@@ -12,8 +12,11 @@ import SwiftData
 struct BrainMeshApp: App {
     var sharedModelContainer: ModelContainer = {
         let schema = Schema([
-            Item.self,
+            MetaEntity.self,
+            MetaAttribute.self,
+            MetaLink.self
         ])
+
         let modelConfiguration = ModelConfiguration(schema: schema, isStoredInMemoryOnly: false)
 
         do {
