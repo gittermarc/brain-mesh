@@ -29,7 +29,6 @@ final class MetaEntity {
     var name: String {
         didSet {
             nameFolded = BMSearch.fold(name)
-            // displayName der Attribute enthält Entity-Name -> Suchlabel updaten
             for a in attributes { a.recomputeSearchLabelFolded() }
         }
     }
