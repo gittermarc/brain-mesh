@@ -11,32 +11,46 @@ import SwiftData
 struct GraphCanvasScreen: View {
     @Environment(\.modelContext) private var modelContext
 
+    // Focus/Neighborhood
     @State private var focusEntity: MetaEntity?
     @State private var showFocusPicker = false
     @State private var hops: Int = 1
 
+    // Toggles
     @State private var showAttributes: Bool = true
 
+    // Global filter (nur wenn kein Fokus)
     @State private var searchText: String = ""
 
+    // Performance knobs
     @State private var maxNodes: Int = 140
     @State private var maxLinks: Int = 800
 
+    // Graph
     @State private var nodes: [GraphNode] = []
     @State private var edges: [GraphEdge] = []
-
     @State private var positions: [NodeKey: CGPoint] = [:]
     @State private var velocities: [NodeKey: CGVector] = [:]
 
-    // NEW: pinned nodes
+    // Pinning + Selection
     @State private var pinned: Set<NodeKey> = []
+    @State private var selection: NodeKey? = nil
 
+    // Camera
     @State private var scale: CGFloat = 1.0
     @State private var pan: CGSize = .zero
+    @State private var cameraCommand: CameraCommand? = nil
 
+    // Loading/UI
     @State private var isLoading = false
     @State private var loadError: String?
+    @State private var showInspector = false
+    
+    // MiniMap emphasis
+    @State private var miniMapEmphasized: Bool = false
+    @State private var miniMapPulseTask: Task<Void, Never>?
 
+    // Sheets
     @State private var selectedEntity: MetaEntity?
     @State private var selectedAttribute: MetaAttribute?
 
@@ -44,78 +58,128 @@ struct GraphCanvasScreen: View {
 
     var body: some View {
         NavigationStack {
-            VStack(spacing: 0) {
-                controls
-                Divider()
+            ZStack {
+                // Canvas / Graph
+                if let loadError {
+                    errorView(loadError)
+                } else if nodes.isEmpty && !isLoading {
+                    emptyView
+                } else {
+                    GraphCanvasView(
+                        nodes: nodes,
+                        edges: edges,
+                        positions: $positions,
+                        velocities: $velocities,
+                        pinned: $pinned,
+                        selection: $selection,
+                        scale: $scale,
+                        pan: $pan,
+                        cameraCommand: $cameraCommand,
+                        onTapNode: { keyOrNil in
+                            // Single tap = selection (oder clear)
+                            selection = keyOrNil
+                        }
+                    )
+                }
 
-                ZStack {
-                    if let loadError {
-                        VStack(spacing: 12) {
-                            Image(systemName: "exclamationmark.triangle")
-                                .font(.system(size: 36))
-                                .foregroundStyle(.secondary)
-                            Text("Fehler").font(.headline)
-                            Text(loadError).foregroundStyle(.secondary).multilineTextAlignment(.center)
-                            Button("Erneut versuchen") { Task { await loadGraph() } }
-                                .buttonStyle(.borderedProminent)
-                        }
-                        .padding()
-                    } else if nodes.isEmpty && !isLoading {
-                        VStack(spacing: 12) {
-                            Image(systemName: "circle.grid.cross")
-                                .font(.system(size: 36))
-                                .foregroundStyle(.secondary)
-                            Text("Noch nichts zu sehen").font(.headline)
-                            Text("Lege Entitäten und Links an – dann Fokus setzen oder global anzeigen.")
-                                .foregroundStyle(.secondary)
-                                .multilineTextAlignment(.center)
-                        }
-                        .padding()
-                    } else {
-                        GraphCanvasView(
-                            nodes: nodes,
-                            edges: edges,
-                            positions: $positions,
-                            velocities: $velocities,
-                            pinned: $pinned,
-                            scale: $scale,
-                            pan: $pan,
-                            onTap: { key in
-                                switch key.kind {
-                                case .entity:
-                                    if let e = fetchEntity(id: key.uuid) {
-                                        focusEntity = e
-                                        Task { await loadGraph() }
-                                    }
-                                case .attribute:
-                                    if let a = fetchAttribute(id: key.uuid) {
-                                        selectedAttribute = a
-                                    }
-                                }
-                            }
-                        )
-                        .overlay(alignment: .topLeading) {
-                            if isLoading {
-                                HStack(spacing: 8) {
-                                    ProgressView()
-                                    Text("Lade…").foregroundStyle(.secondary)
-                                }
-                                .padding(10)
-                                .background(.thinMaterial)
-                                .clipShape(RoundedRectangle(cornerRadius: 12))
-                                .padding()
-                            }
-                        }
+                // Loading overlay
+                if isLoading {
+                    HStack(spacing: 8) {
+                        ProgressView()
+                        Text("Lade…").foregroundStyle(.secondary)
                     }
+                    .padding(10)
+                    .background(.thinMaterial)
+                    .clipShape(RoundedRectangle(cornerRadius: 12))
+                    .padding()
+                    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+                    .opacity(miniMapEmphasized ? 1.0 : 0.55)
+                    .scaleEffect(miniMapEmphasized ? 1.02 : 1.0)
+                }
+
+                // Side status (hochkant links)
+                GeometryReader { geo in
+                    let x = geo.safeAreaInsets.leading + 16
+                    sideStatusBar
+                        .rotationEffect(.degrees(-90))
+                        .fixedSize()
+                        .position(x: x, y: geo.size.height / 2)
+                }
+                .allowsHitTesting(false)
+
+                // ✅ MiniMap (oben rechts)
+                GeometryReader { geo in
+                    MiniMapView(
+                        nodes: nodes,
+                        edges: edges,
+                        positions: positions,
+                        selection: selection,
+                        focus: focusKey,
+                        scale: scale,
+                        pan: pan,
+                        canvasSize: geo.size
+                    )
+                    .frame(width: 180, height: 125)
+                    .padding(.trailing, 12)
+                    .padding(.top, 12)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topTrailing)
+                }
+                .allowsHitTesting(false)
+
+                // Action chip for selection
+                if let key = selection, let selected = nodeForKey(key) {
+                    actionChip(for: selected)
+                        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottomLeading)
+                        .padding(.leading, 12)
+                        .padding(.bottom, 14)
+                        .transition(.move(edge: .bottom).combined(with: .opacity))
                 }
             }
             .navigationTitle("Graph")
             .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItemGroup(placement: .topBarTrailing) {
+                    Button {
+                        showFocusPicker = true
+                    } label: {
+                        Image(systemName: "scope")
+                    }
 
+                    Button {
+                        if let sel = selection { cameraCommand = CameraCommand(kind: .center(sel)) }
+                        else if let f = focusEntity { cameraCommand = CameraCommand(kind: .center(NodeKey(kind: .entity, uuid: f.id))) }
+                    } label: {
+                        Image(systemName: "dot.scope")
+                    }
+                    .disabled(selection == nil && focusEntity == nil)
+
+                    Button {
+                        cameraCommand = CameraCommand(kind: .fitAll)
+                    } label: {
+                        Image(systemName: "arrow.up.left.and.down.right.magnifyingglass")
+                    }
+                    .disabled(nodes.isEmpty)
+
+                    Button {
+                        cameraCommand = CameraCommand(kind: .reset)
+                    } label: {
+                        Image(systemName: "arrow.counterclockwise")
+                    }
+
+                    Button {
+                        showInspector = true
+                    } label: {
+                        Image(systemName: "slider.horizontal.3")
+                    }
+                }
+            }
+
+            // Focus picker
             .sheet(isPresented: $showFocusPicker) {
                 NodePickerView(kind: .entity) { picked in
                     if let entity = fetchEntity(id: picked.id) {
                         focusEntity = entity
+                        selection = NodeKey(kind: .entity, uuid: entity.id)
                         showFocusPicker = false
                         Task { await loadGraph() }
                     } else {
@@ -124,16 +188,23 @@ struct GraphCanvasScreen: View {
                 }
             }
 
+            // Inspector
+            .sheet(isPresented: $showInspector) {
+                inspectorSheet
+            }
+
+            // Detail sheets
             .sheet(item: $selectedEntity) { entity in
                 NavigationStack { EntityDetailView(entity: entity) }
             }
-
             .sheet(item: $selectedAttribute) { attr in
                 NavigationStack { AttributeDetailView(attribute: attr) }
             }
 
+            // Initial load
             .task { await loadGraph() }
 
+            // Global filter reload (nur global)
             .task(id: searchText) {
                 guard focusEntity == nil else { return }
                 isLoading = true
@@ -142,6 +213,7 @@ struct GraphCanvasScreen: View {
                 await loadGraph()
             }
 
+            // Neighborhood reload
             .task(id: hops) {
                 guard focusEntity != nil else { return }
                 await loadGraph()
@@ -152,127 +224,264 @@ struct GraphCanvasScreen: View {
                 await loadGraph()
             }
         }
+        .onChange(of: pan) { _, _ in pulseMiniMap() }
+        .onChange(of: scale) { _, _ in pulseMiniMap() }
     }
 
-    private var controls: some View {
-        VStack(spacing: 10) {
-            HStack(spacing: 10) {
-                VStack(alignment: .leading, spacing: 4) {
-                    Text("Fokus").font(.caption).foregroundStyle(.secondary)
-                    if let f = focusEntity {
-                        Text(f.name).font(.headline).lineLimit(1)
-                    } else {
-                        Text("Keiner").font(.headline).foregroundStyle(.secondary)
+    // MARK: - Minimal top bar
+
+    private var sideStatusBar: some View {
+        HStack(spacing: 10) {
+            VStack(alignment: .leading, spacing: 1) {
+                Text(focusEntity == nil ? "Global" : "Fokus")
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+
+                Text(focusEntity?.name ?? (BMSearch.fold(searchText).isEmpty ? "Alle Entitäten" : "Filter: \(searchText)"))
+                    .font(.subheadline)
+                    .lineLimit(1)
+            }
+
+            Divider().frame(height: 20)
+
+            Text("N \(nodes.count) · L \(edges.count) · 📌 \(pinned.count)")
+                .font(.caption2)
+                .foregroundStyle(.secondary)
+                .lineLimit(1)
+        }
+        .padding(.horizontal, 10)
+        .padding(.vertical, 8)
+        .background(.thinMaterial)
+        .clipShape(RoundedRectangle(cornerRadius: 14))
+    }
+
+    // ✅ Helper für MiniMap Focus-Markierung
+    private var focusKey: NodeKey? {
+        guard let f = focusEntity else { return nil }
+        return NodeKey(kind: .entity, uuid: f.id)
+    }
+    
+    private func pulseMiniMap() {
+        // bereits geplantes "Abdimmen" abbrechen
+        miniMapPulseTask?.cancel()
+
+        // sofort hoch
+        withAnimation(.easeOut(duration: 0.12)) {
+            miniMapEmphasized = true
+        }
+
+        // nach kurzer Pause wieder runter
+        miniMapPulseTask = Task { @MainActor in
+            try? await Task.sleep(nanoseconds: 650_000_000) // 0.65s
+            if Task.isCancelled { return }
+            withAnimation(.easeInOut(duration: 0.25)) {
+                miniMapEmphasized = false
+            }
+        }
+    }
+
+
+    // MARK: - Action chip
+
+    private func actionChip(for node: GraphNode) -> some View {
+        let isPinned = pinned.contains(node.key)
+        return HStack(spacing: 10) {
+            VStack(alignment: .leading, spacing: 2) {
+                Text(node.key.kind == .entity ? "Entität" : "Attribut")
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+
+                Text(nodeLabel(for: node))
+                    .font(.subheadline)
+                    .lineLimit(1)
+            }
+
+            Spacer()
+
+            Button {
+                cameraCommand = CameraCommand(kind: .center(node.key))
+            } label: {
+                Image(systemName: "dot.scope")
+            }
+            .buttonStyle(.bordered)
+
+            if node.key.kind == .entity {
+                Button {
+                    if let e = fetchEntity(id: node.key.uuid) {
+                        focusEntity = e
+                        Task { await loadGraph() }
+                        cameraCommand = CameraCommand(kind: .center(node.key))
                     }
+                } label: {
+                    Image(systemName: "scope")
                 }
+                .buttonStyle(.borderedProminent)
+            }
 
-                Spacer()
+            Button {
+                openDetails(for: node.key)
+            } label: {
+                Image(systemName: "info.circle")
+            }
+            .buttonStyle(.bordered)
 
-                if let f = focusEntity {
+            Button {
+                if isPinned { pinned.remove(node.key) }
+                else { pinned.insert(node.key) }
+                velocities[node.key] = .zero
+            } label: {
+                Image(systemName: isPinned ? "pin.slash" : "pin")
+            }
+            .buttonStyle(.bordered)
+
+            Button {
+                selection = nil
+            } label: {
+                Image(systemName: "xmark")
+            }
+            .buttonStyle(.bordered)
+        }
+        .padding(10)
+        .background(.thinMaterial)
+        .clipShape(RoundedRectangle(cornerRadius: 14))
+        .shadow(radius: 6, y: 2)
+        .frame(maxWidth: 520)
+    }
+
+    private func nodeLabel(for node: GraphNode) -> String {
+        // Für Attribute wollen wir lieber den DisplayName (Entity · Attr), falls möglich:
+        if node.key.kind == .attribute, let a = fetchAttribute(id: node.key.uuid) {
+            return a.displayName
+        }
+        return node.label
+    }
+
+    private func openDetails(for key: NodeKey) {
+        switch key.kind {
+        case .entity:
+            if let e = fetchEntity(id: key.uuid) { selectedEntity = e }
+        case .attribute:
+            if let a = fetchAttribute(id: key.uuid) { selectedAttribute = a }
+        }
+    }
+
+    // MARK: - Inspector sheet (entkoppelt die "Regler" vom Canvas)
+
+    private var inspectorSheet: some View {
+        NavigationStack {
+            Form {
+                Section("Modus") {
+                    HStack {
+                        Text("Fokus")
+                        Spacer()
+                        Text(focusEntity?.name ?? "Keiner")
+                            .foregroundStyle(.secondary)
+                            .lineLimit(1)
+                    }
+
                     Button {
-                        selectedEntity = f
+                        showFocusPicker = true
                     } label: {
-                        Label("Details", systemImage: "info.circle")
+                        Label("Fokus wählen", systemImage: "scope")
                     }
-                    .buttonStyle(.bordered)
-                }
 
-                if focusEntity != nil {
-                    Button {
+                    Button(role: .destructive) {
                         focusEntity = nil
+                        selection = nil
                         Task { await loadGraph() }
                     } label: {
                         Label("Fokus löschen", systemImage: "xmark.circle")
                     }
-                    .buttonStyle(.bordered)
-                }
-
-                Button { showFocusPicker = true } label: {
-                    Label("Fokus wählen", systemImage: "scope")
-                }
-                .buttonStyle(.borderedProminent)
-            }
-            .padding(.horizontal)
-            .padding(.top, 10)
-
-            HStack(spacing: 12) {
-                Stepper("Hops: \(hops)", value: $hops, in: 1...3)
                     .disabled(focusEntity == nil)
-
-                Spacer()
-
-                Toggle("Attribute anzeigen", isOn: $showAttributes)
-                    .disabled(focusEntity == nil)
-            }
-            .padding(.horizontal)
-
-            HStack {
-                Image(systemName: "magnifyingglass").foregroundStyle(.secondary)
-                TextField("Globaler Filter (Entitätenname)…", text: $searchText)
-                    .textInputAutocapitalization(.never)
-                    .autocorrectionDisabled()
-                    .disabled(focusEntity != nil)
-            }
-            .padding(.horizontal)
-
-            HStack(spacing: 12) {
-                VStack(alignment: .leading, spacing: 4) {
-                    Text("Max Nodes: \(maxNodes)").font(.caption).foregroundStyle(.secondary)
-                    Slider(value: Binding(get: { Double(maxNodes) }, set: { maxNodes = Int($0) }),
-                           in: 60...260, step: 10)
                 }
-                VStack(alignment: .leading, spacing: 4) {
-                    Text("Max Links: \(maxLinks)").font(.caption).foregroundStyle(.secondary)
-                    Slider(value: Binding(get: { Double(maxLinks) }, set: { maxLinks = Int($0) }),
-                           in: 300...4000, step: 100)
-                }
-            }
-            .padding(.horizontal)
 
-            HStack(spacing: 10) {
-                Button {
-                    withAnimation(.snappy) {
-                        scale = 1.0
-                        pan = .zero
+                Section("Neighborhood") {
+                    Stepper("Hops: \(hops)", value: $hops, in: 1...3)
+                        .disabled(focusEntity == nil)
+
+                    Toggle("Attribute anzeigen", isOn: $showAttributes)
+                        .disabled(focusEntity == nil)
+                }
+
+                Section("Global") {
+                    TextField("Filter (Entitätenname)…", text: $searchText)
+                        .disabled(focusEntity != nil)
+                }
+
+                Section("Limits") {
+                    VStack(alignment: .leading, spacing: 6) {
+                        Text("Max Nodes: \(maxNodes)").font(.caption).foregroundStyle(.secondary)
+                        Slider(value: Binding(get: { Double(maxNodes) }, set: { maxNodes = Int($0) }),
+                               in: 60...260, step: 10)
                     }
-                } label: {
-                    Label("Reset View", systemImage: "arrow.counterclockwise")
+                    VStack(alignment: .leading, spacing: 6) {
+                        Text("Max Links: \(maxLinks)").font(.caption).foregroundStyle(.secondary)
+                        Slider(value: Binding(get: { Double(maxLinks) }, set: { maxLinks = Int($0) }),
+                               in: 300...4000, step: 100)
+                    }
+
+                    Button {
+                        Task { await loadGraph(resetLayout: true) }
+                    } label: {
+                        Label("Neu laden & layouten", systemImage: "wand.and.rays")
+                    }
                 }
-                .buttonStyle(.bordered)
 
-                Button {
-                    Task { await loadGraph(resetLayout: true) }
-                } label: {
-                    Label("Neu layouten", systemImage: "wand.and.rays")
-                }
-                .buttonStyle(.borderedProminent)
-            }
-            .padding(.horizontal)
-
-            HStack(spacing: 10) {
-                Text("Pinned: \(pinned.count)")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-
-                if !pinned.isEmpty {
-                    Button("Unpin all") {
+                Section("Pins") {
+                    HStack {
+                        Text("Pinned")
+                        Spacer()
+                        Text("\(pinned.count)").foregroundStyle(.secondary)
+                    }
+                    Button(role: .destructive) {
                         pinned.removeAll()
+                    } label: {
+                        Label("Unpin all", systemImage: "pin.slash")
                     }
-                    .font(.caption)
-                    .buttonStyle(.bordered)
+                    .disabled(pinned.isEmpty)
                 }
 
-                Spacer()
+                Section("Orientierung") {
+                    Text("Single Tap = Auswahl (Selection).")
+                    Text("Buttons oben: Center (Selection/Fokus), Fit-to-Graph, Reset.")
+                }
             }
-            .padding(.horizontal)
-            .padding(.bottom, 6)
-
-            Text("Drag Node = move + auto-pin · Double-Tap Node = pin/unpin · Drag leer = pan")
-                .font(.caption2)
-                .foregroundStyle(.secondary)
-                .padding(.bottom, 6)
+            .navigationTitle("Inspector")
+            .toolbar {
+                ToolbarItem(placement: .topBarTrailing) {
+                    Button("Fertig") { showInspector = false }
+                }
+            }
         }
-        .background(.background)
+        .presentationDetents([.medium, .large])
+    }
+
+    // MARK: - Views
+
+    private func errorView(_ text: String) -> some View {
+        VStack(spacing: 12) {
+            Image(systemName: "exclamationmark.triangle")
+                .font(.system(size: 36))
+                .foregroundStyle(.secondary)
+            Text("Fehler").font(.headline)
+            Text(text).foregroundStyle(.secondary).multilineTextAlignment(.center)
+            Button("Erneut versuchen") { Task { await loadGraph() } }
+                .buttonStyle(.borderedProminent)
+        }
+        .padding()
+    }
+
+    private var emptyView: some View {
+        VStack(spacing: 12) {
+            Image(systemName: "circle.grid.cross")
+                .font(.system(size: 36))
+                .foregroundStyle(.secondary)
+            Text("Noch nichts zu sehen").font(.headline)
+            Text("Lege Entitäten und Links an – dann Fokus setzen oder global anzeigen.")
+                .foregroundStyle(.secondary)
+                .multilineTextAlignment(.center)
+        }
+        .padding()
     }
 
     // MARK: - Data loading
@@ -289,9 +498,10 @@ struct GraphCanvasScreen: View {
                 try loadGlobal()
             }
 
-            // pinned auf existierende nodes beschränken (sonst wächst Set ewig)
+            // pinned/selection auf existierende nodes beschränken
             let nodeKeys = Set(nodes.map(\.key))
             pinned = pinned.intersection(nodeKeys)
+            if let sel = selection, !nodeKeys.contains(sel) { selection = nil }
 
             if resetLayout { seedLayout(preservePinned: true) }
             isLoading = false
@@ -441,9 +651,7 @@ struct GraphCanvasScreen: View {
 
         if includeAttributes {
             var attrOwner: [UUID: UUID] = [:]
-            for e in ents {
-                for a in e.attributes { attrOwner[a.id] = e.id }
-            }
+            for e in ents { for a in e.attributes { attrOwner[a.id] = e.id } }
 
             for a in attrs {
                 if let ownerID = attrOwner[a.id] {
@@ -469,9 +677,7 @@ struct GraphCanvasScreen: View {
                 let id = n.key.uuid
 
                 var outFD = FetchDescriptor<MetaLink>(
-                    predicate: #Predicate<MetaLink> { l in
-                        l.sourceKindRaw == k && l.sourceID == id
-                    },
+                    predicate: #Predicate<MetaLink> { l in l.sourceKindRaw == k && l.sourceID == id },
                     sortBy: [SortDescriptor(\MetaLink.createdAt, order: .reverse)]
                 )
                 outFD.fetchLimit = perNodeCap
@@ -489,9 +695,7 @@ struct GraphCanvasScreen: View {
                 if linkEdges.count >= remaining { break }
 
                 var inFD = FetchDescriptor<MetaLink>(
-                    predicate: #Predicate<MetaLink> { l in
-                        l.targetKindRaw == k && l.targetID == id
-                    },
+                    predicate: #Predicate<MetaLink> { l in l.targetKindRaw == k && l.targetID == id },
                     sortBy: [SortDescriptor(\MetaLink.createdAt, order: .reverse)]
                 )
                 inFD.fetchLimit = perNodeCap
@@ -514,6 +718,12 @@ struct GraphCanvasScreen: View {
         edges = newEdges.unique()
     }
 
+    // MARK: - Helpers
+
+    private func nodeForKey(_ key: NodeKey) -> GraphNode? {
+        nodes.first(where: { $0.key == key })
+    }
+
     private func fetchEntity(id: UUID) -> MetaEntity? {
         let nodeID = id
         let fd = FetchDescriptor<MetaEntity>(predicate: #Predicate { e in e.id == nodeID })
@@ -533,7 +743,6 @@ struct GraphCanvasScreen: View {
         velocities.removeAll(keepingCapacity: true)
         guard !nodes.isEmpty else { return }
 
-        // pinned positions wenn vorhanden beibehalten
         if preservePinned {
             for k in pinned {
                 if let p = oldPos[k] {
@@ -586,6 +795,136 @@ struct GraphCanvasScreen: View {
     }
 }
 
+// ✅ MiniMap View (unten im File, aber innerhalb derselben Datei)
+private struct MiniMapView: View {
+    let nodes: [GraphNode]
+    let edges: [GraphEdge]
+    let positions: [NodeKey: CGPoint]
+
+    let selection: NodeKey?
+    let focus: NodeKey?
+
+    let scale: CGFloat
+    let pan: CGSize
+    let canvasSize: CGSize
+
+    var body: some View {
+        Canvas { context, size in
+            guard let bounds = worldBounds() else {
+                let frame = CGRect(origin: .zero, size: size)
+                context.stroke(Path(roundedRect: frame, cornerRadius: 12),
+                               with: .color(.secondary.opacity(0.25)),
+                               lineWidth: 1)
+                return
+            }
+
+            let worldRect = bounds.insetBy(dx: -60, dy: -60)
+
+            func map(_ p: CGPoint) -> CGPoint {
+                let nx = (p.x - worldRect.minX) / max(1, worldRect.width)
+                let ny = (p.y - worldRect.minY) / max(1, worldRect.height)
+                return CGPoint(x: nx * size.width, y: ny * size.height)
+            }
+
+            // edges
+            for e in edges {
+                guard let p1 = positions[e.a], let p2 = positions[e.b] else { continue }
+                let a = map(p1)
+                let b = map(p2)
+
+                var path = Path()
+                path.move(to: a)
+                path.addLine(to: b)
+
+                switch e.type {
+                case .containment:
+                    context.stroke(path, with: .color(.secondary.opacity(0.18)), lineWidth: 1)
+                case .link:
+                    context.stroke(path, with: .color(.secondary.opacity(0.28)), lineWidth: 1)
+                }
+            }
+
+            // nodes
+            for n in nodes {
+                guard let p = positions[n.key] else { continue }
+                let s = map(p)
+
+                let isFocus = (focus == n.key)
+                let isSel = (selection == n.key)
+
+                let r: CGFloat = (n.key.kind == .entity) ? 3.2 : 2.6
+                let dot = CGRect(x: s.x - r, y: s.y - r, width: r * 2, height: r * 2)
+                context.fill(Path(ellipseIn: dot), with: .color(.primary.opacity(0.55)))
+
+                if isFocus || isSel {
+                    let rr: CGFloat = isSel ? 7.0 : 5.8
+                    let ring = CGRect(x: s.x - rr, y: s.y - rr, width: rr * 2, height: rr * 2)
+                    context.stroke(Path(ellipseIn: ring),
+                                   with: .color(.primary.opacity(0.9)),
+                                   lineWidth: isSel ? 2 : 1)
+                }
+            }
+
+            // viewport rect
+            let v = viewportWorldRect()
+            let tl = map(CGPoint(x: v.minX, y: v.minY))
+            let br = map(CGPoint(x: v.maxX, y: v.maxY))
+
+            let vRect = CGRect(
+                x: min(tl.x, br.x),
+                y: min(tl.y, br.y),
+                width: abs(br.x - tl.x),
+                height: abs(br.y - tl.y)
+            )
+
+            context.stroke(Path(roundedRect: vRect, cornerRadius: 8),
+                           with: .color(.primary.opacity(0.75)),
+                           lineWidth: 2)
+
+            // frame
+            let frame = CGRect(origin: .zero, size: size)
+            context.stroke(Path(roundedRect: frame, cornerRadius: 12),
+                           with: .color(.secondary.opacity(0.25)),
+                           lineWidth: 1)
+        }
+        .background(.thinMaterial)
+        .clipShape(RoundedRectangle(cornerRadius: 12))
+        .shadow(radius: 6, y: 2)
+    }
+
+    private func worldBounds() -> CGRect? {
+        var minX: CGFloat = .greatestFiniteMagnitude
+        var minY: CGFloat = .greatestFiniteMagnitude
+        var maxX: CGFloat = -.greatestFiniteMagnitude
+        var maxY: CGFloat = -.greatestFiniteMagnitude
+
+        var any = false
+        for n in nodes {
+            guard let p = positions[n.key] else { continue }
+            any = true
+            minX = min(minX, p.x); minY = min(minY, p.y)
+            maxX = max(maxX, p.x); maxY = max(maxY, p.y)
+        }
+        guard any else { return nil }
+        return CGRect(x: minX, y: minY, width: max(1, maxX - minX), height: max(1, maxY - minY))
+    }
+
+    private func viewportWorldRect() -> CGRect {
+        let centerX = canvasSize.width / 2 + pan.width
+        let centerY = canvasSize.height / 2 + pan.height
+
+        let tl = CGPoint(x: (0 - centerX) / scale, y: (0 - centerY) / scale)
+        let br = CGPoint(x: (canvasSize.width - centerX) / scale, y: (canvasSize.height - centerY) / scale)
+
+        return CGRect(
+            x: min(tl.x, br.x),
+            y: min(tl.y, br.y),
+            width: abs(br.x - tl.x),
+            height: abs(br.y - tl.y)
+        )
+    }
+}
+
 // MARK: - Graph types
 
 struct NodeKey: Hashable {
@@ -624,7 +963,19 @@ extension Array where Element == GraphEdge {
     func unique() -> [GraphEdge] { Array(Set(self)) }
 }
 
-// MARK: - Graph Canvas View (Drag + Pin)
+// MARK: - Camera commands
+
+struct CameraCommand: Identifiable, Equatable {
+    enum Kind: Equatable {
+        case center(NodeKey)
+        case fitAll
+        case reset
+    }
+    let id = UUID()
+    let kind: Kind
+}
+
+// MARK: - Graph Canvas View (Selection + Drag/Pin + Camera commands)
 
 struct GraphCanvasView: View {
     let nodes: [GraphNode]
@@ -633,11 +984,13 @@ struct GraphCanvasView: View {
     @Binding var positions: [NodeKey: CGPoint]
     @Binding var velocities: [NodeKey: CGVector]
     @Binding var pinned: Set<NodeKey>
+    @Binding var selection: NodeKey?
 
     @Binding var scale: CGFloat
     @Binding var pan: CGSize
+    @Binding var cameraCommand: CameraCommand?
 
-    let onTap: (NodeKey) -> Void
+    let onTapNode: (NodeKey?) -> Void
 
     @State private var timer: Timer?
     @State private var panStart: CGSize = .zero
@@ -678,16 +1031,23 @@ struct GraphCanvasView: View {
                     guard let p = positions[n.key] else { continue }
                     let s = toScreen(p, center: center)
                     let isPinned = pinned.contains(n.key)
+                    let isSelected = (selection == n.key)
 
                     switch n.key.kind {
                     case .entity:
                         let r: CGFloat = 16
                         let rect = CGRect(x: s.x - r, y: s.y - r, width: r * 2, height: r * 2)
+
                         context.fill(Path(ellipseIn: rect), with: .color(.primary.opacity(isPinned ? 0.22 : 0.15)))
-                        context.stroke(Path(ellipseIn: rect), with: .color(.primary.opacity(isPinned ? 0.80 : 0.55)), lineWidth: isPinned ? 2 : 1)
+                        context.stroke(Path(ellipseIn: rect),
+                                       with: .color(.primary.opacity(isSelected ? 0.95 : (isPinned ? 0.80 : 0.55))),
+                                       lineWidth: isSelected ? 3 : (isPinned ? 2 : 1))
                         context.draw(Text(n.label).font(.caption), at: CGPoint(x: s.x, y: s.y + 26), anchor: .center)
+
                         if isPinned {
-                            context.draw(Text("📌").font(.caption2), at: CGPoint(x: s.x + 18, y: s.y - 18), anchor: .center)
+                            context.draw(Text("📌").font(.caption2),
+                                         at: CGPoint(x: s.x + 18, y: s.y - 18),
+                                         anchor: .center)
                         }
 
                     case .attribute:
@@ -695,22 +1055,92 @@ struct GraphCanvasView: View {
                         let h: CGFloat = 22
                         let rect = CGRect(x: s.x - w/2, y: s.y - h/2, width: w, height: h)
                         let rr = Path(roundedRect: rect, cornerRadius: 6)
+
                         context.fill(rr, with: .color(.primary.opacity(isPinned ? 0.16 : 0.10)))
-                        context.stroke(rr, with: .color(.primary.opacity(isPinned ? 0.75 : 0.45)), lineWidth: isPinned ? 2 : 1)
+                        context.stroke(rr,
+                                       with: .color(.primary.opacity(isSelected ? 0.95 : (isPinned ? 0.75 : 0.45))),
+                                       lineWidth: isSelected ? 3 : (isPinned ? 2 : 1))
                         context.draw(Text(n.label).font(.caption2), at: CGPoint(x: s.x, y: s.y + 22), anchor: .center)
+
                         if isPinned {
-                            context.draw(Text("📌").font(.caption2), at: CGPoint(x: s.x + 18, y: s.y - 14), anchor: .center)
+                            context.draw(Text("📌").font(.caption2),
+                                         at: CGPoint(x: s.x + 18, y: s.y - 14),
+                                         anchor: .center)
                         }
                     }
                 }
             }
             .contentShape(Rectangle())
-            .highPriorityGesture(doubleTapPinGesture(in: size)) // double tap > single tap
-            .gesture(singleTapGesture(in: size))
+            .highPriorityGesture(doubleTapPinGesture(in: size))
+            .gesture(singleTapSelectGesture(in: size))
             .gesture(dragGesture(in: size))
             .gesture(zoomGesture())
             .onAppear { startSimulation() }
             .onDisappear { stopSimulation() }
+            .onChange(of: cameraCommand?.id) { _, _ in
+                guard let cmd = cameraCommand else { return }
+                applyCameraCommand(cmd, in: size)
+                cameraCommand = nil
+            }
+        }
+    }
+
+    // MARK: - Camera command handling
+
+    private func applyCameraCommand(_ cmd: CameraCommand, in size: CGSize) {
+        switch cmd.kind {
+        case .reset:
+            withAnimation(.snappy) {
+                scale = 1.0
+                pan = .zero
+                panStart = .zero
+                scaleStart = 1.0
+            }
+
+        case .center(let key):
+            guard let p = positions[key] else { return }
+            withAnimation(.snappy) {
+                pan = CGSize(width: -p.x * scale, height: -p.y * scale)
+                panStart = pan
+            }
+
+        case .fitAll:
+            // Bounding box im World-Space
+            let keys = nodes.map(\.key)
+            guard !keys.isEmpty else { return }
+            var minX: CGFloat = .greatestFiniteMagnitude
+            var minY: CGFloat = .greatestFiniteMagnitude
+            var maxX: CGFloat = -.greatestFiniteMagnitude
+            var maxY: CGFloat = -.greatestFiniteMagnitude
+
+            for k in keys {
+                guard let p = positions[k] else { continue }
+                minX = min(minX, p.x)
+                minY = min(minY, p.y)
+                maxX = max(maxX, p.x)
+                maxY = max(maxY, p.y)
+            }
+
+            if minX == .greatestFiniteMagnitude { return }
+
+            let worldW = max(1, maxX - minX)
+            let worldH = max(1, maxY - minY)
+
+            let padding: CGFloat = 90
+            let availW = max(1, size.width - padding)
+            let availH = max(1, size.height - padding)
+
+            let targetScale = min(availW / worldW, availH / worldH)
+            let clamped = max(0.4, min(3.0, targetScale))
+
+            let mid = CGPoint(x: (minX + maxX) / 2, y: (minY + maxY) / 2)
+
+            withAnimation(.snappy) {
+                scale = clamped
+                scaleStart = clamped
+                pan = CGSize(width: -mid.x * clamped, height: -mid.y * clamped)
+                panStart = pan
+            }
         }
     }
 
@@ -743,14 +1173,13 @@ struct GraphCanvasView: View {
 
     // MARK: - Gestures
 
-    private func singleTapGesture(in size: CGSize) -> some Gesture {
+    private func singleTapSelectGesture(in size: CGSize) -> some Gesture {
         SpatialTapGesture(count: 1)
             .onEnded { value in
                 let center = CGPoint(x: size.width / 2 + pan.width, y: size.height / 2 + pan.height)
                 let worldTap = toWorld(value.location, center: center)
-                if let key = hitTest(worldTap: worldTap) {
-                    onTap(key)
-                }
+                let hit = hitTest(worldTap: worldTap)
+                onTapNode(hit) // nil = clear selection
             }
     }
 
@@ -776,10 +1205,10 @@ struct GraphCanvasView: View {
                 let center = CGPoint(x: size.width / 2 + pan.width, y: size.height / 2 + pan.height)
 
                 if draggingKey == nil {
-                    // decide mode based on start point
                     let worldStart = toWorld(value.startLocation, center: center)
                     if let key = hitTest(worldTap: worldStart) {
                         draggingKey = key
+                        selection = key // Drag = auch auswählen
                         dragStartWorld = positions[key] ?? worldStart
                         velocities[key] = .zero
                     } else {
@@ -788,21 +1217,18 @@ struct GraphCanvasView: View {
                 }
 
                 if let key = draggingKey {
-                    // drag node in world space
                     let dx = value.translation.width / scale
                     let dy = value.translation.height / scale
                     positions[key] = CGPoint(x: dragStartWorld.x + dx, y: dragStartWorld.y + dy)
                     velocities[key] = .zero
                 } else {
-                    // pan canvas
                     pan = CGSize(width: dragStartPan.width + value.translation.width,
                                 height: dragStartPan.height + value.translation.height)
                 }
             }
             .onEnded { _ in
                 if let key = draggingKey {
-                    // auto-pin on drag end
-                    pinned.insert(key)
+                    pinned.insert(key) // auto-pin
                     velocities[key] = .zero
                 } else {
                     panStart = pan
