@@ -1,6 +1,7 @@
 {
   "images" : [
     {
+      "filename" : "BrainMesh_AppIcon_Light_1024_flat.png",
       "idiom" : "universal",
       "platform" : "ios",
       "size" : "1024x1024"
@@ -12,6 +13,7 @@
           "value" : "dark"
         }
       ],
+      "filename" : "BrainMesh_AppIcon_Dark_1024_flat.png",
       "idiom" : "universal",
       "platform" : "ios",
       "size" : "1024x1024"

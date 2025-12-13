@@ -28,6 +28,9 @@ struct GraphCanvasScreen: View {
     @State private var positions: [NodeKey: CGPoint] = [:]
     @State private var velocities: [NodeKey: CGVector] = [:]
 
+    // NEW: pinned nodes
+    @State private var pinned: Set<NodeKey> = []
+
     @State private var scale: CGFloat = 1.0
     @State private var pan: CGSize = .zero
 
@@ -74,6 +77,7 @@ struct GraphCanvasScreen: View {
                             edges: edges,
                             positions: $positions,
                             velocities: $velocities,
+                            pinned: $pinned,
                             scale: $scale,
                             pan: $pan,
                             onTap: { key in
@@ -87,11 +91,6 @@ struct GraphCanvasScreen: View {
                                     if let a = fetchAttribute(id: key.uuid) {
                                         selectedAttribute = a
                                     }
-                                }
-                            },
-                            onLongPress: { key in
-                                if key.kind == .entity, let e = fetchEntity(id: key.uuid) {
-                                    selectedEntity = e
                                 }
                             }
                         )
@@ -169,6 +168,15 @@ struct GraphCanvasScreen: View {
 
                 Spacer()
 
+                if let f = focusEntity {
+                    Button {
+                        selectedEntity = f
+                    } label: {
+                        Label("Details", systemImage: "info.circle")
+                    }
+                    .buttonStyle(.bordered)
+                }
+
                 if focusEntity != nil {
                     Button {
                         focusEntity = nil
@@ -240,9 +248,26 @@ struct GraphCanvasScreen: View {
                 .buttonStyle(.borderedProminent)
             }
             .padding(.horizontal)
-            .padding(.bottom, 10)
 
-            Text("Tip: Tap Entity = Fokus, Tap Attribut = Detail, Long-Press Entity = Detail")
+            HStack(spacing: 10) {
+                Text("Pinned: \(pinned.count)")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+
+                if !pinned.isEmpty {
+                    Button("Unpin all") {
+                        pinned.removeAll()
+                    }
+                    .font(.caption)
+                    .buttonStyle(.bordered)
+                }
+
+                Spacer()
+            }
+            .padding(.horizontal)
+            .padding(.bottom, 6)
+
+            Text("Drag Node = move + auto-pin · Double-Tap Node = pin/unpin · Drag leer = pan")
                 .font(.caption2)
                 .foregroundStyle(.secondary)
                 .padding(.bottom, 6)
@@ -264,7 +289,11 @@ struct GraphCanvasScreen: View {
                 try loadGlobal()
             }
 
-            if resetLayout { seedLayout() }
+            // pinned auf existierende nodes beschränken (sonst wächst Set ewig)
+            let nodeKeys = Set(nodes.map(\.key))
+            pinned = pinned.intersection(nodeKeys)
+
+            if resetLayout { seedLayout(preservePinned: true) }
             isLoading = false
         } catch {
             isLoading = false
@@ -396,7 +425,7 @@ struct GraphCanvasScreen: View {
         for e in ents { newNodes.append(GraphNode(key: NodeKey(kind: .entity, uuid: e.id), label: e.name)) }
         for a in attrs { newNodes.append(GraphNode(key: NodeKey(kind: .attribute, uuid: a.id), label: a.name)) }
 
-        let nodeKeySet = Set(newNodes.map { $0.key })
+        let nodeKeySet = Set(newNodes.map(\.key))
 
         var newEdges: [GraphEdge] = []
         newEdges.reserveCapacity(maxLinks)
@@ -411,7 +440,7 @@ struct GraphCanvasScreen: View {
         }
 
         if includeAttributes {
-            var attrOwner: [UUID: UUID] = [:] // attrID -> entityID
+            var attrOwner: [UUID: UUID] = [:]
             for e in ents {
                 for a in e.attributes { attrOwner[a.id] = e.id }
             }
@@ -497,16 +526,29 @@ struct GraphCanvasScreen: View {
         return try? modelContext.fetch(fd).first
     }
 
-    private func seedLayout() {
+    private func seedLayout(preservePinned: Bool) {
+        let oldPos = positions
+
         positions.removeAll(keepingCapacity: true)
         velocities.removeAll(keepingCapacity: true)
         guard !nodes.isEmpty else { return }
+
+        // pinned positions wenn vorhanden beibehalten
+        if preservePinned {
+            for k in pinned {
+                if let p = oldPos[k] {
+                    positions[k] = p
+                    velocities[k] = .zero
+                }
+            }
+        }
 
         let entityNodes = nodes.filter { $0.key.kind == .entity }
         let attrNodes = nodes.filter { $0.key.kind == .attribute }
 
         let radius: CGFloat = 220
         for (i, n) in entityNodes.enumerated() {
+            if pinned.contains(n.key), positions[n.key] != nil { continue }
             let angle = (CGFloat(i) / CGFloat(max(1, entityNodes.count))) * (.pi * 2)
             let p = CGPoint(x: cos(angle) * radius, y: sin(angle) * radius)
             positions[n.key] = p
@@ -524,7 +566,8 @@ struct GraphCanvasScreen: View {
         }
 
         for a in attrNodes {
-            positions[a.key] = CGPoint(x: 0, y: 0)
+            if pinned.contains(a.key), positions[a.key] != nil { continue }
+            positions[a.key] = positions[a.key] ?? CGPoint(x: 0, y: 0)
             velocities[a.key] = .zero
         }
 
@@ -533,6 +576,7 @@ struct GraphCanvasScreen: View {
             guard let ep = positions[ek] else { continue }
             let list = attrs
             for (i, ak) in list.enumerated() {
+                if pinned.contains(ak), positions[ak] != nil { continue }
                 let angle = (CGFloat(i) / CGFloat(max(1, list.count))) * (.pi * 2)
                 let p = CGPoint(x: ep.x + cos(angle) * satRadius, y: ep.y + sin(angle) * satRadius)
                 positions[ak] = p
@@ -580,7 +624,7 @@ extension Array where Element == GraphEdge {
     func unique() -> [GraphEdge] { Array(Set(self)) }
 }
 
-// MARK: - Graph Canvas View
+// MARK: - Graph Canvas View (Drag + Pin)
 
 struct GraphCanvasView: View {
     let nodes: [GraphNode]
@@ -588,16 +632,21 @@ struct GraphCanvasView: View {
 
     @Binding var positions: [NodeKey: CGPoint]
     @Binding var velocities: [NodeKey: CGVector]
+    @Binding var pinned: Set<NodeKey>
 
     @Binding var scale: CGFloat
     @Binding var pan: CGSize
 
     let onTap: (NodeKey) -> Void
-    let onLongPress: (NodeKey) -> Void
 
     @State private var timer: Timer?
     @State private var panStart: CGSize = .zero
     @State private var scaleStart: CGFloat = 1.0
+
+    // drag state
+    @State private var draggingKey: NodeKey?
+    @State private var dragStartWorld: CGPoint = .zero
+    @State private var dragStartPan: CGSize = .zero
 
     var body: some View {
         GeometryReader { geo in
@@ -606,6 +655,7 @@ struct GraphCanvasView: View {
             Canvas { context, _ in
                 let center = CGPoint(x: size.width / 2 + pan.width, y: size.height / 2 + pan.height)
 
+                // edges
                 for e in edges {
                     guard let p1 = positions[e.a], let p2 = positions[e.b] else { continue }
                     let a = toScreen(p1, center: center)
@@ -623,50 +673,55 @@ struct GraphCanvasView: View {
                     }
                 }
 
+                // nodes
                 for n in nodes {
                     guard let p = positions[n.key] else { continue }
                     let s = toScreen(p, center: center)
+                    let isPinned = pinned.contains(n.key)
 
                     switch n.key.kind {
                     case .entity:
                         let r: CGFloat = 16
                         let rect = CGRect(x: s.x - r, y: s.y - r, width: r * 2, height: r * 2)
-                        context.fill(Path(ellipseIn: rect), with: .color(.primary.opacity(0.15)))
-                        context.stroke(Path(ellipseIn: rect), with: .color(.primary.opacity(0.55)), lineWidth: 1)
+                        context.fill(Path(ellipseIn: rect), with: .color(.primary.opacity(isPinned ? 0.22 : 0.15)))
+                        context.stroke(Path(ellipseIn: rect), with: .color(.primary.opacity(isPinned ? 0.80 : 0.55)), lineWidth: isPinned ? 2 : 1)
                         context.draw(Text(n.label).font(.caption), at: CGPoint(x: s.x, y: s.y + 26), anchor: .center)
+                        if isPinned {
+                            context.draw(Text("📌").font(.caption2), at: CGPoint(x: s.x + 18, y: s.y - 18), anchor: .center)
+                        }
 
                     case .attribute:
                         let w: CGFloat = 28
                         let h: CGFloat = 22
                         let rect = CGRect(x: s.x - w/2, y: s.y - h/2, width: w, height: h)
                         let rr = Path(roundedRect: rect, cornerRadius: 6)
-                        context.fill(rr, with: .color(.primary.opacity(0.10)))
-                        context.stroke(rr, with: .color(.primary.opacity(0.45)), lineWidth: 1)
+                        context.fill(rr, with: .color(.primary.opacity(isPinned ? 0.16 : 0.10)))
+                        context.stroke(rr, with: .color(.primary.opacity(isPinned ? 0.75 : 0.45)), lineWidth: isPinned ? 2 : 1)
                         context.draw(Text(n.label).font(.caption2), at: CGPoint(x: s.x, y: s.y + 22), anchor: .center)
+                        if isPinned {
+                            context.draw(Text("📌").font(.caption2), at: CGPoint(x: s.x + 18, y: s.y - 14), anchor: .center)
+                        }
                     }
                 }
             }
             .contentShape(Rectangle())
-            .gesture(panGesture().simultaneously(with: zoomGesture()))
-            .gesture(tapGesture(in: geo.size))
-            .simultaneousGesture(longPressGesture(in: geo.size))
+            .highPriorityGesture(doubleTapPinGesture(in: size)) // double tap > single tap
+            .gesture(singleTapGesture(in: size))
+            .gesture(dragGesture(in: size))
+            .gesture(zoomGesture())
             .onAppear { startSimulation() }
             .onDisappear { stopSimulation() }
         }
     }
 
+    // MARK: - Coordinate transforms
+
     private func toWorld(_ screen: CGPoint, center: CGPoint) -> CGPoint {
-        CGPoint(
-            x: (screen.x - center.x) / scale,
-            y: (screen.y - center.y) / scale
-        )
+        CGPoint(x: (screen.x - center.x) / scale, y: (screen.y - center.y) / scale)
     }
 
     private func toScreen(_ world: CGPoint, center: CGPoint) -> CGPoint {
-        CGPoint(
-            x: center.x + world.x * scale,
-            y: center.y + world.y * scale
-        )
+        CGPoint(x: center.x + world.x * scale, y: center.y + world.y * scale)
     }
 
     private func hitTest(worldTap: CGPoint) -> NodeKey? {
@@ -686,37 +741,74 @@ struct GraphCanvasView: View {
         return best?.0
     }
 
-    private func tapGesture(in size: CGSize) -> some Gesture {
-        DragGesture(minimumDistance: 0)
+    // MARK: - Gestures
+
+    private func singleTapGesture(in size: CGSize) -> some Gesture {
+        SpatialTapGesture(count: 1)
             .onEnded { value in
                 let center = CGPoint(x: size.width / 2 + pan.width, y: size.height / 2 + pan.height)
                 let worldTap = toWorld(value.location, center: center)
-                if let key = hitTest(worldTap: worldTap) { onTap(key) }
-            }
-    }
-
-    private func longPressGesture(in size: CGSize) -> some Gesture {
-        LongPressGesture(minimumDuration: 0.45)
-            .sequenced(before: DragGesture(minimumDistance: 0))
-            .onEnded { value in
-                switch value {
-                case .second(true, let drag?):
-                    let center = CGPoint(x: size.width / 2 + pan.width, y: size.height / 2 + pan.height)
-                    let worldTap = toWorld(drag.location, center: center)
-                    if let key = hitTest(worldTap: worldTap) { onLongPress(key) }
-                default:
-                    break
+                if let key = hitTest(worldTap: worldTap) {
+                    onTap(key)
                 }
             }
     }
 
-    private func panGesture() -> some Gesture {
-        DragGesture()
-            .onChanged { value in
-                pan = CGSize(width: panStart.width + value.translation.width,
-                            height: panStart.height + value.translation.height)
+    private func doubleTapPinGesture(in size: CGSize) -> some Gesture {
+        SpatialTapGesture(count: 2)
+            .onEnded { value in
+                let center = CGPoint(x: size.width / 2 + pan.width, y: size.height / 2 + pan.height)
+                let worldTap = toWorld(value.location, center: center)
+                guard let key = hitTest(worldTap: worldTap) else { return }
+
+                if pinned.contains(key) {
+                    pinned.remove(key)
+                } else {
+                    pinned.insert(key)
+                    velocities[key] = .zero
+                }
             }
-            .onEnded { _ in panStart = pan }
+    }
+
+    private func dragGesture(in size: CGSize) -> some Gesture {
+        DragGesture(minimumDistance: 2)
+            .onChanged { value in
+                let center = CGPoint(x: size.width / 2 + pan.width, y: size.height / 2 + pan.height)
+
+                if draggingKey == nil {
+                    // decide mode based on start point
+                    let worldStart = toWorld(value.startLocation, center: center)
+                    if let key = hitTest(worldTap: worldStart) {
+                        draggingKey = key
+                        dragStartWorld = positions[key] ?? worldStart
+                        velocities[key] = .zero
+                    } else {
+                        dragStartPan = panStart
+                    }
+                }
+
+                if let key = draggingKey {
+                    // drag node in world space
+                    let dx = value.translation.width / scale
+                    let dy = value.translation.height / scale
+                    positions[key] = CGPoint(x: dragStartWorld.x + dx, y: dragStartWorld.y + dy)
+                    velocities[key] = .zero
+                } else {
+                    // pan canvas
+                    pan = CGSize(width: dragStartPan.width + value.translation.width,
+                                height: dragStartPan.height + value.translation.height)
+                }
+            }
+            .onEnded { _ in
+                if let key = draggingKey {
+                    // auto-pin on drag end
+                    pinned.insert(key)
+                    velocities[key] = .zero
+                } else {
+                    panStart = pan
+                }
+                draggingKey = nil
+            }
     }
 
     private func zoomGesture() -> some Gesture {
@@ -724,8 +816,12 @@ struct GraphCanvasView: View {
             .onChanged { val in
                 scale = max(0.4, min(3.0, scaleStart * val))
             }
-            .onEnded { _ in scaleStart = scale }
+            .onEnded { _ in
+                scaleStart = scale
+            }
     }
+
+    // MARK: - Simulation
 
     private func startSimulation() {
         stopSimulation()
@@ -737,6 +833,16 @@ struct GraphCanvasView: View {
     private func stopSimulation() {
         timer?.invalidate()
         timer = nil
+    }
+
+    private func isFixed(_ key: NodeKey) -> Bool {
+        pinned.contains(key) || (draggingKey == key)
+    }
+
+    private func addVelocity(_ key: NodeKey, dx: CGFloat, dy: CGFloat, vel: inout [NodeKey: CGVector]) {
+        guard !isFixed(key) else { return }
+        vel[key, default: .zero].dx += dx
+        vel[key, default: .zero].dy += dy
     }
 
     private func stepSimulation() {
@@ -753,11 +859,13 @@ struct GraphCanvasView: View {
         var pos = positions
         var vel = velocities
 
+        // Repulsion O(n^2)
         for i in 0..<nodes.count {
             let a = nodes[i].key
-            guard let pa = pos[a] else { continue }
+            guard let pa = pos[a], !isFixed(a) else { continue }
 
-            var force = CGVector(dx: 0, dy: 0)
+            var fx: CGFloat = 0
+            var fy: CGFloat = 0
 
             for j in 0..<nodes.count where j != i {
                 let b = nodes[j].key
@@ -767,14 +875,14 @@ struct GraphCanvasView: View {
                 let dy = pa.y - pb.y
                 let dist2 = max(dx*dx + dy*dy, 40)
                 let f = repulsion / dist2
-                force.dx += dx * f
-                force.dy += dy * f
+                fx += dx * f
+                fy += dy * f
             }
 
-            vel[a, default: .zero].dx += force.dx * 0.00002
-            vel[a, default: .zero].dy += force.dy * 0.00002
+            addVelocity(a, dx: fx * 0.00002, dy: fy * 0.00002, vel: &vel)
         }
 
+        // Springs
         for e in edges {
             guard let p1 = pos[e.a], let p2 = pos[e.b] else { continue }
 
@@ -789,16 +897,20 @@ struct GraphCanvasView: View {
             let fx = (dx / dist) * diff * spring
             let fy = (dy / dist) * diff * spring
 
-            vel[e.a, default: .zero].dx += fx
-            vel[e.a, default: .zero].dy += fy
-            vel[e.b, default: .zero].dx -= fx
-            vel[e.b, default: .zero].dy -= fy
+            addVelocity(e.a, dx: fx, dy: fy, vel: &vel)
+            addVelocity(e.b, dx: -fx, dy: -fy, vel: &vel)
         }
 
+        // Integrate
         for n in nodes {
             let id = n.key
-            var v = vel[id, default: .zero]
 
+            if isFixed(id) {
+                vel[id] = .zero
+                continue
+            }
+
+            var v = vel[id, default: .zero]
             v.dx *= damping
             v.dy *= damping
 
