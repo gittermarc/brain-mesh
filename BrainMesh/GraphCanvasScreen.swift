@@ -19,6 +19,11 @@ struct GraphCanvasScreen: View {
     // Toggles
     @State private var showAttributes: Bool = true
 
+    // ✅ Lens
+    @State private var lensEnabled: Bool = true
+    @State private var lensHideNonRelevant: Bool = false
+    @State private var lensDepth: Int = 2 // 1 = nur Nachbarn, 2 = Nachbarn+Nachbarn
+
     // Global filter (nur wenn kein Fokus)
     @State private var searchText: String = ""
 
@@ -32,7 +37,7 @@ struct GraphCanvasScreen: View {
     @State private var positions: [NodeKey: CGPoint] = [:]
     @State private var velocities: [NodeKey: CGVector] = [:]
 
-    // ✅ Notizen jetzt GERICHETET: source -> target
+    // ✅ Notizen GERICHETET: source -> target
     @State private var directedEdgeNotes: [DirectedEdgeKey: String] = [:]
 
     // Pinning + Selection
@@ -60,6 +65,14 @@ struct GraphCanvasScreen: View {
     private let debounceNanos: UInt64 = 250_000_000
 
     var body: some View {
+        let lens = LensContext.build(
+            enabled: lensEnabled,
+            hideNonRelevant: lensHideNonRelevant,
+            depth: lensDepth,
+            selection: selection,
+            edges: edges
+        )
+
         NavigationStack {
             ZStack {
                 // Canvas / Graph
@@ -71,7 +84,8 @@ struct GraphCanvasScreen: View {
                     GraphCanvasView(
                         nodes: nodes,
                         edges: edges,
-                        directedEdgeNotes: directedEdgeNotes, // ✅
+                        directedEdgeNotes: directedEdgeNotes,
+                        lens: lens,
                         positions: $positions,
                         velocities: $velocities,
                         pinned: $pinned,
@@ -129,7 +143,7 @@ struct GraphCanvasScreen: View {
                 }
                 .allowsHitTesting(false)
 
-                // Action chip
+                // Action chip for selection
                 if let key = selection, let selected = nodeForKey(key) {
                     actionChip(for: selected)
                         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottomLeading)
@@ -142,7 +156,11 @@ struct GraphCanvasScreen: View {
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItemGroup(placement: .topBarTrailing) {
-                    Button { showFocusPicker = true } label: { Image(systemName: "scope") }
+                    Button {
+                        showFocusPicker = true
+                    } label: {
+                        Image(systemName: "scope")
+                    }
 
                     Button {
                         if let sel = selection { cameraCommand = CameraCommand(kind: .center(sel)) }
@@ -152,21 +170,28 @@ struct GraphCanvasScreen: View {
                     }
                     .disabled(selection == nil && focusEntity == nil)
 
-                    Button { cameraCommand = CameraCommand(kind: .fitAll) } label: {
+                    Button {
+                        cameraCommand = CameraCommand(kind: .fitAll)
+                    } label: {
                         Image(systemName: "arrow.up.left.and.down.right.magnifyingglass")
                     }
                     .disabled(nodes.isEmpty)
 
-                    Button { cameraCommand = CameraCommand(kind: .reset) } label: {
+                    Button {
+                        cameraCommand = CameraCommand(kind: .reset)
+                    } label: {
                         Image(systemName: "arrow.counterclockwise")
                     }
 
-                    Button { showInspector = true } label: {
+                    Button {
+                        showInspector = true
+                    } label: {
                         Image(systemName: "slider.horizontal.3")
                     }
                 }
             }
 
+            // Focus picker
             .sheet(isPresented: $showFocusPicker) {
                 NodePickerView(kind: .entity) { picked in
                     if let entity = fetchEntity(id: picked.id) {
@@ -180,8 +205,12 @@ struct GraphCanvasScreen: View {
                 }
             }
 
-            .sheet(isPresented: $showInspector) { inspectorSheet }
+            // Inspector
+            .sheet(isPresented: $showInspector) {
+                inspectorSheet
+            }
 
+            // Detail sheets
             .sheet(item: $selectedEntity) { entity in
                 NavigationStack { EntityDetailView(entity: entity) }
             }
@@ -189,8 +218,10 @@ struct GraphCanvasScreen: View {
                 NavigationStack { AttributeDetailView(attribute: attr) }
             }
 
+            // Initial load
             .task { await loadGraph() }
 
+            // Global filter reload (nur global)
             .task(id: searchText) {
                 guard focusEntity == nil else { return }
                 isLoading = true
@@ -199,6 +230,7 @@ struct GraphCanvasScreen: View {
                 await loadGraph()
             }
 
+            // Neighborhood reload
             .task(id: hops) {
                 guard focusEntity != nil else { return }
                 await loadGraph()
@@ -213,7 +245,7 @@ struct GraphCanvasScreen: View {
         .onChange(of: scale) { _, _ in pulseMiniMap() }
     }
 
-    // MARK: - Minimal top bar
+    // MARK: - Side status bar
 
     private var sideStatusBar: some View {
         HStack(spacing: 10) {
@@ -259,11 +291,13 @@ struct GraphCanvasScreen: View {
 
     private func actionChip(for node: GraphNode) -> some View {
         let isPinned = pinned.contains(node.key)
+
         return HStack(spacing: 10) {
             VStack(alignment: .leading, spacing: 2) {
                 Text(node.key.kind == .entity ? "Entität" : "Attribut")
                     .font(.caption2)
                     .foregroundStyle(.secondary)
+
                 Text(nodeLabel(for: node))
                     .font(.subheadline)
                     .lineLimit(1)
@@ -271,7 +305,18 @@ struct GraphCanvasScreen: View {
 
             Spacer()
 
-            Button { cameraCommand = CameraCommand(kind: .center(node.key)) } label: {
+            // ✅ Expand
+            Button {
+                Task { await expand(from: node.key) }
+            } label: {
+                Image(systemName: "plus.circle")
+            }
+            .buttonStyle(.bordered)
+            .help("Nachbarn aufklappen")
+
+            Button {
+                cameraCommand = CameraCommand(kind: .center(node.key))
+            } label: {
                 Image(systemName: "dot.scope")
             }
             .buttonStyle(.bordered)
@@ -283,24 +328,31 @@ struct GraphCanvasScreen: View {
                         Task { await loadGraph() }
                         cameraCommand = CameraCommand(kind: .center(node.key))
                     }
-                } label: { Image(systemName: "scope") }
+                } label: {
+                    Image(systemName: "scope")
+                }
                 .buttonStyle(.borderedProminent)
             }
 
-            Button { openDetails(for: node.key) } label: {
+            Button {
+                openDetails(for: node.key)
+            } label: {
                 Image(systemName: "info.circle")
             }
             .buttonStyle(.bordered)
 
             Button {
-                if isPinned { pinned.remove(node.key) } else { pinned.insert(node.key) }
+                if isPinned { pinned.remove(node.key) }
+                else { pinned.insert(node.key) }
                 velocities[node.key] = .zero
             } label: {
                 Image(systemName: isPinned ? "pin.slash" : "pin")
             }
             .buttonStyle(.bordered)
 
-            Button { selection = nil } label: {
+            Button {
+                selection = nil
+            } label: {
                 Image(systemName: "xmark")
             }
             .buttonStyle(.bordered)
@@ -309,7 +361,7 @@ struct GraphCanvasScreen: View {
         .background(.thinMaterial)
         .clipShape(RoundedRectangle(cornerRadius: 14))
         .shadow(radius: 6, y: 2)
-        .frame(maxWidth: 520)
+        .frame(maxWidth: 560)
     }
 
     private func nodeLabel(for node: GraphNode) -> String {
@@ -342,7 +394,9 @@ struct GraphCanvasScreen: View {
                             .lineLimit(1)
                     }
 
-                    Button { showFocusPicker = true } label: {
+                    Button {
+                        showFocusPicker = true
+                    } label: {
                         Label("Fokus wählen", systemImage: "scope")
                     }
 
@@ -362,6 +416,20 @@ struct GraphCanvasScreen: View {
 
                     Toggle("Attribute anzeigen", isOn: $showAttributes)
                         .disabled(focusEntity == nil)
+                }
+
+                Section("Lens") {
+                    Toggle("Lens aktiv", isOn: $lensEnabled)
+
+                    Toggle("Nicht relevante ausblenden", isOn: $lensHideNonRelevant)
+                        .disabled(!lensEnabled)
+
+                    Stepper("Lens Tiefe: \(lensDepth)", value: $lensDepth, in: 1...2)
+                        .disabled(!lensEnabled)
+
+                    Text("Wenn eine Node ausgewählt ist, werden Nachbarn hervorgehoben und der Rest gedimmt (oder ausgeblendet).")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
                 }
 
                 Section("Global") {
@@ -400,12 +468,6 @@ struct GraphCanvasScreen: View {
                         Label("Unpin all", systemImage: "pin.slash")
                     }
                     .disabled(pinned.isEmpty)
-                }
-
-                Section("Orientierung") {
-                    Text("Single Tap = Auswahl (Selection).")
-                    Text("Notiz am Link kommt jetzt immer aus dem AUSGEHENDEN Link der selektierten Node.")
-                        .foregroundStyle(.secondary)
                 }
             }
             .navigationTitle("Inspector")
@@ -464,7 +526,6 @@ struct GraphCanvasScreen: View {
             pinned = pinned.intersection(nodeKeys)
             if let sel = selection, !nodeKeys.contains(sel) { selection = nil }
 
-            // ✅ Notes nur für sichtbare Kanten behalten (beide Richtungen erlaubt)
             let validDirected = Set(edges.flatMap {
                 [
                     DirectedEdgeKey.make(source: $0.a, target: $0.b, type: $0.type),
@@ -519,10 +580,10 @@ struct GraphCanvasScreen: View {
 
             if let n = l.note?.trimmingCharacters(in: .whitespacesAndNewlines), !n.isEmpty {
                 let k = DirectedEdgeKey.make(source: s, target: t, type: .link)
-                if notes[k] == nil { notes[k] = n } // newest wins
+                if notes[k] == nil { notes[k] = n }
             }
 
-            return GraphEdge(a: s, b: t, type: .link) // GraphEdge bleibt “eine Linie”
+            return GraphEdge(a: s, b: t, type: .link)
         }.unique()
 
         directedEdgeNotes = notes
@@ -715,6 +776,177 @@ struct GraphCanvasScreen: View {
         directedEdgeNotes = notes
     }
 
+    // MARK: - Expand (incremental)
+
+    @MainActor
+    private func expand(from key: NodeKey) async {
+        if nodes.isEmpty { return }
+        if nodes.count >= maxNodes { return }
+
+        isLoading = true
+        defer { isLoading = false }
+
+        let existingKeys = Set(nodes.map(\.key))
+        var newKeys: [NodeKey] = []
+        var newEdges: [GraphEdge] = []
+        var newNotes = directedEdgeNotes
+
+        func ensureNode(_ nk: NodeKey) {
+            guard !existingKeys.contains(nk) else { return }
+            if !newKeys.contains(nk) { newKeys.append(nk) }
+        }
+
+        // Helper: label fetch
+        func labelFor(_ nk: NodeKey) -> String? {
+            switch nk.kind {
+            case .entity:
+                return fetchEntity(id: nk.uuid)?.name
+            case .attribute:
+                return fetchAttribute(id: nk.uuid)?.name
+            }
+        }
+
+        // Expand Links (out + in)
+        let kindRaw = key.kind.rawValue
+        let id = key.uuid
+
+        let perExpandCap = min(220, max(40, maxLinks / 6))
+
+        var outFD = FetchDescriptor<MetaLink>(
+            predicate: #Predicate<MetaLink> { l in
+                l.sourceKindRaw == kindRaw && l.sourceID == id
+            },
+            sortBy: [SortDescriptor(\MetaLink.createdAt, order: .reverse)]
+        )
+        outFD.fetchLimit = perExpandCap
+
+        var inFD = FetchDescriptor<MetaLink>(
+            predicate: #Predicate<MetaLink> { l in
+                l.targetKindRaw == kindRaw && l.targetID == id
+            },
+            sortBy: [SortDescriptor(\MetaLink.createdAt, order: .reverse)]
+        )
+        inFD.fetchLimit = perExpandCap
+
+        let outLinks = (try? modelContext.fetch(outFD)) ?? []
+        let inLinks = (try? modelContext.fetch(inFD)) ?? []
+
+        // Build candidate edges
+        for l in outLinks {
+            let a = NodeKey(kind: NodeKind(rawValue: l.sourceKindRaw) ?? .entity, uuid: l.sourceID)
+            let b = NodeKey(kind: NodeKind(rawValue: l.targetKindRaw) ?? .entity, uuid: l.targetID)
+
+            // respect max nodes
+            if !existingKeys.contains(b) && (existingKeys.count + newKeys.count) >= maxNodes { break }
+
+            ensureNode(a)
+            ensureNode(b)
+            newEdges.append(GraphEdge(a: a, b: b, type: .link))
+
+            if let note = l.note?.trimmingCharacters(in: .whitespacesAndNewlines), !note.isEmpty {
+                let dk = DirectedEdgeKey.make(source: a, target: b, type: .link)
+                if newNotes[dk] == nil { newNotes[dk] = note }
+            }
+            if (edges.count + newEdges.count) >= maxLinks { break }
+        }
+
+        if (edges.count + newEdges.count) < maxLinks {
+            for l in inLinks {
+                let a = NodeKey(kind: NodeKind(rawValue: l.sourceKindRaw) ?? .entity, uuid: l.sourceID)
+                let b = NodeKey(kind: NodeKind(rawValue: l.targetKindRaw) ?? .entity, uuid: l.targetID)
+
+                // respect max nodes
+                if !existingKeys.contains(a) && (existingKeys.count + newKeys.count) >= maxNodes { break }
+
+                ensureNode(a)
+                ensureNode(b)
+                newEdges.append(GraphEdge(a: a, b: b, type: .link))
+
+                if let note = l.note?.trimmingCharacters(in: .whitespacesAndNewlines), !note.isEmpty {
+                    let dk = DirectedEdgeKey.make(source: a, target: b, type: .link)
+                    if newNotes[dk] == nil { newNotes[dk] = note }
+                }
+                if (edges.count + newEdges.count) >= maxLinks { break }
+            }
+        }
+
+        // Expand containment (attributes of entity / owner of attribute)
+        if showAttributes {
+            switch key.kind {
+            case .entity:
+                if let e = fetchEntity(id: key.uuid) {
+                    let remaining = max(0, maxNodes - (existingKeys.count + newKeys.count))
+                    if remaining > 0 {
+                        let sortedAttrs = e.attributes.sorted { $0.name < $1.name }
+                        for a in sortedAttrs.prefix(remaining) {
+                            let ak = NodeKey(kind: .attribute, uuid: a.id)
+                            ensureNode(ak)
+                            newEdges.append(GraphEdge(a: key, b: ak, type: .containment))
+                            if (edges.count + newEdges.count) >= maxLinks { break }
+                        }
+                    }
+                }
+            case .attribute:
+                if let a = fetchAttribute(id: key.uuid), let owner = a.entity {
+                    let ek = NodeKey(kind: .entity, uuid: owner.id)
+                    if !existingKeys.contains(ek), (existingKeys.count + newKeys.count) < maxNodes {
+                        ensureNode(ek)
+                    }
+                    newEdges.append(GraphEdge(a: ek, b: key, type: .containment))
+                }
+            }
+        }
+
+        // Materialize new nodes with labels
+        var appendedNodes: [GraphNode] = []
+        appendedNodes.reserveCapacity(newKeys.count)
+
+        for nk in newKeys {
+            guard let label = labelFor(nk) else { continue }
+            appendedNodes.append(GraphNode(key: nk, label: label))
+        }
+
+        if appendedNodes.isEmpty && newEdges.isEmpty {
+            return
+        }
+
+        // Merge
+        nodes.append(contentsOf: appendedNodes)
+
+        let mergedEdges = (edges + newEdges).unique()
+        edges = Array(mergedEdges.prefix(maxLinks))
+
+        directedEdgeNotes = newNotes
+
+        // Seed positions for new nodes near the expanded node
+        seedNewNodesNear(key, newNodeKeys: appendedNodes.map(\.key))
+    }
+
+    @MainActor
+    private func seedNewNodesNear(_ centerKey: NodeKey, newNodeKeys: [NodeKey]) {
+        guard !newNodeKeys.isEmpty else { return }
+        guard let cp = positions[centerKey] else {
+            // Fallback: just place them around origin
+            for (i, k) in newNodeKeys.enumerated() {
+                let angle = (CGFloat(i) / CGFloat(max(1, newNodeKeys.count))) * (.pi * 2)
+                let p = CGPoint(x: cos(angle) * 140, y: sin(angle) * 140)
+                positions[k] = p
+                velocities[k] = .zero
+            }
+            return
+        }
+
+        let rBase: CGFloat = 90
+        for (i, k) in newNodeKeys.enumerated() {
+            if positions[k] != nil { continue }
+            let angle = (CGFloat(i) / CGFloat(max(1, newNodeKeys.count))) * (.pi * 2)
+            let r = rBase + CGFloat((i % 4)) * 14
+            let p = CGPoint(x: cp.x + cos(angle) * r, y: cp.y + sin(angle) * r)
+            positions[k] = p
+            velocities[k] = .zero
+        }
+    }
+
     // MARK: - Helpers
 
     private func nodeForKey(_ key: NodeKey) -> GraphNode? {
@@ -792,7 +1024,77 @@ struct GraphCanvasScreen: View {
     }
 }
 
-// ✅ MiniMap View
+// MARK: - Lens
+
+private struct LensContext: Equatable {
+    let enabled: Bool
+    let hideNonRelevant: Bool
+    let depth: Int
+    let selection: NodeKey?
+    let distance: [NodeKey: Int]
+    let relevant: Set<NodeKey>
+
+    static func build(enabled: Bool, hideNonRelevant: Bool, depth: Int, selection: NodeKey?, edges: [GraphEdge]) -> LensContext {
+        guard enabled, let s = selection else {
+            return LensContext(enabled: false, hideNonRelevant: false, depth: depth, selection: selection, distance: [:], relevant: [])
+        }
+
+        // adjacency (edges sind klein; maxLinks ~ 800 -> ok)
+        var adj: [NodeKey: [NodeKey]] = [:]
+        adj.reserveCapacity(edges.count * 2)
+        for e in edges {
+            adj[e.a, default: []].append(e.b)
+            adj[e.b, default: []].append(e.a)
+        }
+
+        var dist: [NodeKey: Int] = [s: 0]
+        var q: [NodeKey] = [s]
+        var idx = 0
+
+        while idx < q.count {
+            let cur = q[idx]; idx += 1
+            let d = dist[cur, default: 0]
+            if d >= depth { continue }
+            for nb in adj[cur, default: []] {
+                if dist[nb] == nil {
+                    dist[nb] = d + 1
+                    q.append(nb)
+                }
+            }
+        }
+
+        let rel = Set(dist.keys)
+        return LensContext(enabled: true, hideNonRelevant: hideNonRelevant, depth: depth, selection: s, distance: dist, relevant: rel)
+    }
+
+    func nodeOpacity(_ k: NodeKey) -> CGFloat {
+        guard enabled, let d = distance[k] else { return hideNonRelevant ? 0.0 : 0.12 }
+        switch d {
+        case 0: return 1.0
+        case 1: return 0.92
+        case 2: return 0.55
+        default: return hideNonRelevant ? 0.0 : 0.12
+        }
+    }
+
+    func edgeOpacity(a: NodeKey, b: NodeKey) -> CGFloat {
+        guard enabled else { return 1.0 }
+        let da = distance[a]
+        let db = distance[b]
+        if da == nil || db == nil { return hideNonRelevant ? 0.0 : 0.10 }
+        let m = max(da!, db!)
+        if m <= 1 { return 0.95 }
+        if m == 2 { return 0.55 }
+        return hideNonRelevant ? 0.0 : 0.10
+    }
+
+    func isHidden(_ k: NodeKey) -> Bool {
+        enabled && hideNonRelevant && distance[k] == nil
+    }
+}
+
+// MARK: - MiniMap View
+
 private struct MiniMapView: View {
     let nodes: [GraphNode]
     let edges: [GraphEdge]
@@ -979,12 +1281,13 @@ struct CameraCommand: Identifiable, Equatable {
     let kind: Kind
 }
 
-// MARK: - Graph Canvas View (Selection + Drag/Pin + Camera commands)
+// MARK: - Graph Canvas View (Selection + Drag/Pin + Camera commands + Lens)
 
 struct GraphCanvasView: View {
     let nodes: [GraphNode]
     let edges: [GraphEdge]
-    let directedEdgeNotes: [DirectedEdgeKey: String] // ✅
+    let directedEdgeNotes: [DirectedEdgeKey: String]
+    fileprivate let lens: LensContext
 
     @Binding var positions: [NodeKey: CGPoint]
     @Binding var velocities: [NodeKey: CGVector]
@@ -1010,58 +1313,110 @@ struct GraphCanvasView: View {
         GeometryReader { geo in
             let size = geo.size
 
+            // ✅ Semantic zoom opacities (weich, kein hartes “an/aus”)
+            let entityLabelAlpha = fade(scale, from: 0.82, to: 0.98)          // mid
+            let attributeLabelAlpha = fade(scale, from: 1.28, to: 1.48)        // near
+            let noteAlpha = fade(scale, from: 1.36, to: 1.56)                  // near+
+            let showNotes = noteAlpha > 0.02
+
             Canvas { context, _ in
                 let center = CGPoint(x: size.width / 2 + pan.width, y: size.height / 2 + pan.height)
 
                 // edges
                 for e in edges {
+                    if lens.hideNonRelevant && (lens.isHidden(e.a) || lens.isHidden(e.b)) {
+                        continue
+                    }
+
                     guard let p1 = positions[e.a], let p2 = positions[e.b] else { continue }
                     let a = toScreen(p1, center: center)
                     let b = toScreen(p2, center: center)
+
+                    let edgeAlpha = lens.edgeOpacity(a: e.a, b: e.b)
 
                     var path = Path()
                     path.move(to: a)
                     path.addLine(to: b)
 
+                    // ✅ Kanten wirken “ruhiger” wenn man weit rauszoomt (minimaler Effekt)
+                    let zoomEdgeFactor = max(0.65, min(1.0, scale / 1.0))
+                    let baseLink = 0.40 * edgeAlpha * zoomEdgeFactor
+                    let baseContain = 0.22 * edgeAlpha * zoomEdgeFactor
+
                     switch e.type {
                     case .containment:
-                        context.stroke(path, with: .color(.secondary.opacity(0.22)), lineWidth: 1)
+                        context.stroke(path, with: .color(.secondary.opacity(baseContain)), lineWidth: 1)
                     case .link:
-                        context.stroke(path, with: .color(.secondary.opacity(0.40)), lineWidth: 1)
+                        context.stroke(path, with: .color(.secondary.opacity(baseLink)), lineWidth: 1)
                     }
 
-                    // ✅ Option 1: Notiz nur an Kanten der selektierten Node – und zwar AUSGEHEND!
-                    if e.type == .link, let sel = selection {
+                    // ✅ Notizen: nur für Kanten der selektierten Node – ausgehend! – und nur im Nah-Zoom
+                    if showNotes, let sel = selection, e.type == .link {
                         if sel == e.a {
-                            drawOutgoingNoteIfAny(source: e.a, target: e.b, from: a, to: b, in: context)
+                            drawOutgoingNoteIfAny(
+                                source: e.a,
+                                target: e.b,
+                                from: a,
+                                to: b,
+                                alpha: noteAlpha,
+                                in: context
+                            )
                         } else if sel == e.b {
-                            drawOutgoingNoteIfAny(source: e.b, target: e.a, from: b, to: a, in: context)
+                            drawOutgoingNoteIfAny(
+                                source: e.b,
+                                target: e.a,
+                                from: b,
+                                to: a,
+                                alpha: noteAlpha,
+                                in: context
+                            )
                         }
                     }
                 }
 
                 // nodes
                 for n in nodes {
+                    if lens.hideNonRelevant && lens.isHidden(n.key) { continue }
+
                     guard let p = positions[n.key] else { continue }
                     let s = toScreen(p, center: center)
+
                     let isPinned = pinned.contains(n.key)
                     let isSelected = (selection == n.key)
+
+                    let nodeAlpha = lens.nodeOpacity(n.key)
 
                     switch n.key.kind {
                     case .entity:
                         let r: CGFloat = 16
                         let rect = CGRect(x: s.x - r, y: s.y - r, width: r * 2, height: r * 2)
 
-                        context.fill(Path(ellipseIn: rect), with: .color(.primary.opacity(isPinned ? 0.22 : 0.15)))
-                        context.stroke(Path(ellipseIn: rect),
-                                       with: .color(.primary.opacity(isSelected ? 0.95 : (isPinned ? 0.80 : 0.55))),
-                                       lineWidth: isSelected ? 3 : (isPinned ? 2 : 1))
-                        context.draw(Text(n.label).font(.caption), at: CGPoint(x: s.x, y: s.y + 26), anchor: .center)
+                        context.fill(Path(ellipseIn: rect), with: .color(.primary.opacity((isPinned ? 0.22 : 0.15) * nodeAlpha)))
+                        context.stroke(
+                            Path(ellipseIn: rect),
+                            with: .color(.primary.opacity((isSelected ? 0.95 : (isPinned ? 0.80 : 0.55)) * nodeAlpha)),
+                            lineWidth: isSelected ? 3 : (isPinned ? 2 : 1)
+                        )
 
-                        if isPinned {
-                            context.draw(Text("📌").font(.caption2),
-                                         at: CGPoint(x: s.x + 18, y: s.y - 18),
-                                         anchor: .center)
+                        // ✅ Entity-Label erst ab mid (weich)
+                        let labelA = max(entityLabelAlpha, isSelected ? 1.0 : 0.0) * nodeAlpha
+                        if labelA > 0.06 {
+                            context.draw(
+                                Text(n.label)
+                                    .font(.caption)
+                                    .foregroundStyle(.primary.opacity(labelA)),
+                                at: CGPoint(x: s.x, y: s.y + 26),
+                                anchor: .center
+                            )
+                        }
+
+                        // ✅ Pin-Icon nicht im weit-weg-Modus spammy: erst ab mid oder wenn selected
+                        if isPinned && (entityLabelAlpha > 0.25 || isSelected) && nodeAlpha > 0.20 {
+                            context.draw(
+                                Text("📌").font(.caption2),
+                                at: CGPoint(x: s.x + 18, y: s.y - 18),
+                                anchor: .center
+                            )
                         }
 
                     case .attribute:
@@ -1070,16 +1425,31 @@ struct GraphCanvasView: View {
                         let rect = CGRect(x: s.x - w/2, y: s.y - h/2, width: w, height: h)
                         let rr = Path(roundedRect: rect, cornerRadius: 6)
 
-                        context.fill(rr, with: .color(.primary.opacity(isPinned ? 0.16 : 0.10)))
-                        context.stroke(rr,
-                                       with: .color(.primary.opacity(isSelected ? 0.95 : (isPinned ? 0.75 : 0.45))),
-                                       lineWidth: isSelected ? 3 : (isPinned ? 2 : 1))
-                        context.draw(Text(n.label).font(.caption2), at: CGPoint(x: s.x, y: s.y + 22), anchor: .center)
+                        context.fill(rr, with: .color(.primary.opacity((isPinned ? 0.16 : 0.10) * nodeAlpha)))
+                        context.stroke(
+                            rr,
+                            with: .color(.primary.opacity((isSelected ? 0.95 : (isPinned ? 0.75 : 0.45)) * nodeAlpha)),
+                            lineWidth: isSelected ? 3 : (isPinned ? 2 : 1)
+                        )
 
-                        if isPinned {
-                            context.draw(Text("📌").font(.caption2),
-                                         at: CGPoint(x: s.x + 18, y: s.y - 14),
-                                         anchor: .center)
+                        // ✅ Attribute-Label erst ab near (weich), aber wenn selected trotzdem zeigen
+                        let labelA = max(attributeLabelAlpha, isSelected ? 1.0 : 0.0) * nodeAlpha
+                        if labelA > 0.06 {
+                            context.draw(
+                                Text(n.label)
+                                    .font(.caption2)
+                                    .foregroundStyle(.primary.opacity(labelA)),
+                                at: CGPoint(x: s.x, y: s.y + 22),
+                                anchor: .center
+                            )
+                        }
+
+                        if isPinned && (attributeLabelAlpha > 0.25 || isSelected) && nodeAlpha > 0.20 {
+                            context.draw(
+                                Text("📌").font(.caption2),
+                                at: CGPoint(x: s.x + 18, y: s.y - 14),
+                                anchor: .center
+                            )
                         }
                     }
                 }
@@ -1099,13 +1469,32 @@ struct GraphCanvasView: View {
         }
     }
 
-    private func drawOutgoingNoteIfAny(source: NodeKey, target: NodeKey, from a: CGPoint, to b: CGPoint, in context: GraphicsContext) {
-        let k = DirectedEdgeKey.make(source: source, target: target, type: .link)
-        guard let note = directedEdgeNotes[k], !note.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return }
-        drawEdgeNote(note, from: a, to: b, in: context)
+    // MARK: - Semantic Zoom helpers
+
+    private func clamp01(_ x: CGFloat) -> CGFloat { max(0, min(1, x)) }
+
+    /// Linear fade from 0..1 between two scale values.
+    private func fade(_ value: CGFloat, from a: CGFloat, to b: CGFloat) -> CGFloat {
+        guard b > a else { return value >= b ? 1 : 0 }
+        return clamp01((value - a) / (b - a))
     }
 
-    private func drawEdgeNote(_ raw: String, from a: CGPoint, to b: CGPoint, in context: GraphicsContext) {
+    // MARK: - Notes
+
+    private func drawOutgoingNoteIfAny(
+        source: NodeKey,
+        target: NodeKey,
+        from a: CGPoint,
+        to b: CGPoint,
+        alpha: CGFloat,
+        in context: GraphicsContext
+    ) {
+        let k = DirectedEdgeKey.make(source: source, target: target, type: .link)
+        guard let note = directedEdgeNotes[k], !note.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return }
+        drawEdgeNote(note, from: a, to: b, alpha: alpha, in: context)
+    }
+
+    private func drawEdgeNote(_ raw: String, from a: CGPoint, to b: CGPoint, alpha: CGFloat, in context: GraphicsContext) {
         let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return }
 
@@ -1116,7 +1505,7 @@ struct GraphCanvasView: View {
 
         let text = Text(textStr)
             .font(.caption2)
-            .foregroundStyle(.primary)
+            .foregroundStyle(.primary.opacity(alpha))
 
         let resolved = context.resolve(text)
         let maxSize = CGSize(width: 160, height: 60)
@@ -1131,8 +1520,8 @@ struct GraphCanvasView: View {
         )
 
         let bgPath = Path(roundedRect: bg, cornerRadius: 8)
-        context.fill(bgPath, with: .color(.primary.opacity(0.12)))
-        context.stroke(bgPath, with: .color(.primary.opacity(0.28)), lineWidth: 1)
+        context.fill(bgPath, with: .color(.primary.opacity(0.12 * alpha)))
+        context.stroke(bgPath, with: .color(.primary.opacity(0.28 * alpha)), lineWidth: 1)
 
         context.draw(resolved, at: mid, anchor: .center)
     }
@@ -1209,6 +1598,8 @@ struct GraphCanvasView: View {
         var best: (NodeKey, CGFloat)?
 
         for n in nodes {
+            if lens.hideNonRelevant && lens.isHidden(n.key) { continue }
+
             guard let p = positions[n.key] else { continue }
             let dx = p.x - worldTap.x
             let dy = p.y - worldTap.y
