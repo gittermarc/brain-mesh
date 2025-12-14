@@ -8,6 +8,28 @@
 import SwiftUI
 import SwiftData
 
+enum WorkMode: String, CaseIterable, Identifiable {
+    case explore
+    case edit
+
+    var id: String { rawValue }
+
+    var title: String {
+        switch self {
+        case .explore: return "Explore"
+        case .edit: return "Edit"
+        }
+    }
+
+    var icon: String {
+        switch self {
+        case .explore: return "hand.draw"
+        case .edit: return "pencil.tip"
+        }
+    }
+}
+
+
 struct GraphCanvasScreen: View {
     @Environment(\.modelContext) private var modelContext
 
@@ -15,6 +37,8 @@ struct GraphCanvasScreen: View {
     @State private var focusEntity: MetaEntity?
     @State private var showFocusPicker = false
     @State private var hops: Int = 1
+    @State private var workMode: WorkMode = .explore
+
 
     // Toggles
     @State private var showAttributes: Bool = true
@@ -86,6 +110,7 @@ struct GraphCanvasScreen: View {
                         edges: edges,
                         directedEdgeNotes: directedEdgeNotes,
                         lens: lens,
+                        workMode: workMode,
                         positions: $positions,
                         velocities: $velocities,
                         pinned: $pinned,
@@ -162,6 +187,13 @@ struct GraphCanvasScreen: View {
                         Image(systemName: "scope")
                     }
 
+                    Button {
+                        workMode = (workMode == .explore) ? .edit : .explore
+                    } label: {
+                        Image(systemName: workMode.icon)
+                    }
+                    .accessibilityLabel(workMode == .explore ? "In Edit-Modus wechseln" : "In Explore-Modus wechseln")
+                    
                     Button {
                         if let sel = selection { cameraCommand = CameraCommand(kind: .center(sel)) }
                         else if let f = focusEntity { cameraCommand = CameraCommand(kind: .center(NodeKey(kind: .entity, uuid: f.id))) }
@@ -392,6 +424,12 @@ struct GraphCanvasScreen: View {
                         Text(focusEntity?.name ?? "Keiner")
                             .foregroundStyle(.secondary)
                             .lineLimit(1)
+                        Picker("Arbeitsmodus", selection: $workMode) {
+                            ForEach(WorkMode.allCases) { mode in
+                                Text(mode.title).tag(mode)
+                            }
+                        }
+                        .pickerStyle(.segmented)
                     }
 
                     Button {
@@ -1289,6 +1327,8 @@ struct GraphCanvasView: View {
     let directedEdgeNotes: [DirectedEdgeKey: String]
     fileprivate let lens: LensContext
 
+    let workMode: WorkMode   // ✅ neu
+
     @Binding var positions: [NodeKey: CGPoint]
     @Binding var velocities: [NodeKey: CGVector]
     @Binding var pinned: Set<NodeKey>
@@ -1324,9 +1364,7 @@ struct GraphCanvasView: View {
 
                 // edges
                 for e in edges {
-                    if lens.hideNonRelevant && (lens.isHidden(e.a) || lens.isHidden(e.b)) {
-                        continue
-                    }
+                    if lens.hideNonRelevant && (lens.isHidden(e.a) || lens.isHidden(e.b)) { continue }
 
                     guard let p1 = positions[e.a], let p2 = positions[e.b] else { continue }
                     let a = toScreen(p1, center: center)
@@ -1338,7 +1376,6 @@ struct GraphCanvasView: View {
                     path.move(to: a)
                     path.addLine(to: b)
 
-                    // ✅ Kanten wirken “ruhiger” wenn man weit rauszoomt (minimaler Effekt)
                     let zoomEdgeFactor = max(0.65, min(1.0, scale / 1.0))
                     let baseLink = 0.40 * edgeAlpha * zoomEdgeFactor
                     let baseContain = 0.22 * edgeAlpha * zoomEdgeFactor
@@ -1350,26 +1387,12 @@ struct GraphCanvasView: View {
                         context.stroke(path, with: .color(.secondary.opacity(baseLink)), lineWidth: 1)
                     }
 
-                    // ✅ Notizen: nur für Kanten der selektierten Node – ausgehend! – und nur im Nah-Zoom
+                    // ✅ Notizen: nur im Nah-Zoom und nur für Kanten der selektierten Node (ausgehend)
                     if showNotes, let sel = selection, e.type == .link {
                         if sel == e.a {
-                            drawOutgoingNoteIfAny(
-                                source: e.a,
-                                target: e.b,
-                                from: a,
-                                to: b,
-                                alpha: noteAlpha,
-                                in: context
-                            )
+                            drawOutgoingNoteIfAny(source: e.a, target: e.b, from: a, to: b, alpha: noteAlpha, in: context)
                         } else if sel == e.b {
-                            drawOutgoingNoteIfAny(
-                                source: e.b,
-                                target: e.a,
-                                from: b,
-                                to: a,
-                                alpha: noteAlpha,
-                                in: context
-                            )
+                            drawOutgoingNoteIfAny(source: e.b, target: e.a, from: b, to: a, alpha: noteAlpha, in: context)
                         }
                     }
                 }
@@ -1377,13 +1400,11 @@ struct GraphCanvasView: View {
                 // nodes
                 for n in nodes {
                     if lens.hideNonRelevant && lens.isHidden(n.key) { continue }
-
                     guard let p = positions[n.key] else { continue }
-                    let s = toScreen(p, center: center)
 
+                    let s = toScreen(p, center: center)
                     let isPinned = pinned.contains(n.key)
                     let isSelected = (selection == n.key)
-
                     let nodeAlpha = lens.nodeOpacity(n.key)
 
                     switch n.key.kind {
@@ -1398,25 +1419,17 @@ struct GraphCanvasView: View {
                             lineWidth: isSelected ? 3 : (isPinned ? 2 : 1)
                         )
 
-                        // ✅ Entity-Label erst ab mid (weich)
                         let labelA = max(entityLabelAlpha, isSelected ? 1.0 : 0.0) * nodeAlpha
                         if labelA > 0.06 {
                             context.draw(
-                                Text(n.label)
-                                    .font(.caption)
-                                    .foregroundStyle(.primary.opacity(labelA)),
+                                Text(n.label).font(.caption).foregroundStyle(.primary.opacity(labelA)),
                                 at: CGPoint(x: s.x, y: s.y + 26),
                                 anchor: .center
                             )
                         }
 
-                        // ✅ Pin-Icon nicht im weit-weg-Modus spammy: erst ab mid oder wenn selected
                         if isPinned && (entityLabelAlpha > 0.25 || isSelected) && nodeAlpha > 0.20 {
-                            context.draw(
-                                Text("📌").font(.caption2),
-                                at: CGPoint(x: s.x + 18, y: s.y - 18),
-                                anchor: .center
-                            )
+                            context.draw(Text("📌").font(.caption2), at: CGPoint(x: s.x + 18, y: s.y - 18), anchor: .center)
                         }
 
                     case .attribute:
@@ -1432,32 +1445,25 @@ struct GraphCanvasView: View {
                             lineWidth: isSelected ? 3 : (isPinned ? 2 : 1)
                         )
 
-                        // ✅ Attribute-Label erst ab near (weich), aber wenn selected trotzdem zeigen
                         let labelA = max(attributeLabelAlpha, isSelected ? 1.0 : 0.0) * nodeAlpha
                         if labelA > 0.06 {
                             context.draw(
-                                Text(n.label)
-                                    .font(.caption2)
-                                    .foregroundStyle(.primary.opacity(labelA)),
+                                Text(n.label).font(.caption2).foregroundStyle(.primary.opacity(labelA)),
                                 at: CGPoint(x: s.x, y: s.y + 22),
                                 anchor: .center
                             )
                         }
 
                         if isPinned && (attributeLabelAlpha > 0.25 || isSelected) && nodeAlpha > 0.20 {
-                            context.draw(
-                                Text("📌").font(.caption2),
-                                at: CGPoint(x: s.x + 18, y: s.y - 14),
-                                anchor: .center
-                            )
+                            context.draw(Text("📌").font(.caption2), at: CGPoint(x: s.x + 18, y: s.y - 14), anchor: .center)
                         }
                     }
                 }
             }
             .contentShape(Rectangle())
-            .highPriorityGesture(doubleTapPinGesture(in: size))
+            .highPriorityGesture(doubleTapPinGesture(in: size))   // ✅ mode-aware
             .gesture(singleTapSelectGesture(in: size))
-            .gesture(dragGesture(in: size))
+            .gesture(dragGesture(in: size))                       // ✅ mode-aware
             .gesture(zoomGesture())
             .onAppear { startSimulation() }
             .onDisappear { stopSimulation() }
@@ -1472,8 +1478,6 @@ struct GraphCanvasView: View {
     // MARK: - Semantic Zoom helpers
 
     private func clamp01(_ x: CGFloat) -> CGFloat { max(0, min(1, x)) }
-
-    /// Linear fade from 0..1 between two scale values.
     private func fade(_ value: CGFloat, from a: CGFloat, to b: CGFloat) -> CGFloat {
         guard b > a else { return value >= b ? 1 : 0 }
         return clamp01((value - a) / (b - a))
@@ -1522,11 +1526,10 @@ struct GraphCanvasView: View {
         let bgPath = Path(roundedRect: bg, cornerRadius: 8)
         context.fill(bgPath, with: .color(.primary.opacity(0.12 * alpha)))
         context.stroke(bgPath, with: .color(.primary.opacity(0.28 * alpha)), lineWidth: 1)
-
         context.draw(resolved, at: mid, anchor: .center)
     }
 
-    // MARK: - Camera command handling
+    // MARK: - Camera command handling (unverändert)
 
     private func applyCameraCommand(_ cmd: CameraCommand, in size: CGSize) {
         switch cmd.kind {
@@ -1537,14 +1540,12 @@ struct GraphCanvasView: View {
                 panStart = .zero
                 scaleStart = 1.0
             }
-
         case .center(let key):
             guard let p = positions[key] else { return }
             withAnimation(.snappy) {
                 pan = CGSize(width: -p.x * scale, height: -p.y * scale)
                 panStart = pan
             }
-
         case .fitAll:
             let keys = nodes.map(\.key)
             guard !keys.isEmpty else { return }
@@ -1555,12 +1556,9 @@ struct GraphCanvasView: View {
 
             for k in keys {
                 guard let p = positions[k] else { continue }
-                minX = min(minX, p.x)
-                minY = min(minY, p.y)
-                maxX = max(maxX, p.x)
-                maxY = max(maxY, p.y)
+                minX = min(minX, p.x); minY = min(minY, p.y)
+                maxX = max(maxX, p.x); maxY = max(maxY, p.y)
             }
-
             if minX == .greatestFiniteMagnitude { return }
 
             let worldW = max(1, maxX - minX)
@@ -1572,7 +1570,6 @@ struct GraphCanvasView: View {
 
             let targetScale = min(availW / worldW, availH / worldH)
             let clamped = max(0.4, min(3.0, targetScale))
-
             let mid = CGPoint(x: (minX + maxX) / 2, y: (minY + maxY) / 2)
 
             withAnimation(.snappy) {
@@ -1596,11 +1593,10 @@ struct GraphCanvasView: View {
 
     private func hitTest(worldTap: CGPoint) -> NodeKey? {
         var best: (NodeKey, CGFloat)?
-
         for n in nodes {
             if lens.hideNonRelevant && lens.isHidden(n.key) { continue }
-
             guard let p = positions[n.key] else { continue }
+
             let dx = p.x - worldTap.x
             let dy = p.y - worldTap.y
             let d = sqrt(dx*dx + dy*dy)
@@ -1628,6 +1624,9 @@ struct GraphCanvasView: View {
     private func doubleTapPinGesture(in size: CGSize) -> some Gesture {
         SpatialTapGesture(count: 2)
             .onEnded { value in
+                // ✅ Explore = kein Pinning (nichts “kaputtklicken”)
+                guard workMode == .edit else { return }
+
                 let center = CGPoint(x: size.width / 2 + pan.width, y: size.height / 2 + pan.height)
                 let worldTap = toWorld(value.location, center: center)
                 guard let key = hitTest(worldTap: worldTap) else { return }
@@ -1646,6 +1645,16 @@ struct GraphCanvasView: View {
             .onChanged { value in
                 let center = CGPoint(x: size.width / 2 + pan.width, y: size.height / 2 + pan.height)
 
+                // ✅ Explore: Drag ist IMMER nur Pan
+                if workMode == .explore {
+                    if draggingKey != nil { draggingKey = nil }
+                    if value.translation == .zero { dragStartPan = panStart } // safe, falls iOS komisch startet
+                    pan = CGSize(width: panStart.width + value.translation.width,
+                                height: panStart.height + value.translation.height)
+                    return
+                }
+
+                // ✅ Edit: wie bisher (Node drag oder Pan)
                 if draggingKey == nil {
                     let worldStart = toWorld(value.startLocation, center: center)
                     if let key = hitTest(worldTap: worldStart) {
@@ -1669,8 +1678,14 @@ struct GraphCanvasView: View {
                 }
             }
             .onEnded { _ in
+                if workMode == .explore {
+                    panStart = pan
+                    draggingKey = nil
+                    return
+                }
+
                 if let key = draggingKey {
-                    pinned.insert(key)
+                    pinned.insert(key) // auto-pin
                     velocities[key] = .zero
                 } else {
                     panStart = pan
@@ -1704,7 +1719,8 @@ struct GraphCanvasView: View {
     }
 
     private func isFixed(_ key: NodeKey) -> Bool {
-        pinned.contains(key) || (draggingKey == key)
+        // ✅ Explore: nie “fixed” durch Dragging (weil wir nicht draggen)
+        pinned.contains(key) || (workMode == .edit && draggingKey == key)
     }
 
     private func addVelocity(_ key: NodeKey, dx: CGFloat, dy: CGFloat, vel: inout [NodeKey: CGVector]) {
