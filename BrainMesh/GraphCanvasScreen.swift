@@ -7,6 +7,7 @@
 
 import SwiftUI
 import SwiftData
+import UIKit
 
 enum WorkMode: String, CaseIterable, Identifiable {
     case explore
@@ -39,7 +40,13 @@ struct GraphCanvasScreen: View {
     @State private var hops: Int = 1
     @State private var workMode: WorkMode = .explore
 
+    @State private var showGraphPhotoFullscreen = false
+    @State private var graphFullscreenImage: UIImage?
+    @State private var cachedFullImagePath: String?
+    @State private var cachedFullImage: UIImage?
 
+    
+    
     // Toggles
     @State private var showAttributes: Bool = true
 
@@ -111,6 +118,19 @@ struct GraphCanvasScreen: View {
                         directedEdgeNotes: directedEdgeNotes,
                         lens: lens,
                         workMode: workMode,
+                        selectedImagePath: selectedImagePath(),
+                        onTapSelectedThumbnail: {
+                            if let img = cachedFullImage {
+                                graphFullscreenImage = img
+                                showGraphPhotoFullscreen = true
+                                return
+                            }
+                            // Fallback (sollte selten sein)
+                            guard let path = selectedImagePathValue,
+                                  let full = ImageStore.loadUIImage(path: path) else { return }
+                            graphFullscreenImage = full
+                            showGraphPhotoFullscreen = true
+                        },
                         positions: $positions,
                         velocities: $velocities,
                         pinned: $pinned,
@@ -275,6 +295,14 @@ struct GraphCanvasScreen: View {
         }
         .onChange(of: pan) { _, _ in pulseMiniMap() }
         .onChange(of: scale) { _, _ in pulseMiniMap() }
+        .onAppear { prefetchSelectedFullImage() }
+        .onChange(of: selection) { _, _ in prefetchSelectedFullImage() }
+        .onChange(of: selectedImagePathValue) { _, _ in prefetchSelectedFullImage() }
+        .fullScreenCover(isPresented: $showGraphPhotoFullscreen) {
+            if let img = graphFullscreenImage {
+                FullscreenPhotoView(image: img)
+            }
+        }
     }
 
     // MARK: - Side status bar
@@ -1002,6 +1030,42 @@ struct GraphCanvasScreen: View {
         let fd = FetchDescriptor<MetaAttribute>(predicate: #Predicate { a in a.id == nodeID })
         return try? modelContext.fetch(fd).first
     }
+    
+    private func selectedImagePath() -> String? {
+        guard let sel = selection else { return nil }
+        switch sel.kind {
+        case .entity:
+            return fetchEntity(id: sel.uuid)?.imagePath
+        case .attribute:
+            return fetchAttribute(id: sel.uuid)?.imagePath
+        }
+    }
+    
+    private var selectedImagePathValue: String? {
+        selectedImagePath()
+    }
+
+    private func prefetchSelectedFullImage() {
+        let path = selectedImagePathValue
+        guard path != cachedFullImagePath else { return }   // nichts zu tun
+
+        cachedFullImagePath = path
+        cachedFullImage = nil
+
+        guard let path, !path.isEmpty else { return }
+
+        DispatchQueue.global(qos: .userInitiated).async {
+            let img = ImageStore.loadUIImage(path: path)
+            DispatchQueue.main.async {
+                // nur übernehmen, wenn inzwischen nicht umselected wurde
+                if cachedFullImagePath == path {
+                    cachedFullImage = img
+                }
+            }
+        }
+    }
+
+
 
     private func seedLayout(preservePinned: Bool) {
         let oldPos = positions
@@ -1327,7 +1391,11 @@ struct GraphCanvasView: View {
     let directedEdgeNotes: [DirectedEdgeKey: String]
     fileprivate let lens: LensContext
 
-    let workMode: WorkMode   // ✅ neu
+    let workMode: WorkMode
+
+    // ✅ Thumbnail support (nur Selection)
+    let selectedImagePath: String?
+    let onTapSelectedThumbnail: () -> Void
 
     @Binding var positions: [NodeKey: CGPoint]
     @Binding var velocities: [NodeKey: CGVector]
@@ -1349,6 +1417,10 @@ struct GraphCanvasView: View {
     @State private var dragStartWorld: CGPoint = .zero
     @State private var dragStartPan: CGSize = .zero
 
+    // ✅ cache thumbnail (wichtig: NICHT pro Frame von Disk lesen)
+    @State private var cachedThumbPath: String?
+    @State private var cachedThumb: UIImage?
+
     var body: some View {
         GeometryReader { geo in
             let size = geo.size
@@ -1359,118 +1431,190 @@ struct GraphCanvasView: View {
             let noteAlpha = fade(scale, from: 1.36, to: 1.56)                  // near+
             let showNotes = noteAlpha > 0.02
 
-            Canvas { context, _ in
-                let center = CGPoint(x: size.width / 2 + pan.width, y: size.height / 2 + pan.height)
+            // ✅ Thumbnail nur "near"
+            let thumbAlpha = fade(scale, from: 1.26, to: 1.42)
 
-                // edges
-                for e in edges {
-                    if lens.hideNonRelevant && (lens.isHidden(e.a) || lens.isHidden(e.b)) { continue }
+            ZStack {
+                Canvas { context, _ in
+                    let center = CGPoint(x: size.width / 2 + pan.width, y: size.height / 2 + pan.height)
 
-                    guard let p1 = positions[e.a], let p2 = positions[e.b] else { continue }
-                    let a = toScreen(p1, center: center)
-                    let b = toScreen(p2, center: center)
+                    // edges
+                    for e in edges {
+                        if lens.hideNonRelevant && (lens.isHidden(e.a) || lens.isHidden(e.b)) {
+                            continue
+                        }
 
-                    let edgeAlpha = lens.edgeOpacity(a: e.a, b: e.b)
+                        guard let p1 = positions[e.a], let p2 = positions[e.b] else { continue }
+                        let a = toScreen(p1, center: center)
+                        let b = toScreen(p2, center: center)
 
-                    var path = Path()
-                    path.move(to: a)
-                    path.addLine(to: b)
+                        let edgeAlpha = lens.edgeOpacity(a: e.a, b: e.b)
 
-                    let zoomEdgeFactor = max(0.65, min(1.0, scale / 1.0))
-                    let baseLink = 0.40 * edgeAlpha * zoomEdgeFactor
-                    let baseContain = 0.22 * edgeAlpha * zoomEdgeFactor
+                        var path = Path()
+                        path.move(to: a)
+                        path.addLine(to: b)
 
-                    switch e.type {
-                    case .containment:
-                        context.stroke(path, with: .color(.secondary.opacity(baseContain)), lineWidth: 1)
-                    case .link:
-                        context.stroke(path, with: .color(.secondary.opacity(baseLink)), lineWidth: 1)
+                        let zoomEdgeFactor = max(0.65, min(1.0, scale / 1.0))
+                        let baseLink = 0.40 * edgeAlpha * zoomEdgeFactor
+                        let baseContain = 0.22 * edgeAlpha * zoomEdgeFactor
+
+                        switch e.type {
+                        case .containment:
+                            context.stroke(path, with: .color(.secondary.opacity(baseContain)), lineWidth: 1)
+                        case .link:
+                            context.stroke(path, with: .color(.secondary.opacity(baseLink)), lineWidth: 1)
+                        }
+
+                        // ✅ Notizen: nur im Nah-Zoom und nur für Kanten der selektierten Node (ausgehend)
+                        if showNotes, let sel = selection, e.type == .link {
+                            if sel == e.a {
+                                drawOutgoingNoteIfAny(source: e.a, target: e.b, from: a, to: b, alpha: noteAlpha, in: context)
+                            } else if sel == e.b {
+                                drawOutgoingNoteIfAny(source: e.b, target: e.a, from: b, to: a, alpha: noteAlpha, in: context)
+                            }
+                        }
                     }
 
-                    // ✅ Notizen: nur im Nah-Zoom und nur für Kanten der selektierten Node (ausgehend)
-                    if showNotes, let sel = selection, e.type == .link {
-                        if sel == e.a {
-                            drawOutgoingNoteIfAny(source: e.a, target: e.b, from: a, to: b, alpha: noteAlpha, in: context)
-                        } else if sel == e.b {
-                            drawOutgoingNoteIfAny(source: e.b, target: e.a, from: b, to: a, alpha: noteAlpha, in: context)
+                    // nodes
+                    for n in nodes {
+                        if lens.hideNonRelevant && lens.isHidden(n.key) { continue }
+                        guard let p = positions[n.key] else { continue }
+                        let center = CGPoint(x: size.width / 2 + pan.width, y: size.height / 2 + pan.height)
+                        let s = toScreen(p, center: center)
+
+                        let isPinned = pinned.contains(n.key)
+                        let isSelected = (selection == n.key)
+
+                        let nodeAlpha = lens.nodeOpacity(n.key)
+
+                        switch n.key.kind {
+                        case .entity:
+                            let r: CGFloat = 16
+                            let rect = CGRect(x: s.x - r, y: s.y - r, width: r * 2, height: r * 2)
+
+                            context.fill(Path(ellipseIn: rect), with: .color(.primary.opacity((isPinned ? 0.22 : 0.15) * nodeAlpha)))
+                            context.stroke(
+                                Path(ellipseIn: rect),
+                                with: .color(.primary.opacity((isSelected ? 0.95 : (isPinned ? 0.80 : 0.55)) * nodeAlpha)),
+                                lineWidth: isSelected ? 3 : (isPinned ? 2 : 1)
+                            )
+
+                            let labelA = max(entityLabelAlpha, isSelected ? 1.0 : 0.0) * nodeAlpha
+                            if labelA > 0.06 {
+                                context.draw(
+                                    Text(n.label).font(.caption).foregroundStyle(.primary.opacity(labelA)),
+                                    at: CGPoint(x: s.x, y: s.y + 26),
+                                    anchor: .center
+                                )
+                            }
+
+                            if isPinned && (entityLabelAlpha > 0.25 || isSelected) && nodeAlpha > 0.20 {
+                                context.draw(Text("📌").font(.caption2),
+                                             at: CGPoint(x: s.x + 18, y: s.y - 18),
+                                             anchor: .center)
+                            }
+
+                        case .attribute:
+                            let w: CGFloat = 28
+                            let h: CGFloat = 22
+                            let rect = CGRect(x: s.x - w/2, y: s.y - h/2, width: w, height: h)
+                            let rr = Path(roundedRect: rect, cornerRadius: 6)
+
+                            context.fill(rr, with: .color(.primary.opacity((isPinned ? 0.16 : 0.10) * nodeAlpha)))
+                            context.stroke(
+                                rr,
+                                with: .color(.primary.opacity((isSelected ? 0.95 : (isPinned ? 0.75 : 0.45)) * nodeAlpha)),
+                                lineWidth: isSelected ? 3 : (isPinned ? 2 : 1)
+                            )
+
+                            let labelA = max(attributeLabelAlpha, isSelected ? 1.0 : 0.0) * nodeAlpha
+                            if labelA > 0.06 {
+                                context.draw(
+                                    Text(n.label).font(.caption2).foregroundStyle(.primary.opacity(labelA)),
+                                    at: CGPoint(x: s.x, y: s.y + 22),
+                                    anchor: .center
+                                )
+                            }
+
+                            if isPinned && (attributeLabelAlpha > 0.25 || isSelected) && nodeAlpha > 0.20 {
+                                context.draw(Text("📌").font(.caption2),
+                                             at: CGPoint(x: s.x + 18, y: s.y - 14),
+                                             anchor: .center)
+                            }
                         }
                     }
                 }
 
-                // nodes
-                for n in nodes {
-                    if lens.hideNonRelevant && lens.isHidden(n.key) { continue }
-                    guard let p = positions[n.key] else { continue }
+                // ✅ Selection Thumbnail Overlay (nur near + nur wenn Bild vorhanden)
+                if thumbAlpha > 0.05,
+                   let sel = selection,
+                   let wp = positions[sel],
+                   let img = cachedThumb {
 
-                    let s = toScreen(p, center: center)
-                    let isPinned = pinned.contains(n.key)
-                    let isSelected = (selection == n.key)
-                    let nodeAlpha = lens.nodeOpacity(n.key)
+                    let center = CGPoint(x: size.width / 2 + pan.width, y: size.height / 2 + pan.height)
+                    let sp = toScreen(wp, center: center)
 
-                    switch n.key.kind {
-                    case .entity:
-                        let r: CGFloat = 16
-                        let rect = CGRect(x: s.x - r, y: s.y - r, width: r * 2, height: r * 2)
+                    // slightly offset so it doesn't sit on top of the node
+                    let rawX = sp.x + 54
+                    let rawY = sp.y - 54
 
-                        context.fill(Path(ellipseIn: rect), with: .color(.primary.opacity((isPinned ? 0.22 : 0.15) * nodeAlpha)))
-                        context.stroke(
-                            Path(ellipseIn: rect),
-                            with: .color(.primary.opacity((isSelected ? 0.95 : (isPinned ? 0.80 : 0.55)) * nodeAlpha)),
-                            lineWidth: isSelected ? 3 : (isPinned ? 2 : 1)
-                        )
+                    let x = min(max(44, rawX), size.width - 44)
+                    let y = min(max(44, rawY), size.height - 44)
 
-                        let labelA = max(entityLabelAlpha, isSelected ? 1.0 : 0.0) * nodeAlpha
-                        if labelA > 0.06 {
-                            context.draw(
-                                Text(n.label).font(.caption).foregroundStyle(.primary.opacity(labelA)),
-                                at: CGPoint(x: s.x, y: s.y + 26),
-                                anchor: .center
-                            )
-                        }
-
-                        if isPinned && (entityLabelAlpha > 0.25 || isSelected) && nodeAlpha > 0.20 {
-                            context.draw(Text("📌").font(.caption2), at: CGPoint(x: s.x + 18, y: s.y - 18), anchor: .center)
-                        }
-
-                    case .attribute:
-                        let w: CGFloat = 28
-                        let h: CGFloat = 22
-                        let rect = CGRect(x: s.x - w/2, y: s.y - h/2, width: w, height: h)
-                        let rr = Path(roundedRect: rect, cornerRadius: 6)
-
-                        context.fill(rr, with: .color(.primary.opacity((isPinned ? 0.16 : 0.10) * nodeAlpha)))
-                        context.stroke(
-                            rr,
-                            with: .color(.primary.opacity((isSelected ? 0.95 : (isPinned ? 0.75 : 0.45)) * nodeAlpha)),
-                            lineWidth: isSelected ? 3 : (isPinned ? 2 : 1)
-                        )
-
-                        let labelA = max(attributeLabelAlpha, isSelected ? 1.0 : 0.0) * nodeAlpha
-                        if labelA > 0.06 {
-                            context.draw(
-                                Text(n.label).font(.caption2).foregroundStyle(.primary.opacity(labelA)),
-                                at: CGPoint(x: s.x, y: s.y + 22),
-                                anchor: .center
-                            )
-                        }
-
-                        if isPinned && (attributeLabelAlpha > 0.25 || isSelected) && nodeAlpha > 0.20 {
-                            context.draw(Text("📌").font(.caption2), at: CGPoint(x: s.x + 18, y: s.y - 14), anchor: .center)
-                        }
-                    }
+                    Image(uiImage: img)
+                        .resizable()
+                        .scaledToFill()
+                        .frame(width: 56, height: 56)
+                        .clipShape(RoundedRectangle(cornerRadius: 12))
+                        .overlay(RoundedRectangle(cornerRadius: 12).stroke(.white.opacity(0.45), lineWidth: 1))
+                        .shadow(radius: 8, y: 3)
+                        .opacity(0.25 + 0.75 * thumbAlpha)
+                        .position(x: x, y: y)
+                        .onTapGesture { onTapSelectedThumbnail() }
                 }
             }
             .contentShape(Rectangle())
-            .highPriorityGesture(doubleTapPinGesture(in: size))   // ✅ mode-aware
+            .highPriorityGesture(doubleTapPinGesture(in: size))
             .gesture(singleTapSelectGesture(in: size))
-            .gesture(dragGesture(in: size))                       // ✅ mode-aware
+            .gesture(dragGesture(in: size))
             .gesture(zoomGesture())
-            .onAppear { startSimulation() }
+            .onAppear {
+                startSimulation()
+                refreshThumbnailCache()
+            }
             .onDisappear { stopSimulation() }
             .onChange(of: cameraCommand?.id) { _, _ in
                 guard let cmd = cameraCommand else { return }
                 applyCameraCommand(cmd, in: size)
                 cameraCommand = nil
+            }
+            .onChange(of: selection) { _, _ in
+                refreshThumbnailCache()
+            }
+            .onChange(of: selectedImagePath) { _, _ in
+                refreshThumbnailCache()
+            }
+        }
+    }
+
+    // MARK: - Thumbnail cache
+
+    private func refreshThumbnailCache() {
+        let path = selectedImagePath
+        guard path != cachedThumbPath else { return }
+        cachedThumbPath = path
+        cachedThumb = nil
+
+        guard let path, !path.isEmpty else { return }
+
+        DispatchQueue.global(qos: .userInitiated).async {
+            guard let full = ImageStore.loadUIImage(path: path) else { return }
+            let thumb = full.preparingThumbnail(of: CGSize(width: 160, height: 160)) ?? full
+            DispatchQueue.main.async {
+                // only apply if still current
+                if cachedThumbPath == path {
+                    cachedThumb = thumb
+                }
             }
         }
     }
@@ -1529,7 +1673,7 @@ struct GraphCanvasView: View {
         context.draw(resolved, at: mid, anchor: .center)
     }
 
-    // MARK: - Camera command handling (unverändert)
+    // MARK: - Camera command handling
 
     private func applyCameraCommand(_ cmd: CameraCommand, in size: CGSize) {
         switch cmd.kind {
@@ -1540,12 +1684,14 @@ struct GraphCanvasView: View {
                 panStart = .zero
                 scaleStart = 1.0
             }
+
         case .center(let key):
             guard let p = positions[key] else { return }
             withAnimation(.snappy) {
                 pan = CGSize(width: -p.x * scale, height: -p.y * scale)
                 panStart = pan
             }
+
         case .fitAll:
             let keys = nodes.map(\.key)
             guard !keys.isEmpty else { return }
@@ -1556,9 +1702,12 @@ struct GraphCanvasView: View {
 
             for k in keys {
                 guard let p = positions[k] else { continue }
-                minX = min(minX, p.x); minY = min(minY, p.y)
-                maxX = max(maxX, p.x); maxY = max(maxY, p.y)
+                minX = min(minX, p.x)
+                minY = min(minY, p.y)
+                maxX = max(maxX, p.x)
+                maxY = max(maxY, p.y)
             }
+
             if minX == .greatestFiniteMagnitude { return }
 
             let worldW = max(1, maxX - minX)
@@ -1570,6 +1719,7 @@ struct GraphCanvasView: View {
 
             let targetScale = min(availW / worldW, availH / worldH)
             let clamped = max(0.4, min(3.0, targetScale))
+
             let mid = CGPoint(x: (minX + maxX) / 2, y: (minY + maxY) / 2)
 
             withAnimation(.snappy) {
@@ -1593,10 +1743,10 @@ struct GraphCanvasView: View {
 
     private func hitTest(worldTap: CGPoint) -> NodeKey? {
         var best: (NodeKey, CGFloat)?
+
         for n in nodes {
             if lens.hideNonRelevant && lens.isHidden(n.key) { continue }
             guard let p = positions[n.key] else { continue }
-
             let dx = p.x - worldTap.x
             let dy = p.y - worldTap.y
             let d = sqrt(dx*dx + dy*dy)
@@ -1624,7 +1774,6 @@ struct GraphCanvasView: View {
     private func doubleTapPinGesture(in size: CGSize) -> some Gesture {
         SpatialTapGesture(count: 2)
             .onEnded { value in
-                // ✅ Explore = kein Pinning (nichts “kaputtklicken”)
                 guard workMode == .edit else { return }
 
                 let center = CGPoint(x: size.width / 2 + pan.width, y: size.height / 2 + pan.height)
@@ -1645,16 +1794,13 @@ struct GraphCanvasView: View {
             .onChanged { value in
                 let center = CGPoint(x: size.width / 2 + pan.width, y: size.height / 2 + pan.height)
 
-                // ✅ Explore: Drag ist IMMER nur Pan
                 if workMode == .explore {
                     if draggingKey != nil { draggingKey = nil }
-                    if value.translation == .zero { dragStartPan = panStart } // safe, falls iOS komisch startet
                     pan = CGSize(width: panStart.width + value.translation.width,
                                 height: panStart.height + value.translation.height)
                     return
                 }
 
-                // ✅ Edit: wie bisher (Node drag oder Pan)
                 if draggingKey == nil {
                     let worldStart = toWorld(value.startLocation, center: center)
                     if let key = hitTest(worldTap: worldStart) {
@@ -1685,7 +1831,7 @@ struct GraphCanvasView: View {
                 }
 
                 if let key = draggingKey {
-                    pinned.insert(key) // auto-pin
+                    pinned.insert(key)
                     velocities[key] = .zero
                 } else {
                     panStart = pan
@@ -1719,7 +1865,6 @@ struct GraphCanvasView: View {
     }
 
     private func isFixed(_ key: NodeKey) -> Bool {
-        // ✅ Explore: nie “fixed” durch Dragging (weil wir nicht draggen)
         pinned.contains(key) || (workMode == .edit && draggingKey == key)
     }
 

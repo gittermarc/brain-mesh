@@ -16,6 +16,10 @@ struct NotesAndPhotoSection: View {
     @State private var pickerItem: PhotosPickerItem?
     @State private var loadError: String?
 
+    // Fullscreen preview
+    @State private var showFullscreen = false
+    @State private var fullscreenImage: UIImage?
+
     var body: some View {
         Section("Notizen") {
             TextEditor(text: $notes)
@@ -30,6 +34,10 @@ struct NotesAndPhotoSection: View {
                     .clipShape(RoundedRectangle(cornerRadius: 12))
                     .overlay(RoundedRectangle(cornerRadius: 12).stroke(.secondary.opacity(0.25)))
                     .padding(.vertical, 6)
+                    .onTapGesture {
+                        fullscreenImage = ui
+                        showFullscreen = true
+                    }
 
                 Button(role: .destructive) {
                     ImageStore.delete(path: imagePath)
@@ -57,6 +65,11 @@ struct NotesAndPhotoSection: View {
             Button("OK", role: .cancel) {}
         } message: {
             Text(loadError ?? "")
+        }
+        .fullScreenCover(isPresented: $showFullscreen) {
+            if let img = fullscreenImage {
+                FullscreenPhotoView(image: img)
+            }
         }
     }
 
