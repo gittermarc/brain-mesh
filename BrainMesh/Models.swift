@@ -34,6 +34,9 @@ final class MetaEntity {
     }
 
     var nameFolded: String
+    
+    var notes: String = ""
+    var imagePath: String? = nil
 
     @Relationship(deleteRule: .cascade)
     var attributes: [MetaAttribute]
@@ -58,6 +61,9 @@ final class MetaAttribute {
     }
 
     var nameFolded: String
+    
+    var notes: String = ""
+    var imagePath: String? = nil
 
     var entity: MetaEntity? {
         didSet { recomputeSearchLabelFolded() }

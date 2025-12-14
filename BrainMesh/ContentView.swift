@@ -168,6 +168,8 @@ struct EntityDetailView: View {
             Section("Entität") {
                 TextField("Name", text: $entity.name)
             }
+            NotesAndPhotoSection(notes: $entity.notes, imagePath: $entity.imagePath)
+
 
             Section("Attribute") {
                 if entity.attributes.isEmpty {
@@ -279,6 +281,7 @@ struct AttributeDetailView: View {
                     Text("Entität: \(e.name)").foregroundStyle(.secondary)
                 }
             }
+            NotesAndPhotoSection(notes: $attribute.notes, imagePath: $attribute.imagePath)
 
             LinksSection(
                 titleOutgoing: "Links (ausgehend)",
