@@ -11,28 +11,37 @@ import SwiftData
 @main
 struct BrainMeshApp: App {
 
-    var sharedModelContainer: ModelContainer = {
+    private let sharedModelContainer: ModelContainer
+
+    init() {
         let schema = Schema([
             MetaEntity.self,
             MetaAttribute.self,
             MetaLink.self
         ])
 
-        // CloudKit / iCloud Sync (private DB). Wenn Capabilities noch fehlen -> sauberer Local-Fallback.
+        // CloudKit / iCloud Sync (private DB)
         let cloudConfig = ModelConfiguration(schema: schema, cloudKitDatabase: .automatic)
 
         do {
-            return try ModelContainer(for: schema, configurations: [cloudConfig])
+            sharedModelContainer = try ModelContainer(for: schema, configurations: [cloudConfig])
+            print("✅ SwiftData CloudKit: KONTAINER erstellt (cloudKitDatabase: .automatic)")
         } catch {
-            // Local-only fallback
+            // Debug: lieber hart scheitern, sonst merkst du nie, dass du lokal läufst.
+            #if DEBUG
+            fatalError("❌ SwiftData CloudKit KONTAINER FEHLER (DEBUG, kein Fallback): \(error)")
+            #else
+            // Release: optionaler Local-Fallback (dein ursprünglicher Ansatz)
+            print("⚠️ SwiftData CloudKit failed, falling back to local-only: \(error)")
             let localConfig = ModelConfiguration(schema: schema)
             do {
-                return try ModelContainer(for: schema, configurations: [localConfig])
+                sharedModelContainer = try ModelContainer(for: schema, configurations: [localConfig])
             } catch {
-                fatalError("Could not create ModelContainer (cloud + local failed): \(error)")
+                fatalError("❌ Could not create local ModelContainer: \(error)")
             }
+            #endif
         }
-    }()
+    }
 
     var body: some Scene {
         WindowGroup {
