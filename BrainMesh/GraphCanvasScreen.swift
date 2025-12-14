@@ -32,6 +32,9 @@ struct GraphCanvasScreen: View {
     @State private var positions: [NodeKey: CGPoint] = [:]
     @State private var velocities: [NodeKey: CGVector] = [:]
 
+    // ✅ Notizen jetzt GERICHETET: source -> target
+    @State private var directedEdgeNotes: [DirectedEdgeKey: String] = [:]
+
     // Pinning + Selection
     @State private var pinned: Set<NodeKey> = []
     @State private var selection: NodeKey? = nil
@@ -45,7 +48,7 @@ struct GraphCanvasScreen: View {
     @State private var isLoading = false
     @State private var loadError: String?
     @State private var showInspector = false
-    
+
     // MiniMap emphasis
     @State private var miniMapEmphasized: Bool = false
     @State private var miniMapPulseTask: Task<Void, Never>?
@@ -68,6 +71,7 @@ struct GraphCanvasScreen: View {
                     GraphCanvasView(
                         nodes: nodes,
                         edges: edges,
+                        directedEdgeNotes: directedEdgeNotes, // ✅
                         positions: $positions,
                         velocities: $velocities,
                         pinned: $pinned,
@@ -76,7 +80,6 @@ struct GraphCanvasScreen: View {
                         pan: $pan,
                         cameraCommand: $cameraCommand,
                         onTapNode: { keyOrNil in
-                            // Single tap = selection (oder clear)
                             selection = keyOrNil
                         }
                     )
@@ -93,8 +96,6 @@ struct GraphCanvasScreen: View {
                     .clipShape(RoundedRectangle(cornerRadius: 12))
                     .padding()
                     .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
-                    .opacity(miniMapEmphasized ? 1.0 : 0.55)
-                    .scaleEffect(miniMapEmphasized ? 1.02 : 1.0)
                 }
 
                 // Side status (hochkant links)
@@ -107,7 +108,7 @@ struct GraphCanvasScreen: View {
                 }
                 .allowsHitTesting(false)
 
-                // ✅ MiniMap (oben rechts)
+                // MiniMap
                 GeometryReader { geo in
                     MiniMapView(
                         nodes: nodes,
@@ -120,13 +121,15 @@ struct GraphCanvasScreen: View {
                         canvasSize: geo.size
                     )
                     .frame(width: 180, height: 125)
+                    .opacity(miniMapEmphasized ? 1.0 : 0.55)
+                    .scaleEffect(miniMapEmphasized ? 1.02 : 1.0)
                     .padding(.trailing, 12)
                     .padding(.top, 12)
                     .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topTrailing)
                 }
                 .allowsHitTesting(false)
 
-                // Action chip for selection
+                // Action chip
                 if let key = selection, let selected = nodeForKey(key) {
                     actionChip(for: selected)
                         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottomLeading)
@@ -139,11 +142,7 @@ struct GraphCanvasScreen: View {
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItemGroup(placement: .topBarTrailing) {
-                    Button {
-                        showFocusPicker = true
-                    } label: {
-                        Image(systemName: "scope")
-                    }
+                    Button { showFocusPicker = true } label: { Image(systemName: "scope") }
 
                     Button {
                         if let sel = selection { cameraCommand = CameraCommand(kind: .center(sel)) }
@@ -153,28 +152,21 @@ struct GraphCanvasScreen: View {
                     }
                     .disabled(selection == nil && focusEntity == nil)
 
-                    Button {
-                        cameraCommand = CameraCommand(kind: .fitAll)
-                    } label: {
+                    Button { cameraCommand = CameraCommand(kind: .fitAll) } label: {
                         Image(systemName: "arrow.up.left.and.down.right.magnifyingglass")
                     }
                     .disabled(nodes.isEmpty)
 
-                    Button {
-                        cameraCommand = CameraCommand(kind: .reset)
-                    } label: {
+                    Button { cameraCommand = CameraCommand(kind: .reset) } label: {
                         Image(systemName: "arrow.counterclockwise")
                     }
 
-                    Button {
-                        showInspector = true
-                    } label: {
+                    Button { showInspector = true } label: {
                         Image(systemName: "slider.horizontal.3")
                     }
                 }
             }
 
-            // Focus picker
             .sheet(isPresented: $showFocusPicker) {
                 NodePickerView(kind: .entity) { picked in
                     if let entity = fetchEntity(id: picked.id) {
@@ -188,12 +180,8 @@ struct GraphCanvasScreen: View {
                 }
             }
 
-            // Inspector
-            .sheet(isPresented: $showInspector) {
-                inspectorSheet
-            }
+            .sheet(isPresented: $showInspector) { inspectorSheet }
 
-            // Detail sheets
             .sheet(item: $selectedEntity) { entity in
                 NavigationStack { EntityDetailView(entity: entity) }
             }
@@ -201,10 +189,8 @@ struct GraphCanvasScreen: View {
                 NavigationStack { AttributeDetailView(attribute: attr) }
             }
 
-            // Initial load
             .task { await loadGraph() }
 
-            // Global filter reload (nur global)
             .task(id: searchText) {
                 guard focusEntity == nil else { return }
                 isLoading = true
@@ -213,7 +199,6 @@ struct GraphCanvasScreen: View {
                 await loadGraph()
             }
 
-            // Neighborhood reload
             .task(id: hops) {
                 guard focusEntity != nil else { return }
                 await loadGraph()
@@ -255,31 +240,20 @@ struct GraphCanvasScreen: View {
         .clipShape(RoundedRectangle(cornerRadius: 14))
     }
 
-    // ✅ Helper für MiniMap Focus-Markierung
     private var focusKey: NodeKey? {
         guard let f = focusEntity else { return nil }
         return NodeKey(kind: .entity, uuid: f.id)
     }
-    
+
     private func pulseMiniMap() {
-        // bereits geplantes "Abdimmen" abbrechen
         miniMapPulseTask?.cancel()
-
-        // sofort hoch
-        withAnimation(.easeOut(duration: 0.12)) {
-            miniMapEmphasized = true
-        }
-
-        // nach kurzer Pause wieder runter
+        withAnimation(.easeOut(duration: 0.12)) { miniMapEmphasized = true }
         miniMapPulseTask = Task { @MainActor in
-            try? await Task.sleep(nanoseconds: 650_000_000) // 0.65s
+            try? await Task.sleep(nanoseconds: 650_000_000)
             if Task.isCancelled { return }
-            withAnimation(.easeInOut(duration: 0.25)) {
-                miniMapEmphasized = false
-            }
+            withAnimation(.easeInOut(duration: 0.25)) { miniMapEmphasized = false }
         }
     }
-
 
     // MARK: - Action chip
 
@@ -290,7 +264,6 @@ struct GraphCanvasScreen: View {
                 Text(node.key.kind == .entity ? "Entität" : "Attribut")
                     .font(.caption2)
                     .foregroundStyle(.secondary)
-
                 Text(nodeLabel(for: node))
                     .font(.subheadline)
                     .lineLimit(1)
@@ -298,9 +271,7 @@ struct GraphCanvasScreen: View {
 
             Spacer()
 
-            Button {
-                cameraCommand = CameraCommand(kind: .center(node.key))
-            } label: {
+            Button { cameraCommand = CameraCommand(kind: .center(node.key)) } label: {
                 Image(systemName: "dot.scope")
             }
             .buttonStyle(.bordered)
@@ -312,31 +283,24 @@ struct GraphCanvasScreen: View {
                         Task { await loadGraph() }
                         cameraCommand = CameraCommand(kind: .center(node.key))
                     }
-                } label: {
-                    Image(systemName: "scope")
-                }
+                } label: { Image(systemName: "scope") }
                 .buttonStyle(.borderedProminent)
             }
 
-            Button {
-                openDetails(for: node.key)
-            } label: {
+            Button { openDetails(for: node.key) } label: {
                 Image(systemName: "info.circle")
             }
             .buttonStyle(.bordered)
 
             Button {
-                if isPinned { pinned.remove(node.key) }
-                else { pinned.insert(node.key) }
+                if isPinned { pinned.remove(node.key) } else { pinned.insert(node.key) }
                 velocities[node.key] = .zero
             } label: {
                 Image(systemName: isPinned ? "pin.slash" : "pin")
             }
             .buttonStyle(.bordered)
 
-            Button {
-                selection = nil
-            } label: {
+            Button { selection = nil } label: {
                 Image(systemName: "xmark")
             }
             .buttonStyle(.bordered)
@@ -349,7 +313,6 @@ struct GraphCanvasScreen: View {
     }
 
     private func nodeLabel(for node: GraphNode) -> String {
-        // Für Attribute wollen wir lieber den DisplayName (Entity · Attr), falls möglich:
         if node.key.kind == .attribute, let a = fetchAttribute(id: node.key.uuid) {
             return a.displayName
         }
@@ -365,7 +328,7 @@ struct GraphCanvasScreen: View {
         }
     }
 
-    // MARK: - Inspector sheet (entkoppelt die "Regler" vom Canvas)
+    // MARK: - Inspector sheet
 
     private var inspectorSheet: some View {
         NavigationStack {
@@ -379,9 +342,7 @@ struct GraphCanvasScreen: View {
                             .lineLimit(1)
                     }
 
-                    Button {
-                        showFocusPicker = true
-                    } label: {
+                    Button { showFocusPicker = true } label: {
                         Label("Fokus wählen", systemImage: "scope")
                     }
 
@@ -443,7 +404,8 @@ struct GraphCanvasScreen: View {
 
                 Section("Orientierung") {
                     Text("Single Tap = Auswahl (Selection).")
-                    Text("Buttons oben: Center (Selection/Fokus), Fit-to-Graph, Reset.")
+                    Text("Notiz am Link kommt jetzt immer aus dem AUSGEHENDEN Link der selektierten Node.")
+                        .foregroundStyle(.secondary)
                 }
             }
             .navigationTitle("Inspector")
@@ -498,10 +460,18 @@ struct GraphCanvasScreen: View {
                 try loadGlobal()
             }
 
-            // pinned/selection auf existierende nodes beschränken
             let nodeKeys = Set(nodes.map(\.key))
             pinned = pinned.intersection(nodeKeys)
             if let sel = selection, !nodeKeys.contains(sel) { selection = nil }
+
+            // ✅ Notes nur für sichtbare Kanten behalten (beide Richtungen erlaubt)
+            let validDirected = Set(edges.flatMap {
+                [
+                    DirectedEdgeKey.make(source: $0.a, target: $0.b, type: $0.type),
+                    DirectedEdgeKey.make(source: $0.b, target: $0.a, type: $0.type)
+                ]
+            })
+            directedEdgeNotes = directedEdgeNotes.filter { validDirected.contains($0.key) }
 
             if resetLayout { seedLayout(preservePinned: true) }
             isLoading = false
@@ -541,11 +511,21 @@ struct GraphCanvasScreen: View {
         let filteredLinks = links.filter { nodeIDs.contains($0.sourceID) && nodeIDs.contains($0.targetID) }
 
         nodes = ents.map { GraphNode(key: NodeKey(kind: .entity, uuid: $0.id), label: $0.name) }
-        edges = filteredLinks.map {
-            GraphEdge(a: NodeKey(kind: .entity, uuid: $0.sourceID),
-                      b: NodeKey(kind: .entity, uuid: $0.targetID),
-                      type: .link)
+
+        var notes: [DirectedEdgeKey: String] = [:]
+        edges = filteredLinks.map { l in
+            let s = NodeKey(kind: .entity, uuid: l.sourceID)
+            let t = NodeKey(kind: .entity, uuid: l.targetID)
+
+            if let n = l.note?.trimmingCharacters(in: .whitespacesAndNewlines), !n.isEmpty {
+                let k = DirectedEdgeKey.make(source: s, target: t, type: .link)
+                if notes[k] == nil { notes[k] = n } // newest wins
+            }
+
+            return GraphEdge(a: s, b: t, type: .link) // GraphEdge bleibt “eine Linie”
         }.unique()
+
+        directedEdgeNotes = notes
     }
 
     private func loadNeighborhood(centerID: UUID, hops: Int, includeAttributes: Bool) throws {
@@ -637,6 +617,7 @@ struct GraphCanvasScreen: View {
 
         let nodeKeySet = Set(newNodes.map(\.key))
 
+        var notes: [DirectedEdgeKey: String] = [:]
         var newEdges: [GraphEdge] = []
         newEdges.reserveCapacity(maxLinks)
 
@@ -645,6 +626,11 @@ struct GraphCanvasScreen: View {
             let b = NodeKey(kind: .entity, uuid: l.targetID)
             if nodeKeySet.contains(a) && nodeKeySet.contains(b) {
                 newEdges.append(GraphEdge(a: a, b: b, type: .link))
+
+                if let n = l.note?.trimmingCharacters(in: .whitespacesAndNewlines), !n.isEmpty {
+                    let k = DirectedEdgeKey.make(source: a, target: b, type: .link)
+                    if notes[k] == nil { notes[k] = n }
+                }
             }
             if newEdges.count >= maxLinks { break }
         }
@@ -688,6 +674,11 @@ struct GraphCanvasScreen: View {
                     let b = NodeKey(kind: NodeKind(rawValue: l.targetKindRaw) ?? .entity, uuid: l.targetID)
                     if nodeKeySet.contains(a) && nodeKeySet.contains(b) {
                         linkEdges.append(GraphEdge(a: a, b: b, type: .link))
+
+                        if let note = l.note?.trimmingCharacters(in: .whitespacesAndNewlines), !note.isEmpty {
+                            let dk = DirectedEdgeKey.make(source: a, target: b, type: .link)
+                            if notes[dk] == nil { notes[dk] = note }
+                        }
                     }
                     if linkEdges.count >= remaining { break }
                 }
@@ -706,6 +697,11 @@ struct GraphCanvasScreen: View {
                     let b = NodeKey(kind: NodeKind(rawValue: l.targetKindRaw) ?? .entity, uuid: l.targetID)
                     if nodeKeySet.contains(a) && nodeKeySet.contains(b) {
                         linkEdges.append(GraphEdge(a: a, b: b, type: .link))
+
+                        if let note = l.note?.trimmingCharacters(in: .whitespacesAndNewlines), !note.isEmpty {
+                            let dk = DirectedEdgeKey.make(source: a, target: b, type: .link)
+                            if notes[dk] == nil { notes[dk] = note }
+                        }
                     }
                     if linkEdges.count >= remaining { break }
                 }
@@ -716,6 +712,7 @@ struct GraphCanvasScreen: View {
 
         nodes = newNodes
         edges = newEdges.unique()
+        directedEdgeNotes = notes
     }
 
     // MARK: - Helpers
@@ -795,7 +792,7 @@ struct GraphCanvasScreen: View {
     }
 }
 
-// ✅ MiniMap View (unten im File, aber innerhalb derselben Datei)
+// ✅ MiniMap View
 private struct MiniMapView: View {
     let nodes: [GraphNode]
     let edges: [GraphEdge]
@@ -826,7 +823,6 @@ private struct MiniMapView: View {
                 return CGPoint(x: nx * size.width, y: ny * size.height)
             }
 
-            // edges
             for e in edges {
                 guard let p1 = positions[e.a], let p2 = positions[e.b] else { continue }
                 let a = map(p1)
@@ -844,7 +840,6 @@ private struct MiniMapView: View {
                 }
             }
 
-            // nodes
             for n in nodes {
                 guard let p = positions[n.key] else { continue }
                 let s = map(p)
@@ -865,7 +860,6 @@ private struct MiniMapView: View {
                 }
             }
 
-            // viewport rect
             let v = viewportWorldRect()
             let tl = map(CGPoint(x: v.minX, y: v.minY))
             let br = map(CGPoint(x: v.maxX, y: v.maxY))
@@ -881,7 +875,6 @@ private struct MiniMapView: View {
                            with: .color(.primary.opacity(0.75)),
                            lineWidth: 2)
 
-            // frame
             let frame = CGRect(origin: .zero, size: size)
             context.stroke(Path(roundedRect: frame, cornerRadius: 12),
                            with: .color(.secondary.opacity(0.25)),
@@ -963,6 +956,17 @@ extension Array where Element == GraphEdge {
     func unique() -> [GraphEdge] { Array(Set(self)) }
 }
 
+// ✅ Directed notes key: source -> target
+struct DirectedEdgeKey: Hashable {
+    let sourceID: String
+    let targetID: String
+    let type: Int
+
+    static func make(source: NodeKey, target: NodeKey, type: GraphEdgeType) -> DirectedEdgeKey {
+        DirectedEdgeKey(sourceID: source.identifier, targetID: target.identifier, type: type.rawValue)
+    }
+}
+
 // MARK: - Camera commands
 
 struct CameraCommand: Identifiable, Equatable {
@@ -980,6 +984,7 @@ struct CameraCommand: Identifiable, Equatable {
 struct GraphCanvasView: View {
     let nodes: [GraphNode]
     let edges: [GraphEdge]
+    let directedEdgeNotes: [DirectedEdgeKey: String] // ✅
 
     @Binding var positions: [NodeKey: CGPoint]
     @Binding var velocities: [NodeKey: CGVector]
@@ -1023,6 +1028,15 @@ struct GraphCanvasView: View {
                         context.stroke(path, with: .color(.secondary.opacity(0.22)), lineWidth: 1)
                     case .link:
                         context.stroke(path, with: .color(.secondary.opacity(0.40)), lineWidth: 1)
+                    }
+
+                    // ✅ Option 1: Notiz nur an Kanten der selektierten Node – und zwar AUSGEHEND!
+                    if e.type == .link, let sel = selection {
+                        if sel == e.a {
+                            drawOutgoingNoteIfAny(source: e.a, target: e.b, from: a, to: b, in: context)
+                        } else if sel == e.b {
+                            drawOutgoingNoteIfAny(source: e.b, target: e.a, from: b, to: a, in: context)
+                        }
                     }
                 }
 
@@ -1085,6 +1099,44 @@ struct GraphCanvasView: View {
         }
     }
 
+    private func drawOutgoingNoteIfAny(source: NodeKey, target: NodeKey, from a: CGPoint, to b: CGPoint, in context: GraphicsContext) {
+        let k = DirectedEdgeKey.make(source: source, target: target, type: .link)
+        guard let note = directedEdgeNotes[k], !note.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return }
+        drawEdgeNote(note, from: a, to: b, in: context)
+    }
+
+    private func drawEdgeNote(_ raw: String, from a: CGPoint, to b: CGPoint, in context: GraphicsContext) {
+        let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return }
+
+        let maxChars = 46
+        let textStr = trimmed.count > maxChars ? (String(trimmed.prefix(maxChars)) + "…") : trimmed
+
+        let mid = CGPoint(x: (a.x + b.x) / 2, y: (a.y + b.y) / 2 - 10)
+
+        let text = Text(textStr)
+            .font(.caption2)
+            .foregroundStyle(.primary)
+
+        let resolved = context.resolve(text)
+        let maxSize = CGSize(width: 160, height: 60)
+        let measured = resolved.measure(in: maxSize)
+
+        let pad: CGFloat = 6
+        let bg = CGRect(
+            x: mid.x - measured.width/2 - pad,
+            y: mid.y - measured.height/2 - pad,
+            width: measured.width + pad*2,
+            height: measured.height + pad*2
+        )
+
+        let bgPath = Path(roundedRect: bg, cornerRadius: 8)
+        context.fill(bgPath, with: .color(.primary.opacity(0.12)))
+        context.stroke(bgPath, with: .color(.primary.opacity(0.28)), lineWidth: 1)
+
+        context.draw(resolved, at: mid, anchor: .center)
+    }
+
     // MARK: - Camera command handling
 
     private func applyCameraCommand(_ cmd: CameraCommand, in size: CGSize) {
@@ -1105,7 +1157,6 @@ struct GraphCanvasView: View {
             }
 
         case .fitAll:
-            // Bounding box im World-Space
             let keys = nodes.map(\.key)
             guard !keys.isEmpty else { return }
             var minX: CGFloat = .greatestFiniteMagnitude
@@ -1179,7 +1230,7 @@ struct GraphCanvasView: View {
                 let center = CGPoint(x: size.width / 2 + pan.width, y: size.height / 2 + pan.height)
                 let worldTap = toWorld(value.location, center: center)
                 let hit = hitTest(worldTap: worldTap)
-                onTapNode(hit) // nil = clear selection
+                onTapNode(hit)
             }
     }
 
@@ -1208,7 +1259,7 @@ struct GraphCanvasView: View {
                     let worldStart = toWorld(value.startLocation, center: center)
                     if let key = hitTest(worldTap: worldStart) {
                         draggingKey = key
-                        selection = key // Drag = auch auswählen
+                        selection = key
                         dragStartWorld = positions[key] ?? worldStart
                         velocities[key] = .zero
                     } else {
@@ -1228,7 +1279,7 @@ struct GraphCanvasView: View {
             }
             .onEnded { _ in
                 if let key = draggingKey {
-                    pinned.insert(key) // auto-pin
+                    pinned.insert(key)
                     velocities[key] = .zero
                 } else {
                     panStart = pan
@@ -1285,7 +1336,6 @@ struct GraphCanvasView: View {
         var pos = positions
         var vel = velocities
 
-        // Repulsion O(n^2)
         for i in 0..<nodes.count {
             let a = nodes[i].key
             guard let pa = pos[a], !isFixed(a) else { continue }
@@ -1308,7 +1358,6 @@ struct GraphCanvasView: View {
             addVelocity(a, dx: fx * 0.00002, dy: fy * 0.00002, vel: &vel)
         }
 
-        // Springs
         for e in edges {
             guard let p1 = pos[e.a], let p2 = pos[e.b] else { continue }
 
@@ -1327,7 +1376,6 @@ struct GraphCanvasView: View {
             addVelocity(e.b, dx: -fx, dy: -fy, vel: &vel)
         }
 
-        // Integrate
         for n in nodes {
             let id = n.key
 
