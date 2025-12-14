@@ -43,7 +43,7 @@ struct EntitiesHomeView: View {
         let s = BMSearch.fold(searchText)
         guard !s.isEmpty else { return entities }
         return entities.filter { e in
-            e.nameFolded.contains(s) || e.attributes.contains(where: { $0.searchLabelFolded.contains(s) })
+            e.nameFolded.contains(s) || e.attributesList.contains(where: { $0.searchLabelFolded.contains(s) })
         }
     }
 
@@ -56,7 +56,7 @@ struct EntitiesHomeView: View {
                     } label: {
                         VStack(alignment: .leading, spacing: 4) {
                             Text(entity.name).font(.headline)
-                            Text("\(entity.attributes.count) Attribute")
+                            Text("\(entity.attributesList.count) Attribute")
                                 .font(.subheadline)
                                 .foregroundStyle(.secondary)
                         }
@@ -172,10 +172,10 @@ struct EntityDetailView: View {
 
 
             Section("Attribute") {
-                if entity.attributes.isEmpty {
+                if entity.attributesList.isEmpty {
                     Text("Noch keine Attribute.").foregroundStyle(.secondary)
                 } else {
-                    ForEach(entity.attributes.sorted(by: { $0.name < $1.name })) { attr in
+                    ForEach(entity.attributesList.sorted(by: { $0.name < $1.name })) { attr in
                         NavigationLink { AttributeDetailView(attribute: attr) } label: { Text(attr.name) }
                     }
                     .onDelete(perform: deleteAttributes)
@@ -206,7 +206,7 @@ struct EntityDetailView: View {
                 guard !cleaned.isEmpty else { return }
                 let attr = MetaAttribute(name: cleaned, entity: entity)
                 modelContext.insert(attr)
-                entity.attributes.append(attr)
+                entity.addAttribute(attr)
                 newAttributeName = ""
             }
         } message: {
@@ -218,10 +218,11 @@ struct EntityDetailView: View {
     }
 
     private func deleteAttributes(at offsets: IndexSet) {
-        let sorted = entity.attributes.sorted(by: { $0.name < $1.name })
+        let sorted = entity.attributesList.sorted(by: { $0.name < $1.name })
         for index in offsets {
             let attr = sorted[index]
             deleteLinks(referencing: .attribute, id: attr.id)
+            entity.removeAttribute(attr)
             modelContext.delete(attr)
         }
     }

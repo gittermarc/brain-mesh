@@ -727,7 +727,7 @@ struct GraphCanvasScreen: View {
             let remaining = max(0, maxNodes - ents.count)
             if remaining > 0 {
                 for e in ents {
-                    let sortedAttrs = e.attributes.sorted { $0.name < $1.name }
+                    let sortedAttrs = e.attributesList.sorted { $0.name < $1.name }
                     for a in sortedAttrs {
                         attrs.append(a)
                         if attrs.count >= remaining { break }
@@ -764,7 +764,7 @@ struct GraphCanvasScreen: View {
 
         if includeAttributes {
             var attrOwner: [UUID: UUID] = [:]
-            for e in ents { for a in e.attributes { attrOwner[a.id] = e.id } }
+            for e in ents { for a in e.attributesList { attrOwner[a.id] = e.id } }
 
             for a in attrs {
                 if let ownerID = attrOwner[a.id] {
@@ -943,7 +943,7 @@ struct GraphCanvasScreen: View {
                 if let e = fetchEntity(id: key.uuid) {
                     let remaining = max(0, maxNodes - (existingKeys.count + newKeys.count))
                     if remaining > 0 {
-                        let sortedAttrs = e.attributes.sorted { $0.name < $1.name }
+                        let sortedAttrs = e.attributesList.sorted { $0.name < $1.name }
                         for a in sortedAttrs.prefix(remaining) {
                             let ak = NodeKey(kind: .attribute, uuid: a.id)
                             ensureNode(ak)

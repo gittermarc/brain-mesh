@@ -10,6 +10,7 @@ import SwiftData
 
 @main
 struct BrainMeshApp: App {
+
     var sharedModelContainer: ModelContainer = {
         let schema = Schema([
             MetaEntity.self,
@@ -17,12 +18,19 @@ struct BrainMeshApp: App {
             MetaLink.self
         ])
 
-        let modelConfiguration = ModelConfiguration(schema: schema, isStoredInMemoryOnly: false)
+        // CloudKit / iCloud Sync (private DB). Wenn Capabilities noch fehlen -> sauberer Local-Fallback.
+        let cloudConfig = ModelConfiguration(schema: schema, cloudKitDatabase: .automatic)
 
         do {
-            return try ModelContainer(for: schema, configurations: [modelConfiguration])
+            return try ModelContainer(for: schema, configurations: [cloudConfig])
         } catch {
-            fatalError("Could not create ModelContainer: \(error)")
+            // Local-only fallback
+            let localConfig = ModelConfiguration(schema: schema)
+            do {
+                return try ModelContainer(for: schema, configurations: [localConfig])
+            } catch {
+                fatalError("Could not create ModelContainer (cloud + local failed): \(error)")
+            }
         }
     }()
 
