@@ -25,7 +25,6 @@ enum BMSearch {
 @Model
 final class MetaEntity {
 
-    // CloudKit: keine Unique Constraints → kein @Attribute(.unique)
     var id: UUID = UUID()
 
     var name: String = "" {
@@ -36,13 +35,12 @@ final class MetaEntity {
     }
 
     var nameFolded: String = ""
-
     var notes: String = ""
     var imagePath: String? = nil
 
-    // ✅ CloudKit verlangt: Relationships optional
-    // ✅ Inverse NUR AUF EINER SEITE setzen (sonst Macro-Zirkularität)
-    @Relationship(deleteRule: .cascade, inverse: \MetaAttribute.entity)
+    // ✅ Relationship optional + Cascade ok
+    // ✅ Inverse NUR HIER definieren (eine Seite!)
+    @Relationship(deleteRule: .cascade, inverse: \MetaAttribute.owner)
     var attributes: [MetaAttribute]? = nil
 
     init(name: String) {
@@ -53,18 +51,24 @@ final class MetaEntity {
 
     // MARK: - Convenience
 
-    var attributesList: [MetaAttribute] { attributes ?? [] }
+    /// De-dupe by id (falls aus der Vergangenheit schon Dopplungen entstanden sind)
+    var attributesList: [MetaAttribute] {
+        guard let attributes else { return [] }
+        var seen = Set<UUID>()
+        return attributes.filter { seen.insert($0.id).inserted }
+    }
 
+    /// Eine Quelle der Wahrheit: wir setzen owner hier explizit.
     func addAttribute(_ attr: MetaAttribute) {
         if attributes == nil { attributes = [] }
+        if attributes?.contains(where: { $0.id == attr.id }) == true { return }
         attributes?.append(attr)
-        // inverse (zur Sicherheit)
-        attr.entity = self
+        attr.owner = self
     }
 
     func removeAttribute(_ attr: MetaAttribute) {
         attributes?.removeAll { $0.id == attr.id }
-        if attr.entity?.id == self.id { attr.entity = nil }
+        if attr.owner?.id == self.id { attr.owner = nil }
     }
 }
 
@@ -81,22 +85,21 @@ final class MetaAttribute {
     }
 
     var nameFolded: String = ""
-
     var notes: String = ""
     var imagePath: String? = nil
 
-    // ✅ Optional relationship (CloudKit ok)
-    // ❗️Kein @Relationship(inverse: ...) hier, sonst Macro-Zirkularität mit MetaEntity.attributes
-    var entity: MetaEntity? = nil {
+    // ✅ NICHT "entity" nennen (Konflikt mit Core Data)
+    // ❗️KEIN inverse hier, sonst Macro-Zirkularität
+    var owner: MetaEntity? = nil {
         didSet { recomputeSearchLabelFolded() }
     }
 
     var searchLabelFolded: String = ""
 
-    init(name: String, entity: MetaEntity? = nil) {
+    init(name: String, owner: MetaEntity? = nil) {
         self.name = name
         self.nameFolded = BMSearch.fold(name)
-        self.entity = entity
+        self.owner = owner
         self.searchLabelFolded = BMSearch.fold(self.displayName)
     }
 
@@ -105,7 +108,7 @@ final class MetaAttribute {
     }
 
     var displayName: String {
-        if let e = entity { return "\(e.name) · \(name)" }
+        if let e = owner { return "\(e.name) · \(name)" }
         return name
     }
 }

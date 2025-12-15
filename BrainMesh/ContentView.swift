@@ -201,14 +201,17 @@ struct EntityDetailView: View {
         .alert("Neues Attribut", isPresented: $showAddAttribute) {
             TextField("Name (z.B. 2023)", text: $newAttributeName)
             Button("Abbrechen", role: .cancel) { newAttributeName = "" }
-            Button("Hinzufügen") {
-                let cleaned = newAttributeName.trimmingCharacters(in: .whitespacesAndNewlines)
-                guard !cleaned.isEmpty else { return }
-                let attr = MetaAttribute(name: cleaned, entity: entity)
-                modelContext.insert(attr)
-                entity.addAttribute(attr)
-                newAttributeName = ""
-            }
+                Button("Hinzufügen") {
+                    let cleaned = newAttributeName.trimmingCharacters(in: .whitespacesAndNewlines)
+                    guard !cleaned.isEmpty else { return }
+
+                    let attr = MetaAttribute(name: cleaned)   // entity NICHT im init setzen
+                    modelContext.insert(attr)
+                    entity.addAttribute(attr)                 // setzt attr.entity = entity (inverse kümmert sich)
+
+                    newAttributeName = ""
+                }
+
         } message: {
             Text("Attribute sind frei benennbar.")
         }
@@ -278,7 +281,7 @@ struct AttributeDetailView: View {
         Form {
             Section("Attribut") {
                 TextField("Name", text: $attribute.name)
-                if let e = attribute.entity {
+                if let e = attribute.owner {
                     Text("Entität: \(e.name)").foregroundStyle(.secondary)
                 }
             }

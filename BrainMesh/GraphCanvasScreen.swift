@@ -953,7 +953,7 @@ struct GraphCanvasScreen: View {
                     }
                 }
             case .attribute:
-                if let a = fetchAttribute(id: key.uuid), let owner = a.entity {
+                if let a = fetchAttribute(id: key.uuid), let owner = a.owner {
                     let ek = NodeKey(kind: .entity, uuid: owner.id)
                     if !existingKeys.contains(ek), (existingKeys.count + newKeys.count) < maxNodes {
                         ensureNode(ek)
