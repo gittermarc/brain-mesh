@@ -168,7 +168,13 @@ struct EntityDetailView: View {
             Section("Entität") {
                 TextField("Name", text: $entity.name)
             }
-            NotesAndPhotoSection(notes: $entity.notes, imagePath: $entity.imagePath)
+            NotesAndPhotoSection(
+                notes: $entity.notes,
+                imageData: $entity.imageData,
+                imagePath: $entity.imagePath,
+                stableID: entity.id
+            )
+
 
 
             Section("Attribute") {
@@ -285,7 +291,13 @@ struct AttributeDetailView: View {
                     Text("Entität: \(e.name)").foregroundStyle(.secondary)
                 }
             }
-            NotesAndPhotoSection(notes: $attribute.notes, imagePath: $attribute.imagePath)
+            NotesAndPhotoSection(
+                notes: $attribute.notes,
+                imageData: $attribute.imageData,
+                imagePath: $attribute.imagePath,
+                stableID: attribute.id
+            )
+
 
             LinksSection(
                 titleOutgoing: "Links (ausgehend)",

@@ -27,11 +27,9 @@ struct BrainMeshApp: App {
             sharedModelContainer = try ModelContainer(for: schema, configurations: [cloudConfig])
             print("✅ SwiftData CloudKit: KONTAINER erstellt (cloudKitDatabase: .automatic)")
         } catch {
-            // Debug: lieber hart scheitern, sonst merkst du nie, dass du lokal läufst.
             #if DEBUG
             fatalError("❌ SwiftData CloudKit KONTAINER FEHLER (DEBUG, kein Fallback): \(error)")
             #else
-            // Release: optionaler Local-Fallback (dein ursprünglicher Ansatz)
             print("⚠️ SwiftData CloudKit failed, falling back to local-only: \(error)")
             let localConfig = ModelConfiguration(schema: schema)
             do {
@@ -45,7 +43,7 @@ struct BrainMeshApp: App {
 
     var body: some Scene {
         WindowGroup {
-            ContentView()
+            AppRootView()
         }
         .modelContainer(sharedModelContainer)
     }

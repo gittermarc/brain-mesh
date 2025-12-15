@@ -36,6 +36,11 @@ final class MetaEntity {
 
     var nameFolded: String = ""
     var notes: String = ""
+
+    // ✅ CloudKit-sync: Bilddaten (JPEG, klein gehalten)
+    var imageData: Data? = nil
+
+    // ✅ Lokaler Cache (Dateiname in AppSupport/BrainMeshImages). Kann leer sein.
     var imagePath: String? = nil
 
     // ✅ Relationship optional + Cascade ok
@@ -86,6 +91,11 @@ final class MetaAttribute {
 
     var nameFolded: String = ""
     var notes: String = ""
+
+    // ✅ CloudKit-sync: Bilddaten (JPEG, klein gehalten)
+    var imageData: Data? = nil
+
+    // ✅ Lokaler Cache (Dateiname in AppSupport/BrainMeshImages). Kann leer sein.
     var imagePath: String? = nil
 
     // ✅ NICHT "entity" nennen (Konflikt mit Core Data)
