@@ -12,15 +12,34 @@ struct AppRootView: View {
     @Environment(\.modelContext) private var modelContext
     @Environment(\.scenePhase) private var scenePhase
 
+    @AppStorage("BMActiveGraphID") private var activeGraphIDString: String = ""
+
     var body: some View {
         ContentView()
             .task {
+                await bootstrapGraphing()
                 await ImageHydrator.hydrateAll(using: modelContext)
             }
             .onChange(of: scenePhase) { _, newPhase in
                 if newPhase == .active {
-                    Task { await ImageHydrator.hydrateAll(using: modelContext) }
+                    Task {
+                        await bootstrapGraphing()
+                        await ImageHydrator.hydrateAll(using: modelContext)
+                    }
                 }
             }
+    }
+
+    @MainActor
+    private func bootstrapGraphing() async {
+        let defaultGraph = GraphBootstrap.ensureAtLeastOneGraph(using: modelContext)
+
+        // Active graph setzen (falls leer / kaputt)
+        if UUID(uuidString: activeGraphIDString) == nil {
+            activeGraphIDString = defaultGraph.id.uuidString
+        }
+
+        // Legacy Records in den Default-Graph schieben
+        GraphBootstrap.migrateLegacyRecordsIfNeeded(defaultGraphID: defaultGraph.id, using: modelContext)
     }
 }

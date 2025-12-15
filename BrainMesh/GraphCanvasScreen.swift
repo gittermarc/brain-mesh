@@ -30,9 +30,22 @@ enum WorkMode: String, CaseIterable, Identifiable {
     }
 }
 
-
 struct GraphCanvasScreen: View {
     @Environment(\.modelContext) private var modelContext
+
+    // ✅ Active Graph (Multi-Graph)
+    @AppStorage("BMActiveGraphID") private var activeGraphIDString: String = ""
+    private var activeGraphID: UUID? { UUID(uuidString: activeGraphIDString) }
+
+    @Query(sort: [SortDescriptor(\MetaGraph.createdAt, order: .forward)])
+    private var graphs: [MetaGraph]
+
+    @State private var showGraphPicker = false
+
+    private var activeGraphName: String {
+        if let id = activeGraphID, let g = graphs.first(where: { $0.id == id }) { return g.name }
+        return graphs.first?.name ?? "Graph"
+    }
 
     // Focus/Neighborhood
     @State private var focusEntity: MetaEntity?
@@ -45,8 +58,6 @@ struct GraphCanvasScreen: View {
     @State private var cachedFullImagePath: String?
     @State private var cachedFullImage: UIImage?
 
-    
-    
     // Toggles
     @State private var showAttributes: Bool = true
 
@@ -201,6 +212,12 @@ struct GraphCanvasScreen: View {
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItemGroup(placement: .topBarTrailing) {
+
+                    Button { showGraphPicker = true } label: {
+                        Image(systemName: "square.stack.3d.up")
+                    }
+                    .accessibilityLabel("Graph wählen")
+
                     Button {
                         showFocusPicker = true
                     } label: {
@@ -213,7 +230,7 @@ struct GraphCanvasScreen: View {
                         Image(systemName: workMode.icon)
                     }
                     .accessibilityLabel(workMode == .explore ? "In Edit-Modus wechseln" : "In Explore-Modus wechseln")
-                    
+
                     Button {
                         if let sel = selection { cameraCommand = CameraCommand(kind: .center(sel)) }
                         else if let f = focusEntity { cameraCommand = CameraCommand(kind: .center(NodeKey(kind: .entity, uuid: f.id))) }
@@ -241,6 +258,11 @@ struct GraphCanvasScreen: View {
                         Image(systemName: "slider.horizontal.3")
                     }
                 }
+            }
+
+            // ✅ Graph Picker
+            .sheet(isPresented: $showGraphPicker) {
+                GraphPickerSheet()
             }
 
             // Focus picker
@@ -272,6 +294,14 @@ struct GraphCanvasScreen: View {
 
             // Initial load
             .task { await loadGraph() }
+
+            // ✅ Graph change => reset view state + reload
+            .onChange(of: activeGraphIDString) { _, _ in
+                focusEntity = nil
+                selection = nil
+                pinned.removeAll()
+                Task { await loadGraph(resetLayout: true) }
+            }
 
             // Global filter reload (nur global)
             .task(id: searchText) {
@@ -310,7 +340,7 @@ struct GraphCanvasScreen: View {
     private var sideStatusBar: some View {
         HStack(spacing: 10) {
             VStack(alignment: .leading, spacing: 1) {
-                Text(focusEntity == nil ? "Global" : "Fokus")
+                Text("\(activeGraphName) · \(focusEntity == nil ? "Global" : "Fokus")")
                     .font(.caption2)
                     .foregroundStyle(.secondary)
 
@@ -445,6 +475,20 @@ struct GraphCanvasScreen: View {
     private var inspectorSheet: some View {
         NavigationStack {
             Form {
+
+                Section("Graph") {
+                    HStack {
+                        Text("Aktiv")
+                        Spacer()
+                        Text(activeGraphName).foregroundStyle(.secondary).lineLimit(1)
+                    }
+                    Button {
+                        showGraphPicker = true
+                    } label: {
+                        Label("Graph wechseln", systemImage: "square.stack.3d.up")
+                    }
+                }
+
                 Section("Modus") {
                     HStack {
                         Text("Fokus")
@@ -611,26 +655,54 @@ struct GraphCanvasScreen: View {
     private func loadGlobal() throws {
         let folded = BMSearch.fold(searchText)
 
+        // ✅ Entities (scoped)
         var eFD: FetchDescriptor<MetaEntity>
-        if folded.isEmpty {
-            eFD = FetchDescriptor(sortBy: [SortDescriptor(\MetaEntity.name)])
+        if let gid = activeGraphID {
+            if folded.isEmpty {
+                eFD = FetchDescriptor(
+                    predicate: #Predicate<MetaEntity> { e in e.graphID == gid || e.graphID == nil },
+                    sortBy: [SortDescriptor(\MetaEntity.name)]
+                )
+            } else {
+                let term = folded
+                eFD = FetchDescriptor(
+                    predicate: #Predicate<MetaEntity> { e in (e.graphID == gid || e.graphID == nil) && e.nameFolded.contains(term) },
+                    sortBy: [SortDescriptor(\MetaEntity.name)]
+                )
+            }
         } else {
-            let term = folded
-            eFD = FetchDescriptor(
-                predicate: #Predicate<MetaEntity> { e in e.nameFolded.contains(term) },
-                sortBy: [SortDescriptor(\MetaEntity.name)]
-            )
+            if folded.isEmpty {
+                eFD = FetchDescriptor(sortBy: [SortDescriptor(\MetaEntity.name)])
+            } else {
+                let term = folded
+                eFD = FetchDescriptor(
+                    predicate: #Predicate<MetaEntity> { e in e.nameFolded.contains(term) },
+                    sortBy: [SortDescriptor(\MetaEntity.name)]
+                )
+            }
         }
         eFD.fetchLimit = maxNodes
         let ents = try modelContext.fetch(eFD)
 
+        // ✅ Links (scoped)
         let kEntity = NodeKind.entity.rawValue
-        var lFD = FetchDescriptor<MetaLink>(
-            predicate: #Predicate<MetaLink> { l in
-                l.sourceKindRaw == kEntity && l.targetKindRaw == kEntity
-            },
-            sortBy: [SortDescriptor(\MetaLink.createdAt, order: .reverse)]
-        )
+        var lFD: FetchDescriptor<MetaLink>
+        if let gid = activeGraphID {
+            lFD = FetchDescriptor(
+                predicate: #Predicate<MetaLink> { l in
+                    (l.graphID == gid || l.graphID == nil) &&
+                    l.sourceKindRaw == kEntity && l.targetKindRaw == kEntity
+                },
+                sortBy: [SortDescriptor(\MetaLink.createdAt, order: .reverse)]
+            )
+        } else {
+            lFD = FetchDescriptor(
+                predicate: #Predicate<MetaLink> { l in
+                    l.sourceKindRaw == kEntity && l.targetKindRaw == kEntity
+                },
+                sortBy: [SortDescriptor(\MetaLink.createdAt, order: .reverse)]
+            )
+        }
         lFD.fetchLimit = maxLinks
         let links = try modelContext.fetch(lFD)
 
@@ -657,6 +729,7 @@ struct GraphCanvasScreen: View {
 
     private func loadNeighborhood(centerID: UUID, hops: Int, includeAttributes: Bool) throws {
         let kEntity = NodeKind.entity.rawValue
+        let gid = activeGraphID
 
         var visitedEntities: Set<UUID> = [centerID]
         var frontier: Set<UUID> = [centerID]
@@ -672,14 +745,27 @@ struct GraphCanvasScreen: View {
 
                 let nID = nodeID
 
-                var outFD = FetchDescriptor<MetaLink>(
-                    predicate: #Predicate<MetaLink> { l in
-                        l.sourceKindRaw == kEntity &&
-                        l.targetKindRaw == kEntity &&
-                        l.sourceID == nID
-                    },
-                    sortBy: [SortDescriptor(\MetaLink.createdAt, order: .reverse)]
-                )
+                var outFD: FetchDescriptor<MetaLink>
+                if let gid {
+                    outFD = FetchDescriptor(
+                        predicate: #Predicate<MetaLink> { l in
+                            (l.graphID == gid || l.graphID == nil) &&
+                            l.sourceKindRaw == kEntity &&
+                            l.targetKindRaw == kEntity &&
+                            l.sourceID == nID
+                        },
+                        sortBy: [SortDescriptor(\MetaLink.createdAt, order: .reverse)]
+                    )
+                } else {
+                    outFD = FetchDescriptor(
+                        predicate: #Predicate<MetaLink> { l in
+                            l.sourceKindRaw == kEntity &&
+                            l.targetKindRaw == kEntity &&
+                            l.sourceID == nID
+                        },
+                        sortBy: [SortDescriptor(\MetaLink.createdAt, order: .reverse)]
+                    )
+                }
                 outFD.fetchLimit = maxLinks
                 let outLinks = (try? modelContext.fetch(outFD)) ?? []
 
@@ -691,14 +777,27 @@ struct GraphCanvasScreen: View {
 
                 if collectedEntityLinks.count >= maxLinks { break }
 
-                var inFD = FetchDescriptor<MetaLink>(
-                    predicate: #Predicate<MetaLink> { l in
-                        l.sourceKindRaw == kEntity &&
-                        l.targetKindRaw == kEntity &&
-                        l.targetID == nID
-                    },
-                    sortBy: [SortDescriptor(\MetaLink.createdAt, order: .reverse)]
-                )
+                var inFD: FetchDescriptor<MetaLink>
+                if let gid {
+                    inFD = FetchDescriptor(
+                        predicate: #Predicate<MetaLink> { l in
+                            (l.graphID == gid || l.graphID == nil) &&
+                            l.sourceKindRaw == kEntity &&
+                            l.targetKindRaw == kEntity &&
+                            l.targetID == nID
+                        },
+                        sortBy: [SortDescriptor(\MetaLink.createdAt, order: .reverse)]
+                    )
+                } else {
+                    inFD = FetchDescriptor(
+                        predicate: #Predicate<MetaLink> { l in
+                            l.sourceKindRaw == kEntity &&
+                            l.targetKindRaw == kEntity &&
+                            l.targetID == nID
+                        },
+                        sortBy: [SortDescriptor(\MetaLink.createdAt, order: .reverse)]
+                    )
+                }
                 inFD.fetchLimit = maxLinks
                 let inLinks = (try? modelContext.fetch(inFD)) ?? []
 
@@ -729,6 +828,8 @@ struct GraphCanvasScreen: View {
                 for e in ents {
                     let sortedAttrs = e.attributesList.sorted { $0.name < $1.name }
                     for a in sortedAttrs {
+                        // ✅ attribute scope check (optional safety)
+                        if let gid, !(a.graphID == gid || a.graphID == nil) { continue }
                         attrs.append(a)
                         if attrs.count >= remaining { break }
                     }
@@ -789,10 +890,21 @@ struct GraphCanvasScreen: View {
                 let k = n.key.kind.rawValue
                 let id = n.key.uuid
 
-                var outFD = FetchDescriptor<MetaLink>(
-                    predicate: #Predicate<MetaLink> { l in l.sourceKindRaw == k && l.sourceID == id },
-                    sortBy: [SortDescriptor(\MetaLink.createdAt, order: .reverse)]
-                )
+                var outFD: FetchDescriptor<MetaLink>
+                if let gid {
+                    outFD = FetchDescriptor(
+                        predicate: #Predicate<MetaLink> { l in
+                            (l.graphID == gid || l.graphID == nil) &&
+                            l.sourceKindRaw == k && l.sourceID == id
+                        },
+                        sortBy: [SortDescriptor(\MetaLink.createdAt, order: .reverse)]
+                    )
+                } else {
+                    outFD = FetchDescriptor(
+                        predicate: #Predicate<MetaLink> { l in l.sourceKindRaw == k && l.sourceID == id },
+                        sortBy: [SortDescriptor(\MetaLink.createdAt, order: .reverse)]
+                    )
+                }
                 outFD.fetchLimit = perNodeCap
                 let out = (try? modelContext.fetch(outFD)) ?? []
 
@@ -812,10 +924,21 @@ struct GraphCanvasScreen: View {
 
                 if linkEdges.count >= remaining { break }
 
-                var inFD = FetchDescriptor<MetaLink>(
-                    predicate: #Predicate<MetaLink> { l in l.targetKindRaw == k && l.targetID == id },
-                    sortBy: [SortDescriptor(\MetaLink.createdAt, order: .reverse)]
-                )
+                var inFD: FetchDescriptor<MetaLink>
+                if let gid {
+                    inFD = FetchDescriptor(
+                        predicate: #Predicate<MetaLink> { l in
+                            (l.graphID == gid || l.graphID == nil) &&
+                            l.targetKindRaw == k && l.targetID == id
+                        },
+                        sortBy: [SortDescriptor(\MetaLink.createdAt, order: .reverse)]
+                    )
+                } else {
+                    inFD = FetchDescriptor(
+                        predicate: #Predicate<MetaLink> { l in l.targetKindRaw == k && l.targetID == id },
+                        sortBy: [SortDescriptor(\MetaLink.createdAt, order: .reverse)]
+                    )
+                }
                 inFD.fetchLimit = perNodeCap
                 let inc = (try? modelContext.fetch(inFD)) ?? []
 
@@ -878,20 +1001,38 @@ struct GraphCanvasScreen: View {
 
         let perExpandCap = min(220, max(40, maxLinks / 6))
 
-        var outFD = FetchDescriptor<MetaLink>(
-            predicate: #Predicate<MetaLink> { l in
-                l.sourceKindRaw == kindRaw && l.sourceID == id
-            },
-            sortBy: [SortDescriptor(\MetaLink.createdAt, order: .reverse)]
-        )
-        outFD.fetchLimit = perExpandCap
+        let gid = activeGraphID
 
-        var inFD = FetchDescriptor<MetaLink>(
-            predicate: #Predicate<MetaLink> { l in
-                l.targetKindRaw == kindRaw && l.targetID == id
-            },
-            sortBy: [SortDescriptor(\MetaLink.createdAt, order: .reverse)]
-        )
+        var outFD: FetchDescriptor<MetaLink>
+        var inFD: FetchDescriptor<MetaLink>
+
+        if let gid {
+            outFD = FetchDescriptor(
+                predicate: #Predicate<MetaLink> { l in
+                    (l.graphID == gid || l.graphID == nil) &&
+                    l.sourceKindRaw == kindRaw && l.sourceID == id
+                },
+                sortBy: [SortDescriptor(\MetaLink.createdAt, order: .reverse)]
+            )
+            inFD = FetchDescriptor(
+                predicate: #Predicate<MetaLink> { l in
+                    (l.graphID == gid || l.graphID == nil) &&
+                    l.targetKindRaw == kindRaw && l.targetID == id
+                },
+                sortBy: [SortDescriptor(\MetaLink.createdAt, order: .reverse)]
+            )
+        } else {
+            outFD = FetchDescriptor(
+                predicate: #Predicate<MetaLink> { l in l.sourceKindRaw == kindRaw && l.sourceID == id },
+                sortBy: [SortDescriptor(\MetaLink.createdAt, order: .reverse)]
+            )
+            inFD = FetchDescriptor(
+                predicate: #Predicate<MetaLink> { l in l.targetKindRaw == kindRaw && l.targetID == id },
+                sortBy: [SortDescriptor(\MetaLink.createdAt, order: .reverse)]
+            )
+        }
+
+        outFD.fetchLimit = perExpandCap
         inFD.fetchLimit = perExpandCap
 
         let outLinks = (try? modelContext.fetch(outFD)) ?? []
@@ -945,6 +1086,7 @@ struct GraphCanvasScreen: View {
                     if remaining > 0 {
                         let sortedAttrs = e.attributesList.sorted { $0.name < $1.name }
                         for a in sortedAttrs.prefix(remaining) {
+                            if let gid, !(a.graphID == gid || a.graphID == nil) { continue }
                             let ak = NodeKey(kind: .attribute, uuid: a.id)
                             ensureNode(ak)
                             newEdges.append(GraphEdge(a: key, b: ak, type: .containment))
@@ -1022,15 +1164,23 @@ struct GraphCanvasScreen: View {
     private func fetchEntity(id: UUID) -> MetaEntity? {
         let nodeID = id
         let fd = FetchDescriptor<MetaEntity>(predicate: #Predicate { e in e.id == nodeID })
-        return try? modelContext.fetch(fd).first
+        guard let e = try? modelContext.fetch(fd).first else { return nil }
+        if let gid = activeGraphID {
+            return (e.graphID == gid || e.graphID == nil) ? e : nil
+        }
+        return e
     }
 
     private func fetchAttribute(id: UUID) -> MetaAttribute? {
         let nodeID = id
         let fd = FetchDescriptor<MetaAttribute>(predicate: #Predicate { a in a.id == nodeID })
-        return try? modelContext.fetch(fd).first
+        guard let a = try? modelContext.fetch(fd).first else { return nil }
+        if let gid = activeGraphID {
+            return (a.graphID == gid || a.graphID == nil) ? a : nil
+        }
+        return a
     }
-    
+
     private func selectedImagePath() -> String? {
         guard let sel = selection else { return nil }
         switch sel.kind {
@@ -1040,7 +1190,7 @@ struct GraphCanvasScreen: View {
             return fetchAttribute(id: sel.uuid)?.imagePath
         }
     }
-    
+
     private var selectedImagePathValue: String? {
         selectedImagePath()
     }
@@ -1064,8 +1214,6 @@ struct GraphCanvasScreen: View {
             }
         }
     }
-
-
 
     private func seedLayout(preservePinned: Bool) {
         let oldPos = positions

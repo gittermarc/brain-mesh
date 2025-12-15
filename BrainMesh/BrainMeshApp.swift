@@ -15,7 +15,7 @@ struct BrainMeshApp: App {
 
     init() {
         let schema = Schema([
-            MetaGraph.self,       // ✅ NEU
+            MetaGraph.self,
             MetaEntity.self,
             MetaAttribute.self,
             MetaLink.self
@@ -27,11 +27,6 @@ struct BrainMeshApp: App {
         do {
             sharedModelContainer = try ModelContainer(for: schema, configurations: [cloudConfig])
             print("✅ SwiftData CloudKit: KONTAINER erstellt (cloudKitDatabase: .automatic)")
-
-            // ✅ Bootstrap: Default-Graph + Backfill für bestehende Daten
-            let ctx = ModelContext(sharedModelContainer)
-            GraphBootstrap.bootstrap(using: ctx)
-
         } catch {
             #if DEBUG
             fatalError("❌ SwiftData CloudKit KONTAINER FEHLER (DEBUG, kein Fallback): \(error)")
@@ -40,11 +35,6 @@ struct BrainMeshApp: App {
             let localConfig = ModelConfiguration(schema: schema)
             do {
                 sharedModelContainer = try ModelContainer(for: schema, configurations: [localConfig])
-
-                // ✅ Bootstrap auch im Local-Fallback
-                let ctx = ModelContext(sharedModelContainer)
-                GraphBootstrap.bootstrap(using: ctx)
-
             } catch {
                 fatalError("❌ Could not create local ModelContainer: \(error)")
             }
@@ -55,8 +45,6 @@ struct BrainMeshApp: App {
     var body: some Scene {
         WindowGroup {
             AppRootView()
-                // ✅ GraphSession wird später für Picker/Filter genutzt – stört jetzt nicht.
-                .environmentObject(GraphSession.shared)
         }
         .modelContainer(sharedModelContainer)
     }

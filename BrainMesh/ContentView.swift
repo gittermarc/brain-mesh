@@ -34,15 +34,35 @@ struct ContentView: View {
 
 struct EntitiesHomeView: View {
     @Environment(\.modelContext) private var modelContext
-    @Query(sort: [SortDescriptor(\MetaEntity.name)]) private var entities: [MetaEntity]
+
+    @AppStorage("BMActiveGraphID") private var activeGraphIDString: String = ""
+    private var activeGraphID: UUID? { UUID(uuidString: activeGraphIDString) }
+
+    @Query(sort: [SortDescriptor(\MetaGraph.createdAt, order: .forward)])
+    private var graphs: [MetaGraph]
+
+    @Query(sort: [SortDescriptor(\MetaEntity.name)])
+    private var entities: [MetaEntity]
 
     @State private var searchText = ""
     @State private var showAddEntity = false
+    @State private var showGraphPicker = false
+
+    private var activeGraphName: String {
+        if let id = activeGraphID, let g = graphs.first(where: { $0.id == id }) { return g.name }
+        return graphs.first?.name ?? "Graph"
+    }
+
+    private var scopedEntities: [MetaEntity] {
+        guard let gid = activeGraphID else { return entities } // falls Bootstrap noch nicht gelaufen ist
+        return entities.filter { $0.graphID == gid || $0.graphID == nil }
+    }
 
     private var filteredEntities: [MetaEntity] {
+        let base = scopedEntities
         let s = BMSearch.fold(searchText)
-        guard !s.isEmpty else { return entities }
-        return entities.filter { e in
+        guard !s.isEmpty else { return base }
+        return base.filter { e in
             e.nameFolded.contains(s) || e.attributesList.contains(where: { $0.searchLabelFolded.contains(s) })
         }
     }
@@ -67,35 +87,55 @@ struct EntitiesHomeView: View {
             .navigationTitle("Entitäten")
             .searchable(text: $searchText, prompt: "Entität oder Attribut suchen…")
             .toolbar {
+                ToolbarItem(placement: .topBarLeading) {
+                    Button { showGraphPicker = true } label: {
+                        Label(activeGraphName, systemImage: "square.stack.3d.up")
+                            .labelStyle(.titleAndIcon)
+                    }
+                }
                 ToolbarItem(placement: .topBarTrailing) {
                     Button { showAddEntity = true } label: { Image(systemName: "plus") }
                 }
             }
-            .sheet(isPresented: $showAddEntity) { AddEntityView() }
+            .sheet(isPresented: $showAddEntity) {
+                AddEntityView()
+            }
+            .sheet(isPresented: $showGraphPicker) {
+                GraphPickerSheet()
+            }
         }
     }
 
     private func deleteEntities(at offsets: IndexSet) {
         for index in offsets {
             let entity = filteredEntities[index]
-            deleteLinks(referencing: .entity, id: entity.id)
+            deleteLinks(referencing: .entity, id: entity.id, graphID: entity.graphID ?? activeGraphID)
             modelContext.delete(entity)
         }
     }
 
-    private func deleteLinks(referencing kind: NodeKind, id: UUID) {
+    private func deleteLinks(referencing kind: NodeKind, id: UUID, graphID: UUID?) {
         let k = kind.rawValue
         let nodeID = id
+        let gid = graphID
 
         let fdSource = FetchDescriptor<MetaLink>(
-            predicate: #Predicate { l in l.sourceKindRaw == k && l.sourceID == nodeID }
+            predicate: #Predicate { l in
+                l.sourceKindRaw == k &&
+                l.sourceID == nodeID &&
+                (gid == nil || l.graphID == gid)
+            }
         )
         if let links = try? modelContext.fetch(fdSource) {
             for l in links { modelContext.delete(l) }
         }
 
         let fdTarget = FetchDescriptor<MetaLink>(
-            predicate: #Predicate { l in l.targetKindRaw == k && l.targetID == nodeID }
+            predicate: #Predicate { l in
+                l.targetKindRaw == k &&
+                l.targetID == nodeID &&
+                (gid == nil || l.graphID == gid)
+            }
         )
         if let links = try? modelContext.fetch(fdTarget) {
             for l in links { modelContext.delete(l) }
@@ -108,6 +148,10 @@ struct EntitiesHomeView: View {
 struct AddEntityView: View {
     @Environment(\.dismiss) private var dismiss
     @Environment(\.modelContext) private var modelContext
+
+    @AppStorage("BMActiveGraphID") private var activeGraphIDString: String = ""
+    private var activeGraphID: UUID? { UUID(uuidString: activeGraphIDString) }
+
     @State private var name = ""
 
     var body: some View {
@@ -124,7 +168,9 @@ struct AddEntityView: View {
                 ToolbarItem(placement: .confirmationAction) {
                     Button("Speichern") {
                         let cleaned = name.trimmingCharacters(in: .whitespacesAndNewlines)
-                        modelContext.insert(MetaEntity(name: cleaned))
+                        let e = MetaEntity(name: cleaned, graphID: activeGraphID)
+                        modelContext.insert(e)
+                        try? modelContext.save()
                         dismiss()
                     }
                     .disabled(name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
@@ -151,14 +197,19 @@ struct EntityDetailView: View {
         self.entity = entity
         let id = entity.id
         let kindRaw = NodeKind.entity.rawValue
+        let gid = entity.graphID
 
         _outgoingLinks = Query(
-            filter: #Predicate<MetaLink> { l in l.sourceKindRaw == kindRaw && l.sourceID == id },
+            filter: #Predicate<MetaLink> { l in
+                l.sourceKindRaw == kindRaw && l.sourceID == id && (gid == nil || l.graphID == gid)
+            },
             sort: [SortDescriptor(\MetaLink.createdAt, order: .reverse)]
         )
 
         _incomingLinks = Query(
-            filter: #Predicate<MetaLink> { l in l.targetKindRaw == kindRaw && l.targetID == id },
+            filter: #Predicate<MetaLink> { l in
+                l.targetKindRaw == kindRaw && l.targetID == id && (gid == nil || l.graphID == gid)
+            },
             sort: [SortDescriptor(\MetaLink.createdAt, order: .reverse)]
         )
     }
@@ -174,8 +225,6 @@ struct EntityDetailView: View {
                 imagePath: $entity.imagePath,
                 stableID: entity.id
             )
-
-
 
             Section("Attribute") {
                 if entity.attributesList.isEmpty {
@@ -207,22 +256,23 @@ struct EntityDetailView: View {
         .alert("Neues Attribut", isPresented: $showAddAttribute) {
             TextField("Name (z.B. 2023)", text: $newAttributeName)
             Button("Abbrechen", role: .cancel) { newAttributeName = "" }
-                Button("Hinzufügen") {
-                    let cleaned = newAttributeName.trimmingCharacters(in: .whitespacesAndNewlines)
-                    guard !cleaned.isEmpty else { return }
+            Button("Hinzufügen") {
+                let cleaned = newAttributeName.trimmingCharacters(in: .whitespacesAndNewlines)
+                guard !cleaned.isEmpty else { return }
 
-                    let attr = MetaAttribute(name: cleaned)   // entity NICHT im init setzen
-                    modelContext.insert(attr)
-                    entity.addAttribute(attr)                 // setzt attr.entity = entity (inverse kümmert sich)
+                let attr = MetaAttribute(name: cleaned, owner: nil, graphID: entity.graphID)
+                modelContext.insert(attr)
+                entity.addAttribute(attr)
 
-                    newAttributeName = ""
-                }
-
+                newAttributeName = ""
+                try? modelContext.save()
+            }
         } message: {
             Text("Attribute sind frei benennbar.")
         }
         .sheet(isPresented: $showAddLink) {
-            AddLinkView(source: NodeRef(kind: .entity, id: entity.id, label: entity.name))
+            AddLinkView(source: NodeRef(kind: .entity, id: entity.id, label: entity.name),
+                        graphID: entity.graphID)
         }
     }
 
@@ -230,25 +280,31 @@ struct EntityDetailView: View {
         let sorted = entity.attributesList.sorted(by: { $0.name < $1.name })
         for index in offsets {
             let attr = sorted[index]
-            deleteLinks(referencing: .attribute, id: attr.id)
+            deleteLinks(referencing: .attribute, id: attr.id, graphID: entity.graphID)
             entity.removeAttribute(attr)
             modelContext.delete(attr)
         }
+        try? modelContext.save()
     }
 
-    private func deleteLinks(referencing kind: NodeKind, id: UUID) {
+    private func deleteLinks(referencing kind: NodeKind, id: UUID, graphID: UUID?) {
         let k = kind.rawValue
         let nodeID = id
+        let gid = graphID
 
         let fdSource = FetchDescriptor<MetaLink>(
-            predicate: #Predicate { l in l.sourceKindRaw == k && l.sourceID == nodeID }
+            predicate: #Predicate { l in
+                l.sourceKindRaw == k && l.sourceID == nodeID && (gid == nil || l.graphID == gid)
+            }
         )
         if let links = try? modelContext.fetch(fdSource) {
             for l in links { modelContext.delete(l) }
         }
 
         let fdTarget = FetchDescriptor<MetaLink>(
-            predicate: #Predicate { l in l.targetKindRaw == k && l.targetID == nodeID }
+            predicate: #Predicate { l in
+                l.targetKindRaw == k && l.targetID == nodeID && (gid == nil || l.graphID == gid)
+            }
         )
         if let links = try? modelContext.fetch(fdTarget) {
             for l in links { modelContext.delete(l) }
@@ -271,14 +327,19 @@ struct AttributeDetailView: View {
         self.attribute = attribute
         let id = attribute.id
         let kindRaw = NodeKind.attribute.rawValue
+        let gid = attribute.graphID
 
         _outgoingLinks = Query(
-            filter: #Predicate<MetaLink> { l in l.sourceKindRaw == kindRaw && l.sourceID == id },
+            filter: #Predicate<MetaLink> { l in
+                l.sourceKindRaw == kindRaw && l.sourceID == id && (gid == nil || l.graphID == gid)
+            },
             sort: [SortDescriptor(\MetaLink.createdAt, order: .reverse)]
         )
 
         _incomingLinks = Query(
-            filter: #Predicate<MetaLink> { l in l.targetKindRaw == kindRaw && l.targetID == id },
+            filter: #Predicate<MetaLink> { l in
+                l.targetKindRaw == kindRaw && l.targetID == id && (gid == nil || l.graphID == gid)
+            },
             sort: [SortDescriptor(\MetaLink.createdAt, order: .reverse)]
         )
     }
@@ -298,7 +359,6 @@ struct AttributeDetailView: View {
                 stableID: attribute.id
             )
 
-
             LinksSection(
                 titleOutgoing: "Links (ausgehend)",
                 titleIncoming: "Links (eingehend)",
@@ -312,7 +372,8 @@ struct AttributeDetailView: View {
         .navigationTitle(attribute.displayName)
         .navigationBarTitleDisplayMode(.inline)
         .sheet(isPresented: $showAddLink) {
-            AddLinkView(source: NodeRef(kind: .attribute, id: attribute.id, label: attribute.displayName))
+            AddLinkView(source: NodeRef(kind: .attribute, id: attribute.id, label: attribute.displayName),
+                        graphID: attribute.graphID)
         }
     }
 }
@@ -376,6 +437,7 @@ struct AddLinkView: View {
     @Environment(\.modelContext) private var modelContext
 
     let source: NodeRef
+    let graphID: UUID?
 
     @State private var targetKind: NodeKind = .entity
     @State private var selectedTarget: NodeRef?
@@ -444,13 +506,15 @@ struct AddLinkView: View {
         let sID = source.id
         let tKind = target.kind.rawValue
         let tID = target.id
+        let gid = graphID
 
         let fd = FetchDescriptor<MetaLink>(
             predicate: #Predicate { l in
                 l.sourceKindRaw == sKind &&
                 l.sourceID == sID &&
                 l.targetKindRaw == tKind &&
-                l.targetID == tID
+                l.targetID == tID &&
+                (gid == nil || l.graphID == gid)
             }
         )
 
@@ -469,19 +533,24 @@ struct AddLinkView: View {
             targetKind: target.kind,
             targetID: target.id,
             targetLabel: target.label,
-            note: finalNote
+            note: finalNote,
+            graphID: gid
         )
 
         modelContext.insert(link)
+        try? modelContext.save()
         dismiss()
     }
 }
 
-// MARK: - NodePickerView (skalierend)
+// MARK: - NodePickerView (skalierend, graph-scoped)
 
 struct NodePickerView: View {
     @Environment(\.dismiss) private var dismiss
     @Environment(\.modelContext) private var modelContext
+
+    @AppStorage("BMActiveGraphID") private var activeGraphIDString: String = ""
+    private var activeGraphID: UUID? { UUID(uuidString: activeGraphIDString) }
 
     let kind: NodeKind
     let onPick: (NodeRef) -> Void
@@ -565,15 +634,24 @@ struct NodePickerView: View {
     }
 
     private func fetchEntities(foldedSearch s: String) throws -> [NodeRef] {
+        let gid = activeGraphID
         var fd: FetchDescriptor<MetaEntity>
 
         if s.isEmpty {
-            fd = FetchDescriptor(sortBy: [SortDescriptor(\MetaEntity.name)])
+            fd = FetchDescriptor(
+                predicate: #Predicate<MetaEntity> { e in
+                    gid == nil || e.graphID == gid || e.graphID == nil
+                },
+                sortBy: [SortDescriptor(\MetaEntity.name)]
+            )
             fd.fetchLimit = emptySearchLimit
         } else {
             let term = s
             fd = FetchDescriptor(
-                predicate: #Predicate<MetaEntity> { e in e.nameFolded.contains(term) },
+                predicate: #Predicate<MetaEntity> { e in
+                    (gid == nil || e.graphID == gid || e.graphID == nil) &&
+                    e.nameFolded.contains(term)
+                },
                 sortBy: [SortDescriptor(\MetaEntity.name)]
             )
             fd.fetchLimit = searchLimit
@@ -583,15 +661,24 @@ struct NodePickerView: View {
     }
 
     private func fetchAttributes(foldedSearch s: String) throws -> [NodeRef] {
+        let gid = activeGraphID
         var fd: FetchDescriptor<MetaAttribute>
 
         if s.isEmpty {
-            fd = FetchDescriptor(sortBy: [SortDescriptor(\MetaAttribute.name)])
+            fd = FetchDescriptor(
+                predicate: #Predicate<MetaAttribute> { a in
+                    gid == nil || a.graphID == gid || a.graphID == nil
+                },
+                sortBy: [SortDescriptor(\MetaAttribute.name)]
+            )
             fd.fetchLimit = emptySearchLimit
         } else {
             let term = s
             fd = FetchDescriptor(
-                predicate: #Predicate<MetaAttribute> { a in a.searchLabelFolded.contains(term) },
+                predicate: #Predicate<MetaAttribute> { a in
+                    (gid == nil || a.graphID == gid || a.graphID == nil) &&
+                    a.searchLabelFolded.contains(term)
+                },
                 sortBy: [SortDescriptor(\MetaAttribute.name)]
             )
             fd.fetchLimit = searchLimit

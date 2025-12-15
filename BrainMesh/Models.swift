@@ -22,34 +22,32 @@ enum BMSearch {
     }
 }
 
-// MARK: - Graph
+// MARK: - Graph (Workspace)
 
 @Model
 final class MetaGraph {
     var id: UUID = UUID()
-    var name: String = ""
     var createdAt: Date = Date()
 
-    /// Kennzeichen für den systemweiten Default-Graph
-    var isDefault: Bool = false
+    var name: String = "" {
+        didSet { nameFolded = BMSearch.fold(name) }
+    }
+    var nameFolded: String = ""
 
-    init(id: UUID = UUID(), name: String, isDefault: Bool = false) {
-        self.id = id
-        self.name = name
-        self.isDefault = isDefault
+    init(name: String) {
+        let cleaned = name.trimmingCharacters(in: .whitespacesAndNewlines)
+        self.name = cleaned.isEmpty ? "Neuer Graph" : cleaned
+        self.nameFolded = BMSearch.fold(self.name)
         self.createdAt = Date()
     }
 }
-
-// MARK: - Entity
 
 @Model
 final class MetaEntity {
 
     var id: UUID = UUID()
 
-    /// ✅ NEU: Zugehörigkeit zu genau einem Graphen
-    /// Optional, weil bestehende Stores sonst random UUIDs bekommen würden (Katastrophe).
+    // ✅ Graph scope (Multi-DB). Optional für sanfte Migration alter Daten.
     var graphID: UUID? = nil
 
     var name: String = "" {
@@ -73,9 +71,10 @@ final class MetaEntity {
     @Relationship(deleteRule: .cascade, inverse: \MetaAttribute.owner)
     var attributes: [MetaAttribute]? = nil
 
-    init(name: String) {
+    init(name: String, graphID: UUID? = nil) {
         self.name = name
         self.nameFolded = BMSearch.fold(name)
+        self.graphID = graphID
         self.attributes = []
     }
 
@@ -93,11 +92,10 @@ final class MetaEntity {
         if attributes == nil { attributes = [] }
         if attributes?.contains(where: { $0.id == attr.id }) == true { return }
         attributes?.append(attr)
-        attr.owner = self
 
-        // ✅ Graph “mitschwimmen” lassen (Safety Belt)
+        // ✅ Scope Attribute in denselben Graph wie die Entität
         if attr.graphID == nil { attr.graphID = self.graphID }
-        if attr.graphID == nil { attr.graphID = GraphBootstrap.defaultGraphID }
+        attr.owner = self
     }
 
     func removeAttribute(_ attr: MetaAttribute) {
@@ -106,14 +104,12 @@ final class MetaEntity {
     }
 }
 
-// MARK: - Attribute
-
 @Model
 final class MetaAttribute {
 
     var id: UUID = UUID()
 
-    /// ✅ NEU: Graph-Zugehörigkeit (Safety Belt)
+    // ✅ Graph scope (Multi-DB). Optional für Migration.
     var graphID: UUID? = nil
 
     var name: String = "" {
@@ -136,19 +132,19 @@ final class MetaAttribute {
     // ❗️KEIN inverse hier, sonst Macro-Zirkularität
     var owner: MetaEntity? = nil {
         didSet {
-            // Graph automatisch an Owner koppeln (aber optional lassen)
-            if graphID == nil { graphID = owner?.graphID }
+            // ✅ wenn owner gesetzt ist, Graph scope angleichen
+            if let o = owner, graphID == nil { graphID = o.graphID }
             recomputeSearchLabelFolded()
         }
     }
 
     var searchLabelFolded: String = ""
 
-    init(name: String, owner: MetaEntity? = nil) {
+    init(name: String, owner: MetaEntity? = nil, graphID: UUID? = nil) {
         self.name = name
         self.nameFolded = BMSearch.fold(name)
         self.owner = owner
-        self.graphID = owner?.graphID
+        self.graphID = graphID ?? owner?.graphID
         self.searchLabelFolded = BMSearch.fold(self.displayName)
     }
 
@@ -162,8 +158,6 @@ final class MetaAttribute {
     }
 }
 
-// MARK: - Link
-
 @Model
 final class MetaLink {
 
@@ -171,7 +165,7 @@ final class MetaLink {
     var createdAt: Date = Date()
     var note: String? = nil
 
-    /// ✅ NEU: Link gehört zu genau einem Graphen
+    // ✅ Graph scope (Multi-DB). Optional für Migration.
     var graphID: UUID? = nil
 
     var sourceLabel: String = ""
@@ -190,11 +184,14 @@ final class MetaLink {
         targetKind: NodeKind,
         targetID: UUID,
         targetLabel: String,
-        note: String? = nil
+        note: String? = nil,
+        graphID: UUID? = nil
     ) {
         self.id = UUID()
         self.createdAt = Date()
         self.note = note
+
+        self.graphID = graphID
 
         self.sourceKindRaw = sourceKind.rawValue
         self.sourceID = sourceID

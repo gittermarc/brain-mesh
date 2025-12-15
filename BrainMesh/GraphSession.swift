@@ -5,7 +5,6 @@
 //  Created by Marc Fechner on 15.12.25.
 //
 
-
 import Foundation
 import Combine
 
@@ -13,8 +12,36 @@ import Combine
 final class GraphSession: ObservableObject {
     static let shared = GraphSession()
 
-    /// Aktiver Graph (später per UI umschaltbar)
-    @Published var activeGraphID: UUID = GraphBootstrap.defaultGraphID
+    // Muss identisch sein mit @AppStorage("BMActiveGraphID")
+    private let storageKey = "BMActiveGraphID"
 
-    private init() {}
+    /// Aktiver Graph (später per UI umschaltbar)
+    @Published var activeGraphID: UUID
+
+    private var cancellables: Set<AnyCancellable> = []
+
+    private init() {
+        // Default: "unset" UUID (stabil, kein random UUID-Schrott)
+        let unset = UUID(uuidString: "00000000-0000-0000-0000-000000000000")!
+
+        if let s = UserDefaults.standard.string(forKey: storageKey),
+           let id = UUID(uuidString: s) {
+            self.activeGraphID = id
+        } else {
+            self.activeGraphID = unset
+        }
+
+        // Bleibt automatisch synchron, wenn AppStorage/UserDefaults sich ändern
+        NotificationCenter.default.publisher(for: UserDefaults.didChangeNotification)
+            .receive(on: RunLoop.main)
+            .sink { [weak self] _ in
+                guard let self else { return }
+                if let s = UserDefaults.standard.string(forKey: self.storageKey),
+                   let id = UUID(uuidString: s),
+                   id != self.activeGraphID {
+                    self.activeGraphID = id
+                }
+            }
+            .store(in: &cancellables)
+    }
 }
