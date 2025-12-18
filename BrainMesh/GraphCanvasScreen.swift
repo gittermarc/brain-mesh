@@ -66,16 +66,16 @@ struct GraphCanvasScreen: View {
     @State private var lensHideNonRelevant: Bool = false
     @State private var lensDepth: Int = 2 // 1 = nur Nachbarn, 2 = Nachbarn+Nachbarn
 
-    // Global filter (nur wenn kein Fokus)
-    @State private var searchText: String = ""
-
     // Performance knobs
     @State private var maxNodes: Int = 140
     @State private var maxLinks: Int = 800
 
+    // ✅ Physics tuning
+    @State private var collisionStrength: Double = 0.030
+
     // Graph
     @State private var nodes: [GraphNode] = []
-    @State private var edges: [GraphEdge] = []
+    @State private var edges: [GraphEdge] = []                         // ✅ alle Kanten (Physik / Daten)
     @State private var positions: [NodeKey: CGPoint] = [:]
     @State private var velocities: [NodeKey: CGVector] = [:]
 
@@ -85,6 +85,10 @@ struct GraphCanvasScreen: View {
     // Pinning + Selection
     @State private var pinned: Set<NodeKey> = []
     @State private var selection: NodeKey? = nil
+
+    // ✅ Degree cap (Link edges) + “more”
+    private let degreeCap: Int = 12
+    @State private var showAllLinksForSelection: Bool = false
 
     // Camera
     @State private var scale: CGFloat = 1.0
@@ -104,16 +108,27 @@ struct GraphCanvasScreen: View {
     @State private var selectedEntity: MetaEntity?
     @State private var selectedAttribute: MetaAttribute?
 
-    private let debounceNanos: UInt64 = 250_000_000
-
     var body: some View {
+
+        // ✅ Nodes-only Default + Spotlight edges (nur direct selection edges)
+        let drawEdges = edgesForDisplay()
+
+        // ✅ Auto-Spotlight (erzwingt hideNonRelevant=true, depth=1 sobald selection != nil)
+        let autoSpotlight = (selection != nil)
+        let effectiveLensEnabled = autoSpotlight ? true : lensEnabled
+        let effectiveLensHide = autoSpotlight ? true : lensHideNonRelevant
+        let effectiveLensDepth = autoSpotlight ? 1 : lensDepth
+
         let lens = LensContext.build(
-            enabled: lensEnabled,
-            hideNonRelevant: lensHideNonRelevant,
-            depth: lensDepth,
+            enabled: effectiveLensEnabled,
+            hideNonRelevant: effectiveLensHide,
+            depth: effectiveLensDepth,
             selection: selection,
-            edges: edges
+            edges: drawEdges
         )
+
+        // ✅ Physik-Relevanz: im Spotlight nur auf Selection+Nachbarn simulieren (damit Hidden-Nodes nicht “mitdrücken”)
+        let physicsRelevant: Set<NodeKey>? = (autoSpotlight ? lens.relevant : nil)
 
         NavigationStack {
             ZStack {
@@ -125,10 +140,13 @@ struct GraphCanvasScreen: View {
                 } else {
                     GraphCanvasView(
                         nodes: nodes,
-                        edges: edges,
+                        drawEdges: drawEdges,
+                        physicsEdges: edges,
                         directedEdgeNotes: directedEdgeNotes,
                         lens: lens,
                         workMode: workMode,
+                        collisionStrength: CGFloat(collisionStrength),
+                        physicsRelevant: physicsRelevant,
                         selectedImagePath: selectedImagePath(),
                         onTapSelectedThumbnail: {
                             if let img = cachedFullImage {
@@ -178,11 +196,11 @@ struct GraphCanvasScreen: View {
                 }
                 .allowsHitTesting(false)
 
-                // MiniMap
+                // MiniMap (zeigt dieselben “drawEdges”, also in Default nodes-only quasi ohne Linien)
                 GeometryReader { geo in
                     MiniMapView(
                         nodes: nodes,
-                        edges: edges,
+                        edges: drawEdges,
                         positions: positions,
                         selection: selection,
                         focus: focusKey,
@@ -305,15 +323,6 @@ struct GraphCanvasScreen: View {
                 Task { await loadGraph(resetLayout: true) }
             }
 
-            // Global filter reload (nur global)
-            .task(id: searchText) {
-                guard focusEntity == nil else { return }
-                isLoading = true
-                try? await Task.sleep(nanoseconds: debounceNanos)
-                if Task.isCancelled { return }
-                await loadGraph()
-            }
-
             // Neighborhood reload
             .task(id: hops) {
                 guard focusEntity != nil else { return }
@@ -328,7 +337,13 @@ struct GraphCanvasScreen: View {
         .onChange(of: pan) { _, _ in pulseMiniMap() }
         .onChange(of: scale) { _, _ in pulseMiniMap() }
         .onAppear { prefetchSelectedFullImage() }
-        .onChange(of: selection) { _, _ in prefetchSelectedFullImage() }
+
+        // ✅ Selection change: reset “more”
+        .onChange(of: selection) { _, _ in
+            showAllLinksForSelection = false
+            prefetchSelectedFullImage()
+        }
+
         .onChange(of: selectedImagePathValue) { _, _ in prefetchSelectedFullImage() }
         .fullScreenCover(isPresented: $showGraphPhotoFullscreen) {
             if let img = graphFullscreenImage {
@@ -346,7 +361,7 @@ struct GraphCanvasScreen: View {
                     .font(.caption2)
                     .foregroundStyle(.secondary)
 
-                Text(focusEntity?.name ?? (BMSearch.fold(searchText).isEmpty ? "Alle Entitäten" : "Filter: \(searchText)"))
+                Text(focusEntity?.name ?? "Alle Entitäten")
                     .font(.subheadline)
                     .lineLimit(1)
             }
@@ -379,10 +394,56 @@ struct GraphCanvasScreen: View {
         }
     }
 
+    // MARK: - Spotlight edges (Nodes-only default + Degree cap)
+
+    private func edgesForDisplay() -> [GraphEdge] {
+        // ✅ Default: nodes-only (keine Linien)
+        guard let sel = selection else { return [] }
+
+        // ✅ Nur direkte Kanten des selektierten Nodes
+        let incident = edges.filter { $0.a == sel || $0.b == sel }
+
+        let containment = incident.filter { $0.type == .containment }
+        var links = incident.filter { $0.type == .link }
+
+        // stabilere Reihenfolge
+        links.sort { displayLabel(for: otherEnd(of: $0, sel: sel)) < displayLabel(for: otherEnd(of: $1, sel: sel)) }
+
+        if !showAllLinksForSelection {
+            links = Array(links.prefix(degreeCap))
+        }
+
+        return (containment + links).unique()
+    }
+
+    private func otherEnd(of e: GraphEdge, sel: NodeKey) -> NodeKey {
+        (e.a == sel) ? e.b : e.a
+    }
+
+    private func displayLabel(for key: NodeKey) -> String {
+        // in nodes steckt nur "label" (Attribute nicht mit owner prefix) — daher hier smarter:
+        switch key.kind {
+        case .entity:
+            return fetchEntity(id: key.uuid)?.name ?? (nodes.first(where: { $0.key == key })?.label ?? "")
+        case .attribute:
+            // displayName ist schöner (Owner · Attr)
+            if let a = fetchAttribute(id: key.uuid) { return a.displayName }
+            return nodes.first(where: { $0.key == key })?.label ?? ""
+        }
+    }
+
+    private func hiddenLinkCountForSelection() -> Int {
+        guard let sel = selection else { return 0 }
+        if showAllLinksForSelection { return 0 }
+        let incidentLinkCount = edges.filter { $0.type == .link && ($0.a == sel || $0.b == sel) }.count
+        return max(0, incidentLinkCount - degreeCap)
+    }
+
     // MARK: - Action chip
 
     private func actionChip(for node: GraphNode) -> some View {
         let isPinned = pinned.contains(node.key)
+        let hiddenLinks = hiddenLinkCountForSelection()
 
         return HStack(spacing: 10) {
             VStack(alignment: .leading, spacing: 2) {
@@ -396,6 +457,24 @@ struct GraphCanvasScreen: View {
             }
 
             Spacer()
+
+            // ✅ Degree cap “more”
+            if hiddenLinks > 0 {
+                Button {
+                    showAllLinksForSelection = true
+                } label: {
+                    Label("Mehr (\(hiddenLinks))", systemImage: "ellipsis.circle")
+                }
+                .buttonStyle(.bordered)
+                .help("Weitere Links dieser Node anzeigen")
+            } else if showAllLinksForSelection {
+                Button {
+                    showAllLinksForSelection = false
+                } label: {
+                    Label("Weniger", systemImage: "chevron.up.circle")
+                }
+                .buttonStyle(.bordered)
+            }
 
             // ✅ Expand
             Button {
@@ -453,7 +532,7 @@ struct GraphCanvasScreen: View {
         .background(.thinMaterial)
         .clipShape(RoundedRectangle(cornerRadius: 14))
         .shadow(radius: 6, y: 2)
-        .frame(maxWidth: 560)
+        .frame(maxWidth: 640)
     }
 
     private func nodeLabel(for node: GraphNode) -> String {
@@ -539,14 +618,35 @@ struct GraphCanvasScreen: View {
                     Stepper("Lens Tiefe: \(lensDepth)", value: $lensDepth, in: 1...2)
                         .disabled(!lensEnabled)
 
-                    Text("Wenn eine Node ausgewählt ist, werden Nachbarn hervorgehoben und der Rest gedimmt (oder ausgeblendet).")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
+                    if selection != nil {
+                        Text("Spotlight aktiv: Selection → nur direkte Nachbarn (Tiefe 1) + Rest ausgeblendet.")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    } else {
+                        Text("Wenn eine Node ausgewählt ist, werden Nachbarn hervorgehoben und der Rest gedimmt (oder ausgeblendet).")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
                 }
 
-                Section("Global") {
-                    TextField("Filter (Entitätenname)…", text: $searchText)
-                        .disabled(focusEntity != nil)
+                Section("Layout & Physics") {
+                    Button {
+                        stabilizeLayout()
+                    } label: {
+                        Label("Layout stabilisieren", systemImage: "pin.circle")
+                    }
+                    .disabled(nodes.isEmpty)
+
+                    VStack(alignment: .leading, spacing: 6) {
+                        Text("Collisions: \(collisionStrength, format: .number.precision(.fractionLength(3)))")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                        Slider(value: $collisionStrength, in: 0.0...0.09, step: 0.005)
+                    }
+
+                    Text("Tipp: Wenn du viel overlap hast → Collisions hoch. Wenn es „zittert“ → Collisions runter.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
                 }
 
                 Section("Limits") {
@@ -592,6 +692,14 @@ struct GraphCanvasScreen: View {
         .presentationDetents([.medium, .large])
     }
 
+    private func stabilizeLayout() {
+        let all = Set(nodes.map(\.key))
+        pinned = all
+        for k in all {
+            velocities[k] = .zero
+        }
+    }
+
     // MARK: - Views
 
     private func errorView(_ text: String) -> some View {
@@ -624,17 +732,13 @@ struct GraphCanvasScreen: View {
 
     @MainActor
     private func ensureActiveGraphAndLoadIfNeeded() async {
-        // Wenn noch kein ActiveGraph gesetzt ist, aber Graphen existieren:
-        // -> setze den ältesten/ersten Graph als aktiv.
         if activeGraphID == nil, let first = graphs.first {
             activeGraphIDString = first.id.uuidString
-            // onChange(of: activeGraphIDString) triggert ohnehin loadGraph(resetLayout: true)
             return
         }
-
         await loadGraph()
     }
-    
+
     @MainActor
     private func loadGraph(resetLayout: Bool = true) async {
         isLoading = true
@@ -668,38 +772,18 @@ struct GraphCanvasScreen: View {
     }
 
     private func loadGlobal() throws {
-        let folded = BMSearch.fold(searchText)
-
-        // ✅ Entities (scoped)
         var eFD: FetchDescriptor<MetaEntity>
         if let gid = activeGraphID {
-            if folded.isEmpty {
-                eFD = FetchDescriptor(
-                    predicate: #Predicate<MetaEntity> { e in e.graphID == gid || e.graphID == nil },
-                    sortBy: [SortDescriptor(\MetaEntity.name)]
-                )
-            } else {
-                let term = folded
-                eFD = FetchDescriptor(
-                    predicate: #Predicate<MetaEntity> { e in (e.graphID == gid || e.graphID == nil) && e.nameFolded.contains(term) },
-                    sortBy: [SortDescriptor(\MetaEntity.name)]
-                )
-            }
+            eFD = FetchDescriptor(
+                predicate: #Predicate<MetaEntity> { e in e.graphID == gid || e.graphID == nil },
+                sortBy: [SortDescriptor(\MetaEntity.name)]
+            )
         } else {
-            if folded.isEmpty {
-                eFD = FetchDescriptor(sortBy: [SortDescriptor(\MetaEntity.name)])
-            } else {
-                let term = folded
-                eFD = FetchDescriptor(
-                    predicate: #Predicate<MetaEntity> { e in e.nameFolded.contains(term) },
-                    sortBy: [SortDescriptor(\MetaEntity.name)]
-                )
-            }
+            eFD = FetchDescriptor(sortBy: [SortDescriptor(\MetaEntity.name)])
         }
         eFD.fetchLimit = maxNodes
         let ents = try modelContext.fetch(eFD)
 
-        // ✅ Links (scoped)
         let kEntity = NodeKind.entity.rawValue
         var lFD: FetchDescriptor<MetaLink>
         if let gid = activeGraphID {
@@ -843,7 +927,6 @@ struct GraphCanvasScreen: View {
                 for e in ents {
                     let sortedAttrs = e.attributesList.sorted { $0.name < $1.name }
                     for a in sortedAttrs {
-                        // ✅ attribute scope check (optional safety)
                         if let gid, !(a.graphID == gid || a.graphID == nil) { continue }
                         attrs.append(a)
                         if attrs.count >= remaining { break }
@@ -1000,7 +1083,6 @@ struct GraphCanvasScreen: View {
             if !newKeys.contains(nk) { newKeys.append(nk) }
         }
 
-        // Helper: label fetch
         func labelFor(_ nk: NodeKey) -> String? {
             switch nk.kind {
             case .entity:
@@ -1010,12 +1092,10 @@ struct GraphCanvasScreen: View {
             }
         }
 
-        // Expand Links (out + in)
         let kindRaw = key.kind.rawValue
         let id = key.uuid
 
         let perExpandCap = min(220, max(40, maxLinks / 6))
-
         let gid = activeGraphID
 
         var outFD: FetchDescriptor<MetaLink>
@@ -1053,12 +1133,10 @@ struct GraphCanvasScreen: View {
         let outLinks = (try? modelContext.fetch(outFD)) ?? []
         let inLinks = (try? modelContext.fetch(inFD)) ?? []
 
-        // Build candidate edges
         for l in outLinks {
             let a = NodeKey(kind: NodeKind(rawValue: l.sourceKindRaw) ?? .entity, uuid: l.sourceID)
             let b = NodeKey(kind: NodeKind(rawValue: l.targetKindRaw) ?? .entity, uuid: l.targetID)
 
-            // respect max nodes
             if !existingKeys.contains(b) && (existingKeys.count + newKeys.count) >= maxNodes { break }
 
             ensureNode(a)
@@ -1077,7 +1155,6 @@ struct GraphCanvasScreen: View {
                 let a = NodeKey(kind: NodeKind(rawValue: l.sourceKindRaw) ?? .entity, uuid: l.sourceID)
                 let b = NodeKey(kind: NodeKind(rawValue: l.targetKindRaw) ?? .entity, uuid: l.targetID)
 
-                // respect max nodes
                 if !existingKeys.contains(a) && (existingKeys.count + newKeys.count) >= maxNodes { break }
 
                 ensureNode(a)
@@ -1092,7 +1169,6 @@ struct GraphCanvasScreen: View {
             }
         }
 
-        // Expand containment (attributes of entity / owner of attribute)
         if showAttributes {
             switch key.kind {
             case .entity:
@@ -1120,7 +1196,6 @@ struct GraphCanvasScreen: View {
             }
         }
 
-        // Materialize new nodes with labels
         var appendedNodes: [GraphNode] = []
         appendedNodes.reserveCapacity(newKeys.count)
 
@@ -1133,7 +1208,6 @@ struct GraphCanvasScreen: View {
             return
         }
 
-        // Merge
         nodes.append(contentsOf: appendedNodes)
 
         let mergedEdges = (edges + newEdges).unique()
@@ -1141,7 +1215,6 @@ struct GraphCanvasScreen: View {
 
         directedEdgeNotes = newNotes
 
-        // Seed positions for new nodes near the expanded node
         seedNewNodesNear(key, newNodeKeys: appendedNodes.map(\.key))
     }
 
@@ -1149,7 +1222,6 @@ struct GraphCanvasScreen: View {
     private func seedNewNodesNear(_ centerKey: NodeKey, newNodeKeys: [NodeKey]) {
         guard !newNodeKeys.isEmpty else { return }
         guard let cp = positions[centerKey] else {
-            // Fallback: just place them around origin
             for (i, k) in newNodeKeys.enumerated() {
                 let angle = (CGFloat(i) / CGFloat(max(1, newNodeKeys.count))) * (.pi * 2)
                 let p = CGPoint(x: cos(angle) * 140, y: sin(angle) * 140)
@@ -1206,13 +1278,11 @@ struct GraphCanvasScreen: View {
         }
     }
 
-    private var selectedImagePathValue: String? {
-        selectedImagePath()
-    }
+    private var selectedImagePathValue: String? { selectedImagePath() }
 
     private func prefetchSelectedFullImage() {
         let path = selectedImagePathValue
-        guard path != cachedFullImagePath else { return }   // nichts zu tun
+        guard path != cachedFullImagePath else { return }
 
         cachedFullImagePath = path
         cachedFullImage = nil
@@ -1222,7 +1292,6 @@ struct GraphCanvasScreen: View {
         DispatchQueue.global(qos: .userInitiated).async {
             let img = ImageStore.loadUIImage(path: path)
             DispatchQueue.main.async {
-                // nur übernehmen, wenn inzwischen nicht umselected wurde
                 if cachedFullImagePath == path {
                     cachedFullImage = img
                 }
@@ -1277,10 +1346,9 @@ struct GraphCanvasScreen: View {
         let satRadius: CGFloat = 70
         for (ek, attrs) in owner {
             guard let ep = positions[ek] else { continue }
-            let list = attrs
-            for (i, ak) in list.enumerated() {
+            for (i, ak) in attrs.enumerated() {
                 if pinned.contains(ak), positions[ak] != nil { continue }
-                let angle = (CGFloat(i) / CGFloat(max(1, list.count))) * (.pi * 2)
+                let angle = (CGFloat(i) / CGFloat(max(1, attrs.count))) * (.pi * 2)
                 let p = CGPoint(x: ep.x + cos(angle) * satRadius, y: ep.y + sin(angle) * satRadius)
                 positions[ak] = p
                 velocities[ak] = .zero
@@ -1304,7 +1372,6 @@ private struct LensContext: Equatable {
             return LensContext(enabled: false, hideNonRelevant: false, depth: depth, selection: selection, distance: [:], relevant: [])
         }
 
-        // adjacency (edges sind klein; maxLinks ~ 800 -> ok)
         var adj: [NodeKey: [NodeKey]] = [:]
         adj.reserveCapacity(edges.count * 2)
         for e in edges {
@@ -1550,11 +1617,19 @@ struct CameraCommand: Identifiable, Equatable {
 
 struct GraphCanvasView: View {
     let nodes: [GraphNode]
-    let edges: [GraphEdge]
+
+    // ✅ getrennt: was wir zeichnen vs. was die Physik nutzt
+    let drawEdges: [GraphEdge]
+    let physicsEdges: [GraphEdge]
+
     let directedEdgeNotes: [DirectedEdgeKey: String]
     fileprivate let lens: LensContext
 
     let workMode: WorkMode
+    let collisionStrength: CGFloat
+
+    // ✅ Spotlight Physik: nur auf relevanten Nodes simulieren (selection+neighbors)
+    let physicsRelevant: Set<NodeKey>?
 
     // ✅ Thumbnail support (nur Selection)
     let selectedImagePath: String?
@@ -1588,24 +1663,23 @@ struct GraphCanvasView: View {
         GeometryReader { geo in
             let size = geo.size
 
-            // ✅ Semantic zoom opacities (weich, kein hartes “an/aus”)
-            let entityLabelAlpha = fade(scale, from: 0.82, to: 0.98)          // mid
-            let attributeLabelAlpha = fade(scale, from: 1.28, to: 1.48)        // near
-            let noteAlpha = fade(scale, from: 1.36, to: 1.56)                  // near+
-            let showNotes = noteAlpha > 0.02
+            let entityLabelAlpha = fade(scale, from: 0.55, to: 0.88)
+            let attributeLabelAlpha = fade(scale, from: 1.20, to: 1.42)
+            let noteAlpha = fade(scale, from: 1.32, to: 1.52)
+            let showNotes = (noteAlpha > 0.02) && (selection != nil)
 
-            // ✅ Thumbnail nur "near"
             let thumbAlpha = fade(scale, from: 1.26, to: 1.42)
+
+            // ✅ Label priority: bei selection nur Selected + Nachbarn labeln
+            let spotlightLabelsOnly = (selection != nil)
 
             ZStack {
                 Canvas { context, _ in
                     let center = CGPoint(x: size.width / 2 + pan.width, y: size.height / 2 + pan.height)
 
-                    // edges
-                    for e in edges {
-                        if lens.hideNonRelevant && (lens.isHidden(e.a) || lens.isHidden(e.b)) {
-                            continue
-                        }
+                    // edges (DRAW)
+                    for e in drawEdges {
+                        if lens.hideNonRelevant && (lens.isHidden(e.a) || lens.isHidden(e.b)) { continue }
 
                         guard let p1 = positions[e.a], let p2 = positions[e.b] else { continue }
                         let a = toScreen(p1, center: center)
@@ -1628,7 +1702,7 @@ struct GraphCanvasView: View {
                             context.stroke(path, with: .color(.secondary.opacity(baseLink)), lineWidth: 1)
                         }
 
-                        // ✅ Notizen: nur im Nah-Zoom und nur für Kanten der selektierten Node (ausgehend)
+                        // ✅ Notizen: nur im Nah-Zoom + nur für Kanten der selektierten Node (ausgehend)
                         if showNotes, let sel = selection, e.type == .link {
                             if sel == e.a {
                                 drawOutgoingNoteIfAny(source: e.a, target: e.b, from: a, to: b, alpha: noteAlpha, in: context)
@@ -1642,12 +1716,11 @@ struct GraphCanvasView: View {
                     for n in nodes {
                         if lens.hideNonRelevant && lens.isHidden(n.key) { continue }
                         guard let p = positions[n.key] else { continue }
-                        let center = CGPoint(x: size.width / 2 + pan.width, y: size.height / 2 + pan.height)
+
                         let s = toScreen(p, center: center)
 
                         let isPinned = pinned.contains(n.key)
                         let isSelected = (selection == n.key)
-
                         let nodeAlpha = lens.nodeOpacity(n.key)
 
                         switch n.key.kind {
@@ -1662,13 +1735,26 @@ struct GraphCanvasView: View {
                                 lineWidth: isSelected ? 3 : (isPinned ? 2 : 1)
                             )
 
-                            let labelA = max(entityLabelAlpha, isSelected ? 1.0 : 0.0) * nodeAlpha
-                            if labelA > 0.06 {
-                                context.draw(
-                                    Text(n.label).font(.caption).foregroundStyle(.primary.opacity(labelA)),
-                                    at: CGPoint(x: s.x, y: s.y + 26),
-                                    anchor: .center
-                                )
+                            // Labels: Default besser sichtbar; Spotlight nur relevant
+                            let isRelevantInSpotlight = (lens.distance[n.key] != nil)
+                            let allowLabel = (!spotlightLabelsOnly) || isRelevantInSpotlight
+
+                            if allowLabel {
+                                let baseMin: CGFloat = (selection == nil) ? 0.34 : 0.10
+                                let labelA = max(max(entityLabelAlpha, baseMin), isSelected ? 1.0 : 0.0) * nodeAlpha
+                                if labelA > 0.04 {
+                                    let off = labelOffset(for: n.key, kind: .entity)
+                                    drawLabel(
+                                        n.label,
+                                        at: CGPoint(x: s.x + off.x, y: s.y + 28 + off.y),
+                                        alpha: labelA,
+                                        isSelected: isSelected,
+                                        wantHalo: (selection == nil) || isSelected || labelA < 0.92,
+                                        in: context,
+                                        font: .caption.weight(.semibold),
+                                        maxWidth: 190
+                                    )
+                                }
                             }
 
                             if isPinned && (entityLabelAlpha > 0.25 || isSelected) && nodeAlpha > 0.20 {
@@ -1690,13 +1776,24 @@ struct GraphCanvasView: View {
                                 lineWidth: isSelected ? 3 : (isPinned ? 2 : 1)
                             )
 
-                            let labelA = max(attributeLabelAlpha, isSelected ? 1.0 : 0.0) * nodeAlpha
-                            if labelA > 0.06 {
-                                context.draw(
-                                    Text(n.label).font(.caption2).foregroundStyle(.primary.opacity(labelA)),
-                                    at: CGPoint(x: s.x, y: s.y + 22),
-                                    anchor: .center
-                                )
+                            let isRelevantInSpotlight = (lens.distance[n.key] != nil)
+                            let allowLabel = (!spotlightLabelsOnly) || isRelevantInSpotlight
+
+                            if allowLabel {
+                                let labelA = max(attributeLabelAlpha, isSelected ? 1.0 : 0.0) * nodeAlpha
+                                if labelA > 0.06 {
+                                    let off = labelOffset(for: n.key, kind: .attribute)
+                                    drawLabel(
+                                        n.label,
+                                        at: CGPoint(x: s.x + off.x, y: s.y + 24 + off.y),
+                                        alpha: labelA,
+                                        isSelected: isSelected,
+                                        wantHalo: isSelected || labelA < 0.90,
+                                        in: context,
+                                        font: .caption2,
+                                        maxWidth: 170
+                                    )
+                                }
                             }
 
                             if isPinned && (attributeLabelAlpha > 0.25 || isSelected) && nodeAlpha > 0.20 {
@@ -1717,7 +1814,6 @@ struct GraphCanvasView: View {
                     let center = CGPoint(x: size.width / 2 + pan.width, y: size.height / 2 + pan.height)
                     let sp = toScreen(wp, center: center)
 
-                    // slightly offset so it doesn't sit on top of the node
                     let rawX = sp.x + 54
                     let rawY = sp.y - 54
 
@@ -1751,12 +1847,8 @@ struct GraphCanvasView: View {
                 applyCameraCommand(cmd, in: size)
                 cameraCommand = nil
             }
-            .onChange(of: selection) { _, _ in
-                refreshThumbnailCache()
-            }
-            .onChange(of: selectedImagePath) { _, _ in
-                refreshThumbnailCache()
-            }
+            .onChange(of: selection) { _, _ in refreshThumbnailCache() }
+            .onChange(of: selectedImagePath) { _, _ in refreshThumbnailCache() }
         }
     }
 
@@ -1774,7 +1866,6 @@ struct GraphCanvasView: View {
             guard let full = ImageStore.loadUIImage(path: path) else { return }
             let thumb = full.preparingThumbnail(of: CGSize(width: 160, height: 160)) ?? full
             DispatchQueue.main.async {
-                // only apply if still current
                 if cachedThumbPath == path {
                     cachedThumb = thumb
                 }
@@ -1790,6 +1881,69 @@ struct GraphCanvasView: View {
         return clamp01((value - a) / (b - a))
     }
 
+    // MARK: - Stable jitter helpers
+
+    private func stableSeed(_ s: String) -> Int {
+        var h: Int = 0
+        for u in s.unicodeScalars {
+            h = (h &* 31) &+ Int(u.value)
+        }
+        return h
+    }
+
+    private enum LabelKind { case entity, attribute }
+
+    private func labelOffset(for key: NodeKey, kind: LabelKind) -> CGPoint {
+        let h = stableSeed(key.identifier)
+        let xChoices: [CGFloat] = [-14, 0, 14]
+        let yChoicesEntity: [CGFloat] = [0, 6, 12]
+        let yChoicesAttr: [CGFloat] = [0, -6, -12]
+
+        let xi = abs(h) % xChoices.count
+        let yi = abs(h / 7) % 3
+
+        let x = xChoices[xi]
+        let y = (kind == .entity) ? yChoicesEntity[yi] : yChoicesAttr[yi]
+        return CGPoint(x: x, y: y)
+    }
+
+    // MARK: - Label drawing (Halo)
+
+    private func drawLabel(
+        _ textStr: String,
+        at p: CGPoint,
+        alpha: CGFloat,
+        isSelected: Bool,
+        wantHalo: Bool,
+        in context: GraphicsContext,
+        font: Font,
+        maxWidth: CGFloat
+    ) {
+        let text = Text(textStr)
+            .font(font)
+            .foregroundStyle(.primary.opacity(alpha))
+
+        let resolved = context.resolve(text)
+        let measured = resolved.measure(in: CGSize(width: maxWidth, height: 60))
+
+        if wantHalo || isSelected {
+            let padX: CGFloat = 6
+            let padY: CGFloat = 3
+            let bg = CGRect(
+                x: p.x - measured.width / 2 - padX,
+                y: p.y - measured.height / 2 - padY,
+                width: measured.width + padX * 2,
+                height: measured.height + padY * 2
+            )
+
+            let bgPath = Path(roundedRect: bg, cornerRadius: 7)
+            context.fill(bgPath, with: .color(.primary.opacity(0.12 * alpha)))
+            context.stroke(bgPath, with: .color(.primary.opacity(0.20 * alpha)), lineWidth: 1)
+        }
+
+        context.draw(resolved, at: p, anchor: .center)
+    }
+
     // MARK: - Notes
 
     private func drawOutgoingNoteIfAny(
@@ -1802,17 +1956,38 @@ struct GraphCanvasView: View {
     ) {
         let k = DirectedEdgeKey.make(source: source, target: target, type: .link)
         guard let note = directedEdgeNotes[k], !note.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return }
-        drawEdgeNote(note, from: a, to: b, alpha: alpha, in: context)
+        drawEdgeNote(note, source: source, target: target, from: a, to: b, alpha: alpha, in: context)
     }
 
-    private func drawEdgeNote(_ raw: String, from a: CGPoint, to b: CGPoint, alpha: CGFloat, in context: GraphicsContext) {
+    private func drawEdgeNote(
+        _ raw: String,
+        source: NodeKey,
+        target: NodeKey,
+        from a: CGPoint,
+        to b: CGPoint,
+        alpha: CGFloat,
+        in context: GraphicsContext
+    ) {
         let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return }
 
         let maxChars = 46
         let textStr = trimmed.count > maxChars ? (String(trimmed.prefix(maxChars)) + "…") : trimmed
 
-        let mid = CGPoint(x: (a.x + b.x) / 2, y: (a.y + b.y) / 2 - 10)
+        let midBase = CGPoint(x: (a.x + b.x) / 2, y: (a.y + b.y) / 2)
+
+        let dx = b.x - a.x
+        let dy = b.y - a.y
+        let len = max(1.0, sqrt(dx*dx + dy*dy))
+        let nx = -dy / len
+        let ny = dx / len
+
+        let side = (stableSeed(source.identifier + "->" + target.identifier) % 2 == 0) ? CGFloat(1) : CGFloat(-1)
+        var offset: CGFloat = 14
+        if len < 120 { offset = 20 }
+
+        let mid = CGPoint(x: midBase.x + nx * offset * side,
+                          y: midBase.y + ny * offset * side - 8)
 
         let text = Text(textStr)
             .font(.caption2)
@@ -1960,7 +2135,7 @@ struct GraphCanvasView: View {
                 if workMode == .explore {
                     if draggingKey != nil { draggingKey = nil }
                     pan = CGSize(width: panStart.width + value.translation.width,
-                                height: panStart.height + value.translation.height)
+                                 height: panStart.height + value.translation.height)
                     return
                 }
 
@@ -1983,7 +2158,7 @@ struct GraphCanvasView: View {
                     velocities[key] = .zero
                 } else {
                     pan = CGSize(width: dragStartPan.width + value.translation.width,
-                                height: dragStartPan.height + value.translation.height)
+                                 height: dragStartPan.height + value.translation.height)
                 }
             }
             .onEnded { _ in
@@ -2037,43 +2212,72 @@ struct GraphCanvasView: View {
         vel[key, default: .zero].dy += dy
     }
 
+    private func approxRadius(for key: NodeKey) -> CGFloat {
+        switch key.kind {
+        case .entity: return 22
+        case .attribute: return 18
+        }
+    }
+
     private func stepSimulation() {
         guard nodes.count >= 2 else { return }
 
-        let repulsion: CGFloat = 7500
+        let repulsion: CGFloat = 8800
         let springLink: CGFloat = 0.018
         let springContain: CGFloat = 0.040
-        let restLink: CGFloat = 120
-        let restContain: CGFloat = 70
+        let restLink: CGFloat = 130
+        let restContain: CGFloat = 76
         let damping: CGFloat = 0.85
         let maxSpeed: CGFloat = 18
+
+        let collisionStrength: CGFloat = max(0, self.collisionStrength)
+        let collisionPadding: CGFloat = 6
 
         var pos = positions
         var vel = velocities
 
-        for i in 0..<nodes.count {
-            let a = nodes[i].key
+        // ✅ Spotlight Physik: nur relevante Nodes bewegen; Rest “stilllegen”
+        let relevant = physicsRelevant
+        let simNodes = (relevant == nil) ? nodes : nodes.filter { relevant!.contains($0.key) }
+
+        if let relevant {
+            for n in nodes where !relevant.contains(n.key) {
+                vel[n.key] = .zero
+            }
+        }
+
+        // repulsion + collisions
+        for i in 0..<simNodes.count {
+            let a = simNodes[i].key
             guard let pa = pos[a], !isFixed(a) else { continue }
 
-            var fx: CGFloat = 0
-            var fy: CGFloat = 0
-
-            for j in 0..<nodes.count where j != i {
-                let b = nodes[j].key
+            for j in 0..<simNodes.count where j != i {
+                let b = simNodes[j].key
                 guard let pb = pos[b] else { continue }
 
                 let dx = pa.x - pb.x
                 let dy = pa.y - pb.y
                 let dist2 = max(dx*dx + dy*dy, 40)
-                let f = repulsion / dist2
-                fx += dx * f
-                fy += dy * f
-            }
+                let dist = sqrt(dist2)
 
-            addVelocity(a, dx: fx * 0.00002, dy: fy * 0.00002, vel: &vel)
+                let f = repulsion / dist2
+                addVelocity(a, dx: dx * f * 0.00002, dy: dy * f * 0.00002, vel: &vel)
+
+                let minDist = approxRadius(for: a) + approxRadius(for: b) + collisionPadding
+                if dist < minDist {
+                    let overlap = (minDist - dist)
+                    let nx = (dist > 0.01) ? (dx / dist) : 1
+                    let ny = (dist > 0.01) ? (dy / dist) : 0
+                    addVelocity(a, dx: nx * overlap * collisionStrength, dy: ny * overlap * collisionStrength, vel: &vel)
+                }
+            }
         }
 
-        for e in edges {
+        // springs (Physik nutzt volle Kantenliste, aber Spotlight begrenzt auf relevante Nodes)
+        for e in physicsEdges {
+            if let relevant {
+                if !relevant.contains(e.a) || !relevant.contains(e.b) { continue }
+            }
             guard let p1 = pos[e.a], let p2 = pos[e.b] else { continue }
 
             let dx = p2.x - p1.x
@@ -2091,7 +2295,8 @@ struct GraphCanvasView: View {
             addVelocity(e.b, dx: -fx, dy: -fy, vel: &vel)
         }
 
-        for n in nodes {
+        // integrate
+        for n in simNodes {
             let id = n.key
 
             if isFixed(id) {
