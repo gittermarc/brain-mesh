@@ -23,6 +23,11 @@ struct GraphPickerSheet: View {
     @State private var renameGraph: MetaGraph?
     @State private var renameText: String = ""
 
+    // ✅ Delete flow
+    @State private var deleteGraph: MetaGraph?
+    @State private var isDeleting = false
+    @State private var deleteError: String?
+
     private var activeID: UUID? { UUID(uuidString: activeGraphIDString) }
 
     // ✅ Dedupe by UUID (wenn durch Sync/Bootstrap derselbe Graph doppelt auftaucht)
@@ -57,7 +62,9 @@ struct GraphPickerSheet: View {
                             }
                         }
                         .buttonStyle(.plain)
+                        .disabled(isDeleting)
                         .swipeActions(edge: .trailing, allowsFullSwipe: false) {
+
                             Button {
                                 renameGraph = g
                                 renameText = g.name
@@ -65,6 +72,12 @@ struct GraphPickerSheet: View {
                                 Label("Umbenennen", systemImage: "pencil")
                             }
                             .tint(.indigo)
+
+                            Button(role: .destructive) {
+                                deleteGraph = g
+                            } label: {
+                                Label("Löschen", systemImage: "trash")
+                            }
                         }
                     }
                 }
@@ -80,6 +93,7 @@ struct GraphPickerSheet: View {
                         } label: {
                             Label("Duplikate entfernen", systemImage: "trash")
                         }
+                        .disabled(isDeleting)
                     }
                 }
 
@@ -93,6 +107,7 @@ struct GraphPickerSheet: View {
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
                     Button("Schließen") { dismiss() }
+                        .disabled(isDeleting)
                 }
                 ToolbarItem(placement: .topBarTrailing) {
                     Button {
@@ -101,8 +116,26 @@ struct GraphPickerSheet: View {
                     } label: {
                         Image(systemName: "plus")
                     }
+                    .disabled(isDeleting)
                 }
             }
+
+            .overlay {
+                if isDeleting {
+                    ZStack {
+                        Color.black.opacity(0.08).ignoresSafeArea()
+                        HStack(spacing: 10) {
+                            ProgressView()
+                            Text("Lösche…").foregroundStyle(.secondary)
+                        }
+                        .padding(12)
+                        .background(.thinMaterial)
+                        .clipShape(RoundedRectangle(cornerRadius: 14))
+                    }
+                }
+            }
+
+            // MARK: Add graph
             .alert("Neuer Graph", isPresented: $showAdd) {
                 TextField("Name", text: $newName)
                 Button("Abbrechen", role: .cancel) { newName = "" }
@@ -118,6 +151,8 @@ struct GraphPickerSheet: View {
             } message: {
                 Text("Jeder Graph ist eine eigene Wissensdatenbank.")
             }
+
+            // MARK: Rename
             .alert("Graph umbenennen", isPresented: Binding(
                 get: { renameGraph != nil },
                 set: { if !$0 { renameGraph = nil } }
@@ -131,6 +166,43 @@ struct GraphPickerSheet: View {
                     try? modelContext.save()
                     renameGraph = nil
                 }
+            }
+
+            // MARK: Delete confirm
+            .alert("Graph löschen?", isPresented: Binding(
+                get: { deleteGraph != nil },
+                set: { if !$0 { deleteGraph = nil } }
+            )) {
+                Button("Abbrechen", role: .cancel) { deleteGraph = nil }
+
+                Button("Löschen", role: .destructive) {
+                    guard let g = deleteGraph else { return }
+                    Task { await deleteGraphCompletely(graphUUID: g.id) }
+                }
+            } message: {
+                if let g = deleteGraph {
+                    let isActive = (g.id == activeID)
+                    let isLast = (uniqueGraphs.count <= 1)
+                    if isLast {
+                        Text("Dieser Graph ist der letzte. Wenn du ihn löschst, wird automatisch ein neuer leerer „Default“-Graph angelegt.")
+                    } else if isActive {
+                        Text("Dieser Graph ist aktuell aktiv. Nach dem Löschen wird automatisch auf einen anderen Graph umgeschaltet.")
+                    } else {
+                        Text("Das löscht den Graph inkl. Entitäten, Attributen, Links, Notizen und Bildern. Diese Aktion kann nicht rückgängig gemacht werden.")
+                    }
+                } else {
+                    Text("")
+                }
+            }
+
+            // MARK: Delete error
+            .alert("Löschen fehlgeschlagen", isPresented: Binding(
+                get: { deleteError != nil },
+                set: { if !$0 { deleteError = nil } }
+            )) {
+                Button("OK", role: .cancel) {}
+            } message: {
+                Text(deleteError ?? "")
             }
         }
         .presentationDetents([.medium, .large])
@@ -151,5 +223,99 @@ struct GraphPickerSheet: View {
         }
 
         try? modelContext.save()
+    }
+
+    // MARK: - Graph deletion (inkl. Inhalte + lokale Bilder)
+
+    @MainActor
+    private func deleteGraphCompletely(graphUUID: UUID) async {
+        guard !isDeleting else { return }
+        isDeleting = true
+        defer { isDeleting = false }
+
+        do {
+            // 1) Fallback active graph bestimmen (falls wir den aktiven löschen)
+            let currentActive = UUID(uuidString: activeGraphIDString)
+            let deletingIsActive = (currentActive == graphUUID)
+
+            // Kandidaten: alle Graphs außer dem zu löschenden (unique, stabil)
+            let remaining = uniqueGraphs
+                .filter { $0.id != graphUUID }
+                .sorted { $0.createdAt < $1.createdAt }
+
+            var newActive: UUID? = nil
+
+            if deletingIsActive {
+                if let first = remaining.first {
+                    newActive = first.id
+                } else {
+                    // letzter Graph -> direkt neuen erstellen (damit App nie "ohne Graph" ist)
+                    let fresh = MetaGraph(name: "Default")
+                    modelContext.insert(fresh)
+                    newActive = fresh.id
+                }
+            }
+
+            if let newActive {
+                activeGraphIDString = newActive.uuidString
+            }
+
+            // 2) Betroffene Objekte laden
+            // Entities im Graph
+            let gid = graphUUID
+            let entsFD = FetchDescriptor<MetaEntity>(
+                predicate: #Predicate { e in e.graphID == gid }
+            )
+            let entities = try modelContext.fetch(entsFD)
+
+            // Links im Graph
+            let linksFD = FetchDescriptor<MetaLink>(
+                predicate: #Predicate { l in l.graphID == gid }
+            )
+            let links = try modelContext.fetch(linksFD)
+
+            // Orphan Attributes (falls jemals entstanden)
+            let orphansFD = FetchDescriptor<MetaAttribute>(
+                predicate: #Predicate { a in a.graphID == gid && a.owner == nil }
+            )
+            let orphans = try modelContext.fetch(orphansFD)
+
+            // Graph-Duplikate mit gleicher id (Sync-Schluckauf)
+            let graphsToDelete = graphs.filter { $0.id == gid }
+
+            // 3) Lokale Bilder sammeln (bevor wir löschen)
+            var imagePaths = Set<String>()
+
+            for e in entities {
+                if let p = e.imagePath, !p.isEmpty { imagePaths.insert(p) }
+                // Attributes hängen i.d.R. dran (Cascade), aber wir lesen Pfade vorsichtshalber vorher aus
+                for a in e.attributesList {
+                    if let p = a.imagePath, !p.isEmpty { imagePaths.insert(p) }
+                }
+            }
+            for a in orphans {
+                if let p = a.imagePath, !p.isEmpty { imagePaths.insert(p) }
+            }
+
+            // 4) Löschen (Reihenfolge: Links -> Orphans -> Entities -> Graphs)
+            for l in links { modelContext.delete(l) }
+            for a in orphans { modelContext.delete(a) }
+            for e in entities { modelContext.delete(e) } // cascade entfernt owned attributes
+            for g in graphsToDelete { modelContext.delete(g) }
+
+            try modelContext.save()
+
+            // 5) Lokale Files aufräumen (nicht CloudKit, nur Device)
+            for p in imagePaths {
+                ImageStore.delete(path: p)
+            }
+
+            // UI sauber schließen, wenn wir gerade den aktiven Graph gewechselt haben
+            // (Optional: ich würde es drinlassen, fühlt sich „fertig“ an)
+            deleteGraph = nil
+
+        } catch {
+            deleteError = error.localizedDescription
+        }
     }
 }
