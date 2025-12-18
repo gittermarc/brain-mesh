@@ -26,6 +26,9 @@ struct ContentView: View {
 
             GraphCanvasScreen()
                 .tabItem { Label("Graph", systemImage: "circle.grid.cross") }
+
+            GraphStatsView()
+                .tabItem { Label("Stats", systemImage: "chart.bar") }
         }
     }
 }
