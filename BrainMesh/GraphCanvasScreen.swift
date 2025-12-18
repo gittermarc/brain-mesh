@@ -292,8 +292,10 @@ struct GraphCanvasScreen: View {
                 NavigationStack { AttributeDetailView(attribute: attr) }
             }
 
-            // Initial load
-            .task { await loadGraph() }
+            // Initial load (und Safety: ActiveGraphID setzen, falls leer)
+            .task(id: graphs.count) {
+                await ensureActiveGraphAndLoadIfNeeded()
+            }
 
             // ✅ Graph change => reset view state + reload
             .onChange(of: activeGraphIDString) { _, _ in
@@ -620,6 +622,19 @@ struct GraphCanvasScreen: View {
 
     // MARK: - Data loading
 
+    @MainActor
+    private func ensureActiveGraphAndLoadIfNeeded() async {
+        // Wenn noch kein ActiveGraph gesetzt ist, aber Graphen existieren:
+        // -> setze den ältesten/ersten Graph als aktiv.
+        if activeGraphID == nil, let first = graphs.first {
+            activeGraphIDString = first.id.uuidString
+            // onChange(of: activeGraphIDString) triggert ohnehin loadGraph(resetLayout: true)
+            return
+        }
+
+        await loadGraph()
+    }
+    
     @MainActor
     private func loadGraph(resetLayout: Bool = true) async {
         isLoading = true
