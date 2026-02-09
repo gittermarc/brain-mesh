@@ -58,6 +58,11 @@ struct GraphCanvasScreen: View {
     @State private var positions: [NodeKey: CGPoint] = [:]
     @State private var velocities: [NodeKey: CGVector] = [:]
 
+    // ✅ Render caches (kein SwiftData-Fetch im Render-Pfad)
+    @State private var labelCache: [NodeKey: String] = [:]
+    @State private var imagePathCache: [NodeKey: String] = [:] // non-empty paths; missing = nil
+
+
     // ✅ Notizen GERICHETET: source -> target
     @State private var directedEdgeNotes: [DirectedEdgeKey: String] = [:]
 
@@ -400,15 +405,8 @@ struct GraphCanvasScreen: View {
     }
 
     private func displayLabel(for key: NodeKey) -> String {
-        // in nodes steckt nur "label" (Attribute nicht mit owner prefix) — daher hier smarter:
-        switch key.kind {
-        case .entity:
-            return fetchEntity(id: key.uuid)?.name ?? (nodes.first(where: { $0.key == key })?.label ?? "")
-        case .attribute:
-            // displayName ist schöner (Owner · Attr)
-            if let a = fetchAttribute(id: key.uuid) { return a.displayName }
-            return nodes.first(where: { $0.key == key })?.label ?? ""
-        }
+        if let cached = labelCache[key] { return cached }
+        return nodes.first(where: { $0.key == key })?.label ?? ""
     }
 
     private func hiddenLinkCountForSelection() -> Int {
@@ -515,10 +513,7 @@ struct GraphCanvasScreen: View {
     }
 
     private func nodeLabel(for node: GraphNode) -> String {
-        if node.key.kind == .attribute, let a = fetchAttribute(id: node.key.uuid) {
-            return a.displayName
-        }
-        return node.label
+        labelCache[node.key] ?? node.label
     }
 
     private func openDetails(for key: NodeKey) {
@@ -803,6 +798,20 @@ struct GraphCanvasScreen: View {
         }.unique()
 
         directedEdgeNotes = notes
+
+        // ✅ Render caches (Labels/Bilder) einmalig pro Load – kein SwiftData-Fetch im Render-Pfad
+        var newLabelCache: [NodeKey: String] = [:]
+        var newImagePathCache: [NodeKey: String] = [:]
+
+        for e in ents {
+            let k = NodeKey(kind: .entity, uuid: e.id)
+            newLabelCache[k] = e.name
+            if let p = e.imagePath, !p.isEmpty { newImagePathCache[k] = p }
+        }
+
+        labelCache = newLabelCache
+        imagePathCache = newImagePathCache
+
     }
 
     private func loadNeighborhood(centerID: UUID, hops: Int, includeAttributes: Bool) throws {
@@ -1040,6 +1049,27 @@ struct GraphCanvasScreen: View {
         nodes = newNodes
         edges = newEdges.unique()
         directedEdgeNotes = notes
+
+        // ✅ Render caches (Labels/Bilder) einmalig pro Load – kein SwiftData-Fetch im Render-Pfad
+        var newLabelCache: [NodeKey: String] = [:]
+        var newImagePathCache: [NodeKey: String] = [:]
+
+        for e in ents {
+            let k = NodeKey(kind: .entity, uuid: e.id)
+            newLabelCache[k] = e.name
+            if let p = e.imagePath, !p.isEmpty { newImagePathCache[k] = p }
+        }
+
+        for a in attrs {
+            let k = NodeKey(kind: .attribute, uuid: a.id)
+            // DisplayName (Owner · Attr) ist fürs Sorting/Chip schöner als nur der Attributname
+            newLabelCache[k] = a.displayName
+            if let p = a.imagePath, !p.isEmpty { newImagePathCache[k] = p }
+        }
+
+        labelCache = newLabelCache
+        imagePathCache = newImagePathCache
+
     }
 
     // MARK: - Expand (incremental)
@@ -1062,12 +1092,14 @@ struct GraphCanvasScreen: View {
             if !newKeys.contains(nk) { newKeys.append(nk) }
         }
 
-        func labelFor(_ nk: NodeKey) -> String? {
+        func nodeMeta(for nk: NodeKey) -> (nodeLabel: String, displayLabel: String, imagePath: String?)? {
             switch nk.kind {
             case .entity:
-                return fetchEntity(id: nk.uuid)?.name
+                guard let e = fetchEntity(id: nk.uuid) else { return nil }
+                return (nodeLabel: e.name, displayLabel: e.name, imagePath: e.imagePath)
             case .attribute:
-                return fetchAttribute(id: nk.uuid)?.name
+                guard let a = fetchAttribute(id: nk.uuid) else { return nil }
+                return (nodeLabel: a.name, displayLabel: a.displayName, imagePath: a.imagePath)
             }
         }
 
@@ -1178,9 +1210,16 @@ struct GraphCanvasScreen: View {
         var appendedNodes: [GraphNode] = []
         appendedNodes.reserveCapacity(newKeys.count)
 
+        var updatedLabelCache = labelCache
+        var updatedImagePathCache = imagePathCache
+
         for nk in newKeys {
-            guard let label = labelFor(nk) else { continue }
-            appendedNodes.append(GraphNode(key: nk, label: label))
+            guard let meta = nodeMeta(for: nk) else { continue }
+            appendedNodes.append(GraphNode(key: nk, label: meta.nodeLabel))
+
+            updatedLabelCache[nk] = meta.displayLabel
+            if let p = meta.imagePath, !p.isEmpty { updatedImagePathCache[nk] = p }
+            else { updatedImagePathCache.removeValue(forKey: nk) }
         }
 
         if appendedNodes.isEmpty && newEdges.isEmpty {
@@ -1188,6 +1227,9 @@ struct GraphCanvasScreen: View {
         }
 
         nodes.append(contentsOf: appendedNodes)
+
+        labelCache = updatedLabelCache
+        imagePathCache = updatedImagePathCache
 
         let mergedEdges = (edges + newEdges).unique()
         edges = Array(mergedEdges.prefix(maxLinks))
@@ -1249,13 +1291,9 @@ struct GraphCanvasScreen: View {
 
     private func selectedImagePath() -> String? {
         guard let sel = selection else { return nil }
-        switch sel.kind {
-        case .entity:
-            return fetchEntity(id: sel.uuid)?.imagePath
-        case .attribute:
-            return fetchAttribute(id: sel.uuid)?.imagePath
-        }
+        return imagePathCache[sel]
     }
+
 
     private var selectedImagePathValue: String? { selectedImagePath() }
 
