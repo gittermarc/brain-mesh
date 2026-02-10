@@ -63,13 +63,13 @@ struct AttachmentsSection: View {
 
             Menu {
                 Button {
-                    isImportingFile = true
+                    presentFileImporter()
                 } label: {
                     Label("Datei auswählen", systemImage: "doc")
                 }
 
                 Button {
-                    activeSheet = .videoPicker
+                    presentSheet(.videoPicker)
                 } label: {
                     Label("Video aus Fotos", systemImage: "video")
                 }
@@ -133,12 +133,12 @@ struct AttachmentsSection: View {
 
         // Persist localPath if we had to materialize the cache from synced data.
         try? modelContext.save()
-        activeSheet = .preview(PreviewState(
+        presentSheet(.preview(PreviewState(
             url: url,
             title: attachment.title.isEmpty ? attachment.originalFilename : attachment.title,
             contentTypeIdentifier: attachment.contentTypeIdentifier,
             fileExtension: attachment.fileExtension
-        ))
+        )))
     }
 
     // MARK: - Delete
@@ -216,7 +216,13 @@ struct AttachmentsSection: View {
 
     @MainActor
     private func handlePickedVideo(_ result: Result<PickedVideo, Error>) async {
-        defer { activeSheet = nil }
+        defer {
+            // Important: only dismiss the picker if it is still the active sheet.
+            // Otherwise a finished import could accidentally close a preview sheet the user opened in the meantime.
+            if let current = activeSheet, case .videoPicker = current {
+                activeSheet = nil
+            }
+        }
 
         switch result {
         case .success(let picked):
@@ -297,6 +303,25 @@ struct AttachmentsSection: View {
             try? modelContext.save()
         } catch {
             errorMessage = error.localizedDescription
+        }
+    }
+
+    // MARK: - Presentation helpers
+
+    private func presentSheet(_ sheet: ActiveSheet) {
+        // Presenting sheets directly from inside List/Menu interactions can sometimes auto-dismiss on the same run loop.
+        // Deferring to the next tick makes the presentation stable on the first tap.
+        Task { @MainActor in
+            await Task.yield()
+            await Task.yield()
+            activeSheet = sheet
+        }
+    }
+
+    private func presentFileImporter() {
+        Task { @MainActor in
+            await Task.yield()
+            isImportingFile = true
         }
     }
 }
