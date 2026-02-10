@@ -19,20 +19,13 @@ struct LinksSection: View {
     let onAdd: () -> Void
 
     var body: some View {
-        Section(titleOutgoing) {
+        Section {
             if outgoing.isEmpty {
                 Text("Keine ausgehenden Links.")
                     .foregroundStyle(.secondary)
             } else {
                 ForEach(outgoing) { link in
-                    VStack(alignment: .leading, spacing: 2) {
-                        Text("→ \(link.targetLabel)")
-                        if let note = link.note, !note.isEmpty {
-                            Text(note)
-                                .font(.caption)
-                                .foregroundStyle(.secondary)
-                        }
-                    }
+                    LinkRow(directionSymbol: "arrow.up.right", title: link.targetLabel, note: link.note)
                 }
                 .onDelete(perform: onDeleteOutgoing)
             }
@@ -40,25 +33,57 @@ struct LinksSection: View {
             Button(action: onAdd) {
                 Label("Link hinzufügen", systemImage: "link.badge.plus")
             }
+        } header: {
+            DetailSectionHeader(
+                title: titleOutgoing,
+                systemImage: "arrow.up.right",
+                subtitle: "Verbindungen von diesem Node zu anderen Nodes."
+            )
         }
 
-        Section(titleIncoming) {
+        Section {
             if incoming.isEmpty {
                 Text("Keine eingehenden Links.")
                     .foregroundStyle(.secondary)
             } else {
                 ForEach(incoming) { link in
-                    VStack(alignment: .leading, spacing: 2) {
-                        Text("← \(link.sourceLabel)")
-                        if let note = link.note, !note.isEmpty {
-                            Text(note)
-                                .font(.caption)
-                                .foregroundStyle(.secondary)
-                        }
-                    }
+                    LinkRow(directionSymbol: "arrow.down.left", title: link.sourceLabel, note: link.note)
                 }
                 .onDelete(perform: onDeleteIncoming)
             }
+        } header: {
+            DetailSectionHeader(
+                title: titleIncoming,
+                systemImage: "arrow.down.left",
+                subtitle: "Verbindungen anderer Nodes zu diesem Node."
+            )
         }
+    }
+}
+
+private struct LinkRow: View {
+    let directionSymbol: String
+    let title: String
+    let note: String?
+
+    var body: some View {
+        HStack(spacing: 12) {
+            Image(systemName: directionSymbol)
+                .font(.system(size: 14, weight: .semibold))
+                .frame(width: 22)
+                .foregroundStyle(.tint)
+
+            VStack(alignment: .leading, spacing: 2) {
+                Text(title)
+                if let note, !note.isEmpty {
+                    Text(note)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .lineLimit(2)
+                }
+            }
+            Spacer(minLength: 0)
+        }
+        .padding(.vertical, 2)
     }
 }

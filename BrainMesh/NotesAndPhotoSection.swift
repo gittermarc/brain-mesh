@@ -33,41 +33,15 @@ struct NotesAndPhotoSection: View {
     @State private var fullscreenImage: UIImage?
 
     var body: some View {
-        Section("Notizen") {
-            TextEditor(text: $notes)
-                .frame(minHeight: 120)
-        }
-
-        Section("Bild") {
-            if let ui = currentUIImage() {
-                Image(uiImage: ui)
-                    .resizable()
-                    .scaledToFit()
-                    .clipShape(RoundedRectangle(cornerRadius: 12))
-                    .overlay(RoundedRectangle(cornerRadius: 12).stroke(.secondary.opacity(0.25)))
-                    .padding(.vertical, 6)
-                    .onTapGesture {
-                        fullscreenImage = ui
-                        showFullscreen = true
-                    }
-
-                Button(role: .destructive) {
-                    ImageStore.delete(path: imagePath)
-                    imagePath = nil
-                    imageData = nil
-                    try? modelContext.save()
-                } label: {
-                    Label("Bild entfernen", systemImage: "trash")
-                }
-            } else {
-                Text("Kein Bild ausgewählt.")
-                    .foregroundStyle(.secondary)
-            }
-
-            PhotosPicker(selection: $pickerItem, matching: .images) {
-                Label((imageData == nil && imagePath == nil) ? "Bild auswählen" : "Bild ersetzen",
-                      systemImage: "photo")
-            }
+        Section {
+            notesEditor
+            photoBlock
+        } header: {
+            DetailSectionHeader(
+                title: "Notizen & Bild",
+                systemImage: "pencil.and.outline",
+                subtitle: "Notizen sind durchsuchbar. Bilder werden iCloud-schonend gespeichert."
+            )
         }
         .task { ensureLocalCacheIfPossible() }
         .onChange(of: imageData) { _, _ in
@@ -88,6 +62,59 @@ struct NotesAndPhotoSection: View {
         .fullScreenCover(isPresented: $showFullscreen) {
             if let img = fullscreenImage {
                 FullscreenPhotoView(image: img)
+            }
+        }
+    }
+
+    private var notesEditor: some View {
+        ZStack(alignment: .topLeading) {
+            if notes.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                Text("Notizen hinzufügen …")
+                    .foregroundStyle(.secondary)
+                    .padding(.horizontal, 5)
+                    .padding(.vertical, 8)
+            }
+            TextEditor(text: $notes)
+                .frame(minHeight: 140)
+        }
+    }
+
+    private var photoBlock: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            if let ui = currentUIImage() {
+                Image(uiImage: ui)
+                    .resizable()
+                    .scaledToFit()
+                    .clipShape(RoundedRectangle(cornerRadius: 12))
+                    .overlay(RoundedRectangle(cornerRadius: 12).stroke(.secondary.opacity(0.25)))
+                    .padding(.top, 6)
+                    .onTapGesture {
+                        fullscreenImage = ui
+                        showFullscreen = true
+                    }
+            } else {
+                Text("Kein Bild ausgewählt.")
+                    .foregroundStyle(.secondary)
+            }
+
+            HStack(spacing: 12) {
+                PhotosPicker(selection: $pickerItem, matching: .images) {
+                    Label((imageData == nil && imagePath == nil) ? "Bild auswählen" : "Bild ersetzen",
+                          systemImage: "photo")
+                }
+
+                if imageData != nil || (imagePath?.isEmpty == false) {
+                    Button(role: .destructive) {
+                        ImageStore.delete(path: imagePath)
+                        imagePath = nil
+                        imageData = nil
+                        try? modelContext.save()
+                    } label: {
+                        Label("Entfernen", systemImage: "trash")
+                    }
+                }
+
+                Spacer(minLength: 0)
             }
         }
     }

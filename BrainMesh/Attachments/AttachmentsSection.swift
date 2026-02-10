@@ -45,7 +45,7 @@ struct AttachmentsSection: View {
     }
 
     var body: some View {
-        Section("Anhänge") {
+        Section {
             if attachments.isEmpty {
                 Text("Keine Anhänge hinzugefügt.")
                     .foregroundStyle(.secondary)
@@ -76,6 +76,12 @@ struct AttachmentsSection: View {
             } label: {
                 Label("Anhang hinzufügen", systemImage: "paperclip.badge.plus")
             }
+        } header: {
+            DetailSectionHeader(
+                title: "Anhänge",
+                systemImage: "paperclip",
+                subtitle: "Dateien & Videos (klein halten – maximal \(ByteCountFormatter.string(fromByteCount: Int64(maxBytes), countStyle: .file)))."
+            )
         }
         .fileImporter(
             isPresented: $isImportingFile,
