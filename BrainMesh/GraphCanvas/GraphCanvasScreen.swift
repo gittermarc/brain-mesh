@@ -11,6 +11,8 @@ import UIKit
 
 struct GraphCanvasScreen: View {
     @Environment(\.modelContext) var modelContext
+    // NOTE: Must not be `private` because several view helpers live in separate extension files.
+    @EnvironmentObject var onboarding: OnboardingCoordinator
 
     // ✅ Active Graph (Multi-Graph)
     @AppStorage("BMActiveGraphID") var activeGraphIDString: String = ""
@@ -21,6 +23,10 @@ struct GraphCanvasScreen: View {
 
     @State var showGraphPicker = false
     @State var showSettings = false
+
+    // NOTE: Must not be `private` because GraphCanvasScreen is split into multiple files via extensions.
+    @AppStorage("BMOnboardingHidden") var onboardingHidden: Bool = false
+    @AppStorage("BMOnboardingCompleted") var onboardingCompleted: Bool = false
 
     var activeGraphName: String {
         if let id = activeGraphID, let g = graphs.first(where: { $0.id == id }) { return g.name }

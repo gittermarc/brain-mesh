@@ -9,6 +9,7 @@ import SwiftUI
 
 struct SettingsView: View {
     @Environment(\.dismiss) private var dismiss
+    @EnvironmentObject private var onboarding: OnboardingCoordinator
 
     private var appVersion: String {
         Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "–"
@@ -20,6 +21,14 @@ struct SettingsView: View {
 
     var body: some View {
         List {
+            Section("Hilfe") {
+                Button {
+                    onboarding.isPresented = true
+                } label: {
+                    Label("Onboarding anzeigen", systemImage: "questionmark.circle")
+                }
+            }
+
             Section("Darstellung") {
                 NavigationLink {
                     DisplaySettingsView()
@@ -46,5 +55,6 @@ struct SettingsView: View {
 #Preview {
     NavigationStack {
         SettingsView()
+            .environmentObject(OnboardingCoordinator())
     }
 }

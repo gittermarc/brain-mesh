@@ -12,6 +12,7 @@ import SwiftData
 struct BrainMeshApp: App {
 
     @StateObject private var appearanceStore = AppearanceStore()
+    @StateObject private var onboardingCoordinator = OnboardingCoordinator()
 
     private let sharedModelContainer: ModelContainer
 
@@ -48,6 +49,7 @@ struct BrainMeshApp: App {
         WindowGroup {
             AppRootView()
                 .environmentObject(appearanceStore)
+                .environmentObject(onboardingCoordinator)
         }
         .modelContainer(sharedModelContainer)
     }

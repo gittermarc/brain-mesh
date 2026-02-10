@@ -10,6 +10,7 @@ import SwiftData
 
 struct EntitiesHomeView: View {
     @Environment(\.modelContext) private var modelContext
+    @EnvironmentObject private var onboarding: OnboardingCoordinator
 
     @AppStorage("BMActiveGraphID") private var activeGraphIDString: String = ""
     private var activeGraphID: UUID? { UUID(uuidString: activeGraphIDString) }
@@ -24,6 +25,9 @@ struct EntitiesHomeView: View {
     @State private var showAddEntity = false
     @State private var showGraphPicker = false
     @State private var showSettings = false
+
+    @AppStorage("BMOnboardingHidden") private var onboardingHidden: Bool = false
+    @AppStorage("BMOnboardingCompleted") private var onboardingCompleted: Bool = false
 
     private var activeGraphName: String {
         if let id = activeGraphID, let g = graphs.first(where: { $0.id == id }) { return g.name }
@@ -46,27 +50,74 @@ struct EntitiesHomeView: View {
 
     var body: some View {
         NavigationStack {
-            List {
-                ForEach(filteredEntities) { entity in
-                    NavigationLink {
-                        EntityDetailView(entity: entity)
-                    } label: {
-                        HStack(alignment: .top, spacing: 12) {
-                            Image(systemName: entity.iconSymbolName ?? "cube")
-                                .font(.system(size: 18, weight: .semibold))
-                                .frame(width: 24, height: 24, alignment: .top)
-                                .foregroundStyle(.tint)
+            Group {
+                if filteredEntities.isEmpty {
+                    if searchText.isEmpty {
+                        ScrollView {
+                            VStack(spacing: 16) {
+                                ContentUnavailableView {
+                                    Label("Noch keine Entitäten", systemImage: "cube.transparent")
+                                } description: {
+                                    Text("Lege deine ersten Entitäten an und gib ihnen Attribute. Danach wird dein Graph lebendig.")
+                                }
 
-                            VStack(alignment: .leading, spacing: 4) {
-                                Text(entity.name).font(.headline)
-                                Text("\(entity.attributesList.count) Attribute")
-                                    .font(.subheadline)
-                                    .foregroundStyle(.secondary)
+                                HStack(spacing: 12) {
+                                    Button {
+                                        showAddEntity = true
+                                    } label: {
+                                        Label("Entität anlegen", systemImage: "plus")
+                                    }
+                                    .buttonStyle(.borderedProminent)
+
+                                    if !onboardingHidden {
+                                        Button {
+                                            onboarding.isPresented = true
+                                        } label: {
+                                            Label(onboardingCompleted ? "Onboarding" : "Onboarding starten", systemImage: onboardingCompleted ? "questionmark.circle" : "sparkles")
+                                        }
+                                        .buttonStyle(.bordered)
+                                    }
+                                }
+                                .padding(.top, 4)
+
+                                if !onboardingHidden {
+                                    OnboardingMiniExplainerView()
+                                }
                             }
+                            .padding(.horizontal, 18)
+                            .padding(.top, 20)
+                        }
+                    } else {
+                        ContentUnavailableView {
+                            Label("Keine Treffer", systemImage: "magnifyingglass")
+                        } description: {
+                            Text("Deine Suche hat keine Entität oder kein Attribut gefunden.")
                         }
                     }
+                } else {
+                    List {
+                        ForEach(filteredEntities) { entity in
+                            NavigationLink {
+                                EntityDetailView(entity: entity)
+                            } label: {
+                                HStack(alignment: .top, spacing: 12) {
+                                    Image(systemName: entity.iconSymbolName ?? "cube")
+                                        .font(.system(size: 18, weight: .semibold))
+                                        .frame(width: 24, height: 24, alignment: .top)
+                                        .foregroundStyle(.tint)
+
+                                    VStack(alignment: .leading, spacing: 4) {
+                                        Text(entity.name).font(.headline)
+                                        Text("\(entity.attributesList.count) Attribute")
+                                            .font(.subheadline)
+                                            .foregroundStyle(.secondary)
+                                    }
+                                }
+                            }
+                        }
+                        .onDelete(perform: deleteEntities)
+                    }
                 }
-                .onDelete(perform: deleteEntities)
             }
             .navigationTitle("Entitäten")
             .searchable(text: $searchText, prompt: "Entität oder Attribut suchen…")

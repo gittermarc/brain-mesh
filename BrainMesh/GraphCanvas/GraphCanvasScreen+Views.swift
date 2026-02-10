@@ -23,16 +23,31 @@ extension GraphCanvasScreen {
     }
 
     var emptyView: some View {
-        VStack(spacing: 12) {
-            Image(systemName: "circle.grid.cross")
-                .font(.system(size: 36))
-                .foregroundStyle(.secondary)
-            Text("Noch nichts zu sehen").font(.headline)
-            Text("Lege Entitäten und Links an – dann Fokus setzen oder global anzeigen.")
-                .foregroundStyle(.secondary)
-                .multilineTextAlignment(.center)
+        ScrollView {
+            VStack(spacing: 16) {
+                ContentUnavailableView {
+                    Label("Dein Graph ist noch leer", systemImage: "circle.grid.cross")
+                } description: {
+                    Text("Starte mit 1–2 Entitäten, gib ihnen Attribute und verknüpfe sie. Danach macht der Graph richtig Spaß.")
+                }
+
+                HStack(spacing: 12) {
+                    Button {
+                        onboarding.isPresented = true
+                    } label: {
+                        Label(onboardingCompleted ? "Onboarding ansehen" : "Onboarding starten", systemImage: onboardingCompleted ? "questionmark.circle" : "sparkles")
+                    }
+                    .buttonStyle(.borderedProminent)
+                    .disabled(onboardingHidden)
+                }
+
+                if !onboardingHidden {
+                    OnboardingMiniExplainerView()
+                }
+            }
+            .padding(.horizontal, 18)
+            .padding(.top, 20)
         }
-        .padding()
     }
 
 
