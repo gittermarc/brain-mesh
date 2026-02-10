@@ -108,6 +108,7 @@ struct EntityDetailView: View {
         let sorted = entity.attributesList.sorted(by: { $0.name < $1.name })
         for index in offsets {
             let attr = sorted[index]
+            AttachmentCleanup.deleteAttachments(ownerKind: .attribute, ownerID: attr.id, in: modelContext)
             deleteLinks(referencing: .attribute, id: attr.id, graphID: entity.graphID)
             entity.removeAttribute(attr)
             modelContext.delete(attr)

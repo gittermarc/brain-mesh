@@ -152,6 +152,13 @@ struct EntitiesHomeView: View {
     private func deleteEntities(at offsets: IndexSet) {
         for index in offsets {
             let entity = filteredEntities[index]
+            // Attachments are not part of the graph rendering; they live only on detail level.
+            // They also do not cascade automatically, so we explicitly clean them up.
+            AttachmentCleanup.deleteAttachments(ownerKind: .entity, ownerID: entity.id, in: modelContext)
+            for attr in entity.attributesList {
+                AttachmentCleanup.deleteAttachments(ownerKind: .attribute, ownerID: attr.id, in: modelContext)
+            }
+
             deleteLinks(referencing: .entity, id: entity.id, graphID: entity.graphID ?? activeGraphID)
             modelContext.delete(entity)
         }

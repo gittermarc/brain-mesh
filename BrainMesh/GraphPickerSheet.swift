@@ -297,6 +297,21 @@ struct GraphPickerSheet: View {
                 if let p = a.imagePath, !p.isEmpty { imagePaths.insert(p) }
             }
 
+            // 3b) Attachments aufräumen (Records + lokaler Cache)
+            // 1) normaler Fall: graphID gesetzt
+            AttachmentCleanup.deleteAttachments(graphID: gid, in: modelContext)
+
+            // 2) defensiv: graphID == nil, aber Owner wird gerade gelöscht
+            for e in entities {
+                AttachmentCleanup.deleteAttachments(ownerKind: .entity, ownerID: e.id, graphID: nil, in: modelContext)
+                for a in e.attributesList {
+                    AttachmentCleanup.deleteAttachments(ownerKind: .attribute, ownerID: a.id, graphID: nil, in: modelContext)
+                }
+            }
+            for a in orphans {
+                AttachmentCleanup.deleteAttachments(ownerKind: .attribute, ownerID: a.id, graphID: nil, in: modelContext)
+            }
+
             // 4) Löschen (Reihenfolge: Links -> Orphans -> Entities -> Graphs)
             for l in links { modelContext.delete(l) }
             for a in orphans { modelContext.delete(a) }

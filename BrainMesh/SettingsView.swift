@@ -14,7 +14,15 @@ struct SettingsView: View {
     @EnvironmentObject private var onboarding: OnboardingCoordinator
 
     @State private var isRebuildingImageCache: Bool = false
-    @State private var showImageCacheAlert: Bool = false
+    @State private var isClearingAttachmentCache: Bool = false
+
+    @State private var alertState: AlertState? = nil
+
+    private struct AlertState: Identifiable {
+        let id = UUID()
+        let title: String
+        let message: String
+    }
 
     private var appVersion: String {
         Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "–"
@@ -41,7 +49,10 @@ struct SettingsView: View {
                         isRebuildingImageCache = true
                         await ImageHydrator.forceRebuild(using: modelContext)
                         isRebuildingImageCache = false
-                        showImageCacheAlert = true
+                        alertState = AlertState(
+                            title: "Bildcache aktualisiert",
+                            message: "Der lokale Bildcache wurde neu aufgebaut. Wenn du gerade Bilder geändert hast, sollte alles sofort korrekt angezeigt werden."
+                        )
                     }
                 } label: {
                     HStack {
@@ -53,6 +64,36 @@ struct SettingsView: View {
                     }
                 }
                 .disabled(isRebuildingImageCache)
+
+                Button {
+                    Task { @MainActor in
+                        guard isClearingAttachmentCache == false else { return }
+                        isClearingAttachmentCache = true
+                        defer { isClearingAttachmentCache = false }
+
+                        do {
+                            try AttachmentStore.clearCache()
+                            alertState = AlertState(
+                                title: "Anhänge-Cache bereinigt",
+                                message: "Der lokale Anhänge-Cache wurde gelöscht. Deine Anhänge bleiben in der Datenbank und werden bei Bedarf wieder lokal für die Vorschau erstellt."
+                            )
+                        } catch {
+                            alertState = AlertState(
+                                title: "Anhänge-Cache",
+                                message: "Der Cache konnte nicht gelöscht werden: \(error.localizedDescription)"
+                            )
+                        }
+                    }
+                } label: {
+                    HStack {
+                        Label("Anhänge-Cache bereinigen", systemImage: "paperclip")
+                        Spacer()
+                        if isClearingAttachmentCache {
+                            ProgressView()
+                        }
+                    }
+                }
+                .disabled(isClearingAttachmentCache)
             }
 
             Section("Darstellung") {
@@ -70,10 +111,12 @@ struct SettingsView: View {
         }
         .navigationTitle("Einstellungen")
         .navigationBarTitleDisplayMode(.inline)
-        .alert("Bildcache aktualisiert", isPresented: $showImageCacheAlert) {
-            Button("OK", role: .cancel) {}
-        } message: {
-            Text("Der lokale Bildcache wurde neu aufgebaut. Wenn du gerade Bilder geändert hast, sollte alles sofort korrekt angezeigt werden.")
+        .alert(item: $alertState) { state in
+            Alert(
+                title: Text(state.title),
+                message: Text(state.message),
+                dismissButton: .default(Text("OK"))
+            )
         }
         .toolbar {
             ToolbarItem(placement: .topBarTrailing) {

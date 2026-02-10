@@ -46,6 +46,17 @@ enum AttachmentStore {
         try? FileManager.default.removeItem(at: url)
     }
 
+    /// Deletes all cached attachment files in Application Support.
+    /// This does not delete the SwiftData records; it only clears the local preview/cache.
+    static func clearCache() throws {
+        let fm = FileManager.default
+        let dir = try directoryURL()
+        guard let items = try? fm.contentsOfDirectory(at: dir, includingPropertiesForKeys: nil) else { return }
+        for url in items {
+            try? fm.removeItem(at: url)
+        }
+    }
+
     /// Deterministic local filename based on attachment id + file extension.
     static func makeLocalFilename(attachmentID: UUID, fileExtension: String) -> String {
         let ext = fileExtension.trimmingCharacters(in: CharacterSet(charactersIn: "."))
