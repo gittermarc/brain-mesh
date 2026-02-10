@@ -96,7 +96,13 @@ struct LensContext: Equatable {
     }
 
     func nodeOpacity(_ k: NodeKey) -> CGFloat {
-        guard enabled, let d = distance[k] else { return hideNonRelevant ? 0.0 : 0.12 }
+        // Wenn Lens nicht aktiv ist, soll der Graph NICHT gedimmt werden.
+        // Sonst wirken Nodes/Labels "ausgewaschen" und werden erst bei Selection wirklich lesbar.
+        guard enabled else { return 1.0 }
+
+        guard let d = distance[k] else {
+            return hideNonRelevant ? 0.0 : 0.12
+        }
         switch d {
         case 0: return 1.0
         case 1: return 0.92
