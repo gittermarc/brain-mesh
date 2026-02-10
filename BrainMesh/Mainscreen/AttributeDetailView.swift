@@ -98,6 +98,8 @@ struct AttributeDetailView: View {
                 ownerID: attribute.id,
                 graphID: attribute.graphID
             )
+            // Explicit identity keeps internal sheet/import state stable even if rows above change.
+            .id("attachments-attribute-\(attribute.id.uuidString)")
 
             LinksSection(
                 titleOutgoing: "Ausgehend",

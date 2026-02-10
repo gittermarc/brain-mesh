@@ -83,6 +83,8 @@ struct EntityDetailView: View {
                 ownerID: entity.id,
                 graphID: entity.graphID
             )
+            // Explicit identity keeps internal sheet/import state stable even if rows above change.
+            .id("attachments-entity-\(entity.id.uuidString)")
 
             Section {
                 if entity.attributesList.isEmpty {
