@@ -6,6 +6,7 @@
 //
 
 import SwiftUI
+import UIKit
 
 struct IconPickerView: View {
     @Environment(\.dismiss) private var dismiss
@@ -25,8 +26,16 @@ struct IconPickerView: View {
                 VStack(alignment: .leading, spacing: 18) {
                     noneSection
 
-                    if !searchResults.isEmpty {
-                        symbolGridSection(title: "Ergebnisse", symbols: searchResults)
+                    if let direct = directSymbolCandidate {
+                        directEntrySection(symbolName: direct)
+                    }
+
+                    if hasSearch {
+                        if !searchResults.isEmpty {
+                            symbolGridSection(title: "Ergebnisse", symbols: searchResults)
+                        } else {
+                            noResultsSection
+                        }
                     } else {
                         if !recentSymbols.isEmpty {
                             symbolGridSection(title: "Zuletzt verwendet", symbols: recentSymbols)
@@ -42,13 +51,21 @@ struct IconPickerView: View {
             }
             .navigationTitle("Icon wählen")
             .navigationBarTitleDisplayMode(.inline)
-            .searchable(text: $searchText, prompt: "Symbol suchen (z.B. tag, cube, calendar)…")
+            .searchable(text: $searchText, prompt: "Symbol suchen oder Namen eingeben (z.B. tag, cube, calendar)")
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
                     Button("Schließen") { dismiss() }
                 }
             }
         }
+    }
+
+    private var searchTextTrimmed: String {
+        searchText.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    private var hasSearch: Bool {
+        !searchTextTrimmed.isEmpty
     }
 
     private var noneSection: some View {
@@ -77,11 +94,83 @@ struct IconPickerView: View {
     }
 
     private var searchResults: [String] {
-        let term = BMSearch.fold(searchText)
+        let term = BMSearch.fold(searchTextTrimmed)
         guard !term.isEmpty else { return [] }
 
         return IconCatalog.allSymbols
             .filter { BMSearch.fold($0).contains(term) }
+    }
+
+    private var directSymbolCandidate: String? {
+        let raw = searchTextTrimmed
+        guard !raw.isEmpty else { return nil }
+
+        let candidates: [String] = raw == raw.lowercased()
+            ? [raw]
+            : [raw, raw.lowercased()]
+
+        for c in candidates {
+            guard !c.isEmpty else { continue }
+            if IconCatalog.allSymbols.contains(c) { return nil }
+            if UIImage(systemName: c) != nil { return c }
+        }
+
+        return nil
+    }
+
+    private var noResultsSection: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Text("Kein Treffer")
+                .font(.headline)
+                .padding(.top, 4)
+            Text("Tipp: Du kannst hier auch den exakten SF-Symbol-Namen eintippen (z.B. „person.crop.circle.badge.checkmark“). Wenn das Symbol existiert, erscheint oben „Direkt verwenden“.")
+                .font(.subheadline)
+                .foregroundStyle(.secondary)
+        }
+    }
+
+    private func directEntrySection(symbolName: String) -> some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Text("Direkt verwenden")
+                .font(.headline)
+                .padding(.top, 4)
+
+            Button {
+                select(symbolName)
+            } label: {
+                HStack(spacing: 12) {
+                    ZStack {
+                        RoundedRectangle(cornerRadius: 12)
+                            .fill(.ultraThinMaterial)
+                            .overlay(
+                                RoundedRectangle(cornerRadius: 12)
+                                    .stroke(AnyShapeStyle(Color.secondary.opacity(0.35)), lineWidth: 1)
+                            )
+                        Image(systemName: symbolName)
+                            .font(.system(size: 18, weight: .semibold))
+                            .foregroundStyle(.primary)
+                    }
+                    .frame(width: 56, height: 44)
+
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text(symbolName)
+                            .font(.body)
+                        Text("Eingegebener Symbolname")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
+
+                    Spacer()
+
+                    if selection == symbolName {
+                        Image(systemName: "checkmark")
+                            .foregroundStyle(.tint)
+                    }
+                }
+                .padding(.vertical, 6)
+            }
+            .buttonStyle(.plain)
+        }
     }
 
     private func symbolGridSection(title: String, symbols: [String]) -> some View {
@@ -100,10 +189,7 @@ struct IconPickerView: View {
 
     private func symbolCell(name: String) -> some View {
         Button {
-            selection = name
-            let updated = RecentSymbolStore.bump(name, in: recentSymbols)
-            recentRaw = RecentSymbolStore.encode(updated)
-            dismiss()
+            select(name)
         } label: {
             ZStack {
                 RoundedRectangle(cornerRadius: 12)
@@ -126,5 +212,12 @@ struct IconPickerView: View {
             .accessibilityLabel(Text(name))
         }
         .buttonStyle(.plain)
+    }
+
+    private func select(_ name: String) {
+        selection = name
+        let updated = RecentSymbolStore.bump(name, in: recentSymbols)
+        recentRaw = RecentSymbolStore.encode(updated)
+        dismiss()
     }
 }
