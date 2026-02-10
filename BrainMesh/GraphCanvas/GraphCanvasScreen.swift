@@ -10,87 +10,87 @@ import SwiftData
 import UIKit
 
 struct GraphCanvasScreen: View {
-    @Environment(\.modelContext) private var modelContext
+    @Environment(\.modelContext) var modelContext
 
     // ✅ Active Graph (Multi-Graph)
-    @AppStorage("BMActiveGraphID") private var activeGraphIDString: String = ""
-    private var activeGraphID: UUID? { UUID(uuidString: activeGraphIDString) }
+    @AppStorage("BMActiveGraphID") var activeGraphIDString: String = ""
+    var activeGraphID: UUID? { UUID(uuidString: activeGraphIDString) }
 
     @Query(sort: [SortDescriptor(\MetaGraph.createdAt, order: .forward)])
-    private var graphs: [MetaGraph]
+    var graphs: [MetaGraph]
 
-    @State private var showGraphPicker = false
+    @State var showGraphPicker = false
 
-    private var activeGraphName: String {
+    var activeGraphName: String {
         if let id = activeGraphID, let g = graphs.first(where: { $0.id == id }) { return g.name }
         return graphs.first?.name ?? "Graph"
     }
 
     // Focus/Neighborhood
-    @State private var focusEntity: MetaEntity?
-    @State private var showFocusPicker = false
-    @State private var hops: Int = 1
-    @State private var workMode: WorkMode = .explore
+    @State var focusEntity: MetaEntity?
+    @State var showFocusPicker = false
+    @State var hops: Int = 1
+    @State var workMode: WorkMode = .explore
 
-    @State private var showGraphPhotoFullscreen = false
-    @State private var graphFullscreenImage: UIImage?
-    @State private var cachedFullImagePath: String?
-    @State private var cachedFullImage: UIImage?
+    @State var showGraphPhotoFullscreen = false
+    @State var graphFullscreenImage: UIImage?
+    @State var cachedFullImagePath: String?
+    @State var cachedFullImage: UIImage?
 
     // Toggles
-    @State private var showAttributes: Bool = true
+    @State var showAttributes: Bool = true
 
     // ✅ Lens
-    @State private var lensEnabled: Bool = true
-    @State private var lensHideNonRelevant: Bool = false
-    @State private var lensDepth: Int = 2 // 1 = nur Nachbarn, 2 = Nachbarn+Nachbarn
+    @State var lensEnabled: Bool = true
+    @State var lensHideNonRelevant: Bool = false
+    @State var lensDepth: Int = 2 // 1 = nur Nachbarn, 2 = Nachbarn+Nachbarn
 
     // Performance knobs
-    @State private var maxNodes: Int = 140
-    @State private var maxLinks: Int = 800
+    @State var maxNodes: Int = 140
+    @State var maxLinks: Int = 800
 
     // ✅ Physics tuning
-    @State private var collisionStrength: Double = 0.030
+    @State var collisionStrength: Double = 0.030
 
     // Graph
-    @State private var nodes: [GraphNode] = []
-    @State private var edges: [GraphEdge] = []                         // ✅ alle Kanten (Physik / Daten)
-    @State private var positions: [NodeKey: CGPoint] = [:]
-    @State private var velocities: [NodeKey: CGVector] = [:]
+    @State var nodes: [GraphNode] = []
+    @State var edges: [GraphEdge] = []                         // ✅ alle Kanten (Physik / Daten)
+    @State var positions: [NodeKey: CGPoint] = [:]
+    @State var velocities: [NodeKey: CGVector] = [:]
 
     // ✅ Render caches (kein SwiftData-Fetch im Render-Pfad)
-    @State private var labelCache: [NodeKey: String] = [:]
-    @State private var imagePathCache: [NodeKey: String] = [:] // non-empty paths; missing = nil
+    @State var labelCache: [NodeKey: String] = [:]
+    @State var imagePathCache: [NodeKey: String] = [:] // non-empty paths; missing = nil
 
 
     // ✅ Notizen GERICHETET: source -> target
-    @State private var directedEdgeNotes: [DirectedEdgeKey: String] = [:]
+    @State var directedEdgeNotes: [DirectedEdgeKey: String] = [:]
 
     // Pinning + Selection
-    @State private var pinned: Set<NodeKey> = []
-    @State private var selection: NodeKey? = nil
+    @State var pinned: Set<NodeKey> = []
+    @State var selection: NodeKey? = nil
 
     // ✅ Degree cap (Link edges) + “more”
     private let degreeCap: Int = 12
-    @State private var showAllLinksForSelection: Bool = false
+    @State var showAllLinksForSelection: Bool = false
 
     // Camera
-    @State private var scale: CGFloat = 1.0
-    @State private var pan: CGSize = .zero
-    @State private var cameraCommand: CameraCommand? = nil
+    @State var scale: CGFloat = 1.0
+    @State var pan: CGSize = .zero
+    @State var cameraCommand: CameraCommand? = nil
 
     // Loading/UI
-    @State private var isLoading = false
-    @State private var loadError: String?
-    @State private var showInspector = false
+    @State var isLoading = false
+    @State var loadError: String?
+    @State var showInspector = false
 
     // MiniMap emphasis
-    @State private var miniMapEmphasized: Bool = false
-    @State private var miniMapPulseTask: Task<Void, Never>?
+    @State var miniMapEmphasized: Bool = false
+    @State var miniMapPulseTask: Task<Void, Never>?
 
     // Sheets
-    @State private var selectedEntity: MetaEntity?
-    @State private var selectedAttribute: MetaAttribute?
+    @State var selectedEntity: MetaEntity?
+    @State var selectedAttribute: MetaAttribute?
 
     var body: some View {
 
@@ -157,49 +157,9 @@ struct GraphCanvasScreen: View {
                     )
                 }
 
-                // Loading overlay
-                if isLoading {
-                    HStack(spacing: 8) {
-                        ProgressView()
-                        Text("Lade…").foregroundStyle(.secondary)
-                    }
-                    .padding(10)
-                    .background(.thinMaterial)
-                    .clipShape(RoundedRectangle(cornerRadius: 12))
-                    .padding()
-                    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
-                }
-
-                // Side status (hochkant links)
-                GeometryReader { geo in
-                    let x = geo.safeAreaInsets.leading + 16
-                    sideStatusBar
-                        .rotationEffect(.degrees(-90))
-                        .fixedSize()
-                        .position(x: x, y: geo.size.height / 2)
-                }
-                .allowsHitTesting(false)
-
-                // MiniMap (zeigt dieselben “drawEdges”, also in Default nodes-only quasi ohne Linien)
-                GeometryReader { geo in
-                    MiniMapView(
-                        nodes: nodes,
-                        edges: drawEdges,
-                        positions: positions,
-                        selection: selection,
-                        focus: focusKey,
-                        scale: scale,
-                        pan: pan,
-                        canvasSize: geo.size
-                    )
-                    .frame(width: 180, height: 125)
-                    .opacity(miniMapEmphasized ? 1.0 : 0.55)
-                    .scaleEffect(miniMapEmphasized ? 1.02 : 1.0)
-                    .padding(.trailing, 12)
-                    .padding(.top, 12)
-                    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topTrailing)
-                }
-                .allowsHitTesting(false)
+                loadingChipOverlay
+                sideStatusOverlay
+                miniMapOverlay(drawEdges: drawEdges)
 
                 // Action chip for selection
                 if let key = selection, let selected = nodeForKey(key) {
@@ -336,48 +296,6 @@ struct GraphCanvasScreen: View {
         }
     }
 
-    // MARK: - Side status bar
-
-    private var sideStatusBar: some View {
-        HStack(spacing: 10) {
-            VStack(alignment: .leading, spacing: 1) {
-                Text("\(activeGraphName) · \(focusEntity == nil ? "Global" : "Fokus")")
-                    .font(.caption2)
-                    .foregroundStyle(.secondary)
-
-                Text(focusEntity?.name ?? "Alle Entitäten")
-                    .font(.subheadline)
-                    .lineLimit(1)
-            }
-
-            Divider().frame(height: 20)
-
-            Text("N \(nodes.count) · L \(edges.count) · 📌 \(pinned.count)")
-                .font(.caption2)
-                .foregroundStyle(.secondary)
-                .lineLimit(1)
-        }
-        .padding(.horizontal, 10)
-        .padding(.vertical, 8)
-        .background(.thinMaterial)
-        .clipShape(RoundedRectangle(cornerRadius: 14))
-    }
-
-    private var focusKey: NodeKey? {
-        guard let f = focusEntity else { return nil }
-        return NodeKey(kind: .entity, uuid: f.id)
-    }
-
-    private func pulseMiniMap() {
-        miniMapPulseTask?.cancel()
-        withAnimation(.easeOut(duration: 0.12)) { miniMapEmphasized = true }
-        miniMapPulseTask = Task { @MainActor in
-            try? await Task.sleep(nanoseconds: 650_000_000)
-            if Task.isCancelled { return }
-            withAnimation(.easeInOut(duration: 0.25)) { miniMapEmphasized = false }
-        }
-    }
-
     // MARK: - Spotlight edges (Nodes-only default + Degree cap)
 
     private func edgesForDisplay() -> [GraphEdge] {
@@ -409,269 +327,11 @@ struct GraphCanvasScreen: View {
         return nodes.first(where: { $0.key == key })?.label ?? ""
     }
 
-    private func hiddenLinkCountForSelection() -> Int {
+    func hiddenLinkCountForSelection() -> Int {
         guard let sel = selection else { return 0 }
         if showAllLinksForSelection { return 0 }
         let incidentLinkCount = edges.filter { $0.type == .link && ($0.a == sel || $0.b == sel) }.count
         return max(0, incidentLinkCount - degreeCap)
-    }
-
-    // MARK: - Action chip
-
-    private func actionChip(for node: GraphNode) -> some View {
-        let isPinned = pinned.contains(node.key)
-        let hiddenLinks = hiddenLinkCountForSelection()
-
-        return HStack(spacing: 10) {
-            VStack(alignment: .leading, spacing: 2) {
-                Text(node.key.kind == .entity ? "Entität" : "Attribut")
-                    .font(.caption2)
-                    .foregroundStyle(.secondary)
-
-                Text(nodeLabel(for: node))
-                    .font(.subheadline)
-                    .lineLimit(1)
-            }
-
-            Spacer()
-
-            // ✅ Degree cap “more”
-            if hiddenLinks > 0 {
-                Button {
-                    showAllLinksForSelection = true
-                } label: {
-                    Label("Mehr (\(hiddenLinks))", systemImage: "ellipsis.circle")
-                }
-                .buttonStyle(.bordered)
-                .help("Weitere Links dieser Node anzeigen")
-            } else if showAllLinksForSelection {
-                Button {
-                    showAllLinksForSelection = false
-                } label: {
-                    Label("Weniger", systemImage: "chevron.up.circle")
-                }
-                .buttonStyle(.bordered)
-            }
-
-            // ✅ Expand
-            Button {
-                Task { await expand(from: node.key) }
-            } label: {
-                Image(systemName: "plus.circle")
-            }
-            .buttonStyle(.bordered)
-            .help("Nachbarn aufklappen")
-
-            Button {
-                cameraCommand = CameraCommand(kind: .center(node.key))
-            } label: {
-                Image(systemName: "dot.scope")
-            }
-            .buttonStyle(.bordered)
-
-            if node.key.kind == .entity {
-                Button {
-                    if let e = fetchEntity(id: node.key.uuid) {
-                        focusEntity = e
-                        Task { await loadGraph() }
-                        cameraCommand = CameraCommand(kind: .center(node.key))
-                    }
-                } label: {
-                    Image(systemName: "scope")
-                }
-                .buttonStyle(.borderedProminent)
-            }
-
-            Button {
-                openDetails(for: node.key)
-            } label: {
-                Image(systemName: "info.circle")
-            }
-            .buttonStyle(.bordered)
-
-            Button {
-                if isPinned { pinned.remove(node.key) }
-                else { pinned.insert(node.key) }
-                velocities[node.key] = .zero
-            } label: {
-                Image(systemName: isPinned ? "pin.slash" : "pin")
-            }
-            .buttonStyle(.bordered)
-
-            Button {
-                selection = nil
-            } label: {
-                Image(systemName: "xmark")
-            }
-            .buttonStyle(.bordered)
-        }
-        .padding(10)
-        .background(.thinMaterial)
-        .clipShape(RoundedRectangle(cornerRadius: 14))
-        .shadow(radius: 6, y: 2)
-        .frame(maxWidth: 640)
-    }
-
-    private func nodeLabel(for node: GraphNode) -> String {
-        labelCache[node.key] ?? node.label
-    }
-
-    private func openDetails(for key: NodeKey) {
-        switch key.kind {
-        case .entity:
-            if let e = fetchEntity(id: key.uuid) { selectedEntity = e }
-        case .attribute:
-            if let a = fetchAttribute(id: key.uuid) { selectedAttribute = a }
-        }
-    }
-
-    // MARK: - Inspector sheet
-
-    private var inspectorSheet: some View {
-        NavigationStack {
-            Form {
-
-                Section("Graph") {
-                    HStack {
-                        Text("Aktiv")
-                        Spacer()
-                        Text(activeGraphName).foregroundStyle(.secondary).lineLimit(1)
-                    }
-                    Button {
-                        showGraphPicker = true
-                    } label: {
-                        Label("Graph wechseln", systemImage: "square.stack.3d.up")
-                    }
-                }
-
-                Section("Modus") {
-                    HStack {
-                        Text("Fokus")
-                        Spacer()
-                        Text(focusEntity?.name ?? "Keiner")
-                            .foregroundStyle(.secondary)
-                            .lineLimit(1)
-                        Picker("Arbeitsmodus", selection: $workMode) {
-                            ForEach(WorkMode.allCases) { mode in
-                                Text(mode.title).tag(mode)
-                            }
-                        }
-                        .pickerStyle(.segmented)
-                    }
-
-                    Button {
-                        showFocusPicker = true
-                    } label: {
-                        Label("Fokus wählen", systemImage: "scope")
-                    }
-
-                    Button(role: .destructive) {
-                        focusEntity = nil
-                        selection = nil
-                        Task { await loadGraph() }
-                    } label: {
-                        Label("Fokus löschen", systemImage: "xmark.circle")
-                    }
-                    .disabled(focusEntity == nil)
-                }
-
-                Section("Neighborhood") {
-                    Stepper("Hops: \(hops)", value: $hops, in: 1...3)
-                        .disabled(focusEntity == nil)
-
-                    Toggle("Attribute anzeigen", isOn: $showAttributes)
-                        .disabled(focusEntity == nil)
-                }
-
-                Section("Lens") {
-                    Toggle("Lens aktiv", isOn: $lensEnabled)
-
-                    Toggle("Nicht relevante ausblenden", isOn: $lensHideNonRelevant)
-                        .disabled(!lensEnabled)
-
-                    Stepper("Lens Tiefe: \(lensDepth)", value: $lensDepth, in: 1...2)
-                        .disabled(!lensEnabled)
-
-                    if selection != nil {
-                        Text("Spotlight aktiv: Selection → nur direkte Nachbarn (Tiefe 1) + Rest ausgeblendet.")
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
-                    } else {
-                        Text("Wenn eine Node ausgewählt ist, werden Nachbarn hervorgehoben und der Rest gedimmt (oder ausgeblendet).")
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
-                    }
-                }
-
-                Section("Layout & Physics") {
-                    Button {
-                        stabilizeLayout()
-                    } label: {
-                        Label("Layout stabilisieren", systemImage: "pin.circle")
-                    }
-                    .disabled(nodes.isEmpty)
-
-                    VStack(alignment: .leading, spacing: 6) {
-                        Text("Collisions: \(collisionStrength, format: .number.precision(.fractionLength(3)))")
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
-                        Slider(value: $collisionStrength, in: 0.0...0.09, step: 0.005)
-                    }
-
-                    Text("Tipp: Wenn du viel overlap hast → Collisions hoch. Wenn es „zittert“ → Collisions runter.")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                }
-
-                Section("Limits") {
-                    VStack(alignment: .leading, spacing: 6) {
-                        Text("Max Nodes: \(maxNodes)").font(.caption).foregroundStyle(.secondary)
-                        Slider(value: Binding(get: { Double(maxNodes) }, set: { maxNodes = Int($0) }),
-                               in: 60...260, step: 10)
-                    }
-                    VStack(alignment: .leading, spacing: 6) {
-                        Text("Max Links: \(maxLinks)").font(.caption).foregroundStyle(.secondary)
-                        Slider(value: Binding(get: { Double(maxLinks) }, set: { maxLinks = Int($0) }),
-                               in: 300...4000, step: 100)
-                    }
-
-                    Button {
-                        Task { await loadGraph(resetLayout: true) }
-                    } label: {
-                        Label("Neu laden & layouten", systemImage: "wand.and.rays")
-                    }
-                }
-
-                Section("Pins") {
-                    HStack {
-                        Text("Pinned")
-                        Spacer()
-                        Text("\(pinned.count)").foregroundStyle(.secondary)
-                    }
-                    Button(role: .destructive) {
-                        pinned.removeAll()
-                    } label: {
-                        Label("Unpin all", systemImage: "pin.slash")
-                    }
-                    .disabled(pinned.isEmpty)
-                }
-            }
-            .navigationTitle("Inspector")
-            .toolbar {
-                ToolbarItem(placement: .topBarTrailing) {
-                    Button("Fertig") { showInspector = false }
-                }
-            }
-        }
-        .presentationDetents([.medium, .large])
-    }
-
-    private func stabilizeLayout() {
-        let all = Set(nodes.map(\.key))
-        pinned = all
-        for k in all {
-            velocities[k] = .zero
-        }
     }
 
     // MARK: - Views
@@ -714,7 +374,7 @@ struct GraphCanvasScreen: View {
     }
 
     @MainActor
-    private func loadGraph(resetLayout: Bool = true) async {
+    func loadGraph(resetLayout: Bool = true) async {
         isLoading = true
         loadError = nil
 
@@ -1075,7 +735,7 @@ struct GraphCanvasScreen: View {
     // MARK: - Expand (incremental)
 
     @MainActor
-    private func expand(from key: NodeKey) async {
+    func expand(from key: NodeKey) async {
         if nodes.isEmpty { return }
         if nodes.count >= maxNodes { return }
 
@@ -1269,7 +929,7 @@ struct GraphCanvasScreen: View {
         nodes.first(where: { $0.key == key })
     }
 
-    private func fetchEntity(id: UUID) -> MetaEntity? {
+    func fetchEntity(id: UUID) -> MetaEntity? {
         let nodeID = id
         let fd = FetchDescriptor<MetaEntity>(predicate: #Predicate { e in e.id == nodeID })
         guard let e = try? modelContext.fetch(fd).first else { return nil }
@@ -1279,7 +939,7 @@ struct GraphCanvasScreen: View {
         return e
     }
 
-    private func fetchAttribute(id: UUID) -> MetaAttribute? {
+    func fetchAttribute(id: UUID) -> MetaAttribute? {
         let nodeID = id
         let fd = FetchDescriptor<MetaAttribute>(predicate: #Predicate { a in a.id == nodeID })
         guard let a = try? modelContext.fetch(fd).first else { return nil }
