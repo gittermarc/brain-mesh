@@ -20,6 +20,14 @@ struct SettingsView: View {
 
     var body: some View {
         List {
+            Section("Darstellung") {
+                NavigationLink {
+                    DisplaySettingsView()
+                } label: {
+                    Label("Darstellung", systemImage: "paintpalette")
+                }
+            }
+
             Section("Info") {
                 LabeledContent("Version", value: appVersion)
                 LabeledContent("Build", value: buildNumber)

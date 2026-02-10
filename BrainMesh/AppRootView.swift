@@ -12,10 +12,14 @@ struct AppRootView: View {
     @Environment(\.modelContext) private var modelContext
     @Environment(\.scenePhase) private var scenePhase
 
+    @EnvironmentObject private var appearance: AppearanceStore
+
     @AppStorage("BMActiveGraphID") private var activeGraphIDString: String = ""
 
     var body: some View {
         ContentView()
+            .tint(appearance.appTintColor)
+            .preferredColorScheme(appearance.preferredColorScheme)
             .task {
                 await bootstrapGraphing()
                 await ImageHydrator.hydrateAll(using: modelContext)

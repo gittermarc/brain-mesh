@@ -11,6 +11,8 @@ import SwiftData
 @main
 struct BrainMeshApp: App {
 
+    @StateObject private var appearanceStore = AppearanceStore()
+
     private let sharedModelContainer: ModelContainer
 
     init() {
@@ -45,6 +47,7 @@ struct BrainMeshApp: App {
     var body: some Scene {
         WindowGroup {
             AppRootView()
+                .environmentObject(appearanceStore)
         }
         .modelContainer(sharedModelContainer)
     }
