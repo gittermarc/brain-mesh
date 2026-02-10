@@ -42,6 +42,7 @@ struct AttributeDetailView: View {
         Form {
             Section("Attribut") {
                 TextField("Name", text: $attribute.name)
+                IconPickerRow(title: "Icon", symbolName: $attribute.iconSymbolName)
                 if let e = attribute.owner {
                     Text("Entität: \(e.name)").foregroundStyle(.secondary)
                 }
@@ -67,7 +68,12 @@ struct AttributeDetailView: View {
         .navigationBarTitleDisplayMode(.inline)
         .sheet(isPresented: $showAddLink) {
             AddLinkView(
-                source: NodeRef(kind: .attribute, id: attribute.id, label: attribute.displayName),
+                source: NodeRef(
+                    kind: .attribute,
+                    id: attribute.id,
+                    label: attribute.displayName,
+                    iconSymbolName: attribute.iconSymbolName
+                ),
                 graphID: attribute.graphID
             )
         }

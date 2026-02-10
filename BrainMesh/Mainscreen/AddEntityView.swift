@@ -16,12 +16,17 @@ struct AddEntityView: View {
     private var activeGraphID: UUID? { UUID(uuidString: activeGraphIDString) }
 
     @State private var name = ""
+    @State private var iconSymbolName: String? = nil
 
     var body: some View {
         NavigationStack {
             Form {
                 TextField("Name", text: $name)
                     .textInputAutocapitalization(.words)
+
+                Section("Icon") {
+                    IconPickerRow(title: "Icon auswählen", symbolName: $iconSymbolName)
+                }
             }
             .navigationTitle("Neue Entität")
             .toolbar {
@@ -31,7 +36,7 @@ struct AddEntityView: View {
                 ToolbarItem(placement: .confirmationAction) {
                     Button("Speichern") {
                         let cleaned = name.trimmingCharacters(in: .whitespacesAndNewlines)
-                        let e = MetaEntity(name: cleaned, graphID: activeGraphID)
+                        let e = MetaEntity(name: cleaned, graphID: activeGraphID, iconSymbolName: iconSymbolName)
                         modelContext.insert(e)
                         try? modelContext.save()
                         dismiss()

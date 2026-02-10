@@ -108,15 +108,18 @@ extension GraphCanvasScreen {
         // ✅ Render caches (Labels/Bilder) einmalig pro Load – kein SwiftData-Fetch im Render-Pfad
         var newLabelCache: [NodeKey: String] = [:]
         var newImagePathCache: [NodeKey: String] = [:]
+        var newIconSymbolCache: [NodeKey: String] = [:]
 
         for e in ents {
             let k = NodeKey(kind: .entity, uuid: e.id)
             newLabelCache[k] = e.name
             if let p = e.imagePath, !p.isEmpty { newImagePathCache[k] = p }
+            if let s = e.iconSymbolName, !s.isEmpty { newIconSymbolCache[k] = s }
         }
 
         labelCache = newLabelCache
         imagePathCache = newImagePathCache
+        iconSymbolCache = newIconSymbolCache
 
     }
 
@@ -359,11 +362,13 @@ extension GraphCanvasScreen {
         // ✅ Render caches (Labels/Bilder) einmalig pro Load – kein SwiftData-Fetch im Render-Pfad
         var newLabelCache: [NodeKey: String] = [:]
         var newImagePathCache: [NodeKey: String] = [:]
+        var newIconSymbolCache: [NodeKey: String] = [:]
 
         for e in ents {
             let k = NodeKey(kind: .entity, uuid: e.id)
             newLabelCache[k] = e.name
             if let p = e.imagePath, !p.isEmpty { newImagePathCache[k] = p }
+            if let s = e.iconSymbolName, !s.isEmpty { newIconSymbolCache[k] = s }
         }
 
         for a in attrs {
@@ -371,10 +376,12 @@ extension GraphCanvasScreen {
             // DisplayName (Owner · Attr) ist fürs Sorting/Chip schöner als nur der Attributname
             newLabelCache[k] = a.displayName
             if let p = a.imagePath, !p.isEmpty { newImagePathCache[k] = p }
+            if let s = a.iconSymbolName, !s.isEmpty { newIconSymbolCache[k] = s }
         }
 
         labelCache = newLabelCache
         imagePathCache = newImagePathCache
+        iconSymbolCache = newIconSymbolCache
 
     }
 

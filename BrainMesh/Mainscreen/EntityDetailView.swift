@@ -16,7 +16,6 @@ struct EntityDetailView: View {
     @Query private var incomingLinks: [MetaLink]
 
     @State private var showAddAttribute = false
-    @State private var newAttributeName = ""
     @State private var showAddLink = false
 
     init(entity: MetaEntity) {
@@ -44,6 +43,7 @@ struct EntityDetailView: View {
         Form {
             Section("Entität") {
                 TextField("Name", text: $entity.name)
+                IconPickerRow(title: "Icon", symbolName: $entity.iconSymbolName)
             }
             NotesAndPhotoSection(
                 notes: $entity.notes,
@@ -57,7 +57,15 @@ struct EntityDetailView: View {
                     Text("Noch keine Attribute.").foregroundStyle(.secondary)
                 } else {
                     ForEach(entity.attributesList.sorted(by: { $0.name < $1.name })) { attr in
-                        NavigationLink { AttributeDetailView(attribute: attr) } label: { Text(attr.name) }
+                        NavigationLink { AttributeDetailView(attribute: attr) } label: {
+                            HStack(spacing: 12) {
+                                Image(systemName: attr.iconSymbolName ?? "tag")
+                                    .font(.system(size: 16, weight: .semibold))
+                                    .frame(width: 22)
+                                    .foregroundStyle(.tint)
+                                Text(attr.name)
+                            }
+                        }
                     }
                     .onDelete(perform: deleteAttributes)
                 }
@@ -79,26 +87,12 @@ struct EntityDetailView: View {
         }
         .navigationTitle(entity.name)
         .navigationBarTitleDisplayMode(.inline)
-        .alert("Neues Attribut", isPresented: $showAddAttribute) {
-            TextField("Name (z.B. 2023)", text: $newAttributeName)
-            Button("Abbrechen", role: .cancel) { newAttributeName = "" }
-            Button("Hinzufügen") {
-                let cleaned = newAttributeName.trimmingCharacters(in: .whitespacesAndNewlines)
-                guard !cleaned.isEmpty else { return }
-
-                let attr = MetaAttribute(name: cleaned, owner: nil, graphID: entity.graphID)
-                modelContext.insert(attr)
-                entity.addAttribute(attr)
-
-                newAttributeName = ""
-                try? modelContext.save()
-            }
-        } message: {
-            Text("Attribute sind frei benennbar.")
+        .sheet(isPresented: $showAddAttribute) {
+            AddAttributeView(entity: entity)
         }
         .sheet(isPresented: $showAddLink) {
             AddLinkView(
-                source: NodeRef(kind: .entity, id: entity.id, label: entity.name),
+                source: NodeRef(kind: .entity, id: entity.id, label: entity.name, iconSymbolName: entity.iconSymbolName),
                 graphID: entity.graphID
             )
         }

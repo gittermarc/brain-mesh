@@ -53,7 +53,15 @@ struct NodePickerView: View {
                             }
                         }
                         ForEach(items) { item in
-                            Button { onPick(item) } label: { Text(item.label) }
+                            Button { onPick(item) } label: {
+                                HStack(spacing: 12) {
+                                    Image(systemName: item.iconSymbolName ?? (item.kind == .entity ? "cube" : "tag"))
+                                        .font(.system(size: 16, weight: .semibold))
+                                        .frame(width: 22)
+                                        .foregroundStyle(.tint)
+                                    Text(item.label)
+                                }
+                            }
                         }
                     }
                 }
@@ -123,7 +131,7 @@ struct NodePickerView: View {
             fd.fetchLimit = searchLimit
         }
 
-        return try modelContext.fetch(fd).map { NodeRef(kind: .entity, id: $0.id, label: $0.name) }
+        return try modelContext.fetch(fd).map { NodeRef(kind: .entity, id: $0.id, label: $0.name, iconSymbolName: $0.iconSymbolName) }
     }
 
     private func fetchAttributes(foldedSearch s: String) throws -> [NodeRef] {
@@ -150,6 +158,6 @@ struct NodePickerView: View {
             fd.fetchLimit = searchLimit
         }
 
-        return try modelContext.fetch(fd).map { NodeRef(kind: .attribute, id: $0.id, label: $0.displayName) }
+        return try modelContext.fetch(fd).map { NodeRef(kind: .attribute, id: $0.id, label: $0.displayName, iconSymbolName: $0.iconSymbolName) }
     }
 }

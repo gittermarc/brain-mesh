@@ -62,6 +62,7 @@ struct GraphCanvasScreen: View {
     // ✅ Render caches (kein SwiftData-Fetch im Render-Pfad)
     @State var labelCache: [NodeKey: String] = [:]
     @State var imagePathCache: [NodeKey: String] = [:] // non-empty paths; missing = nil
+    @State var iconSymbolCache: [NodeKey: String] = [:] // non-empty SF Symbol names; missing = nil
 
 
     // ✅ Notizen GERICHETET: source -> target
@@ -126,6 +127,7 @@ struct GraphCanvasScreen: View {
                 } else {
                     GraphCanvasView(
                         nodes: nodes,
+                        iconSymbolCache: iconSymbolCache,
                         drawEdges: drawEdges,
                         physicsEdges: edges,
                         directedEdgeNotes: directedEdgeNotes,
@@ -262,9 +264,15 @@ struct GraphCanvasScreen: View {
             // Detail sheets
             .sheet(item: $selectedEntity) { entity in
                 NavigationStack { EntityDetailView(entity: entity) }
+                    .onDisappear {
+                        refreshNodeCaches(for: NodeKey(kind: .entity, uuid: entity.id))
+                    }
             }
             .sheet(item: $selectedAttribute) { attr in
                 NavigationStack { AttributeDetailView(attribute: attr) }
+                    .onDisappear {
+                        refreshNodeCaches(for: NodeKey(kind: .attribute, uuid: attr.id))
+                    }
             }
 
             // Initial load (und Safety: ActiveGraphID setzen, falls leer)

@@ -25,7 +25,15 @@ struct AddLinkView: View {
     var body: some View {
         NavigationStack {
             Form {
-                Section("Quelle") { Text(source.label) }
+                Section("Quelle") {
+                    HStack(spacing: 12) {
+                        Image(systemName: source.iconSymbolName ?? (source.kind == .entity ? "cube" : "tag"))
+                            .font(.system(size: 16, weight: .semibold))
+                            .frame(width: 22)
+                            .foregroundStyle(.tint)
+                        Text(source.label)
+                    }
+                }
 
                 Section("Zieltyp") {
                     Picker("Zieltyp", selection: $targetKind) {
@@ -39,8 +47,16 @@ struct AddLinkView: View {
                 Section("Ziel") {
                     Button { showPicker = true } label: {
                         HStack {
-                            Text(selectedTarget?.label ?? "Bitte wählen…")
-                                .foregroundStyle(selectedTarget == nil ? .secondary : .primary)
+                            if let t = selectedTarget {
+                                Image(systemName: t.iconSymbolName ?? (t.kind == .entity ? "cube" : "tag"))
+                                    .font(.system(size: 16, weight: .semibold))
+                                    .frame(width: 22)
+                                    .foregroundStyle(.tint)
+                                Text(t.label)
+                            } else {
+                                Text("Bitte wählen…")
+                                    .foregroundStyle(.secondary)
+                            }
                             Spacer()
                             Image(systemName: "chevron.right").foregroundStyle(.secondary)
                         }

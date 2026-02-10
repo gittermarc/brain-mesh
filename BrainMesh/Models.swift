@@ -60,6 +60,10 @@ final class MetaEntity {
     var nameFolded: String = ""
     var notes: String = ""
 
+    /// Optional SF Symbol name (e.g. "cube", "tag.fill").
+    /// Stored as a simple String for performance and easy rendering via `Image(systemName:)`.
+    var iconSymbolName: String? = nil
+
     // ✅ CloudKit-sync: Bilddaten (JPEG, klein gehalten)
     var imageData: Data? = nil
 
@@ -71,10 +75,11 @@ final class MetaEntity {
     @Relationship(deleteRule: .cascade, inverse: \MetaAttribute.owner)
     var attributes: [MetaAttribute]? = nil
 
-    init(name: String, graphID: UUID? = nil) {
+    init(name: String, graphID: UUID? = nil, iconSymbolName: String? = nil) {
         self.name = name
         self.nameFolded = BMSearch.fold(name)
         self.graphID = graphID
+        self.iconSymbolName = iconSymbolName
         self.attributes = []
     }
 
@@ -122,6 +127,10 @@ final class MetaAttribute {
     var nameFolded: String = ""
     var notes: String = ""
 
+    /// Optional SF Symbol name (e.g. "tag", "calendar.badge.clock").
+    /// Stored as a simple String for performance and easy rendering via `Image(systemName:)`.
+    var iconSymbolName: String? = nil
+
     // ✅ CloudKit-sync: Bilddaten (JPEG, klein gehalten)
     var imageData: Data? = nil
 
@@ -140,11 +149,12 @@ final class MetaAttribute {
 
     var searchLabelFolded: String = ""
 
-    init(name: String, owner: MetaEntity? = nil, graphID: UUID? = nil) {
+    init(name: String, owner: MetaEntity? = nil, graphID: UUID? = nil, iconSymbolName: String? = nil) {
         self.name = name
         self.nameFolded = BMSearch.fold(name)
         self.owner = owner
         self.graphID = graphID ?? owner?.graphID
+        self.iconSymbolName = iconSymbolName
         self.searchLabelFolded = BMSearch.fold(self.displayName)
     }
 

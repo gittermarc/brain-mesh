@@ -101,5 +101,41 @@ extension GraphCanvasScreen {
         }
     }
 
+    // MARK: - Cache refresh (after editing in detail sheets)
+
+    @MainActor
+    func refreshNodeCaches(for key: NodeKey) {
+        switch key.kind {
+        case .entity:
+            guard let e = fetchEntity(id: key.uuid) else { return }
+
+            if let idx = nodes.firstIndex(where: { $0.key == key }) {
+                nodes[idx] = GraphNode(key: key, label: e.name)
+            }
+
+            labelCache[key] = e.name
+            if let p = e.imagePath, !p.isEmpty { imagePathCache[key] = p }
+            else { imagePathCache.removeValue(forKey: key) }
+
+            if let s = e.iconSymbolName, !s.isEmpty { iconSymbolCache[key] = s }
+            else { iconSymbolCache.removeValue(forKey: key) }
+
+        case .attribute:
+            guard let a = fetchAttribute(id: key.uuid) else { return }
+
+            if let idx = nodes.firstIndex(where: { $0.key == key }) {
+                nodes[idx] = GraphNode(key: key, label: a.name)
+            }
+
+            // DisplayName ist fürs Sorting/Chip besser als nur der Attributname
+            labelCache[key] = a.displayName
+            if let p = a.imagePath, !p.isEmpty { imagePathCache[key] = p }
+            else { imagePathCache.removeValue(forKey: key) }
+
+            if let s = a.iconSymbolName, !s.isEmpty { iconSymbolCache[key] = s }
+            else { iconSymbolCache.removeValue(forKey: key) }
+        }
+    }
+
 
 }

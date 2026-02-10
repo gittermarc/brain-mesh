@@ -14,6 +14,7 @@ struct GraphCanvasView: View {
     @Environment(\.colorScheme) private var colorScheme
 
     let nodes: [GraphNode]
+    let iconSymbolCache: [NodeKey: String]
 
     // ✅ getrennt: was wir zeichnen vs. was die Physik nutzt
     let drawEdges: [GraphEdge]

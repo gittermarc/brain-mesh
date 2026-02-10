@@ -28,14 +28,14 @@ extension GraphCanvasScreen {
             if !newKeys.contains(nk) { newKeys.append(nk) }
         }
 
-        func nodeMeta(for nk: NodeKey) -> (nodeLabel: String, displayLabel: String, imagePath: String?)? {
+        func nodeMeta(for nk: NodeKey) -> (nodeLabel: String, displayLabel: String, imagePath: String?, iconSymbolName: String?)? {
             switch nk.kind {
             case .entity:
                 guard let e = fetchEntity(id: nk.uuid) else { return nil }
-                return (nodeLabel: e.name, displayLabel: e.name, imagePath: e.imagePath)
+                return (nodeLabel: e.name, displayLabel: e.name, imagePath: e.imagePath, iconSymbolName: e.iconSymbolName)
             case .attribute:
                 guard let a = fetchAttribute(id: nk.uuid) else { return nil }
-                return (nodeLabel: a.name, displayLabel: a.displayName, imagePath: a.imagePath)
+                return (nodeLabel: a.name, displayLabel: a.displayName, imagePath: a.imagePath, iconSymbolName: a.iconSymbolName)
             }
         }
 
@@ -148,6 +148,7 @@ extension GraphCanvasScreen {
 
         var updatedLabelCache = labelCache
         var updatedImagePathCache = imagePathCache
+        var updatedIconSymbolCache = iconSymbolCache
 
         for nk in newKeys {
             guard let meta = nodeMeta(for: nk) else { continue }
@@ -156,6 +157,9 @@ extension GraphCanvasScreen {
             updatedLabelCache[nk] = meta.displayLabel
             if let p = meta.imagePath, !p.isEmpty { updatedImagePathCache[nk] = p }
             else { updatedImagePathCache.removeValue(forKey: nk) }
+
+            if let s = meta.iconSymbolName, !s.isEmpty { updatedIconSymbolCache[nk] = s }
+            else { updatedIconSymbolCache.removeValue(forKey: nk) }
         }
 
         if appendedNodes.isEmpty && newEdges.isEmpty {
@@ -166,6 +170,7 @@ extension GraphCanvasScreen {
 
         labelCache = updatedLabelCache
         imagePathCache = updatedImagePathCache
+        iconSymbolCache = updatedIconSymbolCache
 
         let mergedEdges = (edges + newEdges).unique()
         edges = Array(mergedEdges.prefix(maxLinks))

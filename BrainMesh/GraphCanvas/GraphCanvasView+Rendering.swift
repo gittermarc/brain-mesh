@@ -106,6 +106,13 @@ extension GraphCanvasView {
                     context.stroke(ring, with: .color(theme.highlightColor.opacity(0.95 * nodeAlpha)), lineWidth: 3)
                 }
 
+                if let iconName = iconSymbolCache[n.key], !iconName.isEmpty {
+                    let iconText = Text(Image(systemName: iconName))
+                        .font(.system(size: 12, weight: .semibold))
+                        .foregroundColor(theme.entityColor.opacity(0.95 * nodeAlpha))
+                    context.draw(iconText, at: s, anchor: .center)
+                }
+
                 // Labels: Default besser sichtbar; Spotlight nur relevant
                 let isRelevantInSpotlight = (lens.distance[n.key] != nil)
                 let allowLabel = (!alphas.spotlightLabelsOnly) || isRelevantInSpotlight
@@ -154,6 +161,13 @@ extension GraphCanvasView {
                     let ringRect = rect.insetBy(dx: -pad, dy: -pad)
                     let ring = Path(roundedRect: ringRect, cornerRadius: 8)
                     context.stroke(ring, with: .color(theme.highlightColor.opacity(0.95 * nodeAlpha)), lineWidth: 3)
+                }
+
+                if let iconName = iconSymbolCache[n.key], !iconName.isEmpty {
+                    let iconText = Text(Image(systemName: iconName))
+                        .font(.system(size: 11, weight: .semibold))
+                        .foregroundColor(theme.attributeColor.opacity(0.95 * nodeAlpha))
+                    context.draw(iconText, at: s, anchor: .center)
                 }
 
                 let isRelevantInSpotlight = (lens.distance[n.key] != nil)

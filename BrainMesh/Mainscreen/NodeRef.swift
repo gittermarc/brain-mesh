@@ -12,4 +12,5 @@ struct NodeRef: Identifiable, Hashable {
     let kind: NodeKind
     let id: UUID
     let label: String
+    let iconSymbolName: String?
 }

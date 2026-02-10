@@ -51,11 +51,18 @@ struct EntitiesHomeView: View {
                     NavigationLink {
                         EntityDetailView(entity: entity)
                     } label: {
-                        VStack(alignment: .leading, spacing: 4) {
-                            Text(entity.name).font(.headline)
-                            Text("\(entity.attributesList.count) Attribute")
-                                .font(.subheadline)
-                                .foregroundStyle(.secondary)
+                        HStack(alignment: .top, spacing: 12) {
+                            Image(systemName: entity.iconSymbolName ?? "cube")
+                                .font(.system(size: 18, weight: .semibold))
+                                .frame(width: 24, height: 24, alignment: .top)
+                                .foregroundStyle(.tint)
+
+                            VStack(alignment: .leading, spacing: 4) {
+                                Text(entity.name).font(.headline)
+                                Text("\(entity.attributesList.count) Attribute")
+                                    .font(.subheadline)
+                                    .foregroundStyle(.secondary)
+                            }
                         }
                     }
                 }
