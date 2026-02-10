@@ -21,7 +21,8 @@ struct BrainMeshApp: App {
             MetaGraph.self,
             MetaEntity.self,
             MetaAttribute.self,
-            MetaLink.self
+            MetaLink.self,
+            MetaAttachment.self
         ])
 
         // CloudKit / iCloud Sync (private DB)

@@ -52,6 +52,12 @@ struct EntityDetailView: View {
                 stableID: entity.id
             )
 
+            AttachmentsSection(
+                ownerKind: .entity,
+                ownerID: entity.id,
+                graphID: entity.graphID
+            )
+
             Section("Attribute") {
                 if entity.attributesList.isEmpty {
                     Text("Noch keine Attribute.").foregroundStyle(.secondary)

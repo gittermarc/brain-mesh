@@ -54,6 +54,12 @@ struct AttributeDetailView: View {
                 stableID: attribute.id
             )
 
+            AttachmentsSection(
+                ownerKind: .attribute,
+                ownerID: attribute.id,
+                graphID: attribute.graphID
+            )
+
             LinksSection(
                 titleOutgoing: "Links (ausgehend)",
                 titleIncoming: "Links (eingehend)",
