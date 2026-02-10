@@ -20,6 +20,7 @@ struct GraphCanvasScreen: View {
     var graphs: [MetaGraph]
 
     @State var showGraphPicker = false
+    @State var showSettings = false
 
     var activeGraphName: String {
         if let id = activeGraphID, let g = graphs.first(where: { $0.id == id }) { return g.name }
@@ -220,12 +221,23 @@ struct GraphCanvasScreen: View {
                     } label: {
                         Image(systemName: "slider.horizontal.3")
                     }
+
+                    Button {
+                        showSettings = true
+                    } label: {
+                        Image(systemName: "gearshape")
+                    }
+                    .accessibilityLabel("Einstellungen")
                 }
             }
 
             // ✅ Graph Picker
             .sheet(isPresented: $showGraphPicker) {
                 GraphPickerSheet()
+            }
+
+            .sheet(isPresented: $showSettings) {
+                NavigationStack { SettingsView() }
             }
 
             // Focus picker

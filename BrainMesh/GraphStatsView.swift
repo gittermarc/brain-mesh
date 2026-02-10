@@ -19,6 +19,8 @@ struct GraphStatsView: View {
     @Query private var attributes: [MetaAttribute]
     @Query private var links: [MetaLink]
 
+    @State private var showSettings = false
+
     // ✅ Dedupe by UUID (falls Cloud/Bootstrap doppelt geliefert hat)
     private var uniqueGraphs: [MetaGraph] {
         var seen = Set<UUID>()
@@ -46,6 +48,17 @@ struct GraphStatsView: View {
                 }
             }
             .navigationTitle("Statistiken")
+            .toolbar {
+                ToolbarItem(placement: .topBarTrailing) {
+                    Button { showSettings = true } label: {
+                        Image(systemName: "gearshape")
+                    }
+                    .accessibilityLabel("Einstellungen")
+                }
+            }
+            .sheet(isPresented: $showSettings) {
+                NavigationStack { SettingsView() }
+            }
         }
     }
 

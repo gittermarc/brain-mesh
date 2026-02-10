@@ -23,6 +23,7 @@ struct EntitiesHomeView: View {
     @State private var searchText = ""
     @State private var showAddEntity = false
     @State private var showGraphPicker = false
+    @State private var showSettings = false
 
     private var activeGraphName: String {
         if let id = activeGraphID, let g = graphs.first(where: { $0.id == id }) { return g.name }
@@ -69,8 +70,13 @@ struct EntitiesHomeView: View {
                             .labelStyle(.titleAndIcon)
                     }
                 }
-                ToolbarItem(placement: .topBarTrailing) {
+                ToolbarItemGroup(placement: .topBarTrailing) {
                     Button { showAddEntity = true } label: { Image(systemName: "plus") }
+
+                    Button { showSettings = true } label: {
+                        Image(systemName: "gearshape")
+                    }
+                    .accessibilityLabel("Einstellungen")
                 }
             }
             .sheet(isPresented: $showAddEntity) {
@@ -78,6 +84,9 @@ struct EntitiesHomeView: View {
             }
             .sheet(isPresented: $showGraphPicker) {
                 GraphPickerSheet()
+            }
+            .sheet(isPresented: $showSettings) {
+                NavigationStack { SettingsView() }
             }
         }
     }
