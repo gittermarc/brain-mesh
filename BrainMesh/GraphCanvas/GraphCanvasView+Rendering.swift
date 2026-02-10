@@ -37,7 +37,7 @@ extension GraphCanvasView {
         )
     }
 
-    func renderCanvas(in context: GraphicsContext, size: CGSize, alphas: ZoomAlphas) {
+    func renderCanvas(in context: GraphicsContext, size: CGSize, alphas: ZoomAlphas, theme: GraphTheme, colorScheme: ColorScheme) {
         let center = CGPoint(x: size.width / 2 + pan.width, y: size.height / 2 + pan.height)
 
         // edges (DRAW)
@@ -60,9 +60,9 @@ extension GraphCanvasView {
 
             switch e.type {
             case .containment:
-                context.stroke(path, with: .color(.secondary.opacity(baseContain)), lineWidth: 1)
+                context.stroke(path, with: .color(theme.containmentColor.opacity(baseContain)), lineWidth: 1)
             case .link:
-                context.stroke(path, with: .color(.secondary.opacity(baseLink)), lineWidth: 1)
+                context.stroke(path, with: .color(theme.linkColor.opacity(baseLink)), lineWidth: 1)
             }
 
             // ✅ Notizen: nur im Nah-Zoom + nur für Kanten der selektierten Node (ausgehend)
@@ -91,12 +91,20 @@ extension GraphCanvasView {
                 let r: CGFloat = 16
                 let rect = CGRect(x: s.x - r, y: s.y - r, width: r * 2, height: r * 2)
 
-                context.fill(Path(ellipseIn: rect), with: .color(.primary.opacity((isPinned ? 0.22 : 0.15) * nodeAlpha)))
+                let circle = Path(ellipseIn: rect)
+                context.fill(circle, with: .color(theme.entityColor.opacity((isPinned ? 0.20 : 0.14) * nodeAlpha)))
                 context.stroke(
-                    Path(ellipseIn: rect),
-                    with: .color(.primary.opacity((isSelected ? 0.95 : (isPinned ? 0.80 : 0.55)) * nodeAlpha)),
-                    lineWidth: isSelected ? 3 : (isPinned ? 2 : 1)
+                    circle,
+                    with: .color(theme.entityColor.opacity((isPinned ? 0.72 : 0.55) * nodeAlpha)),
+                    lineWidth: isPinned ? 2 : 1
                 )
+
+                if isSelected {
+                    let rr: CGFloat = r + 3
+                    let ringRect = CGRect(x: s.x - rr, y: s.y - rr, width: rr * 2, height: rr * 2)
+                    let ring = Path(ellipseIn: ringRect)
+                    context.stroke(ring, with: .color(theme.highlightColor.opacity(0.95 * nodeAlpha)), lineWidth: 3)
+                }
 
                 // Labels: Default besser sichtbar; Spotlight nur relevant
                 let isRelevantInSpotlight = (lens.distance[n.key] != nil)
@@ -115,7 +123,9 @@ extension GraphCanvasView {
                             wantHalo: (selection == nil) || isSelected || labelA < 0.92,
                             in: context,
                             font: .caption.weight(.semibold),
-                            maxWidth: 190
+                            maxWidth: 190,
+                            theme: theme,
+                            colorScheme: colorScheme
                         )
                     }
                 }
@@ -132,12 +142,19 @@ extension GraphCanvasView {
                 let rect = CGRect(x: s.x - w/2, y: s.y - h/2, width: w, height: h)
                 let rr = Path(roundedRect: rect, cornerRadius: 6)
 
-                context.fill(rr, with: .color(.primary.opacity((isPinned ? 0.16 : 0.10) * nodeAlpha)))
+                context.fill(rr, with: .color(theme.attributeColor.opacity((isPinned ? 0.18 : 0.12) * nodeAlpha)))
                 context.stroke(
                     rr,
-                    with: .color(.primary.opacity((isSelected ? 0.95 : (isPinned ? 0.75 : 0.45)) * nodeAlpha)),
-                    lineWidth: isSelected ? 3 : (isPinned ? 2 : 1)
+                    with: .color(theme.attributeColor.opacity((isPinned ? 0.70 : 0.50) * nodeAlpha)),
+                    lineWidth: isPinned ? 2 : 1
                 )
+
+                if isSelected {
+                    let pad: CGFloat = 3
+                    let ringRect = rect.insetBy(dx: -pad, dy: -pad)
+                    let ring = Path(roundedRect: ringRect, cornerRadius: 8)
+                    context.stroke(ring, with: .color(theme.highlightColor.opacity(0.95 * nodeAlpha)), lineWidth: 3)
+                }
 
                 let isRelevantInSpotlight = (lens.distance[n.key] != nil)
                 let allowLabel = (!alphas.spotlightLabelsOnly) || isRelevantInSpotlight
@@ -154,7 +171,9 @@ extension GraphCanvasView {
                             wantHalo: isSelected || labelA < 0.90,
                             in: context,
                             font: .caption2,
-                            maxWidth: 170
+                            maxWidth: 170,
+                            theme: theme,
+                            colorScheme: colorScheme
                         )
                     }
                 }
@@ -263,31 +282,30 @@ extension GraphCanvasView {
         wantHalo: Bool,
         in context: GraphicsContext,
         font: Font,
-        maxWidth: CGFloat
+        maxWidth: CGFloat,
+        theme: GraphTheme,
+        colorScheme: ColorScheme
     ) {
-        let text = Text(textStr)
+        let _ = maxWidth // kept for call-site stability; Canvas text does not hard-wrap by width
+
+        let base = Text(textStr)
             .font(font)
-            .foregroundStyle(.primary.opacity(alpha))
 
-        let resolved = context.resolve(text)
-        let measured = resolved.measure(in: CGSize(width: maxWidth, height: 60))
-
-        if wantHalo || isSelected {
-            let padX: CGFloat = 6
-            let padY: CGFloat = 3
-            let bg = CGRect(
-                x: p.x - measured.width / 2 - padX,
-                y: p.y - measured.height / 2 - padY,
-                width: measured.width + padX * 2,
-                height: measured.height + padY * 2
-            )
-
-            let bgPath = Path(roundedRect: bg, cornerRadius: 7)
-            context.fill(bgPath, with: .color(.primary.opacity(0.12 * alpha)))
-            context.stroke(bgPath, with: .color(.primary.opacity(0.20 * alpha)), lineWidth: 1)
+        if theme.labelHaloEnabled && (wantHalo || isSelected) {
+            let haloBase: Color = (colorScheme == .dark) ? .black : .white
+            let halo = base.foregroundColor(haloBase.opacity(min(1.0, 0.88 * alpha)))
+            let offsets: [CGPoint] = [
+                CGPoint(x: -1, y: -1), CGPoint(x: -1, y: 0), CGPoint(x: -1, y: 1),
+                CGPoint(x: 0, y: -1), CGPoint(x: 0, y: 1),
+                CGPoint(x: 1, y: -1), CGPoint(x: 1, y: 0), CGPoint(x: 1, y: 1)
+            ]
+            for o in offsets {
+                context.draw(halo, at: CGPoint(x: p.x + o.x, y: p.y + o.y), anchor: .center)
+            }
         }
 
-        context.draw(resolved, at: p, anchor: .center)
+        let main = base.foregroundColor(.primary.opacity(alpha))
+        context.draw(main, at: p, anchor: .center)
     }
 
     // MARK: - Notes

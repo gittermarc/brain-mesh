@@ -10,6 +10,9 @@ import SwiftUI
 import UIKit
 
 struct GraphCanvasView: View {
+    @EnvironmentObject private var appearance: AppearanceStore
+    @Environment(\.colorScheme) private var colorScheme
+
     let nodes: [GraphNode]
 
     // ✅ getrennt: was wir zeichnen vs. was die Physik nutzt
@@ -54,14 +57,22 @@ struct GraphCanvasView: View {
     @State var cachedThumbPath: String?
     @State var cachedThumb: UIImage?
 
+    private var theme: GraphTheme {
+        GraphTheme(settings: appearance.settings.graph)
+    }
+
     var body: some View {
         GeometryReader { geo in
             let size = geo.size
             let alphas = zoomAlphas()
+            let theme = self.theme
+            let scheme = colorScheme
 
             ZStack {
+                GraphCanvasBackground(theme: theme)
+
                 Canvas { context, _ in
-                    renderCanvas(in: context, size: size, alphas: alphas)
+                    renderCanvas(in: context, size: size, alphas: alphas, theme: theme, colorScheme: scheme)
                 }
 
                 // ✅ Selection Thumbnail Overlay (nur near + nur wenn Bild vorhanden)

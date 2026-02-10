@@ -8,6 +8,8 @@
 import SwiftUI
 
 struct MiniMapView: View {
+    @EnvironmentObject private var appearance: AppearanceStore
+
     let nodes: [GraphNode]
     let edges: [GraphEdge]
     let positions: [NodeKey: CGPoint]
@@ -19,13 +21,19 @@ struct MiniMapView: View {
     let pan: CGSize
     let canvasSize: CGSize
 
+    private var theme: GraphTheme {
+        GraphTheme(settings: appearance.settings.graph)
+    }
+
     var body: some View {
+        let theme = self.theme
+
         Canvas { context, size in
             guard let bounds = worldBounds() else {
                 let frame = CGRect(origin: .zero, size: size)
                 context.stroke(
                     Path(roundedRect: frame, cornerRadius: 12),
-                    with: .color(.secondary.opacity(0.25)),
+                    with: .color(theme.linkColor.opacity(0.22)),
                     lineWidth: 1
                 )
                 return
@@ -50,9 +58,9 @@ struct MiniMapView: View {
 
                 switch e.type {
                 case .containment:
-                    context.stroke(path, with: .color(.secondary.opacity(0.18)), lineWidth: 1)
+                    context.stroke(path, with: .color(theme.containmentColor.opacity(0.26)), lineWidth: 1)
                 case .link:
-                    context.stroke(path, with: .color(.secondary.opacity(0.28)), lineWidth: 1)
+                    context.stroke(path, with: .color(theme.linkColor.opacity(0.34)), lineWidth: 1)
                 }
             }
 
@@ -65,14 +73,15 @@ struct MiniMapView: View {
 
                 let r: CGFloat = (n.key.kind == .entity) ? 3.2 : 2.6
                 let dot = CGRect(x: s.x - r, y: s.y - r, width: r * 2, height: r * 2)
-                context.fill(Path(ellipseIn: dot), with: .color(.primary.opacity(0.55)))
+                let dotColor = (n.key.kind == .entity) ? theme.entityColor : theme.attributeColor
+                context.fill(Path(ellipseIn: dot), with: .color(dotColor.opacity(0.55)))
 
                 if isFocus || isSel {
                     let rr: CGFloat = isSel ? 7.0 : 5.8
                     let ring = CGRect(x: s.x - rr, y: s.y - rr, width: rr * 2, height: rr * 2)
                     context.stroke(
                         Path(ellipseIn: ring),
-                        with: .color(.primary.opacity(0.9)),
+                        with: .color(theme.highlightColor.opacity(isSel ? 0.95 : 0.70)),
                         lineWidth: isSel ? 2 : 1
                     )
                 }
@@ -91,14 +100,14 @@ struct MiniMapView: View {
 
             context.stroke(
                 Path(roundedRect: vRect, cornerRadius: 8),
-                with: .color(.primary.opacity(0.75)),
+                with: .color(theme.highlightColor.opacity(0.70)),
                 lineWidth: 2
             )
 
             let frame = CGRect(origin: .zero, size: size)
             context.stroke(
                 Path(roundedRect: frame, cornerRadius: 12),
-                with: .color(.secondary.opacity(0.25)),
+                with: .color(theme.linkColor.opacity(0.22)),
                 lineWidth: 1
             )
         }
