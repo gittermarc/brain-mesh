@@ -11,25 +11,69 @@ import SwiftData
 @MainActor
 enum ImageHydrator {
 
-    static func hydrateAll(using modelContext: ModelContext) async {
+    private static var didRunIncrementalThisLaunch: Bool = false
+
+    /// Incremental hydration (cheap): only scans records where `imageData != nil`.
+    /// Additionally, this method is guarded to run at most once per app launch by default.
+    /// - Returns: `true` if a hydration pass was executed (i.e. not skipped by the run-once guard).
+    static func hydrateIncremental(using modelContext: ModelContext, runOncePerLaunch: Bool = true) async -> Bool {
+        if runOncePerLaunch {
+            guard didRunIncrementalThisLaunch == false else { return false }
+            didRunIncrementalThisLaunch = true
+        }
+
+        await hydrate(using: modelContext, mode: .incremental)
+        return true
+    }
+
+    /// Manual repair/rebuild: rewrites cached JPEGs for all records with `imageData != nil`.
+    /// Intended to be triggered from Settings.
+    static func forceRebuild(using modelContext: ModelContext) async {
+        await hydrate(using: modelContext, mode: .forceRebuild)
+    }
+
+    private enum HydrationMode {
+        case incremental
+        case forceRebuild
+    }
+
+    private static func hydrate(using modelContext: ModelContext, mode: HydrationMode) async {
         var changed = false
 
-        // Entities
+        let forceWrite = (mode == .forceRebuild)
+
+        // Entities (only those with imageData)
         do {
-            let ents = try modelContext.fetch(FetchDescriptor<MetaEntity>())
+            let fd = FetchDescriptor<MetaEntity>(predicate: #Predicate<MetaEntity> { e in
+                e.imageData != nil
+            })
+            let ents = try modelContext.fetch(fd)
             for e in ents {
-                let did = hydrateOne(stableID: e.id, imageData: e.imageData, imagePath: &e.imagePath)
+                let did = hydrateOne(
+                    stableID: e.id,
+                    imageData: e.imageData,
+                    imagePath: &e.imagePath,
+                    forceWrite: forceWrite
+                )
                 if did { changed = true }
             }
         } catch {
             // ignore
         }
 
-        // Attributes
+        // Attributes (only those with imageData)
         do {
-            let attrs = try modelContext.fetch(FetchDescriptor<MetaAttribute>())
+            let fd = FetchDescriptor<MetaAttribute>(predicate: #Predicate<MetaAttribute> { a in
+                a.imageData != nil
+            })
+            let attrs = try modelContext.fetch(fd)
             for a in attrs {
-                let did = hydrateOne(stableID: a.id, imageData: a.imageData, imagePath: &a.imagePath)
+                let did = hydrateOne(
+                    stableID: a.id,
+                    imageData: a.imageData,
+                    imagePath: &a.imagePath,
+                    forceWrite: forceWrite
+                )
                 if did { changed = true }
             }
         } catch {
@@ -41,7 +85,12 @@ enum ImageHydrator {
         }
     }
 
-    private static func hydrateOne(stableID: UUID, imageData: Data?, imagePath: inout String?) -> Bool {
+    private static func hydrateOne(
+        stableID: UUID,
+        imageData: Data?,
+        imagePath: inout String?,
+        forceWrite: Bool
+    ) -> Bool {
         guard let d = imageData, !d.isEmpty else { return false }
 
         let filename = "\(stableID.uuidString).jpg"
@@ -52,16 +101,16 @@ enum ImageHydrator {
             didChange = true
         }
 
-        if ImageStore.fileExists(path: imagePath) {
+        if !forceWrite, ImageStore.fileExists(path: imagePath) {
             return didChange
         }
 
         do {
             _ = try ImageStore.saveJPEG(d, preferredName: filename)
+            return true
         } catch {
             // not fatal
+            return didChange
         }
-
-        return true
     }
 }
