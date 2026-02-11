@@ -13,9 +13,11 @@ struct AttachmentCardRow: View {
 
     let attachment: MetaAttachment
 
-    private let thumbSide: CGFloat = 54
+    private let defaultThumbSide: CGFloat = 54
+    private let videoThumbHeight: CGFloat = 54
 
     @State private var thumbnail: UIImage? = nil
+    @State private var videoDurationText: String? = nil
 
     var body: some View {
         HStack(spacing: 12) {
@@ -38,8 +40,16 @@ struct AttachmentCardRow: View {
         .padding(.vertical, 6)
         .contentShape(Rectangle())
         .task(id: attachment.id) {
+            await resetStateForNewAttachment()
             await loadThumbnailIfPossible()
+            await loadVideoDurationIfNeeded()
         }
+    }
+
+    @MainActor
+    private func resetStateForNewAttachment() {
+        thumbnail = nil
+        videoDurationText = nil
     }
 
     // MARK: - Thumbnail
@@ -74,7 +84,19 @@ struct AttachmentCardRow: View {
                     .clipShape(Circle())
             }
 
-            // Small type badge (PDF / DOCX / MP4 ...)
+            if isVideo, let videoDurationText {
+                Text(videoDurationText)
+                    .font(.caption2.monospacedDigit())
+                    .foregroundStyle(.white)
+                    .padding(.horizontal, 6)
+                    .padding(.vertical, 3)
+                    .background(.black.opacity(0.55))
+                    .clipShape(Capsule())
+                    .padding(6)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottomLeading)
+            }
+
+            // Small type badge (PDF / DOCX / MP4 etc.)
             Text(typeBadge)
                 .font(.caption2)
                 .padding(.horizontal, 6)
@@ -84,19 +106,25 @@ struct AttachmentCardRow: View {
                 .padding(6)
                 .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottomTrailing)
         }
-        .frame(width: thumbSide, height: thumbSide)
+        .frame(width: thumbSize.width, height: thumbSize.height)
         .clipped()
     }
 
-    @MainActor
+    private var thumbSize: CGSize {
+        if isVideo {
+            let width = round(videoThumbHeight * 16.0 / 9.0)
+            return CGSize(width: width, height: videoThumbHeight)
+        }
+        return CGSize(width: defaultThumbSide, height: defaultThumbSide)
+    }
+
     private func loadThumbnailIfPossible() async {
-        // Ensure we have a local file URL for thumbnail generation.
         guard let fileURL = AttachmentStore.materializeFileURLForThumbnailIfNeeded(for: attachment) else {
             return
         }
 
         let scale = UIScreen.main.scale
-        let requestSize = CGSize(width: 220, height: 220) // one-time cached size
+        let requestSize: CGSize = isVideo ? CGSize(width: 320, height: 180) : CGSize(width: 220, height: 220)
 
         let image = await AttachmentThumbnailStore.shared.thumbnail(
             attachmentID: attachment.id,
@@ -106,7 +134,27 @@ struct AttachmentCardRow: View {
             scale: scale
         )
 
-        thumbnail = image
+        await MainActor.run {
+            thumbnail = image
+        }
+    }
+
+    private func loadVideoDurationIfNeeded() async {
+        guard isVideo else { return }
+        guard videoDurationText == nil else { return }
+
+        guard let fileURL = AttachmentStore.materializeFileURLForThumbnailIfNeeded(for: attachment) else {
+            return
+        }
+
+        let text = await AttachmentVideoDurationStore.shared.durationText(
+            attachmentID: attachment.id,
+            fileURL: fileURL
+        )
+
+        await MainActor.run {
+            videoDurationText = text
+        }
     }
 
     // MARK: - Metadata
