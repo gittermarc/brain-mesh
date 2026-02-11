@@ -15,6 +15,8 @@ struct AppRootView: View {
     @EnvironmentObject private var appearance: AppearanceStore
     @EnvironmentObject private var onboarding: OnboardingCoordinator
 
+    @EnvironmentObject private var graphLock: GraphLockCoordinator
+
     @AppStorage("BMActiveGraphID") private var activeGraphIDString: String = ""
 
     @AppStorage("BMOnboardingHidden") private var onboardingHidden: Bool = false
@@ -36,13 +38,20 @@ struct AppRootView: View {
             }
             .onChange(of: scenePhase) { _, newPhase in
                 if newPhase == .active {
-                    Task {
-                        await handleBecameActive()
-                    }
+                    Task { await handleBecameActive() }
+                } else if newPhase == .inactive || newPhase == .background {
+                    // Auto-lock when leaving the app.
+                    graphLock.lockAll()
                 }
+            }
+            .onChange(of: activeGraphIDString) { _, _ in
+                Task { await enforceLockIfNeeded() }
             }
             .sheet(isPresented: $onboarding.isPresented) {
                 OnboardingSheetView()
+            }
+            .fullScreenCover(item: $graphLock.activeRequest) { req in
+                GraphUnlockView(request: req)
             }
     }
 
@@ -56,7 +65,9 @@ struct AppRootView: View {
         didRunStartupOnce = true
 
         await bootstrapGraphing()
+        await enforceLockIfNeeded()
         await autoHydrateImagesIfDue()
+        await enforceLockIfNeeded()
         await maybePresentOnboardingIfNeeded()
     }
 
@@ -67,6 +78,7 @@ struct AppRootView: View {
 
         // Keep foreground work lightweight.
         await autoHydrateImagesIfDue()
+        await enforceLockIfNeeded()
         await maybePresentOnboardingIfNeeded()
     }
 
@@ -99,6 +111,9 @@ struct AppRootView: View {
 
     @MainActor
     private func maybePresentOnboardingIfNeeded() async {
+        // If the active graph is locked, don't pop onboarding on top.
+        guard graphLock.activeRequest == nil else { return }
+
         guard !onboardingHidden else { return }
         guard !onboardingCompleted else { return }
         guard !onboardingAutoShown else { return }
@@ -111,5 +126,11 @@ struct AppRootView: View {
         guard progress.completedSteps == 0 else { return }
 
         onboarding.isPresented = true
+    }
+
+
+    @MainActor
+    private func enforceLockIfNeeded() async {
+        graphLock.enforceActiveGraphLockIfNeeded(using: modelContext)
     }
 }

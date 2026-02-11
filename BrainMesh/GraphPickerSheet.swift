@@ -12,6 +12,8 @@ struct GraphPickerSheet: View {
     @Environment(\.dismiss) private var dismiss
     @Environment(\.modelContext) private var modelContext
 
+    @EnvironmentObject private var graphLock: GraphLockCoordinator
+
     @AppStorage("BMActiveGraphID") private var activeGraphIDString: String = ""
 
     @Query(sort: [SortDescriptor(\MetaGraph.createdAt, order: .forward)])
@@ -19,6 +21,9 @@ struct GraphPickerSheet: View {
 
     @State private var showAdd = false
     @State private var newName = ""
+
+    @State private var showSecurity = false
+    @State private var securityGraph: MetaGraph?
 
     @State private var renameGraph: MetaGraph?
     @State private var renameText: String = ""
@@ -49,12 +54,32 @@ struct GraphPickerSheet: View {
                 } else {
                     ForEach(uniqueGraphs) { g in
                         Button {
-                            activeGraphIDString = g.id.uuidString
-                            dismiss()
+                            if g.isProtected && !graphLock.isUnlocked(graphID: g.id) {
+                                graphLock.requestUnlock(
+                                    for: g,
+                                    purpose: .switchGraph,
+                                    onSuccess: {
+                                        activeGraphIDString = g.id.uuidString
+                                        dismiss()
+                                    },
+                                    onCancel: {
+                                        // do nothing
+                                    }
+                                )
+                            } else {
+                                activeGraphIDString = g.id.uuidString
+                                dismiss()
+                            }
                         } label: {
                             HStack {
                                 Text(g.name)
                                 Spacer()
+
+                                if g.isProtected {
+                                    Image(systemName: graphLock.isUnlocked(graphID: g.id) ? "lock.open" : "lock.fill")
+                                        .foregroundStyle(.secondary)
+                                }
+
                                 if g.id == activeID {
                                     Image(systemName: "checkmark")
                                         .foregroundStyle(.secondary)
@@ -64,6 +89,14 @@ struct GraphPickerSheet: View {
                         .buttonStyle(.plain)
                         .disabled(isDeleting)
                         .swipeActions(edge: .trailing, allowsFullSwipe: false) {
+
+                            Button {
+                                securityGraph = g
+                                showSecurity = true
+                            } label: {
+                                Label("Schutz", systemImage: "lock")
+                            }
+                            .tint(.gray)
 
                             Button {
                                 renameGraph = g
@@ -205,6 +238,11 @@ struct GraphPickerSheet: View {
                 Text(deleteError ?? "")
             }
         }
+        .sheet(isPresented: $showSecurity) {
+            if let g = securityGraph {
+                GraphSecuritySheet(graph: g)
+            }
+        }
         .presentationDetents([.medium, .large])
     }
 
@@ -262,6 +300,8 @@ struct GraphPickerSheet: View {
 
             // 2) Betroffene Objekte laden
             // Entities im Graph
+            graphLock.lock(graphID: graphUUID)
+
             let gid = graphUUID
             let entsFD = FetchDescriptor<MetaEntity>(
                 predicate: #Predicate { e in e.graphID == gid }

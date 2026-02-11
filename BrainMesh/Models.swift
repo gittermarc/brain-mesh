@@ -34,6 +34,26 @@ final class MetaGraph {
     }
     var nameFolded: String = ""
 
+    // MARK: - Graph Security (optional)
+    // Pro Graph kann der User Zugriffsschutz aktivieren (Biometrie und/oder Passwort).
+
+    /// Entsperren via Face ID / Touch ID (LocalAuthentication)
+    var lockBiometricsEnabled: Bool = false
+
+    /// Eigenes Passwort (Hash + Salt) pro Graph
+    var lockPasswordEnabled: Bool = false
+    var passwordSaltB64: String? = nil
+    var passwordHashB64: String? = nil
+    var passwordIterations: Int = GraphLockCrypto.defaultIterations
+
+    var isPasswordConfigured: Bool {
+        lockPasswordEnabled && passwordSaltB64 != nil && passwordHashB64 != nil && passwordIterations > 0
+    }
+
+    var isProtected: Bool {
+        lockBiometricsEnabled || isPasswordConfigured
+    }
+
     init(name: String) {
         let cleaned = name.trimmingCharacters(in: .whitespacesAndNewlines)
         self.name = cleaned.isEmpty ? "Neuer Graph" : cleaned
@@ -58,6 +78,26 @@ final class MetaEntity {
     }
 
     var nameFolded: String = ""
+
+    // MARK: - Graph Security (optional)
+    // Pro Graph kann der User Zugriffsschutz aktivieren (Biometrie und/oder Passwort).
+
+    /// Entsperren via Face ID / Touch ID (LocalAuthentication)
+    var lockBiometricsEnabled: Bool = false
+
+    /// Eigenes Passwort (Hash + Salt) pro Graph
+    var lockPasswordEnabled: Bool = false
+    var passwordSaltB64: String? = nil
+    var passwordHashB64: String? = nil
+    var passwordIterations: Int = GraphLockCrypto.defaultIterations
+
+    var isPasswordConfigured: Bool {
+        lockPasswordEnabled && passwordSaltB64 != nil && passwordHashB64 != nil && passwordIterations > 0
+    }
+
+    var isProtected: Bool {
+        lockBiometricsEnabled || isPasswordConfigured
+    }
     var notes: String = ""
 
     /// Optional SF Symbol name (e.g. "cube", "tag.fill").
@@ -125,6 +165,26 @@ final class MetaAttribute {
     }
 
     var nameFolded: String = ""
+
+    // MARK: - Graph Security (optional)
+    // Pro Graph kann der User Zugriffsschutz aktivieren (Biometrie und/oder Passwort).
+
+    /// Entsperren via Face ID / Touch ID (LocalAuthentication)
+    var lockBiometricsEnabled: Bool = false
+
+    /// Eigenes Passwort (Hash + Salt) pro Graph
+    var lockPasswordEnabled: Bool = false
+    var passwordSaltB64: String? = nil
+    var passwordHashB64: String? = nil
+    var passwordIterations: Int = GraphLockCrypto.defaultIterations
+
+    var isPasswordConfigured: Bool {
+        lockPasswordEnabled && passwordSaltB64 != nil && passwordHashB64 != nil && passwordIterations > 0
+    }
+
+    var isProtected: Bool {
+        lockBiometricsEnabled || isPasswordConfigured
+    }
     var notes: String = ""
 
     /// Optional SF Symbol name (e.g. "tag", "calendar.badge.clock").
