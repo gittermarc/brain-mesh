@@ -1,138 +1,10 @@
 //
-//  OnboardingView.swift
+//  OnboardingSheetView.swift
 //  BrainMesh
-//
-//  Onboarding + Coordinator
 //
 
 import SwiftUI
 import SwiftData
-import Combine
-
-// MARK: - Coordinator
-
-final class OnboardingCoordinator: ObservableObject {
-    @Published var isPresented: Bool = false
-}
-
-// MARK: - Progress
-
-struct OnboardingProgress: Equatable {
-    let hasEntity: Bool
-    let hasAttribute: Bool
-    let hasLink: Bool
-
-    var totalSteps: Int { 3 }
-    var completedSteps: Int {
-        var c = 0
-        if hasEntity { c += 1 }
-        if hasAttribute { c += 1 }
-        if hasLink { c += 1 }
-        return c
-    }
-
-    var isComplete: Bool { completedSteps >= totalSteps }
-
-    @MainActor
-    static func compute(using modelContext: ModelContext, activeGraphID: UUID?) -> OnboardingProgress {
-        let e = existsEntity(using: modelContext, activeGraphID: activeGraphID)
-        let a = existsAttribute(using: modelContext, activeGraphID: activeGraphID)
-        let l = existsLink(using: modelContext, activeGraphID: activeGraphID)
-        return OnboardingProgress(hasEntity: e, hasAttribute: a, hasLink: l)
-    }
-
-    @MainActor
-    private static func existsEntity(using modelContext: ModelContext, activeGraphID: UUID?) -> Bool {
-        var fd: FetchDescriptor<MetaEntity>
-        if let gid = activeGraphID {
-            fd = FetchDescriptor(
-                predicate: #Predicate<MetaEntity> { e in
-                    e.graphID == gid || e.graphID == nil
-                }
-            )
-        } else {
-            fd = FetchDescriptor()
-        }
-        fd.fetchLimit = 1
-        let result = (try? modelContext.fetch(fd)) ?? []
-        return !result.isEmpty
-    }
-
-    @MainActor
-    private static func existsAttribute(using modelContext: ModelContext, activeGraphID: UUID?) -> Bool {
-        var fd: FetchDescriptor<MetaAttribute>
-        if let gid = activeGraphID {
-            fd = FetchDescriptor(
-                predicate: #Predicate<MetaAttribute> { a in
-                    a.graphID == gid || a.graphID == nil
-                }
-            )
-        } else {
-            fd = FetchDescriptor()
-        }
-        fd.fetchLimit = 1
-        let result = (try? modelContext.fetch(fd)) ?? []
-        return !result.isEmpty
-    }
-
-    @MainActor
-    private static func existsLink(using modelContext: ModelContext, activeGraphID: UUID?) -> Bool {
-        var fd: FetchDescriptor<MetaLink>
-        if let gid = activeGraphID {
-            fd = FetchDescriptor(
-                predicate: #Predicate<MetaLink> { l in
-                    l.graphID == gid || l.graphID == nil
-                }
-            )
-        } else {
-            fd = FetchDescriptor()
-        }
-        fd.fetchLimit = 1
-        let result = (try? modelContext.fetch(fd)) ?? []
-        return !result.isEmpty
-    }
-}
-
-// MARK: - Mini Explainer (für Empty States)
-
-struct OnboardingMiniExplainerView: View {
-    var body: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            Label("Was ist was?", systemImage: "sparkles")
-                .font(.headline)
-            VStack(alignment: .leading, spacing: 8) {
-                HStack(alignment: .top, spacing: 8) {
-                    Image(systemName: "cube")
-                        .foregroundStyle(.tint)
-                        .frame(width: 20)
-                    Text("**Entität** = ein Ding in deinem Wissen: Person, Projekt, Begriff, Ort, Buch …")
-                }
-                HStack(alignment: .top, spacing: 8) {
-                    Image(systemName: "tag")
-                        .foregroundStyle(.tint)
-                        .frame(width: 20)
-                    Text("**Attribut** = ein Detail dazu: Rolle, Status, Datum, Tag, Kategorie …")
-                }
-                HStack(alignment: .top, spacing: 8) {
-                    Image(systemName: "arrow.triangle.branch")
-                        .foregroundStyle(.tint)
-                        .frame(width: 20)
-                    Text("**Link** = Beziehung zwischen zwei Nodes: *arbeitet an*, *liegt in*, *gehört zu* …")
-                }
-            }
-            .font(.subheadline)
-            .foregroundStyle(.secondary)
-        }
-        .padding(16)
-        .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 22, style: .continuous))
-        .overlay {
-            RoundedRectangle(cornerRadius: 22, style: .continuous)
-                .strokeBorder(.quaternary)
-        }
-    }
-}
-
-// MARK: - Onboarding Sheet
 
 struct OnboardingSheetView: View {
     @Environment(\.dismiss) private var dismiss
@@ -175,6 +47,7 @@ struct OnboardingSheetView: View {
                 ToolbarItem(placement: .cancellationAction) {
                     Button("Schließen") { close() }
                 }
+
                 ToolbarItem(placement: .confirmationAction) {
                     Button("Fertig") {
                         onboardingCompleted = true
@@ -419,68 +292,6 @@ struct OnboardingSheetView: View {
     }
 }
 
-// MARK: - Step Card
-
-private struct OnboardingStepCardView: View {
-    let number: Int
-    let title: String
-    let subtitle: String
-    let systemImage: String
-    let isDone: Bool
-    let actionTitle: String
-    let actionEnabled: Bool
-    let action: () -> Void
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            HStack(alignment: .top, spacing: 12) {
-                ZStack {
-                    Circle()
-                        .fill(.thinMaterial)
-                        .frame(width: 40, height: 40)
-                    Image(systemName: isDone ? "checkmark" : systemImage)
-                        .font(.system(size: 16, weight: .semibold))
-                        .foregroundStyle(isDone ? AnyShapeStyle(Color.green) : AnyShapeStyle(.tint))
-                }
-
-                VStack(alignment: .leading, spacing: 4) {
-                    Text("\(number). \(title)")
-                        .font(.headline)
-                    Text(subtitle)
-                        .font(.subheadline)
-                        .foregroundStyle(.secondary)
-                }
-
-                Spacer(minLength: 0)
-            }
-
-            if isDone {
-                Label("Erledigt", systemImage: "checkmark.circle.fill")
-                    .font(.subheadline)
-                    .foregroundStyle(.green)
-            } else {
-                Button(action: action) {
-                    Label(actionTitle, systemImage: "arrow.right")
-                }
-                .buttonStyle(.borderedProminent)
-                .disabled(!actionEnabled)
-
-                if !actionEnabled {
-                    Text("Dafür brauchst du mindestens eine Entität.")
-                        .font(.footnote)
-                        .foregroundStyle(.secondary)
-                }
-            }
-        }
-        .padding(16)
-        .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 22, style: .continuous))
-        .overlay {
-            RoundedRectangle(cornerRadius: 22, style: .continuous)
-                .strokeBorder(.quaternary)
-        }
-    }
-}
-
 // MARK: - Simple Flow Chips
 
 private struct FlowChipsView: View {
@@ -504,69 +315,5 @@ private struct FlowChipsView: View {
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
-    }
-}
-
-/// Wrap-/Flow-Layout für Chips.
-///
-/// Warum nicht der alte AlignmentGuide-ZStack?
-/// Der hat in ScrollViews gerne eine "zu kleine" Höhe reportet → dann liegen Views optisch übereinander.
-private struct FlowLayout: Layout {
-    var spacing: CGFloat = 8
-    var lineSpacing: CGFloat = 8
-
-    func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) -> CGSize {
-        let maxWidth = (proposal.width ?? .greatestFiniteMagnitude)
-
-        var x: CGFloat = 0
-        var y: CGFloat = 0
-        var rowHeight: CGFloat = 0
-        var measuredWidth: CGFloat = 0
-
-        for subview in subviews {
-            let size = subview.sizeThatFits(.unspecified)
-
-            if x > 0, x + size.width > maxWidth {
-                measuredWidth = max(measuredWidth, x - spacing)
-                x = 0
-                y += rowHeight + lineSpacing
-                rowHeight = 0
-            }
-
-            x += size.width + spacing
-            rowHeight = max(rowHeight, size.height)
-        }
-
-        measuredWidth = max(measuredWidth, x > 0 ? (x - spacing) : 0)
-        let height = y + rowHeight
-
-        return CGSize(width: proposal.width ?? measuredWidth, height: height)
-    }
-
-    func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) {
-        let maxWidth = bounds.width > 0 ? bounds.width : .greatestFiniteMagnitude
-
-        var x: CGFloat = 0
-        var y: CGFloat = 0
-        var rowHeight: CGFloat = 0
-
-        for subview in subviews {
-            let size = subview.sizeThatFits(.unspecified)
-
-            if x > 0, x + size.width > maxWidth {
-                x = 0
-                y += rowHeight + lineSpacing
-                rowHeight = 0
-            }
-
-            subview.place(
-                at: CGPoint(x: bounds.minX + x, y: bounds.minY + y),
-                anchor: .topLeading,
-                proposal: ProposedViewSize(width: size.width, height: size.height)
-            )
-
-            x += size.width + spacing
-            rowHeight = max(rowHeight, size.height)
-        }
     }
 }
