@@ -15,6 +15,10 @@ struct IconPickerView: View {
 
     @Binding var selection: String?
     @State private var searchText: String = ""
+    @State private var resolvedSearchResults: [String] = []
+    @State private var isSearching: Bool = false
+    @State private var searchToken: Int = 0
+    @State private var searchTask: Task<Void, Never>? = nil
 
     private let gridColumns: [GridItem] = [
         GridItem(.adaptive(minimum: 44, maximum: 56), spacing: 12, alignment: .top)
@@ -31,8 +35,10 @@ struct IconPickerView: View {
                     }
 
                     if hasSearch {
-                        if !searchResults.isEmpty {
-                            symbolGridSection(title: "Ergebnisse", symbols: searchResults)
+                        if isSearching && resolvedSearchResults.isEmpty {
+                            searchingSection
+                        } else if !resolvedSearchResults.isEmpty {
+                            symbolGridSection(title: "Ergebnisse", symbols: resolvedSearchResults)
                         } else {
                             noResultsSection
                         }
@@ -52,6 +58,15 @@ struct IconPickerView: View {
             .navigationTitle("Icon wählen")
             .navigationBarTitleDisplayMode(.inline)
             .searchable(text: $searchText, prompt: "Symbol suchen oder Namen eingeben (z.B. tag, cube, calendar)")
+            .onAppear {
+                scheduleSearch(for: searchText)
+            }
+            .onDisappear {
+                searchTask?.cancel()
+            }
+            .onChange(of: searchText) { _, newValue in
+                scheduleSearch(for: newValue)
+            }
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
                     Button("Schließen") { dismiss() }
@@ -93,14 +108,6 @@ struct IconPickerView: View {
         RecentSymbolStore.decode(recentRaw)
     }
 
-    private var searchResults: [String] {
-        let term = BMSearch.fold(searchTextTrimmed)
-        guard !term.isEmpty else { return [] }
-
-        return IconCatalog.allSymbols
-            .filter { BMSearch.fold($0).contains(term) }
-    }
-
     private var directSymbolCandidate: String? {
         let raw = searchTextTrimmed
         guard !raw.isEmpty else { return nil }
@@ -126,6 +133,44 @@ struct IconPickerView: View {
             Text("Tipp: Du kannst hier auch den exakten SF-Symbol-Namen eintippen (z.B. „person.crop.circle.badge.checkmark“). Wenn das Symbol existiert, erscheint oben „Direkt verwenden“.")
                 .font(.subheadline)
                 .foregroundStyle(.secondary)
+        }
+    }
+
+    private var searchingSection: some View {
+        HStack(spacing: 10) {
+            ProgressView()
+            Text("Suche …")
+                .font(.subheadline)
+                .foregroundStyle(.secondary)
+        }
+        .padding(.top, 4)
+    }
+
+    private func scheduleSearch(for raw: String) {
+        searchToken += 1
+        let token = searchToken
+
+        searchTask?.cancel()
+
+        let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else {
+            resolvedSearchResults = []
+            isSearching = false
+            return
+        }
+
+        isSearching = true
+        searchTask = Task {
+            // Small debounce: keep typing smooth.
+            try? await Task.sleep(nanoseconds: 250_000_000)
+            if Task.isCancelled { return }
+
+            let results = IconCatalog.search(term: trimmed, limit: 360)
+            await MainActor.run {
+                guard token == searchToken else { return }
+                resolvedSearchResults = results
+                isSearching = false
+            }
         }
     }
 
