@@ -18,9 +18,6 @@ struct EntitiesHomeView: View {
     @Query(sort: [SortDescriptor(\MetaGraph.createdAt, order: .forward)])
     private var graphs: [MetaGraph]
 
-    @Query(sort: [SortDescriptor(\MetaEntity.name)])
-    private var entities: [MetaEntity]
-
     @State private var searchText = ""
     @State private var showAddEntity = false
     @State private var showGraphPicker = false
@@ -29,29 +26,48 @@ struct EntitiesHomeView: View {
     @AppStorage("BMOnboardingHidden") private var onboardingHidden: Bool = false
     @AppStorage("BMOnboardingCompleted") private var onboardingCompleted: Bool = false
 
+    // MARK: - Fetch-based list state (graph-scoped + debounced)
+    @State private var items: [MetaEntity] = []
+    @State private var isLoading = false
+    @State private var loadError: String?
+
+    private let debounceNanos: UInt64 = 250_000_000
     private var activeGraphName: String {
         if let id = activeGraphID, let g = graphs.first(where: { $0.id == id }) { return g.name }
         return graphs.first?.name ?? "Graph"
     }
 
-    private var scopedEntities: [MetaEntity] {
-        guard let gid = activeGraphID else { return entities } // falls Bootstrap noch nicht gelaufen ist
-        return entities.filter { $0.graphID == gid || $0.graphID == nil }
-    }
-
-    private var filteredEntities: [MetaEntity] {
-        let base = scopedEntities
-        let s = BMSearch.fold(searchText)
-        guard !s.isEmpty else { return base }
-        return base.filter { e in
-            e.nameFolded.contains(s) || e.attributesList.contains(where: { $0.searchLabelFolded.contains(s) })
-        }
+    private var taskToken: String {
+        // triggers reload when either the active graph or the search term changes
+        "\(activeGraphIDString)|\(searchText)"
     }
 
     var body: some View {
         NavigationStack {
             Group {
-                if filteredEntities.isEmpty {
+                if let loadError {
+                    VStack(spacing: 12) {
+                        Image(systemName: "exclamationmark.triangle")
+                            .font(.system(size: 36))
+                            .foregroundStyle(.secondary)
+                        Text("Fehler").font(.headline)
+                        Text(loadError)
+                            .foregroundStyle(.secondary)
+                            .multilineTextAlignment(.center)
+                        Button("Erneut versuchen") {
+                            Task { await reload(forFolded: BMSearch.fold(searchText)) }
+                        }
+                        .buttonStyle(.borderedProminent)
+                    }
+                    .padding()
+                } else if isLoading && items.isEmpty {
+                    VStack(spacing: 10) {
+                        ProgressView()
+                        Text("Lade Entitäten…")
+                            .foregroundStyle(.secondary)
+                    }
+                    .padding()
+                } else if items.isEmpty {
                     if searchText.isEmpty {
                         ScrollView {
                             VStack(spacing: 16) {
@@ -96,7 +112,14 @@ struct EntitiesHomeView: View {
                     }
                 } else {
                     List {
-                        ForEach(filteredEntities) { entity in
+                        if isLoading {
+                            HStack {
+                                ProgressView()
+                                Text("Suche…").foregroundStyle(.secondary)
+                            }
+                        }
+
+                        ForEach(items) { entity in
                             NavigationLink {
                                 EntityDetailView(entity: entity)
                             } label: {
@@ -146,12 +169,98 @@ struct EntitiesHomeView: View {
             .sheet(isPresented: $showSettings) {
                 NavigationStack { SettingsView() }
             }
+            .task(id: taskToken) {
+                let folded = BMSearch.fold(searchText)
+                isLoading = true
+                loadError = nil
+
+                // Debounce typing + fast graph switching
+                try? await Task.sleep(nanoseconds: debounceNanos)
+                if Task.isCancelled { return }
+
+                await reload(forFolded: folded)
+            }
+            .onChange(of: showAddEntity) { _, newValue in
+                // Ensure newly created entities show up even without @Query driving this list.
+                if newValue == false {
+                    Task { await reload(forFolded: BMSearch.fold(searchText)) }
+                }
+            }
+        }
+    }
+
+    @MainActor private func reload(forFolded folded: String) async {
+        do {
+            items = try fetchEntities(foldedSearch: folded)
+            isLoading = false
+            loadError = nil
+        } catch {
+            isLoading = false
+            loadError = error.localizedDescription
+        }
+    }
+
+    private func fetchEntities(foldedSearch s: String) throws -> [MetaEntity] {
+        let gid = activeGraphID
+
+        // Empty search: show *all* entities for the active graph (plus legacy nil-scope)
+        if s.isEmpty {
+            let fd = FetchDescriptor<MetaEntity>(
+                predicate: #Predicate<MetaEntity> { e in
+                    gid == nil || e.graphID == gid || e.graphID == nil
+                },
+                sortBy: [SortDescriptor(\MetaEntity.name)]
+            )
+            return try modelContext.fetch(fd)
+        }
+
+        let term = s
+        var unique: [UUID: MetaEntity] = [:]
+
+        // 1) Entity name match
+        var fdEntities = FetchDescriptor<MetaEntity>(
+            predicate: #Predicate<MetaEntity> { e in
+                (gid == nil || e.graphID == gid || e.graphID == nil) &&
+                e.nameFolded.contains(term)
+            },
+            sortBy: [SortDescriptor(\MetaEntity.name)]
+        )
+        for e in try modelContext.fetch(fdEntities) {
+            unique[e.id] = e
+        }
+
+        // 2) Attribute displayName match (entity · attribute)
+        let fdAttrs = FetchDescriptor<MetaAttribute>(
+            predicate: #Predicate<MetaAttribute> { a in
+                (gid == nil || a.graphID == gid || a.graphID == nil) &&
+                a.searchLabelFolded.contains(term)
+            },
+            sortBy: [SortDescriptor(\MetaAttribute.name)]
+        )
+        let attrs = try modelContext.fetch(fdAttrs)
+
+        // Note: `#Predicate` doesn't reliably support `ids.contains(e.id)` for UUID arrays.
+        // We therefore resolve owners directly from the matching attributes.
+        for a in attrs {
+            guard let owner = a.owner else { continue }
+            if gid == nil || owner.graphID == gid || owner.graphID == nil {
+                unique[owner.id] = owner
+            }
+        }
+
+        // Stable sort
+        return unique.values.sorted {
+            $0.name.localizedStandardCompare($1.name) == .orderedAscending
         }
     }
 
     private func deleteEntities(at offsets: IndexSet) {
-        for index in offsets {
-            let entity = filteredEntities[index]
+        let entitiesToDelete: [MetaEntity] = offsets.compactMap { idx -> MetaEntity? in
+            guard items.indices.contains(idx) else { return nil }
+            return items[idx]
+        }
+
+        for entity in entitiesToDelete {
             // Attachments are not part of the graph rendering; they live only on detail level.
             // They also do not cascade automatically, so we explicitly clean them up.
             AttachmentCleanup.deleteAttachments(ownerKind: .entity, ownerID: entity.id, in: modelContext)
@@ -162,6 +271,10 @@ struct EntitiesHomeView: View {
             deleteLinks(referencing: .entity, id: entity.id, graphID: entity.graphID ?? activeGraphID)
             modelContext.delete(entity)
         }
+
+        // Update local list immediately and then re-fetch to stay in sync with SwiftData.
+        items.removeAll { e in entitiesToDelete.contains(where: { $0.id == e.id }) }
+        Task { await reload(forFolded: BMSearch.fold(searchText)) }
     }
 
     private func deleteLinks(referencing kind: NodeKind, id: UUID, graphID: UUID?) {
