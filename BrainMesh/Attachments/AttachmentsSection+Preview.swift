@@ -43,6 +43,8 @@ extension AttachmentsSection {
         for index in offsets {
             let att = attachments[index]
             AttachmentStore.delete(localPath: att.localPath)
+            AttachmentStore.delete(localPath: AttachmentStore.makeLocalFilename(attachmentID: att.id, fileExtension: att.fileExtension))
+            AttachmentThumbnailStore.deleteCachedThumbnail(attachmentID: att.id)
             modelContext.delete(att)
         }
         try? modelContext.save()

@@ -55,12 +55,10 @@ struct AttachmentsSection: View {
                     .foregroundStyle(.secondary)
             } else {
                 ForEach(attachments) { att in
-                    Button {
-                        openPreview(for: att)
-                    } label: {
-                        AttachmentRow(attachment: att)
-                    }
-                    .buttonStyle(.plain)
+                    AttachmentCardRow(attachment: att)
+                        .onTapGesture {
+                            openPreview(for: att)
+                        }
                 }
                 .onDelete(perform: deleteAttachments)
             }

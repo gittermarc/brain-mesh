@@ -79,5 +79,8 @@ enum AttachmentCleanup {
             fileExtension: attachment.fileExtension
         )
         AttachmentStore.delete(localPath: fallback)
+
+        // Thumbnails
+        AttachmentThumbnailStore.deleteCachedThumbnail(attachmentID: attachment.id)
     }
 }

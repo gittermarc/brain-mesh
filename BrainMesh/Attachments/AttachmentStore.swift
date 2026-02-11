@@ -86,15 +86,58 @@ enum AttachmentStore {
         return filename
     }
 
-    /// Ensures we have a file URL for preview.
-    /// - If `localPath` exists, returns that.
-    /// - Else, writes `fileData` to cache for preview.
-    static func ensurePreviewURL(for attachment: MetaAttachment) -> URL? {
-        if let lp = attachment.localPath, let url = url(forLocalPath: lp), FileManager.default.fileExists(atPath: url.path) {
+    /// Returns an existing local file URL if present on disk (localPath or deterministic filename).
+    static func existingCachedFileURL(for attachment: MetaAttachment) -> URL? {
+        if let lp = attachment.localPath,
+           let url = url(forLocalPath: lp),
+           FileManager.default.fileExists(atPath: url.path) {
             return url
         }
+
+        let fallback = makeLocalFilename(attachmentID: attachment.id, fileExtension: attachment.fileExtension)
+        if let url = url(forLocalPath: fallback),
+           FileManager.default.fileExists(atPath: url.path) {
+            return url
+        }
+
+        return nil
+    }
+
+    /// Ensures a local file exists on disk for thumbnailing.
+    /// Important: does NOT mutate the SwiftData model (no localPath writes).
+    static func materializeFileURLForThumbnailIfNeeded(for attachment: MetaAttachment) -> URL? {
+        if let existing = existingCachedFileURL(for: attachment) {
+            return existing
+        }
+
+        guard let data = attachment.fileData else { return nil }
+
+        do {
+            let filename = try writeToCache(data: data, attachmentID: attachment.id, fileExtension: attachment.fileExtension)
+            return url(forLocalPath: filename)
+        } catch {
+            return nil
+        }
+    }
+
+    /// Ensures we have a file URL for preview.
+    /// - If `localPath` exists, returns that.
+    /// - Else, tries the deterministic filename (id + extension) if it exists on disk.
+    /// - Else, writes `fileData` to cache for preview and persists `localPath`.
+    static func ensurePreviewURL(for attachment: MetaAttachment) -> URL? {
+        if let existing = existingCachedFileURL(for: attachment) {
+            // If we found it via deterministic fallback and localPath is nil/stale, normalize it.
+            let normalized = makeLocalFilename(attachmentID: attachment.id, fileExtension: attachment.fileExtension)
+            if attachment.localPath != normalized {
+                // This mutation is expected on the UI/main path (preview).
+                attachment.localPath = normalized
+            }
+            return existing
+        }
+
         guard let data = attachment.fileData else { return nil }
         let ext = attachment.fileExtension
+
         do {
             let filename = try writeToCache(data: data, attachmentID: attachment.id, fileExtension: ext)
             attachment.localPath = filename
