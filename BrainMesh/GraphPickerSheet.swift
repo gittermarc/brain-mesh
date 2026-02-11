@@ -8,6 +8,10 @@
 import SwiftUI
 import SwiftData
 
+/// Sheet to switch between graphs and manage them (rename, delete, security).
+///
+/// This file is intentionally kept small: state + routing.
+/// The heavy UI parts live in `GraphPicker/*`.
 struct GraphPickerSheet: View {
     @Environment(\.dismiss) private var dismiss
     @Environment(\.modelContext) private var modelContext
@@ -22,126 +26,58 @@ struct GraphPickerSheet: View {
     @State private var showAdd = false
     @State private var newName = ""
 
-    @State private var showSecurity = false
+    // Item-driven sheet to avoid SwiftUI "blank sheet" races.
     @State private var securityGraph: MetaGraph?
 
     @State private var renameGraph: MetaGraph?
     @State private var renameText: String = ""
 
-    // ✅ Delete flow
     @State private var deleteGraph: MetaGraph?
     @State private var isDeleting = false
     @State private var deleteError: String?
 
+    // Frozen snapshot for the List (prevents UITableView inconsistency crashes during deletes).
+    @State private var displayedGraphs: [MetaGraph] = []
+    @State private var displayedHiddenDuplicateCount: Int = 0
+
+    @State private var didInitialDedupe = false
+
     private var activeID: UUID? { UUID(uuidString: activeGraphIDString) }
 
-    // ✅ Dedupe by UUID (wenn durch Sync/Bootstrap derselbe Graph doppelt auftaucht)
-    private var uniqueGraphs: [MetaGraph] {
-        var seen = Set<UUID>()
-        return graphs.filter { seen.insert($0.id).inserted }
-    }
-
-    private var hiddenDuplicateCount: Int {
-        max(0, graphs.count - uniqueGraphs.count)
-    }
+    // Equatable signature so we can react to Query changes without needing graphs to be Equatable.
+    private var graphsSignature: [UUID] { graphs.map(\MetaGraph.id) }
 
     var body: some View {
         NavigationStack {
-            List {
-                if uniqueGraphs.isEmpty {
-                    Text("Keine Graphen gefunden (das sollte eigentlich nicht passieren).")
-                        .foregroundStyle(.secondary)
-                } else {
-                    ForEach(uniqueGraphs) { g in
-                        Button {
-                            if g.isProtected && !graphLock.isUnlocked(graphID: g.id) {
-                                graphLock.requestUnlock(
-                                    for: g,
-                                    purpose: .switchGraph,
-                                    onSuccess: {
-                                        activeGraphIDString = g.id.uuidString
-                                        dismiss()
-                                    },
-                                    onCancel: {
-                                        // do nothing
-                                    }
-                                )
-                            } else {
-                                activeGraphIDString = g.id.uuidString
-                                dismiss()
-                            }
-                        } label: {
-                            HStack {
-                                Text(g.name)
-                                Spacer()
-
-                                if g.isProtected {
-                                    Image(systemName: graphLock.isUnlocked(graphID: g.id) ? "lock.open" : "lock.fill")
-                                        .foregroundStyle(.secondary)
-                                }
-
-                                if g.id == activeID {
-                                    Image(systemName: "checkmark")
-                                        .foregroundStyle(.secondary)
-                                }
-                            }
-                        }
-                        .buttonStyle(.plain)
-                        .disabled(isDeleting)
-                        .swipeActions(edge: .trailing, allowsFullSwipe: false) {
-
-                            Button {
-                                securityGraph = g
-                                showSecurity = true
-                            } label: {
-                                Label("Schutz", systemImage: "lock")
-                            }
-                            .tint(.gray)
-
-                            Button {
-                                renameGraph = g
-                                renameText = g.name
-                            } label: {
-                                Label("Umbenennen", systemImage: "pencil")
-                            }
-                            .tint(.indigo)
-
-                            Button(role: .destructive) {
-                                deleteGraph = g
-                            } label: {
-                                Label("Löschen", systemImage: "trash")
-                            }
-                        }
-                    }
+            GraphPickerListView(
+                uniqueGraphs: displayedGraphs,
+                hiddenDuplicateCount: displayedHiddenDuplicateCount,
+                activeGraphID: activeID,
+                isDeleting: isDeleting,
+                onSelectGraph: { g in
+                    selectGraph(g)
+                },
+                onOpenSecurity: { g in
+                    securityGraph = g
+                },
+                onRename: { g in
+                    renameGraph = g
+                    renameText = g.name
+                },
+                onDelete: { g in
+                    deleteGraph = g
+                },
+                onCleanupDuplicates: {
+                    cleanupDuplicateGraphs()
                 }
-
-                if hiddenDuplicateCount > 0 {
-                    Section("Hinweis") {
-                        Text("Ich habe \(hiddenDuplicateCount) doppelte Graph-Einträge ausgeblendet (gleiche ID).")
-                            .font(.footnote)
-                            .foregroundStyle(.secondary)
-
-                        Button(role: .destructive) {
-                            cleanupDuplicateGraphs()
-                        } label: {
-                            Label("Duplikate entfernen", systemImage: "trash")
-                        }
-                        .disabled(isDeleting)
-                    }
-                }
-
-                Section {
-                    Text("Tipp: Links und Picker sind immer auf den aktiven Graph begrenzt – damit du nicht aus Versehen zwei Welten zusammenklebst.")
-                        .font(.footnote)
-                        .foregroundStyle(.secondary)
-                }
-            }
+            )
             .navigationTitle("Graphen")
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
                     Button("Schließen") { dismiss() }
                         .disabled(isDeleting)
                 }
+
                 ToolbarItem(placement: .topBarTrailing) {
                     Button {
                         newName = ""
@@ -150,21 +86,6 @@ struct GraphPickerSheet: View {
                         Image(systemName: "plus")
                     }
                     .disabled(isDeleting)
-                }
-            }
-
-            .overlay {
-                if isDeleting {
-                    ZStack {
-                        Color.black.opacity(0.08).ignoresSafeArea()
-                        HStack(spacing: 10) {
-                            ProgressView()
-                            Text("Lösche…").foregroundStyle(.secondary)
-                        }
-                        .padding(12)
-                        .background(.thinMaterial)
-                        .clipShape(RoundedRectangle(cornerRadius: 14))
-                    }
                 }
             }
 
@@ -186,64 +107,77 @@ struct GraphPickerSheet: View {
             }
 
             // MARK: Rename
-            .alert("Graph umbenennen", isPresented: Binding(
-                get: { renameGraph != nil },
-                set: { if !$0 { renameGraph = nil } }
-            )) {
-                TextField("Name", text: $renameText)
-                Button("Abbrechen", role: .cancel) { renameGraph = nil }
-                Button("Speichern") {
-                    guard let g = renameGraph else { return }
-                    let cleaned = renameText.trimmingCharacters(in: .whitespacesAndNewlines)
-                    g.name = cleaned.isEmpty ? g.name : cleaned
-                    try? modelContext.save()
-                    renameGraph = nil
+            .graphPickerRenameSheet(renameGraph: $renameGraph, renameText: $renameText)
+
+            // MARK: Delete
+            .graphPickerDeleteFlow(
+                graphs: graphs,
+                uniqueGraphs: displayedGraphs,
+                activeGraphID: activeID,
+                activeGraphIDString: $activeGraphIDString,
+                deleteGraph: $deleteGraph,
+                isDeleting: $isDeleting,
+                deleteError: $deleteError,
+                onWillDelete: { g in
+                    optimisticallyRemoveFromDisplayed(g)
                 }
+            )
+        }
+        .task {
+            if !didInitialDedupe {
+                didInitialDedupe = true
+                _ = GraphDedupeService.removeDuplicateGraphs(using: modelContext)
             }
-
-            // MARK: Delete confirm
-            .alert("Graph löschen?", isPresented: Binding(
-                get: { deleteGraph != nil },
-                set: { if !$0 { deleteGraph = nil } }
-            )) {
-                Button("Abbrechen", role: .cancel) { deleteGraph = nil }
-
-                Button("Löschen", role: .destructive) {
-                    guard let g = deleteGraph else { return }
-                    Task { await deleteGraphCompletely(graphUUID: g.id) }
-                }
-            } message: {
-                if let g = deleteGraph {
-                    let isActive = (g.id == activeID)
-                    let isLast = (uniqueGraphs.count <= 1)
-                    if isLast {
-                        Text("Dieser Graph ist der letzte. Wenn du ihn löschst, wird automatisch ein neuer leerer „Default“-Graph angelegt.")
-                    } else if isActive {
-                        Text("Dieser Graph ist aktuell aktiv. Nach dem Löschen wird automatisch auf einen anderen Graph umgeschaltet.")
-                    } else {
-                        Text("Das löscht den Graph inkl. Entitäten, Attributen, Links, Notizen und Bildern. Diese Aktion kann nicht rückgängig gemacht werden.")
-                    }
-                } else {
-                    Text("")
-                }
-            }
-
-            // MARK: Delete error
-            .alert("Löschen fehlgeschlagen", isPresented: Binding(
-                get: { deleteError != nil },
-                set: { if !$0 { deleteError = nil } }
-            )) {
-                Button("OK", role: .cancel) {}
-            } message: {
-                Text(deleteError ?? "")
+            rebuildDisplayed()
+        }
+        .onChange(of: graphsSignature) { _ in
+            if !isDeleting {
+                rebuildDisplayed()
             }
         }
-        .sheet(isPresented: $showSecurity) {
-            if let g = securityGraph {
-                GraphSecuritySheet(graph: g)
+        .onChange(of: isDeleting) { deleting in
+            if !deleting {
+                rebuildDisplayed()
             }
+        }
+        .sheet(item: $securityGraph) { g in
+            GraphSecuritySheet(graph: g)
         }
         .presentationDetents([.medium, .large])
+    }
+
+    private func rebuildDisplayed() {
+        var seen = Set<UUID>()
+        let unique = graphs.filter { seen.insert($0.id).inserted }
+        displayedGraphs = unique
+        displayedHiddenDuplicateCount = max(0, graphs.count - unique.count)
+    }
+
+    private func optimisticallyRemoveFromDisplayed(_ g: MetaGraph) {
+        var tx = Transaction()
+        tx.animation = nil
+        withTransaction(tx) {
+            displayedGraphs.removeAll { $0.id == g.id }
+            // Intentionally keep displayedHiddenDuplicateCount stable during delete.
+        }
+    }
+
+    private func selectGraph(_ g: MetaGraph) {
+        if g.isProtected && !graphLock.isUnlocked(graphID: g.id) {
+            graphLock.requestUnlock(
+                for: g,
+                purpose: .switchGraph,
+                onSuccess: {
+                    activeGraphIDString = g.id.uuidString
+                    dismiss()
+                },
+                onCancel: {
+                }
+            )
+        } else {
+            activeGraphIDString = g.id.uuidString
+            dismiss()
+        }
     }
 
     // ✅ Löscht nur überzählige Duplikate mit identischer UUID (behält den ältesten)
@@ -261,116 +195,8 @@ struct GraphPickerSheet: View {
         }
 
         try? modelContext.save()
-    }
-
-    // MARK: - Graph deletion (inkl. Inhalte + lokale Bilder)
-
-    @MainActor
-    private func deleteGraphCompletely(graphUUID: UUID) async {
-        guard !isDeleting else { return }
-        isDeleting = true
-        defer { isDeleting = false }
-
-        do {
-            // 1) Fallback active graph bestimmen (falls wir den aktiven löschen)
-            let currentActive = UUID(uuidString: activeGraphIDString)
-            let deletingIsActive = (currentActive == graphUUID)
-
-            // Kandidaten: alle Graphs außer dem zu löschenden (unique, stabil)
-            let remaining = uniqueGraphs
-                .filter { $0.id != graphUUID }
-                .sorted { $0.createdAt < $1.createdAt }
-
-            var newActive: UUID? = nil
-
-            if deletingIsActive {
-                if let first = remaining.first {
-                    newActive = first.id
-                } else {
-                    // letzter Graph -> direkt neuen erstellen (damit App nie "ohne Graph" ist)
-                    let fresh = MetaGraph(name: "Default")
-                    modelContext.insert(fresh)
-                    newActive = fresh.id
-                }
-            }
-
-            if let newActive {
-                activeGraphIDString = newActive.uuidString
-            }
-
-            // 2) Betroffene Objekte laden
-            // Entities im Graph
-            graphLock.lock(graphID: graphUUID)
-
-            let gid = graphUUID
-            let entsFD = FetchDescriptor<MetaEntity>(
-                predicate: #Predicate { e in e.graphID == gid }
-            )
-            let entities = try modelContext.fetch(entsFD)
-
-            // Links im Graph
-            let linksFD = FetchDescriptor<MetaLink>(
-                predicate: #Predicate { l in l.graphID == gid }
-            )
-            let links = try modelContext.fetch(linksFD)
-
-            // Orphan Attributes (falls jemals entstanden)
-            let orphansFD = FetchDescriptor<MetaAttribute>(
-                predicate: #Predicate { a in a.graphID == gid && a.owner == nil }
-            )
-            let orphans = try modelContext.fetch(orphansFD)
-
-            // Graph-Duplikate mit gleicher id (Sync-Schluckauf)
-            let graphsToDelete = graphs.filter { $0.id == gid }
-
-            // 3) Lokale Bilder sammeln (bevor wir löschen)
-            var imagePaths = Set<String>()
-
-            for e in entities {
-                if let p = e.imagePath, !p.isEmpty { imagePaths.insert(p) }
-                // Attributes hängen i.d.R. dran (Cascade), aber wir lesen Pfade vorsichtshalber vorher aus
-                for a in e.attributesList {
-                    if let p = a.imagePath, !p.isEmpty { imagePaths.insert(p) }
-                }
-            }
-            for a in orphans {
-                if let p = a.imagePath, !p.isEmpty { imagePaths.insert(p) }
-            }
-
-            // 3b) Attachments aufräumen (Records + lokaler Cache)
-            // 1) normaler Fall: graphID gesetzt
-            AttachmentCleanup.deleteAttachments(graphID: gid, in: modelContext)
-
-            // 2) defensiv: graphID == nil, aber Owner wird gerade gelöscht
-            for e in entities {
-                AttachmentCleanup.deleteAttachments(ownerKind: .entity, ownerID: e.id, graphID: nil, in: modelContext)
-                for a in e.attributesList {
-                    AttachmentCleanup.deleteAttachments(ownerKind: .attribute, ownerID: a.id, graphID: nil, in: modelContext)
-                }
-            }
-            for a in orphans {
-                AttachmentCleanup.deleteAttachments(ownerKind: .attribute, ownerID: a.id, graphID: nil, in: modelContext)
-            }
-
-            // 4) Löschen (Reihenfolge: Links -> Orphans -> Entities -> Graphs)
-            for l in links { modelContext.delete(l) }
-            for a in orphans { modelContext.delete(a) }
-            for e in entities { modelContext.delete(e) } // cascade entfernt owned attributes
-            for g in graphsToDelete { modelContext.delete(g) }
-
-            try modelContext.save()
-
-            // 5) Lokale Files aufräumen (nicht CloudKit, nur Device)
-            for p in imagePaths {
-                ImageStore.delete(path: p)
-            }
-
-            // UI sauber schließen, wenn wir gerade den aktiven Graph gewechselt haben
-            // (Optional: ich würde es drinlassen, fühlt sich „fertig“ an)
-            deleteGraph = nil
-
-        } catch {
-            deleteError = error.localizedDescription
+        if !isDeleting {
+            rebuildDisplayed()
         }
     }
 }
