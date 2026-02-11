@@ -6,6 +6,7 @@
 //
 
 import SwiftUI
+import os
 
 extension GraphCanvasView {
     func startSimulation() {
@@ -39,6 +40,8 @@ extension GraphCanvasView {
 
     func stepSimulation() {
         guard nodes.count >= 2 else { return }
+
+        let tickTimer = BMDuration()
 
         let repulsion: CGFloat = 8800
         let springLink: CGFloat = 0.018
@@ -142,5 +145,27 @@ extension GraphCanvasView {
 
         positions = pos
         velocities = vel
+
+        // MARK: - Observability (P0.2)
+        // Log a rolling window to avoid log spam and keep overhead minimal.
+        let tickNs = tickTimer.nanosecondsElapsed
+        physicsTickCounter += 1
+        physicsTickAccumNanos &+= tickNs
+        if tickNs > physicsTickMaxNanos { physicsTickMaxNanos = tickNs }
+
+        if physicsTickCounter >= 60 {
+            let avgMs = Double(physicsTickAccumNanos) / Double(physicsTickCounter) / 1_000_000.0
+            let maxMs = Double(physicsTickMaxNanos) / 1_000_000.0
+            let simCount = simNodes.count
+            let relCount = relevant?.count ?? 0
+
+            BMLog.physics.debug(
+                "physics avgMs=\(avgMs, format: .fixed(precision: 2)) maxMs=\(maxMs, format: .fixed(precision: 2)) nodes=\(nodes.count, privacy: .public) simNodes=\(simCount, privacy: .public) relevant=\(relCount, privacy: .public) edges=\(physicsEdges.count, privacy: .public)"
+            )
+
+            physicsTickCounter = 0
+            physicsTickAccumNanos = 0
+            physicsTickMaxNanos = 0
+        }
     }
 }

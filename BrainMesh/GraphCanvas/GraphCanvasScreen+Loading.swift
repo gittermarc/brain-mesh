@@ -5,6 +5,7 @@
 
 import SwiftUI
 import SwiftData
+import os
 
 extension GraphCanvasScreen {
 
@@ -14,6 +15,7 @@ extension GraphCanvasScreen {
     func ensureActiveGraphAndLoadIfNeeded() async {
         if activeGraphID == nil, let first = graphs.first {
             activeGraphIDString = first.id.uuidString
+            BMLog.load.info("auto-selected first graph id=\(first.id.uuidString, privacy: .public)")
             return
         }
         await loadGraph()
@@ -21,6 +23,12 @@ extension GraphCanvasScreen {
 
     @MainActor
     func loadGraph(resetLayout: Bool = true) async {
+        let t = BMDuration()
+        let mode: String = (focusEntity != nil) ? "neighborhood" : "global"
+        let focusID: String = focusEntity?.id.uuidString ?? "-"
+        let hopsValue: Int = hops
+        let includeAttrs: Bool = showAttributes
+
         isLoading = true
         loadError = nil
 
@@ -45,9 +53,17 @@ extension GraphCanvasScreen {
 
             if resetLayout { seedLayout(preservePinned: true) }
             isLoading = false
+
+            BMLog.load.info(
+                "loadGraph ok mode=\(mode, privacy: .public) focus=\(focusID, privacy: .public) hops=\(hopsValue, privacy: .public) attrs=\(includeAttrs, privacy: .public) nodes=\(nodes.count, privacy: .public) edges=\(edges.count, privacy: .public) ms=\(t.millisecondsElapsed, format: .fixed(precision: 2))"
+            )
         } catch {
             isLoading = false
             loadError = error.localizedDescription
+
+            BMLog.load.error(
+                "loadGraph failed mode=\(mode, privacy: .public) focus=\(focusID, privacy: .public) hops=\(hopsValue, privacy: .public) attrs=\(includeAttrs, privacy: .public) ms=\(t.millisecondsElapsed, format: .fixed(precision: 2)) error=\(String(describing: error), privacy: .public)"
+            )
         }
     }
 
@@ -373,7 +389,6 @@ extension GraphCanvasScreen {
 
         for a in attrs {
             let k = NodeKey(kind: .attribute, uuid: a.id)
-            // DisplayName (Owner · Attr) ist fürs Sorting/Chip schöner als nur der Attributname
             newLabelCache[k] = a.displayName
             if let p = a.imagePath, !p.isEmpty { newImagePathCache[k] = p }
             if let s = a.iconSymbolName, !s.isEmpty { newIconSymbolCache[k] = s }
@@ -384,6 +399,4 @@ extension GraphCanvasScreen {
         iconSymbolCache = newIconSymbolCache
 
     }
-
-
 }

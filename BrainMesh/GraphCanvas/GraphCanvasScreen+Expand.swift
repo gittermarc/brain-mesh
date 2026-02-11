@@ -5,6 +5,7 @@
 
 import SwiftUI
 import SwiftData
+import os
 
 extension GraphCanvasScreen {
 
@@ -14,6 +15,8 @@ extension GraphCanvasScreen {
     func expand(from key: NodeKey) async {
         if nodes.isEmpty { return }
         if nodes.count >= maxNodes { return }
+
+        let t = BMDuration()
 
         isLoading = true
         defer { isLoading = false }
@@ -163,6 +166,9 @@ extension GraphCanvasScreen {
         }
 
         if appendedNodes.isEmpty && newEdges.isEmpty {
+            BMLog.expand.debug(
+                "expand noop key=\(key.kind.rawValue, privacy: .public)/\(key.uuid.uuidString, privacy: .public) ms=\(t.millisecondsElapsed, format: .fixed(precision: 2))"
+            )
             return
         }
 
@@ -178,6 +184,10 @@ extension GraphCanvasScreen {
         directedEdgeNotes = newNotes
 
         seedNewNodesNear(key, newNodeKeys: appendedNodes.map(\.key))
+
+        BMLog.expand.info(
+            "expand ok key=\(key.kind.rawValue, privacy: .public)/\(key.uuid.uuidString, privacy: .public) addedNodes=\(appendedNodes.count, privacy: .public) addedEdges=\(newEdges.count, privacy: .public) totalNodes=\(nodes.count, privacy: .public) totalEdges=\(edges.count, privacy: .public) ms=\(t.millisecondsElapsed, format: .fixed(precision: 2))"
+        )
     }
 
     @MainActor
@@ -203,6 +213,4 @@ extension GraphCanvasScreen {
             velocities[k] = .zero
         }
     }
-
-
 }

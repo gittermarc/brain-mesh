@@ -58,6 +58,12 @@ struct GraphCanvasView: View {
     @State var cachedThumbPath: String?
     @State var cachedThumb: UIImage?
 
+    // MARK: - Observability (P0.2)
+    // NOTE: Zugriff in Extensions -> nicht `private` (private == file-scope)
+    @State var physicsTickCounter: Int = 0
+    @State var physicsTickAccumNanos: UInt64 = 0
+    @State var physicsTickMaxNanos: UInt64 = 0
+
     private var theme: GraphTheme {
         GraphTheme(settings: appearance.settings.graph)
     }
