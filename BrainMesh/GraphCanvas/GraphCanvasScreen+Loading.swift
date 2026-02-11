@@ -143,95 +143,102 @@ extension GraphCanvasScreen {
         let kEntity = NodeKind.entity.rawValue
         let gid = activeGraphID
 
+        // MARK: BFS – Entity neighborhood (batch per hop, no per-node fetch)
+
         var visitedEntities: Set<UUID> = [centerID]
         var frontier: Set<UUID> = [centerID]
+
         var collectedEntityLinks: [MetaLink] = []
+        collectedEntityLinks.reserveCapacity(min(maxLinks, 256))
 
-        for _ in 1...hops {
-            if visitedEntities.count >= maxNodes { break }
+        var seenEntityLinkIDs: Set<UUID> = []
+        seenEntityLinkIDs.reserveCapacity(min(maxLinks, 256))
 
-            var next: Set<UUID> = []
-
-            for nodeID in frontier {
+        if hops > 0 {
+            for _ in 1...hops {
                 if visitedEntities.count >= maxNodes { break }
-
-                let nID = nodeID
-
-                var outFD: FetchDescriptor<MetaLink>
-                if let gid {
-                    outFD = FetchDescriptor(
-                        predicate: #Predicate<MetaLink> { l in
-                            (l.graphID == gid || l.graphID == nil) &&
-                            l.sourceKindRaw == kEntity &&
-                            l.targetKindRaw == kEntity &&
-                            l.sourceID == nID
-                        },
-                        sortBy: [SortDescriptor(\MetaLink.createdAt, order: .reverse)]
-                    )
-                } else {
-                    outFD = FetchDescriptor(
-                        predicate: #Predicate<MetaLink> { l in
-                            l.sourceKindRaw == kEntity &&
-                            l.targetKindRaw == kEntity &&
-                            l.sourceID == nID
-                        },
-                        sortBy: [SortDescriptor(\MetaLink.createdAt, order: .reverse)]
-                    )
-                }
-                outFD.fetchLimit = maxLinks
-                let outLinks = (try? modelContext.fetch(outFD)) ?? []
-
-                for l in outLinks {
-                    collectedEntityLinks.append(l)
-                    next.insert(l.targetID)
-                    if collectedEntityLinks.count >= maxLinks { break }
-                }
-
+                if frontier.isEmpty { break }
                 if collectedEntityLinks.count >= maxLinks { break }
 
-                var inFD: FetchDescriptor<MetaLink>
+                let frontierIDs = Array(frontier)
+                let remainingLinks = max(0, maxLinks - collectedEntityLinks.count)
+                if remainingLinks == 0 { break }
+
+                var hopFD: FetchDescriptor<MetaLink>
                 if let gid {
-                    inFD = FetchDescriptor(
+                    hopFD = FetchDescriptor(
                         predicate: #Predicate<MetaLink> { l in
                             (l.graphID == gid || l.graphID == nil) &&
                             l.sourceKindRaw == kEntity &&
                             l.targetKindRaw == kEntity &&
-                            l.targetID == nID
+                            (frontierIDs.contains(l.sourceID) || frontierIDs.contains(l.targetID))
                         },
                         sortBy: [SortDescriptor(\MetaLink.createdAt, order: .reverse)]
                     )
                 } else {
-                    inFD = FetchDescriptor(
+                    hopFD = FetchDescriptor(
                         predicate: #Predicate<MetaLink> { l in
                             l.sourceKindRaw == kEntity &&
                             l.targetKindRaw == kEntity &&
-                            l.targetID == nID
+                            (frontierIDs.contains(l.sourceID) || frontierIDs.contains(l.targetID))
                         },
                         sortBy: [SortDescriptor(\MetaLink.createdAt, order: .reverse)]
                     )
                 }
-                inFD.fetchLimit = maxLinks
-                let inLinks = (try? modelContext.fetch(inFD)) ?? []
 
-                for l in inLinks {
+                hopFD.fetchLimit = remainingLinks
+                let hopLinks = (try? modelContext.fetch(hopFD)) ?? []
+                if hopLinks.isEmpty { break }
+
+                var next: Set<UUID> = []
+                next.reserveCapacity(frontier.count * 2)
+
+                for l in hopLinks {
+                    if !seenEntityLinkIDs.insert(l.id).inserted { continue }
+
                     collectedEntityLinks.append(l)
-                    next.insert(l.sourceID)
+
+                    if frontier.contains(l.sourceID) { next.insert(l.targetID) }
+                    if frontier.contains(l.targetID) { next.insert(l.sourceID) }
+
                     if collectedEntityLinks.count >= maxLinks { break }
                 }
+
+                next.subtract(visitedEntities)
+                if next.isEmpty { break }
+
+                let remainingNodeCapacity = max(0, maxNodes - visitedEntities.count)
+                if remainingNodeCapacity == 0 { break }
+                if next.count > remainingNodeCapacity {
+                    next = Set(next.prefix(remainingNodeCapacity))
+                }
+
+                visitedEntities.formUnion(next)
+                frontier = next
             }
-
-            next.subtract(visitedEntities)
-            visitedEntities.formUnion(next)
-            frontier = next
-            if frontier.isEmpty { break }
         }
 
-        var ents: [MetaEntity] = []
-        ents.reserveCapacity(min(visitedEntities.count, maxNodes))
-        for id in visitedEntities.prefix(maxNodes) {
-            if let e = fetchEntity(id: id) { ents.append(e) }
+        // MARK: Batch fetch entities (instead of fetchEntity(id:) in a loop)
+
+        let entityIDs = Array(visitedEntities.prefix(maxNodes))
+        var eFD: FetchDescriptor<MetaEntity>
+        if let gid {
+            eFD = FetchDescriptor(
+                predicate: #Predicate<MetaEntity> { e in
+                    entityIDs.contains(e.id) && (e.graphID == gid || e.graphID == nil)
+                },
+                sortBy: [SortDescriptor(\MetaEntity.name)]
+            )
+        } else {
+            eFD = FetchDescriptor(
+                predicate: #Predicate<MetaEntity> { e in entityIDs.contains(e.id) },
+                sortBy: [SortDescriptor(\MetaEntity.name)]
+            )
         }
-        ents.sort { $0.name < $1.name }
+        eFD.fetchLimit = maxNodes
+        let ents = try modelContext.fetch(eFD)
+
+        // MARK: Attributes (optional) – keep behavior, but only within node budget
 
         var attrs: [MetaAttribute] = []
         if includeAttributes {
@@ -249,6 +256,8 @@ extension GraphCanvasScreen {
             }
         }
 
+        // MARK: Nodes
+
         var newNodes: [GraphNode] = []
         newNodes.reserveCapacity(ents.count + attrs.count)
         for e in ents { newNodes.append(GraphNode(key: NodeKey(kind: .entity, uuid: e.id), label: e.name)) }
@@ -256,10 +265,13 @@ extension GraphCanvasScreen {
 
         let nodeKeySet = Set(newNodes.map(\.key))
 
+        // MARK: Edges + Notes
+
         var notes: [DirectedEdgeKey: String] = [:]
         var newEdges: [GraphEdge] = []
-        newEdges.reserveCapacity(maxLinks)
+        newEdges.reserveCapacity(min(maxLinks, 512))
 
+        // 1) Entity–Entity links from BFS collection
         for l in collectedEntityLinks {
             let a = NodeKey(kind: .entity, uuid: l.sourceID)
             let b = NodeKey(kind: .entity, uuid: l.targetID)
@@ -274,101 +286,70 @@ extension GraphCanvasScreen {
             if newEdges.count >= maxLinks { break }
         }
 
-        if includeAttributes {
+        // 2) Containment edges (Entity–Attribute)
+        if includeAttributes, newEdges.count < maxLinks {
             var attrOwner: [UUID: UUID] = [:]
-            for e in ents { for a in e.attributesList { attrOwner[a.id] = e.id } }
+            attrOwner.reserveCapacity(attrs.count)
+            for a in attrs {
+                if let ownerID = a.owner?.id { attrOwner[a.id] = ownerID }
+            }
 
             for a in attrs {
-                if let ownerID = attrOwner[a.id] {
-                    let ek = NodeKey(kind: .entity, uuid: ownerID)
-                    let ak = NodeKey(kind: .attribute, uuid: a.id)
-                    if nodeKeySet.contains(ek) && nodeKeySet.contains(ak) {
-                        newEdges.append(GraphEdge(a: ek, b: ak, type: .containment))
-                    }
-                    if newEdges.count >= maxLinks { break }
+                guard let ownerID = attrOwner[a.id] else { continue }
+
+                let ek = NodeKey(kind: .entity, uuid: ownerID)
+                let ak = NodeKey(kind: .attribute, uuid: a.id)
+                if nodeKeySet.contains(ek) && nodeKeySet.contains(ak) {
+                    newEdges.append(GraphEdge(a: ek, b: ak, type: .containment))
                 }
+
+                if newEdges.count >= maxLinks { break }
             }
         }
 
+        // 3) Additional links between any loaded nodes (batch instead of per-node N+1)
         if includeAttributes, newEdges.count < maxLinks {
             let remaining = maxLinks - newEdges.count
-            let perNodeCap = max(20, remaining / max(1, newNodes.count))
+            if remaining > 0 {
+                let visibleIDs = Array(Set(newNodes.map { $0.key.uuid }))
 
-            var linkEdges: [GraphEdge] = []
-
-            for n in newNodes {
-                if linkEdges.count >= remaining { break }
-                let k = n.key.kind.rawValue
-                let id = n.key.uuid
-
-                var outFD: FetchDescriptor<MetaLink>
+                var linkFD: FetchDescriptor<MetaLink>
                 if let gid {
-                    outFD = FetchDescriptor(
+                    linkFD = FetchDescriptor(
                         predicate: #Predicate<MetaLink> { l in
                             (l.graphID == gid || l.graphID == nil) &&
-                            l.sourceKindRaw == k && l.sourceID == id
+                            (visibleIDs.contains(l.sourceID) || visibleIDs.contains(l.targetID))
                         },
                         sortBy: [SortDescriptor(\MetaLink.createdAt, order: .reverse)]
                     )
                 } else {
-                    outFD = FetchDescriptor(
-                        predicate: #Predicate<MetaLink> { l in l.sourceKindRaw == k && l.sourceID == id },
+                    linkFD = FetchDescriptor(
+                        predicate: #Predicate<MetaLink> { l in
+                            visibleIDs.contains(l.sourceID) || visibleIDs.contains(l.targetID)
+                        },
                         sortBy: [SortDescriptor(\MetaLink.createdAt, order: .reverse)]
                     )
                 }
-                outFD.fetchLimit = perNodeCap
-                let out = (try? modelContext.fetch(outFD)) ?? []
 
-                for l in out {
+                // Oversample a bit because we filter by (kind,id) in-memory.
+                linkFD.fetchLimit = min(maxLinks, max(remaining * 4, remaining))
+                let candidateLinks = (try? modelContext.fetch(linkFD)) ?? []
+
+                for l in candidateLinks {
                     let a = NodeKey(kind: NodeKind(rawValue: l.sourceKindRaw) ?? .entity, uuid: l.sourceID)
                     let b = NodeKey(kind: NodeKind(rawValue: l.targetKindRaw) ?? .entity, uuid: l.targetID)
                     if nodeKeySet.contains(a) && nodeKeySet.contains(b) {
-                        linkEdges.append(GraphEdge(a: a, b: b, type: .link))
+                        newEdges.append(GraphEdge(a: a, b: b, type: .link))
 
                         if let note = l.note?.trimmingCharacters(in: .whitespacesAndNewlines), !note.isEmpty {
                             let dk = DirectedEdgeKey.make(source: a, target: b, type: .link)
                             if notes[dk] == nil { notes[dk] = note }
                         }
+
+                        if newEdges.count >= maxLinks { break }
                     }
-                    if linkEdges.count >= remaining { break }
-                }
-
-                if linkEdges.count >= remaining { break }
-
-                var inFD: FetchDescriptor<MetaLink>
-                if let gid {
-                    inFD = FetchDescriptor(
-                        predicate: #Predicate<MetaLink> { l in
-                            (l.graphID == gid || l.graphID == nil) &&
-                            l.targetKindRaw == k && l.targetID == id
-                        },
-                        sortBy: [SortDescriptor(\MetaLink.createdAt, order: .reverse)]
-                    )
-                } else {
-                    inFD = FetchDescriptor(
-                        predicate: #Predicate<MetaLink> { l in l.targetKindRaw == k && l.targetID == id },
-                        sortBy: [SortDescriptor(\MetaLink.createdAt, order: .reverse)]
-                    )
-                }
-                inFD.fetchLimit = perNodeCap
-                let inc = (try? modelContext.fetch(inFD)) ?? []
-
-                for l in inc {
-                    let a = NodeKey(kind: NodeKind(rawValue: l.sourceKindRaw) ?? .entity, uuid: l.sourceID)
-                    let b = NodeKey(kind: NodeKind(rawValue: l.targetKindRaw) ?? .entity, uuid: l.targetID)
-                    if nodeKeySet.contains(a) && nodeKeySet.contains(b) {
-                        linkEdges.append(GraphEdge(a: a, b: b, type: .link))
-
-                        if let note = l.note?.trimmingCharacters(in: .whitespacesAndNewlines), !note.isEmpty {
-                            let dk = DirectedEdgeKey.make(source: a, target: b, type: .link)
-                            if notes[dk] == nil { notes[dk] = note }
-                        }
-                    }
-                    if linkEdges.count >= remaining { break }
                 }
             }
-
-            newEdges.append(contentsOf: linkEdges.unique().prefix(remaining))
         }
 
         nodes = newNodes
@@ -399,4 +380,5 @@ extension GraphCanvasScreen {
         iconSymbolCache = newIconSymbolCache
 
     }
+
 }
