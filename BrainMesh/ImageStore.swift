@@ -62,4 +62,44 @@ enum ImageStore {
             // ignore
         }
     }
+
+    // MARK: - Cache metrics
+
+    /// Returns the allocated size (bytes) of the local image cache folder.
+    /// Note: This is *local cache only* (Application Support), not the synced imageData.
+    static func cacheSizeBytes() throws -> Int64 {
+        let dir = try folderURL()
+        return directorySizeBytes(dir)
+    }
+
+    private static func directorySizeBytes(_ directoryURL: URL) -> Int64 {
+        let fm = FileManager.default
+        let keys: Set<URLResourceKey> = [
+            .isRegularFileKey,
+            .fileAllocatedSizeKey,
+            .fileSizeKey
+        ]
+
+        guard let enumerator = fm.enumerator(
+            at: directoryURL,
+            includingPropertiesForKeys: Array(keys),
+            options: [.skipsHiddenFiles],
+            errorHandler: nil
+        ) else {
+            return 0
+        }
+
+        var total: Int64 = 0
+        for case let fileURL as URL in enumerator {
+            guard let values = try? fileURL.resourceValues(forKeys: keys) else { continue }
+            guard values.isRegularFile == true else { continue }
+
+            if let allocated = values.fileAllocatedSize {
+                total += Int64(allocated)
+            } else if let size = values.fileSize {
+                total += Int64(size)
+            }
+        }
+        return total
+    }
 }

@@ -22,11 +22,27 @@ struct GraphCounts: Equatable, Sendable {
     let links: Int
     let notes: Int
     let images: Int
+    let attachments: Int
+    let attachmentBytes: Int64
 
-    static let zero = GraphCounts(entities: 0, attributes: 0, links: 0, notes: 0, images: 0)
+    static let zero = GraphCounts(
+        entities: 0,
+        attributes: 0,
+        links: 0,
+        notes: 0,
+        images: 0,
+        attachments: 0,
+        attachmentBytes: 0
+    )
 
     var isEmpty: Bool {
-        entities == 0 && attributes == 0 && links == 0 && notes == 0 && images == 0
+        entities == 0
+            && attributes == 0
+            && links == 0
+            && notes == 0
+            && images == 0
+            && attachments == 0
+            && attachmentBytes == 0
     }
 }
 
@@ -62,12 +78,18 @@ final class GraphStatsService {
             FetchDescriptor<MetaAttribute>(predicate: #Predicate { $0.imageData != nil })
         )
 
+        // Attachments: count is cheap, bytes require a small fetch to sum byteCount.
+        let attachments = try context.fetchCount(FetchDescriptor<MetaAttachment>())
+        let attachmentBytes = try totalAttachmentBytes()
+
         return GraphCounts(
             entities: entities,
             attributes: attributes,
             links: links,
             notes: entityNotes + attributeNotes + linkNotes,
-            images: entityImages + attributeImages
+            images: entityImages + attributeImages,
+            attachments: attachments,
+            attachmentBytes: attachmentBytes
         )
     }
 
@@ -101,12 +123,19 @@ final class GraphStatsService {
             FetchDescriptor<MetaAttribute>(predicate: attributeImageDataPredicate(for: graphID))
         )
 
+        let attachments = try context.fetchCount(
+            FetchDescriptor<MetaAttachment>(predicate: attachmentGraphPredicate(for: graphID))
+        )
+        let attachmentBytes = try attachmentBytes(for: graphID)
+
         return GraphCounts(
             entities: entities,
             attributes: attributes,
             links: links,
             notes: entityNotes + attributeNotes + linkNotes,
-            images: entityImages + attributeImages
+            images: entityImages + attributeImages,
+            attachments: attachments,
+            attachmentBytes: attachmentBytes
         )
     }
 
@@ -131,6 +160,13 @@ final class GraphStatsService {
             return #Predicate<MetaLink> { $0.graphID == graphID }
         }
         return #Predicate<MetaLink> { $0.graphID == nil }
+    }
+
+    private func attachmentGraphPredicate(for graphID: UUID?) -> Predicate<MetaAttachment> {
+        if let graphID {
+            return #Predicate<MetaAttachment> { $0.graphID == graphID }
+        }
+        return #Predicate<MetaAttachment> { $0.graphID == nil }
     }
 
     // MARK: - Notes predicates
@@ -170,5 +206,27 @@ final class GraphStatsService {
             return #Predicate<MetaAttribute> { $0.graphID == graphID && $0.imageData != nil }
         }
         return #Predicate<MetaAttribute> { $0.graphID == nil && $0.imageData != nil }
+    }
+
+    // MARK: - Attachment bytes
+
+    private func totalAttachmentBytes() throws -> Int64 {
+        let items = try context.fetch(FetchDescriptor<MetaAttachment>())
+        var total: Int64 = 0
+        for a in items {
+            total += Int64(a.byteCount)
+        }
+        return total
+    }
+
+    private func attachmentBytes(for graphID: UUID?) throws -> Int64 {
+        let items = try context.fetch(
+            FetchDescriptor<MetaAttachment>(predicate: attachmentGraphPredicate(for: graphID))
+        )
+        var total: Int64 = 0
+        for a in items {
+            total += Int64(a.byteCount)
+        }
+        return total
     }
 }

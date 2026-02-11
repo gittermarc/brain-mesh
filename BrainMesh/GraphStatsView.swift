@@ -5,6 +5,7 @@
 //  Created by Marc Fechner on 18.12.25.
 //
 
+import Foundation
 import SwiftUI
 import SwiftData
 
@@ -110,6 +111,8 @@ struct GraphStatsView: View {
                 StatsRow(icon: "link", label: "Links", value: total?.links)
                 StatsRow(icon: "note.text", label: "Notizen", value: total?.notes)
                 StatsRow(icon: "photo", label: "Bilder", value: total?.images)
+                StatsRow(icon: "paperclip", label: "Anhänge", value: total?.attachments)
+                StatsRowText(icon: "externaldrive", label: "Anhänge Größe", value: formatBytes(total?.attachmentBytes))
             }
             .padding(.vertical, 6)
         }
@@ -215,8 +218,17 @@ private struct GraphStatsCompact: View {
             StatsRow(icon: "link", label: "Links", value: counts?.links)
             StatsRow(icon: "note.text", label: "Notizen", value: counts?.notes)
             StatsRow(icon: "photo", label: "Bilder", value: counts?.images)
+            StatsRow(icon: "paperclip", label: "Anhänge", value: counts?.attachments)
+            StatsRowText(icon: "externaldrive", label: "Anhänge Größe", value: formatBytes(counts?.attachmentBytes))
         }
     }
+}
+
+private func formatBytes(_ bytes: Int64?) -> String? {
+    guard let bytes else { return nil }
+    let formatter = ByteCountFormatter()
+    formatter.countStyle = .file
+    return formatter.string(fromByteCount: bytes)
 }
 
 private struct StatsRow: View {
@@ -233,6 +245,31 @@ private struct StatsRow: View {
             Spacer()
             if let value {
                 Text("\(value)")
+                    .fontWeight(.semibold)
+                    .monospacedDigit()
+            } else {
+                Text("—")
+                    .fontWeight(.semibold)
+                    .foregroundStyle(.secondary)
+            }
+        }
+    }
+}
+
+private struct StatsRowText: View {
+    let icon: String
+    let label: String
+    let value: String?
+
+    var body: some View {
+        HStack {
+            Image(systemName: icon)
+                .frame(width: 22)
+                .foregroundStyle(.secondary)
+            Text(label)
+            Spacer()
+            if let value {
+                Text(value)
                     .fontWeight(.semibold)
                     .monospacedDigit()
             } else {

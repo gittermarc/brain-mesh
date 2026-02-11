@@ -5,6 +5,7 @@
 //  Created by Marc Fechner on 10.02.26.
 //
 
+import Foundation
 import SwiftUI
 import SwiftData
 
@@ -15,6 +16,9 @@ struct SettingsView: View {
 
     @State private var isRebuildingImageCache: Bool = false
     @State private var isClearingAttachmentCache: Bool = false
+
+    @State private var imageCacheSizeText: String = "—"
+    @State private var attachmentCacheSizeText: String = "—"
 
     @State private var alertState: AlertState? = nil
 
@@ -43,57 +47,73 @@ struct SettingsView: View {
             }
 
             Section("Wartung") {
-                Button {
-                    Task { @MainActor in
-                        guard isRebuildingImageCache == false else { return }
-                        isRebuildingImageCache = true
-                        await ImageHydrator.forceRebuild(using: modelContext)
-                        isRebuildingImageCache = false
-                        alertState = AlertState(
-                            title: "Bildcache aktualisiert",
-                            message: "Der lokale Bildcache wurde neu aufgebaut. Wenn du gerade Bilder geändert hast, sollte alles sofort korrekt angezeigt werden."
-                        )
-                    }
-                } label: {
-                    HStack {
-                        Label("Bildcache neu aufbauen", systemImage: "arrow.clockwise")
-                        Spacer()
-                        if isRebuildingImageCache {
-                            ProgressView()
-                        }
-                    }
-                }
-                .disabled(isRebuildingImageCache)
-
-                Button {
-                    Task { @MainActor in
-                        guard isClearingAttachmentCache == false else { return }
-                        isClearingAttachmentCache = true
-                        defer { isClearingAttachmentCache = false }
-
-                        do {
-                            try AttachmentStore.clearCache()
+                VStack(alignment: .leading, spacing: 4) {
+                    Button {
+                        Task { @MainActor in
+                            guard isRebuildingImageCache == false else { return }
+                            isRebuildingImageCache = true
+                            await ImageHydrator.forceRebuild(using: modelContext)
+                            isRebuildingImageCache = false
+                            refreshCacheSizes()
                             alertState = AlertState(
-                                title: "Anhänge-Cache bereinigt",
-                                message: "Der lokale Anhänge-Cache wurde gelöscht. Deine Anhänge bleiben in der Datenbank und werden bei Bedarf wieder lokal für die Vorschau erstellt."
-                            )
-                        } catch {
-                            alertState = AlertState(
-                                title: "Anhänge-Cache",
-                                message: "Der Cache konnte nicht gelöscht werden: \(error.localizedDescription)"
+                                title: "Bildcache aktualisiert",
+                                message: "Der lokale Bildcache wurde neu aufgebaut. Wenn du gerade Bilder geändert hast, sollte alles sofort korrekt angezeigt werden."
                             )
                         }
-                    }
-                } label: {
-                    HStack {
-                        Label("Anhänge-Cache bereinigen", systemImage: "paperclip")
-                        Spacer()
-                        if isClearingAttachmentCache {
-                            ProgressView()
+                    } label: {
+                        HStack {
+                            Label("Bildcache neu aufbauen", systemImage: "arrow.clockwise")
+                            Spacer()
+                            if isRebuildingImageCache {
+                                ProgressView()
+                            }
                         }
                     }
+                    .disabled(isRebuildingImageCache)
+
+                    Text("Aktuell: \(imageCacheSizeText)")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .padding(.leading, 30)
                 }
-                .disabled(isClearingAttachmentCache)
+
+                VStack(alignment: .leading, spacing: 4) {
+                    Button {
+                        Task { @MainActor in
+                            guard isClearingAttachmentCache == false else { return }
+                            isClearingAttachmentCache = true
+                            defer { isClearingAttachmentCache = false }
+
+                            do {
+                                try AttachmentStore.clearCache()
+                                refreshCacheSizes()
+                                alertState = AlertState(
+                                    title: "Anhänge-Cache bereinigt",
+                                    message: "Der lokale Anhänge-Cache wurde gelöscht. Deine Anhänge bleiben in der Datenbank und werden bei Bedarf wieder lokal für die Vorschau erstellt."
+                                )
+                            } catch {
+                                alertState = AlertState(
+                                    title: "Anhänge-Cache",
+                                    message: "Der Cache konnte nicht gelöscht werden: \(error.localizedDescription)"
+                                )
+                            }
+                        }
+                    } label: {
+                        HStack {
+                            Label("Anhänge-Cache bereinigen", systemImage: "paperclip")
+                            Spacer()
+                            if isClearingAttachmentCache {
+                                ProgressView()
+                            }
+                        }
+                    }
+                    .disabled(isClearingAttachmentCache)
+
+                    Text("Aktuell: \(attachmentCacheSizeText)")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .padding(.leading, 30)
+                }
             }
 
             Section("Darstellung") {
@@ -111,6 +131,9 @@ struct SettingsView: View {
         }
         .navigationTitle("Einstellungen")
         .navigationBarTitleDisplayMode(.inline)
+        .task {
+            refreshCacheSizes()
+        }
         .alert(item: $alertState) { state in
             Alert(
                 title: Text(state.title),
@@ -121,6 +144,24 @@ struct SettingsView: View {
         .toolbar {
             ToolbarItem(placement: .topBarTrailing) {
                 Button("Fertig") { dismiss() }
+            }
+        }
+    }
+
+    private func refreshCacheSizes() {
+        Task.detached(priority: .utility) {
+            let formatter = ByteCountFormatter()
+            formatter.countStyle = .file
+
+            let imageBytes = (try? ImageStore.cacheSizeBytes()) ?? 0
+            let attachmentBytes = (try? AttachmentStore.cacheSizeBytes()) ?? 0
+
+            let imageText = formatter.string(fromByteCount: imageBytes)
+            let attachmentText = formatter.string(fromByteCount: attachmentBytes)
+
+            await MainActor.run {
+                imageCacheSizeText = imageText
+                attachmentCacheSizeText = attachmentText
             }
         }
     }
