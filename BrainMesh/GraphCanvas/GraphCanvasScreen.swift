@@ -78,6 +78,20 @@ struct GraphCanvasScreen: View {
     @State var pinned: Set<NodeKey> = []
     @State var selection: NodeKey? = nil
 
+    // ✅ Derived render state (cached)
+    // Previously computed inside `body` on every re-render.
+    // During physics ticks, `positions/velocities` change frequently which triggers many re-renders.
+    // Caching keeps the per-frame work minimal.
+    @State private var drawEdgesCache: [GraphEdge] = []
+    @State private var lensCache: LensContext = LensContext.build(
+        enabled: false,
+        hideNonRelevant: false,
+        depth: 2,
+        selection: nil,
+        edges: []
+    )
+    @State private var physicsRelevantCache: Set<NodeKey>? = nil
+
     // ✅ Degree cap (Link edges) + “more”
     // NOTE: Must not be `private` because helpers live in separate extension files.
     let degreeCap: Int = 12
@@ -101,10 +115,9 @@ struct GraphCanvasScreen: View {
     @State var selectedEntity: MetaEntity?
     @State var selectedAttribute: MetaAttribute?
 
-    var body: some View {
-
-        // ✅ Nodes-only Default + Spotlight edges (nur direct selection edges)
-        let drawEdges = edgesForDisplay()
+    @MainActor
+    private func recomputeDerivedState() {
+        let newDrawEdges = edgesForDisplay()
 
         // ✅ Auto-Spotlight (erzwingt hideNonRelevant=true, depth=1 sobald selection != nil)
         let autoSpotlight = (selection != nil)
@@ -112,17 +125,23 @@ struct GraphCanvasScreen: View {
         let effectiveLensHide = autoSpotlight ? true : lensHideNonRelevant
         let effectiveLensDepth = autoSpotlight ? 1 : lensDepth
 
-        let lens = LensContext.build(
+        let newLens = LensContext.build(
             enabled: effectiveLensEnabled,
             hideNonRelevant: effectiveLensHide,
             depth: effectiveLensDepth,
             selection: selection,
-            edges: drawEdges
+            edges: newDrawEdges
         )
 
-        // ✅ Physik-Relevanz: im Spotlight nur auf Selection+Nachbarn simulieren (damit Hidden-Nodes nicht “mitdrücken”)
-        let physicsRelevant: Set<NodeKey>? = (autoSpotlight ? lens.relevant : nil)
+        // ✅ Physik-Relevanz: im Spotlight nur auf Selection+Nachbarn simulieren
+        let newPhysicsRelevant: Set<NodeKey>? = (autoSpotlight ? newLens.relevant : nil)
 
+        if drawEdgesCache != newDrawEdges { drawEdgesCache = newDrawEdges }
+        if lensCache != newLens { lensCache = newLens }
+        if physicsRelevantCache != newPhysicsRelevant { physicsRelevantCache = newPhysicsRelevant }
+    }
+
+    var body: some View {
         NavigationStack {
             ZStack {
                 // Canvas / Graph
@@ -134,13 +153,13 @@ struct GraphCanvasScreen: View {
                     GraphCanvasView(
                         nodes: nodes,
                         iconSymbolCache: iconSymbolCache,
-                        drawEdges: drawEdges,
+                        drawEdges: drawEdgesCache,
                         physicsEdges: edges,
                         directedEdgeNotes: directedEdgeNotes,
-                        lens: lens,
+                        lens: lensCache,
                         workMode: workMode,
                         collisionStrength: CGFloat(collisionStrength),
-                        physicsRelevant: physicsRelevant,
+                        physicsRelevant: physicsRelevantCache,
                         selectedImagePath: selectedImagePath(),
                         onTapSelectedThumbnail: {
                             if let img = cachedFullImage {
@@ -169,7 +188,7 @@ struct GraphCanvasScreen: View {
 
                 loadingChipOverlay
                 sideStatusOverlay
-                miniMapOverlay(drawEdges: drawEdges)
+                miniMapOverlay(drawEdges: drawEdgesCache)
 
                 // Action chip for selection
                 if let key = selection, let selected = nodeForKey(key) {
@@ -307,12 +326,25 @@ struct GraphCanvasScreen: View {
         }
         .onChange(of: pan) { _, _ in pulseMiniMap() }
         .onChange(of: scale) { _, _ in pulseMiniMap() }
-        .onAppear { prefetchSelectedFullImage() }
+        .onAppear {
+            prefetchSelectedFullImage()
+            recomputeDerivedState()
+        }
+
+        // ✅ Derived state updates (only when its true inputs change)
+        .onChange(of: edges) { _, _ in recomputeDerivedState() }
+        .onChange(of: nodes) { _, _ in recomputeDerivedState() }
+        .onChange(of: labelCache) { _, _ in recomputeDerivedState() }
+        .onChange(of: showAllLinksForSelection) { _, _ in recomputeDerivedState() }
+        .onChange(of: lensEnabled) { _, _ in recomputeDerivedState() }
+        .onChange(of: lensHideNonRelevant) { _, _ in recomputeDerivedState() }
+        .onChange(of: lensDepth) { _, _ in recomputeDerivedState() }
 
         // ✅ Selection change: reset “more”
         .onChange(of: selection) { _, _ in
             showAllLinksForSelection = false
             prefetchSelectedFullImage()
+            recomputeDerivedState()
         }
 
         .onChange(of: selectedImagePathValue) { _, _ in prefetchSelectedFullImage() }
