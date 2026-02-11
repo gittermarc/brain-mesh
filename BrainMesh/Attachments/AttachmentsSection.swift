@@ -21,6 +21,7 @@ struct AttachmentsSection: View {
 
     @State var isImportingFile = false
     @State var isPickingVideo = false
+    @State var videoPlayback: VideoPlaybackRequest? = nil
     @State var activeSheet: ActiveSheet? = nil
     @State var pendingSheet: ActiveSheet? = nil
     @State var requestGeneration: Int = 0
@@ -117,6 +118,10 @@ struct AttachmentsSection: View {
                 }
             }
             .frame(width: 0, height: 0)
+        )
+        .background(
+            VideoPlaybackPresenter(request: $videoPlayback)
+                .frame(width: 0, height: 0)
         )
         .alert("Anhang konnte nicht hinzugefügt werden", isPresented: Binding(
             get: { errorMessage != nil },

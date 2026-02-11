@@ -68,6 +68,33 @@ extension AttachmentsSection {
         }
     }
 
+    func requestPlayVideo(_ request: VideoPlaybackRequest) {
+        Task { @MainActor in
+            if videoPlayback?.id == request.id { return }
+
+            requestGeneration += 1
+            let gen = requestGeneration
+
+            await waitForPresentationSlot()
+
+            guard requestGeneration == gen else { return }
+
+            // Avoid fighting UIKit: if something else is already presented, keep this request and let the presenter retry.
+            videoPlayback = request
+
+            // Watchdog: same pattern as sheets. If the first attempt gets dropped, re-assert once.
+            Task { @MainActor in
+                try? await Task.sleep(nanoseconds: 350_000_000)
+                guard requestGeneration == gen else { return }
+                if videoPlayback == nil {
+                    await waitForPresentationSlot()
+                    guard requestGeneration == gen else { return }
+                    videoPlayback = request
+                }
+            }
+        }
+    }
+
     @MainActor
     func handleSheetDismiss() {
         guard let next = pendingSheet else { return }

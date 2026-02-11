@@ -18,6 +18,15 @@ extension AttachmentsSection {
             return
         }
 
+        // Videos are presented via a dedicated UIKit-backed presenter.
+        // This avoids flaky SwiftUI sheet transitions when AVPlayer/VideoPlayer is involved.
+        if AttachmentStore.isVideo(contentTypeIdentifier: attachment.contentTypeIdentifier)
+            || ["mov", "mp4", "m4v"].contains(attachment.fileExtension.lowercased()) {
+            try? modelContext.save()
+            requestPlayVideo(VideoPlaybackRequest(url: url, title: attachment.title.isEmpty ? attachment.originalFilename : attachment.title))
+            return
+        }
+
         // Persist localPath if we had to materialize the cache from synced data.
         try? modelContext.save()
         requestPresent(.preview(PreviewState(
