@@ -23,50 +23,99 @@ struct PickedVideo: Sendable {
     let fileExtension: String
 }
 
-/// A small wrapper around `PHPickerViewController` to reliably pick a video from the photo library.
+/// Presents a `PHPickerViewController` (videos only) from an always-on host controller.
 ///
-/// Why not PhotosPicker?
-/// - In some view hierarchies (especially inside `Menu` / `Form` / `List`) PhotosPicker can fail to present and logs
-///   `_UIReparentingView` warnings. This wrapper avoids that class of issues.
-struct VideoPicker: UIViewControllerRepresentable {
+/// Why this exists:
+/// - Presenting a SwiftUI `.sheet` from inside a `Menu`/`Form`/`List` can be flaky ("presentation in progress").
+/// - This presenter behaves like `.fileImporter`: a modifier-ish presenter that waits for SwiftUI to settle.
+///
+/// Usage: embed in `.background(...)` and drive via `isPresented`.
+struct VideoPickerPresenter: UIViewControllerRepresentable {
 
     typealias Completion = (Result<PickedVideo, Error>) -> Void
+
+    @Binding var isPresented: Bool
     let completion: Completion
 
-    func makeUIViewController(context: Context) -> PHPickerViewController {
-        var config = PHPickerConfiguration(photoLibrary: .shared())
-        config.filter = .videos
-        config.selectionLimit = 1
-
-        let vc = PHPickerViewController(configuration: config)
-        vc.delegate = context.coordinator
+    func makeUIViewController(context: Context) -> UIViewController {
+        let vc = UIViewController()
+        vc.view.backgroundColor = .clear
         return vc
     }
 
-    func updateUIViewController(_ uiViewController: PHPickerViewController, context: Context) {}
+    func updateUIViewController(_ uiViewController: UIViewController, context: Context) {
+        context.coordinator.hostViewController = uiViewController
+
+        if isPresented {
+            context.coordinator.presentIfNeeded()
+        } else {
+            context.coordinator.dismissIfNeeded()
+        }
+    }
 
     func makeCoordinator() -> Coordinator {
-        Coordinator(completion: completion)
+        Coordinator(isPresented: $isPresented, completion: completion)
     }
 
     final class Coordinator: NSObject, PHPickerViewControllerDelegate {
+        private let isPresented: Binding<Bool>
         private let completion: Completion
 
-        init(completion: @escaping Completion) {
+        weak var hostViewController: UIViewController?
+        private var isPresentingPicker = false
+        private weak var pickerVC: PHPickerViewController?
+
+        init(isPresented: Binding<Bool>, completion: @escaping Completion) {
+            self.isPresented = isPresented
             self.completion = completion
         }
 
+        func presentIfNeeded() {
+            guard !isPresentingPicker else { return }
+            guard let host = hostViewController else { return }
+            guard host.presentedViewController == nil else { return }
+
+            isPresentingPicker = true
+
+            var config = PHPickerConfiguration(photoLibrary: .shared())
+            config.filter = .videos
+            config.selectionLimit = 1
+
+            let picker = PHPickerViewController(configuration: config)
+            picker.delegate = self
+            pickerVC = picker
+
+            host.present(picker, animated: true)
+        }
+
+        func dismissIfNeeded() {
+            guard isPresentingPicker else { return }
+            guard let picker = pickerVC else {
+                isPresentingPicker = false
+                return
+            }
+            picker.dismiss(animated: true)
+            pickerVC = nil
+            isPresentingPicker = false
+        }
+
         func picker(_ picker: PHPickerViewController, didFinishPicking results: [PHPickerResult]) {
+            // Always close the UI first; processing happens afterwards.
+            picker.dismiss(animated: true)
+            pickerVC = nil
+            isPresentingPicker = false
+            DispatchQueue.main.async {
+                self.isPresented.wrappedValue = false
+            }
+
             guard let first = results.first else {
                 completion(.failure(VideoPickerError.cancelled))
-                picker.dismiss(animated: true)
                 return
             }
 
             let provider = first.itemProvider
             guard provider.hasItemConformingToTypeIdentifier(UTType.movie.identifier) || provider.hasItemConformingToTypeIdentifier(UTType.video.identifier) else {
                 completion(.failure(VideoPickerError.unsupported))
-                picker.dismiss(animated: true)
                 return
             }
 
@@ -75,7 +124,6 @@ struct VideoPicker: UIViewControllerRepresentable {
                 if let error {
                     DispatchQueue.main.async {
                         self.completion(.failure(error))
-                        picker.dismiss(animated: true)
                     }
                     return
                 }
@@ -83,7 +131,6 @@ struct VideoPicker: UIViewControllerRepresentable {
                 guard let url else {
                     DispatchQueue.main.async {
                         self.completion(.failure(VideoPickerError.loadFailed))
-                        picker.dismiss(animated: true)
                     }
                     return
                 }
@@ -102,7 +149,6 @@ struct VideoPicker: UIViewControllerRepresentable {
                 }
 
                 do {
-                    // Remove any potential leftover.
                     if FileManager.default.fileExists(atPath: tmpURL.path) {
                         try FileManager.default.removeItem(at: tmpURL)
                     }
@@ -115,12 +161,10 @@ struct VideoPicker: UIViewControllerRepresentable {
                             contentTypeIdentifier: preferredTypeID,
                             fileExtension: ext
                         )))
-                        picker.dismiss(animated: true)
                     }
                 } catch {
                     DispatchQueue.main.async {
                         self.completion(.failure(error))
-                        picker.dismiss(animated: true)
                     }
                 }
             }
@@ -140,8 +184,7 @@ struct VideoPicker: UIViewControllerRepresentable {
             if let t = UTType(typeIdentifier), let ext = t.preferredFilenameExtension {
                 return ext
             }
-            let ext = fallbackURL.pathExtension
-            return ext
+            return fallbackURL.pathExtension
         }
     }
 }

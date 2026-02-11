@@ -76,7 +76,9 @@ extension AttachmentsSection {
 
     @MainActor
     func handlePickedVideo(_ result: Result<PickedVideo, Error>) async {
-        defer { dismissVideoPickerIfNeeded() }
+        // Picker presentation is controlled by `isPickingVideo` (VideoPickerPresenter).
+        // Ensure we reset it even if something went sideways.
+        isPickingVideo = false
 
         switch result {
         case .success(let picked):

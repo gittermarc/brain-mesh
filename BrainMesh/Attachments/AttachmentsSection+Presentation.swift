@@ -11,10 +11,11 @@ extension AttachmentsSection {
 
     // MARK: - Presentation gating
 
-    @MainActor
-    func dismissVideoPickerIfNeeded() {
-        if case .videoPicker = activeSheet {
-            activeSheet = nil
+    func requestVideoPick() {
+        Task { @MainActor in
+            if isPickingVideo { return }
+            await waitForPresentationSlot()
+            isPickingVideo = true
         }
     }
 

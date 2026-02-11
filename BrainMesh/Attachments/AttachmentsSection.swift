@@ -20,6 +20,7 @@ struct AttachmentsSection: View {
     @Query var attachments: [MetaAttachment]
 
     @State var isImportingFile = false
+    @State var isPickingVideo = false
     @State var activeSheet: ActiveSheet? = nil
     @State var pendingSheet: ActiveSheet? = nil
     @State var requestGeneration: Int = 0
@@ -71,7 +72,7 @@ struct AttachmentsSection: View {
                 }
 
                 Button {
-                    requestPresent(.videoPicker)
+                    requestVideoPick()
                 } label: {
                     Label("Video aus Fotos", systemImage: "video")
                 }
@@ -107,14 +108,16 @@ struct AttachmentsSection: View {
                     contentTypeIdentifier: state.contentTypeIdentifier,
                     fileExtension: state.fileExtension
                 )
-            case .videoPicker:
-                VideoPicker { result in
-                    Task { @MainActor in
-                        await handlePickedVideo(result)
-                    }
-                }
             }
         }
+        .background(
+            VideoPickerPresenter(isPresented: $isPickingVideo) { result in
+                Task { @MainActor in
+                    await handlePickedVideo(result)
+                }
+            }
+            .frame(width: 0, height: 0)
+        )
         .alert("Anhang konnte nicht hinzugefügt werden", isPresented: Binding(
             get: { errorMessage != nil },
             set: { if !$0 { errorMessage = nil } }
@@ -137,14 +140,11 @@ struct AttachmentsSection: View {
 
     enum ActiveSheet: Identifiable {
         case preview(PreviewState)
-        case videoPicker
 
         var id: String {
             switch self {
             case .preview(let p):
                 return "preview-\(p.id)"
-            case .videoPicker:
-                return "videoPicker"
             }
         }
     }
