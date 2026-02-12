@@ -169,7 +169,7 @@ struct AttachmentCardRow: View {
                 Text(" · ")
             }
 
-            Text(attachment.createdAt, style: .relative)
+            Text(attachment.createdAt, format: .dateTime.day(.twoDigits).month(.twoDigits).year().hour().minute())
         }
         .font(.footnote)
         .foregroundStyle(.secondary)
