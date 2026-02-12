@@ -7,10 +7,24 @@
 
 import SwiftUI
 
-struct DetailSectionHeader: View {
+struct DetailSectionHeader<Trailing: View>: View {
     let title: String
     let systemImage: String
     var subtitle: String? = nil
+
+    @ViewBuilder var trailing: () -> Trailing
+
+    init(
+        title: String,
+        systemImage: String,
+        subtitle: String? = nil,
+        @ViewBuilder trailing: @escaping () -> Trailing = { EmptyView() }
+    ) {
+        self.title = title
+        self.systemImage = systemImage
+        self.subtitle = subtitle
+        self.trailing = trailing
+    }
 
     var body: some View {
         HStack(alignment: .firstTextBaseline, spacing: 10) {
@@ -33,6 +47,8 @@ struct DetailSectionHeader: View {
             }
 
             Spacer(minLength: 0)
+
+            trailing()
         }
         .padding(.top, 6)
         .padding(.bottom, 2)
