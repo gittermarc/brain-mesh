@@ -338,17 +338,22 @@ private struct PhotoGalleryThumbnailTile: View {
 
     @State private var thumbnail: UIImage? = nil
 
+    /// One disk-cached thumbnail per attachment id.
+    /// Keep this reasonably large so it still looks crisp in the full browser grid.
+    private let thumbRequestSide: CGFloat = 520
+
     var body: some View {
         ZStack {
             RoundedRectangle(cornerRadius: 16)
                 .fill(.secondary.opacity(0.10))
 
             if let thumbnail {
-                Image(uiImage: thumbnail)
-                    .resizable()
-                    .scaledToFill()
-                    .frame(width: side, height: side)
-                    .clipShape(RoundedRectangle(cornerRadius: 16))
+                PhotoGalleryThumbnailView(
+                    uiImage: thumbnail,
+                    cornerRadius: 16,
+                    contentPadding: 6
+                )
+                .frame(width: side, height: side)
             } else {
                 VStack(spacing: 6) {
                     ProgressView()
@@ -379,7 +384,7 @@ private struct PhotoGalleryThumbnailTile: View {
         guard let url = AttachmentStore.materializeFileURLForThumbnailIfNeeded(for: attachment) else { return }
 
         let scale = UIScreen.main.scale
-        let requestSize = CGSize(width: side * 2, height: side * 2)
+        let requestSize = CGSize(width: thumbRequestSide, height: thumbRequestSide)
 
         let img = await AttachmentThumbnailStore.shared.thumbnail(
             attachmentID: attachment.id,

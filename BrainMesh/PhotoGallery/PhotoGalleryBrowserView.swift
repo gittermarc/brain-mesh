@@ -32,6 +32,10 @@ struct PhotoGalleryBrowserView: View {
 
     private let maxSelectionCount: Int = 24
 
+    /// One disk-cached thumbnail per attachment id.
+    /// Keep this reasonably large so it still looks crisp in the full browser grid.
+    private let thumbRequestSide: CGFloat = 520
+
     init(
         ownerKind: NodeKind,
         ownerID: UUID,
@@ -70,7 +74,7 @@ struct PhotoGalleryBrowserView: View {
                 ForEach(galleryImages) { att in
                     PhotoGalleryGridTile(
                         attachment: att,
-                        side: tileSide,
+                        thumbRequestSide: thumbRequestSide,
                         onTap: {
                             viewerRequest = PhotoGalleryViewerRequest(startAttachmentID: att.id)
                         },
@@ -155,10 +159,6 @@ struct PhotoGalleryBrowserView: View {
         [GridItem(.adaptive(minimum: 110, maximum: 180), spacing: 12)]
     }
 
-    private var tileSide: CGFloat {
-        130
-    }
-
     private var addTile: some View {
         ZStack {
             RoundedRectangle(cornerRadius: 18)
@@ -172,7 +172,7 @@ struct PhotoGalleryBrowserView: View {
             }
             .foregroundStyle(.secondary)
         }
-        .frame(height: tileSide)
+        .aspectRatio(1, contentMode: .fit)
         .overlay(
             RoundedRectangle(cornerRadius: 18)
                 .stroke(.secondary.opacity(0.18))
@@ -280,7 +280,7 @@ struct PhotoGalleryBrowserView: View {
 
 private struct PhotoGalleryGridTile: View {
     let attachment: MetaAttachment
-    let side: CGFloat
+    let thumbRequestSide: CGFloat
     let onTap: () -> Void
     let onSetAsMain: () -> Void
     let onDelete: () -> Void
@@ -293,11 +293,11 @@ private struct PhotoGalleryGridTile: View {
                 .fill(.secondary.opacity(0.10))
 
             if let thumbnail {
-                Image(uiImage: thumbnail)
-                    .resizable()
-                    .scaledToFill()
-                    .frame(height: side)
-                    .clipShape(RoundedRectangle(cornerRadius: 18))
+                PhotoGalleryThumbnailView(
+                    uiImage: thumbnail,
+                    cornerRadius: 18,
+                    contentPadding: 10
+                )
             } else {
                 VStack(spacing: 8) {
                     ProgressView()
@@ -306,7 +306,7 @@ private struct PhotoGalleryGridTile: View {
                         .font(.system(size: 16, weight: .semibold))
                         .foregroundStyle(.secondary)
                 }
-                .frame(height: side)
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
             }
 
             Menu {
@@ -340,7 +340,7 @@ private struct PhotoGalleryGridTile: View {
                     .padding(10)
             }
         }
-        .frame(height: side)
+        .aspectRatio(1, contentMode: .fit)
         .overlay(
             RoundedRectangle(cornerRadius: 18)
                 .stroke(.secondary.opacity(0.18))
@@ -358,7 +358,7 @@ private struct PhotoGalleryGridTile: View {
         guard let url = AttachmentStore.materializeFileURLForThumbnailIfNeeded(for: attachment) else { return }
 
         let scale = UIScreen.main.scale
-        let requestSize = CGSize(width: side * 2, height: side * 2)
+        let requestSize = CGSize(width: thumbRequestSide, height: thumbRequestSide)
 
         let img = await AttachmentThumbnailStore.shared.thumbnail(
             attachmentID: attachment.id,
