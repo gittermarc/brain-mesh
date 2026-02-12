@@ -64,6 +64,16 @@ struct EntityDetailView: View {
                 stableID: entity.id
             )
 
+            PhotoGallerySection(
+                ownerKind: .entity,
+                ownerID: entity.id,
+                graphID: entity.graphID,
+                mainImageData: $entity.imageData,
+                mainImagePath: $entity.imagePath,
+                mainStableID: entity.id
+            )
+            .id("gallery-entity-\(entity.id.uuidString)")
+
             AttachmentsSection(
                 ownerKind: .entity,
                 ownerID: entity.id,

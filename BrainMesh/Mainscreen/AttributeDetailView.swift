@@ -62,6 +62,16 @@ struct AttributeDetailView: View {
                 stableID: attribute.id
             )
 
+            PhotoGallerySection(
+                ownerKind: .attribute,
+                ownerID: attribute.id,
+                graphID: attribute.graphID,
+                mainImageData: $attribute.imageData,
+                mainImagePath: $attribute.imagePath,
+                mainStableID: attribute.id
+            )
+            .id("gallery-attribute-\(attribute.id.uuidString)")
+
             AttachmentsSection(
                 ownerKind: .attribute,
                 ownerID: attribute.id,

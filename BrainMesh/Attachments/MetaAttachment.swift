@@ -8,6 +8,18 @@
 import Foundation
 import SwiftData
 
+/// Classifies attachment usage in the app.
+///
+/// - file: Generic file attachment (PDF, doc, etc.).
+/// - video: Video attachment (picked from Photos).
+/// - galleryImage: Additional images shown only in Entity/Attribute detail galleries.
+///   Important: These must NOT be used in the graph.
+enum AttachmentContentKind: Int, Codable, CaseIterable {
+    case file = 0
+    case video = 1
+    case galleryImage = 2
+}
+
 /// File attachments that hang off an entity/attribute.
 ///
 /// Design goals:
@@ -26,6 +38,10 @@ final class MetaAttachment {
     /// Where does this attachment belong?
     var ownerKindRaw: Int = NodeKind.entity.rawValue
     var ownerID: UUID = UUID()
+
+    /// How is this attachment used in the UI?
+    /// Default: `.file`.
+    var contentKindRaw: Int = AttachmentContentKind.file.rawValue
 
     /// Display metadata.
     var title: String = ""
@@ -46,6 +62,7 @@ final class MetaAttachment {
         ownerKind: NodeKind,
         ownerID: UUID,
         graphID: UUID?,
+        contentKind: AttachmentContentKind = .file,
         title: String,
         originalFilename: String,
         contentTypeIdentifier: String,
@@ -61,6 +78,8 @@ final class MetaAttachment {
         self.ownerKindRaw = ownerKind.rawValue
         self.ownerID = ownerID
 
+        self.contentKindRaw = contentKind.rawValue
+
         self.title = title
         self.originalFilename = originalFilename
         self.contentTypeIdentifier = contentTypeIdentifier
@@ -70,5 +89,11 @@ final class MetaAttachment {
         self.localPath = localPath
     }
 
-    var ownerKind: NodeKind { NodeKind(rawValue: ownerKindRaw) ?? .entity }
+    var ownerKind: NodeKind {
+        NodeKind(rawValue: ownerKindRaw) ?? .entity
+    }
+
+    var contentKind: AttachmentContentKind {
+        AttachmentContentKind(rawValue: contentKindRaw) ?? .file
+    }
 }

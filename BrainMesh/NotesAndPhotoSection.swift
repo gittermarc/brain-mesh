@@ -9,7 +9,6 @@ import SwiftUI
 import SwiftData
 import PhotosUI
 import UIKit
-import ImageIO
 
 struct NotesAndPhotoSection: View {
     @Environment(\.modelContext) private var modelContext
@@ -166,13 +165,13 @@ struct NotesAndPhotoSection: View {
             }
 
             // ✅ robustes Decode → verhindert „2266x0 image slot“
-            guard let decoded = decodeImageSafely(from: raw) else {
+            guard let decoded = ImageImportPipeline.decodeImageSafely(from: raw, maxPixelSize: 2200) else {
                 loadError = "Bild konnte nicht dekodiert werden."
                 return
             }
 
             // ✅ CloudKit-freundlich: runter skalieren + stark komprimieren
-            guard let jpeg = prepareJPEGForCloudKit(decoded) else {
+            guard let jpeg = ImageImportPipeline.prepareJPEGForCloudKit(decoded) else {
                 loadError = "JPEG-Erzeugung fehlgeschlagen."
                 return
             }
@@ -199,87 +198,4 @@ struct NotesAndPhotoSection: View {
         }
     }
 
-    // MARK: - Decode + compression
-
-    private func decodeImageSafely(from data: Data) -> UIImage? {
-        let cfData = data as CFData
-        guard let src = CGImageSourceCreateWithData(cfData, nil) else { return nil }
-
-        let options: [CFString: Any] = [
-            kCGImageSourceCreateThumbnailFromImageAlways: true,
-            kCGImageSourceCreateThumbnailWithTransform: true,
-            // Max Pixel, damit wir keine riesen 12MP+ Bilder in RAM ziehen
-            kCGImageSourceThumbnailMaxPixelSize: 2200
-        ]
-
-        guard let cg = CGImageSourceCreateThumbnailAtIndex(src, 0, options as CFDictionary) else { return nil }
-        let ui = UIImage(cgImage: cg)
-
-        // Hard guard gegen „0 Höhe/Weite“
-        if ui.size.width < 1 || ui.size.height < 1 { return nil }
-
-        return ui
-    }
-
-    private func prepareJPEGForCloudKit(_ image: UIImage) -> Data? {
-        // Ziel: deutlich unter 1MB bleiben (CloudKit Record-Limit). Lieber klein als „geht nicht“.
-        // 250–300KB ist meistens safe.
-        let targetBytes = 280_000
-
-        // 1) Resize (maxDimension)
-        var maxDim: CGFloat = 1400
-        var resized = image.resizedToFit(maxDimension: maxDim)
-
-        // 2) Compress iterativ
-        var q: CGFloat = 0.78
-        var data = resized.jpegData(compressionQuality: q)
-
-        func tooBig(_ d: Data?) -> Bool {
-            guard let d else { return true }
-            return d.count > targetBytes
-        }
-
-        // Qualität runter
-        while tooBig(data) && q > 0.38 {
-            q -= 0.08
-            data = resized.jpegData(compressionQuality: q)
-        }
-
-        // Wenn immer noch zu groß: nochmal kleiner skalieren und erneut komprimieren
-        if tooBig(data) {
-            maxDim = 1100
-            resized = resized.resizedToFit(maxDimension: maxDim)
-            q = 0.68
-            data = resized.jpegData(compressionQuality: q)
-
-            while tooBig(data) && q > 0.34 {
-                q -= 0.08
-                data = resized.jpegData(compressionQuality: q)
-            }
-        }
-
-        return data
-    }
-}
-
-private extension UIImage {
-    func resizedToFit(maxDimension: CGFloat) -> UIImage {
-        let w = size.width
-        let h = size.height
-        let maxSide = max(w, h)
-
-        guard maxSide > maxDimension, maxSide > 0, w > 0, h > 0 else { return self }
-
-        let scale = maxDimension / maxSide
-        let newSize = CGSize(width: max(1, w * scale), height: max(1, h * scale))
-
-        let format = UIGraphicsImageRendererFormat()
-        format.scale = 1.0
-        format.opaque = false
-
-        let renderer = UIGraphicsImageRenderer(size: newSize, format: format)
-        return renderer.image { _ in
-            self.draw(in: CGRect(origin: .zero, size: newSize))
-        }
-    }
 }

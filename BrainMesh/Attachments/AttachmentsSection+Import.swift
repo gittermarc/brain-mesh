@@ -51,11 +51,25 @@ extension AttachmentsSection {
 
             let title = url.deletingPathExtension().lastPathComponent
 
+            let inferredKind: AttachmentContentKind
+            if let t = UTType(contentType) {
+                if t.conforms(to: .image) {
+                    inferredKind = .galleryImage
+                } else if t.conforms(to: .movie) || t.conforms(to: .video) {
+                    inferredKind = .video
+                } else {
+                    inferredKind = .file
+                }
+            } else {
+                inferredKind = .file
+            }
+
             let att = MetaAttachment(
                 id: attachmentID,
                 ownerKind: ownerKind,
                 ownerID: ownerID,
                 graphID: graphID,
+                contentKind: inferredKind,
                 title: title,
                 originalFilename: fileName,
                 contentTypeIdentifier: contentType,
@@ -146,6 +160,7 @@ extension AttachmentsSection {
                 ownerKind: ownerKind,
                 ownerID: ownerID,
                 graphID: graphID,
+                contentKind: .video,
                 title: title.isEmpty ? "Video" : title,
                 originalFilename: originalName,
                 contentTypeIdentifier: typeID,

@@ -39,10 +39,11 @@ struct AttachmentsSection: View {
         let kindRaw = ownerKind.rawValue
         let oid = ownerID
         let gid = graphID
+        let galleryRaw = AttachmentContentKind.galleryImage.rawValue
 
         _attachments = Query(
             filter: #Predicate<MetaAttachment> { a in
-                a.ownerKindRaw == kindRaw && a.ownerID == oid && (gid == nil || a.graphID == gid)
+                a.ownerKindRaw == kindRaw && a.ownerID == oid && (gid == nil || a.graphID == gid) && a.contentKindRaw != galleryRaw
             },
             sort: [SortDescriptor(\MetaAttachment.createdAt, order: .reverse)]
         )
