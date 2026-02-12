@@ -19,8 +19,14 @@ struct AddLinkView: View {
     @State private var selectedTarget: NodeRef?
 
     @State private var note: String = ""
+    @State private var createBidirectional: Bool = false
     @State private var showPicker = false
     @State private var showDuplicateAlert = false
+    @State private var duplicateAlertMessage: String = "Diese Verbindung ist schon vorhanden."
+    @State private var showSelfLinkAlert = false
+
+    @State private var showSaveErrorAlert = false
+    @State private var saveErrorMessage: String = ""
 
     var body: some View {
         NavigationStack {
@@ -63,6 +69,10 @@ struct AddLinkView: View {
                     }
                 }
 
+                Section("Optionen") {
+                    Toggle("Bidirektional", isOn: $createBidirectional)
+                }
+
                 Section("Notiz (optional)") {
                     TextField("z.B. Kontext", text: $note, axis: .vertical)
                 }
@@ -80,7 +90,17 @@ struct AddLinkView: View {
             .alert("Link existiert bereits", isPresented: $showDuplicateAlert) {
                 Button("OK", role: .cancel) {}
             } message: {
-                Text("Diese Verbindung ist schon vorhanden.")
+                Text(duplicateAlertMessage)
+            }
+            .alert("Nicht möglich", isPresented: $showSelfLinkAlert) {
+                Button("OK", role: .cancel) {}
+            } message: {
+                Text("Quelle und Ziel dürfen nicht identisch sein.")
+            }
+            .alert("Speichern fehlgeschlagen", isPresented: $showSaveErrorAlert) {
+                Button("OK", role: .cancel) {}
+            } message: {
+                Text(saveErrorMessage)
             }
             .sheet(isPresented: $showPicker) {
                 NodePickerView(kind: targetKind) { picked in
@@ -94,13 +114,18 @@ struct AddLinkView: View {
     private func save() {
         guard let target = selectedTarget else { return }
 
+        if target.kind == source.kind && target.id == source.id {
+            showSelfLinkAlert = true
+            return
+        }
+
         let sKind = source.kind.rawValue
         let sID = source.id
         let tKind = target.kind.rawValue
         let tID = target.id
         let gid = graphID
 
-        let fd = FetchDescriptor<MetaLink>(
+        let forwardFD = FetchDescriptor<MetaLink>(
             predicate: #Predicate { l in
                 l.sourceKindRaw == sKind &&
                 l.sourceID == sID &&
@@ -110,27 +135,80 @@ struct AddLinkView: View {
             }
         )
 
-        if let existing = try? modelContext.fetch(fd), !existing.isEmpty {
-            showDuplicateAlert = true
-            return
+        let forwardExists = ((try? modelContext.fetchCount(forwardFD)) ?? 0) > 0
+
+        var reverseExists = false
+        if createBidirectional {
+            let reverseFD = FetchDescriptor<MetaLink>(
+                predicate: #Predicate { l in
+                    l.sourceKindRaw == tKind &&
+                    l.sourceID == tID &&
+                    l.targetKindRaw == sKind &&
+                    l.targetID == sID &&
+                    (gid == nil || l.graphID == gid)
+                }
+            )
+            reverseExists = ((try? modelContext.fetchCount(reverseFD)) ?? 0) > 0
+        }
+
+        if !createBidirectional {
+            if forwardExists {
+                duplicateAlertMessage = "Diese Verbindung ist schon vorhanden."
+                showDuplicateAlert = true
+                return
+            }
+        } else {
+            if forwardExists && reverseExists {
+                duplicateAlertMessage = "Beide Richtungen existieren bereits."
+                showDuplicateAlert = true
+                return
+            }
         }
 
         let cleaned = note.trimmingCharacters(in: .whitespacesAndNewlines)
         let finalNote = cleaned.isEmpty ? nil : cleaned
 
-        let link = MetaLink(
-            sourceKind: source.kind,
-            sourceID: source.id,
-            sourceLabel: source.label,
-            targetKind: target.kind,
-            targetID: target.id,
-            targetLabel: target.label,
-            note: finalNote,
-            graphID: gid
-        )
+        var inserted: [MetaLink] = []
 
-        modelContext.insert(link)
-        try? modelContext.save()
-        dismiss()
+        if !forwardExists {
+            let link = MetaLink(
+                sourceKind: source.kind,
+                sourceID: source.id,
+                sourceLabel: source.label,
+                targetKind: target.kind,
+                targetID: target.id,
+                targetLabel: target.label,
+                note: finalNote,
+                graphID: gid
+            )
+            modelContext.insert(link)
+            inserted.append(link)
+        }
+
+        if createBidirectional && !reverseExists {
+            let reverse = MetaLink(
+                sourceKind: target.kind,
+                sourceID: target.id,
+                sourceLabel: target.label,
+                targetKind: source.kind,
+                targetID: source.id,
+                targetLabel: source.label,
+                note: finalNote,
+                graphID: gid
+            )
+            modelContext.insert(reverse)
+            inserted.append(reverse)
+        }
+
+        do {
+            try modelContext.save()
+            dismiss()
+        } catch {
+            saveErrorMessage = error.localizedDescription
+            showSaveErrorAlert = true
+            for l in inserted {
+                modelContext.delete(l)
+            }
+        }
     }
 }
