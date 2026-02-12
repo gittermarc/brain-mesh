@@ -64,6 +64,12 @@ struct GraphCanvasView: View {
     @State var physicsTickAccumNanos: UInt64 = 0
     @State var physicsTickMaxNanos: UInt64 = 0
 
+    // MARK: - Idle / Sleep (P0.1 optional)
+    // When the layout settles, we can pause the 30 FPS timer to save CPU/Battery.
+    // Wakes up automatically on interactions / state changes.
+    @State var physicsIdleTicks: Int = 0
+    @State var physicsIsSleeping: Bool = false
+
     private var theme: GraphTheme {
         GraphTheme(settings: appearance.settings.graph)
     }
@@ -95,12 +101,24 @@ struct GraphCanvasView: View {
                 refreshThumbnailCache()
             }
             .onDisappear { stopSimulation() }
+            .onChange(of: nodes.count) { _, _ in
+                wakeSimulationIfNeeded()
+            }
             .onChange(of: cameraCommand?.id) { _, _ in
                 guard let cmd = cameraCommand else { return }
                 applyCameraCommand(cmd, in: size)
                 cameraCommand = nil
             }
-            .onChange(of: selection) { _, _ in refreshThumbnailCache() }
+            .onChange(of: selection) { _, _ in
+                wakeSimulationIfNeeded()
+                refreshThumbnailCache()
+            }
+            .onChange(of: pinned) { _, _ in
+                wakeSimulationIfNeeded()
+            }
+            .onChange(of: draggingKey) { _, _ in
+                wakeSimulationIfNeeded()
+            }
             .onChange(of: selectedImagePath) { _, _ in refreshThumbnailCache() }
         }
     }

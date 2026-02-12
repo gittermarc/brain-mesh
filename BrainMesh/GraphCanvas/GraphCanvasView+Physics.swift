@@ -11,6 +11,9 @@ import os
 extension GraphCanvasView {
     func startSimulation() {
         stopSimulation()
+        // Reset idle state when (re)starting.
+        physicsIdleTicks = 0
+        physicsIsSleeping = false
         timer = Timer.scheduledTimer(withTimeInterval: 1.0/30.0, repeats: true) { _ in
             stepSimulation()
         }
@@ -19,6 +22,14 @@ extension GraphCanvasView {
     func stopSimulation() {
         timer?.invalidate()
         timer = nil
+    }
+
+    func wakeSimulationIfNeeded() {
+        // If we were sleeping (timer stopped), restart. If we're running, just clear idle state.
+        physicsIdleTicks = 0
+        physicsIsSleeping = false
+        guard timer == nil else { return }
+        startSimulation()
     }
 
     private func isFixed(_ key: NodeKey) -> Bool {
@@ -67,12 +78,14 @@ extension GraphCanvasView {
             }
         }
 
-        // repulsion + collisions
+        // repulsion + collisions (pair loop: i < j)
+        // Old: each pair computed twice (i→j and j→i). New: compute once and apply forces symmetrically.
         for i in 0..<simNodes.count {
             let a = simNodes[i].key
-            guard let pa = pos[a], !isFixed(a) else { continue }
+            guard let pa = pos[a] else { continue }
 
-            for j in 0..<simNodes.count where j != i {
+            if (i + 1) >= simNodes.count { continue }
+            for j in (i + 1)..<simNodes.count {
                 let b = simNodes[j].key
                 guard let pb = pos[b] else { continue }
 
@@ -81,15 +94,23 @@ extension GraphCanvasView {
                 let dist2 = max(dx*dx + dy*dy, 40)
                 let dist = sqrt(dist2)
 
+                // Repulsion: equal and opposite forces
                 let f = repulsion / dist2
-                addVelocity(a, dx: dx * f * 0.00002, dy: dy * f * 0.00002, vel: &vel)
+                let rx = dx * f * 0.00002
+                let ry = dy * f * 0.00002
+                addVelocity(a, dx: rx, dy: ry, vel: &vel)
+                addVelocity(b, dx: -rx, dy: -ry, vel: &vel)
 
+                // Collision: push apart when overlapping (also symmetric)
                 let minDist = approxRadius(for: a) + approxRadius(for: b) + collisionPadding
                 if dist < minDist {
                     let overlap = (minDist - dist)
                     let nx = (dist > 0.01) ? (dx / dist) : 1
                     let ny = (dist > 0.01) ? (dy / dist) : 0
-                    addVelocity(a, dx: nx * overlap * collisionStrength, dy: ny * overlap * collisionStrength, vel: &vel)
+                    let cx = nx * overlap * collisionStrength
+                    let cy = ny * overlap * collisionStrength
+                    addVelocity(a, dx: cx, dy: cy, vel: &vel)
+                    addVelocity(b, dx: -cx, dy: -cy, vel: &vel)
                 }
             }
         }
@@ -117,6 +138,7 @@ extension GraphCanvasView {
         }
 
         // integrate
+        var maxSimSpeed: CGFloat = 0
         for n in simNodes {
             let id = n.key
 
@@ -135,6 +157,9 @@ extension GraphCanvasView {
                 v.dy = (v.dy / speed) * maxSpeed
             }
 
+            let clampedSpeed = sqrt(v.dx*v.dx + v.dy*v.dy)
+            if clampedSpeed > maxSimSpeed { maxSimSpeed = clampedSpeed }
+
             var p = pos[id, default: .zero]
             p.x += v.dx
             p.y += v.dy
@@ -145,6 +170,34 @@ extension GraphCanvasView {
 
         positions = pos
         velocities = vel
+
+        // MARK: - Idle / Sleep (P0.1 optional)
+        // Pause the 30 FPS timer once the layout has settled.
+        // We intentionally keep thresholds conservative to avoid stopping too early.
+        if draggingKey == nil {
+            let idleSpeedThreshold: CGFloat = 0.03
+            let idleTicksNeeded: Int = 90  // ~3 seconds at 30 FPS
+
+            if maxSimSpeed < idleSpeedThreshold {
+                physicsIdleTicks += 1
+                if physicsIdleTicks >= idleTicksNeeded {
+                    physicsIdleTicks = 0
+                    physicsIsSleeping = true
+                    DispatchQueue.main.async {
+                        // If something woke us up between scheduling and execution, don't stop.
+                        if physicsIsSleeping {
+                            stopSimulation()
+                        }
+                    }
+                }
+            } else {
+                physicsIdleTicks = 0
+                physicsIsSleeping = false
+            }
+        } else {
+            physicsIdleTicks = 0
+            physicsIsSleeping = false
+        }
 
         // MARK: - Observability (P0.2)
         // Log a rolling window to avoid log spam and keep overhead minimal.
