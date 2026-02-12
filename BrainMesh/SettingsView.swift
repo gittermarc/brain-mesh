@@ -128,6 +128,8 @@ struct SettingsView: View {
                 LabeledContent("Version", value: appVersion)
                 LabeledContent("Build", value: buildNumber)
             }
+
+            SettingsAboutSection()
         }
         .navigationTitle("Einstellungen")
         .navigationBarTitleDisplayMode(.inline)
