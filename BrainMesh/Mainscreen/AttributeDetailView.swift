@@ -9,7 +9,6 @@ import SwiftUI
 import SwiftData
 
 struct AttributeDetailView: View {
-    @Environment(\.modelContext) private var modelContext
     @Bindable var attribute: MetaAttribute
 
     @Query private var outgoingLinks: [MetaLink]
@@ -19,22 +18,17 @@ struct AttributeDetailView: View {
 
     init(attribute: MetaAttribute) {
         self.attribute = attribute
-        let id = attribute.id
-        let kindRaw = NodeKind.attribute.rawValue
-        let gid = attribute.graphID
 
-        _outgoingLinks = Query(
-            filter: #Predicate<MetaLink> { l in
-                l.sourceKindRaw == kindRaw && l.sourceID == id && (gid == nil || l.graphID == gid)
-            },
-            sort: [SortDescriptor(\MetaLink.createdAt, order: .reverse)]
+        _outgoingLinks = NodeLinksQueryBuilder.outgoingLinksQuery(
+            kind: .attribute,
+            id: attribute.id,
+            graphID: attribute.graphID
         )
 
-        _incomingLinks = Query(
-            filter: #Predicate<MetaLink> { l in
-                l.targetKindRaw == kindRaw && l.targetID == id && (gid == nil || l.graphID == gid)
-            },
-            sort: [SortDescriptor(\MetaLink.createdAt, order: .reverse)]
+        _incomingLinks = NodeLinksQueryBuilder.incomingLinksQuery(
+            kind: .attribute,
+            id: attribute.id,
+            graphID: attribute.graphID
         )
     }
 
@@ -59,32 +53,7 @@ struct AttributeDetailView: View {
             .listRowBackground(Color.clear)
             .listRowSeparator(.hidden)
 
-            Section {
-                IconPickerRow(title: "Icon", symbolName: $attribute.iconSymbolName)
-
-                if let owner = attribute.owner {
-                    NavigationLink { EntityDetailView(entity: owner) } label: {
-                        HStack(spacing: 12) {
-                            Image(systemName: owner.iconSymbolName ?? "cube")
-                                .font(.system(size: 16, weight: .semibold))
-                                .frame(width: 22)
-                                .foregroundStyle(.tint)
-                            VStack(alignment: .leading, spacing: 2) {
-                                Text("Entität")
-                                Text(owner.name)
-                                    .font(.caption)
-                                    .foregroundStyle(.secondary)
-                            }
-                        }
-                    }
-                }
-            } header: {
-                DetailSectionHeader(
-                    title: "Darstellung",
-                    systemImage: "paintbrush",
-                    subtitle: "Icon wird im Canvas und in Listen angezeigt."
-                )
-            }
+            NodeAppearanceSection(iconSymbolName: $attribute.iconSymbolName, ownerEntity: attribute.owner)
 
             NotesAndPhotoSection(
                 notes: $attribute.notes,
@@ -98,17 +67,12 @@ struct AttributeDetailView: View {
                 ownerID: attribute.id,
                 graphID: attribute.graphID
             )
-            // Explicit identity keeps internal sheet/import state stable even if rows above change.
             .id("attachments-attribute-\(attribute.id.uuidString)")
 
-            LinksSection(
-                titleOutgoing: "Ausgehend",
-                titleIncoming: "Eingehend",
+            NodeLinksSectionView(
                 outgoing: outgoingLinks,
                 incoming: incomingLinks,
-                onDeleteOutgoing: { offsets in for i in offsets { modelContext.delete(outgoingLinks[i]) } },
-                onDeleteIncoming: { offsets in for i in offsets { modelContext.delete(incomingLinks[i]) } },
-                onAdd: { showAddLink = true }
+                showAddLink: $showAddLink
             )
         }
         .listStyle(.insetGrouped)
@@ -126,16 +90,6 @@ struct AttributeDetailView: View {
                 .accessibilityLabel("Link hinzufügen")
             }
         }
-        .sheet(isPresented: $showAddLink) {
-            AddLinkView(
-                source: NodeRef(
-                    kind: .attribute,
-                    id: attribute.id,
-                    label: attribute.displayName,
-                    iconSymbolName: attribute.iconSymbolName
-                ),
-                graphID: attribute.graphID
-            )
-        }
+        .addLinkSheet(isPresented: $showAddLink, source: attribute.nodeRef, graphID: attribute.graphID)
     }
 }
