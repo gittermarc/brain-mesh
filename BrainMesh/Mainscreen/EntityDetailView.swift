@@ -16,6 +16,7 @@ struct EntityDetailView: View {
 
     @State private var showAddAttribute = false
     @State private var showAddLink = false
+    @State private var showBulkLink = false
 
     // Gallery presentation is owned by the screen (stable host) to avoid
     // SwiftUI modal races when triggered from inside List rows.
@@ -97,7 +98,8 @@ struct EntityDetailView: View {
             NodeLinksSectionView(
                 outgoing: outgoingLinks,
                 incoming: incomingLinks,
-                showAddLink: $showAddLink
+                showAddLink: $showAddLink,
+                showBulkLink: $showBulkLink
             )
         }
         .listStyle(.insetGrouped)
@@ -118,6 +120,12 @@ struct EntityDetailView: View {
                         showAddLink = true
                     } label: {
                         Label("Link hinzufügen", systemImage: "link.badge.plus")
+                    }
+
+                    Button {
+                        showBulkLink = true
+                    } label: {
+                        Label("Mehrere Links hinzufügen…", systemImage: "link.badge.plus")
                     }
                 } label: {
                     Image(systemName: "plus.circle")
@@ -152,5 +160,6 @@ struct EntityDetailView: View {
             )
         }
         .addLinkSheet(isPresented: $showAddLink, source: entity.nodeRef, graphID: entity.graphID)
+        .bulkLinkSheet(isPresented: $showBulkLink, source: entity.nodeRef, graphID: entity.graphID)
     }
 }

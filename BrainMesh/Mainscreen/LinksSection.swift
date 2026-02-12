@@ -16,7 +16,8 @@ struct LinksSection: View {
 
     let onDeleteOutgoing: (IndexSet) -> Void
     let onDeleteIncoming: (IndexSet) -> Void
-    let onAdd: () -> Void
+    let onAddSingle: () -> Void
+    let onAddBulk: () -> Void
 
     var body: some View {
         Section {
@@ -30,7 +31,14 @@ struct LinksSection: View {
                 .onDelete(perform: onDeleteOutgoing)
             }
 
-            Button(action: onAdd) {
+            Menu {
+                Button(action: onAddSingle) {
+                    Label("Link hinzufügen", systemImage: "link.badge.plus")
+                }
+                Button(action: onAddBulk) {
+                    Label("Mehrere Links hinzufügen…", systemImage: "link.badge.plus")
+                }
+            } label: {
                 Label("Link hinzufügen", systemImage: "link.badge.plus")
             }
         } header: {

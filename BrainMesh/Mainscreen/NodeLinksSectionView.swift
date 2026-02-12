@@ -15,6 +15,7 @@ struct NodeLinksSectionView: View {
     let incoming: [MetaLink]
 
     @Binding var showAddLink: Bool
+    @Binding var showBulkLink: Bool
 
     var body: some View {
         LinksSection(
@@ -24,7 +25,8 @@ struct NodeLinksSectionView: View {
             incoming: incoming,
             onDeleteOutgoing: deleteOutgoing,
             onDeleteIncoming: deleteIncoming,
-            onAdd: { showAddLink = true }
+            onAddSingle: { showAddLink = true },
+            onAddBulk: { showBulkLink = true }
         )
     }
 
