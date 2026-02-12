@@ -17,6 +17,11 @@ struct EntityDetailView: View {
     @State private var showAddAttribute = false
     @State private var showAddLink = false
 
+    // Gallery presentation is owned by the screen (stable host) to avoid
+    // SwiftUI modal races when triggered from inside List rows.
+    @State private var showGalleryBrowser: Bool = false
+    @State private var galleryViewerRequest: PhotoGalleryViewerRequest? = nil
+
     init(entity: MetaEntity) {
         self.entity = entity
 
@@ -70,7 +75,13 @@ struct EntityDetailView: View {
                 graphID: entity.graphID,
                 mainImageData: $entity.imageData,
                 mainImagePath: $entity.imagePath,
-                mainStableID: entity.id
+                mainStableID: entity.id,
+                onOpenBrowser: {
+                    showGalleryBrowser = true
+                },
+                onOpenViewer: { startID in
+                    galleryViewerRequest = PhotoGalleryViewerRequest(startAttachmentID: startID)
+                }
             )
             .id("gallery-entity-\(entity.id.uuidString)")
 
@@ -116,6 +127,29 @@ struct EntityDetailView: View {
         }
         .sheet(isPresented: $showAddAttribute) {
             AddAttributeView(entity: entity)
+        }
+        .sheet(isPresented: $showGalleryBrowser) {
+            NavigationStack {
+                PhotoGalleryBrowserView(
+                    ownerKind: .entity,
+                    ownerID: entity.id,
+                    graphID: entity.graphID,
+                    mainImageData: $entity.imageData,
+                    mainImagePath: $entity.imagePath,
+                    mainStableID: entity.id
+                )
+            }
+        }
+        .fullScreenCover(item: $galleryViewerRequest) { req in
+            PhotoGalleryViewerView(
+                ownerKind: .entity,
+                ownerID: entity.id,
+                graphID: entity.graphID,
+                startAttachmentID: req.startAttachmentID,
+                mainImageData: $entity.imageData,
+                mainImagePath: $entity.imagePath,
+                mainStableID: entity.id
+            )
         }
         .addLinkSheet(isPresented: $showAddLink, source: entity.nodeRef, graphID: entity.graphID)
     }

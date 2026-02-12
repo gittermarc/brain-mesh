@@ -29,9 +29,13 @@ struct PhotoGallerySection: View {
     @Query private var galleryImages: [MetaAttachment]
 
     @State private var pickedItems: [PhotosPickerItem] = []
-    @State private var isShowingBrowser: Bool = false
-    @State private var viewerRequest: PhotoGalleryViewerRequest? = nil
     @State private var errorMessage: String? = nil
+
+    /// Presentation is intentionally owned by the parent screen.
+    /// Presenting sheets/covers from inside a List row can cause SwiftUI
+    /// to immediately dismiss the modal due to row recycling / re-hosting.
+    let onOpenBrowser: () -> Void
+    let onOpenViewer: (_ startAttachmentID: UUID) -> Void
 
     private let maxSelectionCount: Int = 24
 
@@ -41,7 +45,9 @@ struct PhotoGallerySection: View {
         graphID: UUID?,
         mainImageData: Binding<Data?>,
         mainImagePath: Binding<String?>,
-        mainStableID: UUID
+        mainStableID: UUID,
+        onOpenBrowser: @escaping () -> Void,
+        onOpenViewer: @escaping (_ startAttachmentID: UUID) -> Void
     ) {
         self.ownerKind = ownerKind
         self.ownerID = ownerID
@@ -49,6 +55,8 @@ struct PhotoGallerySection: View {
         self._mainImageData = mainImageData
         self._mainImagePath = mainImagePath
         self.mainStableID = mainStableID
+        self.onOpenBrowser = onOpenBrowser
+        self.onOpenViewer = onOpenViewer
 
         let kindRaw = ownerKind.rawValue
         let oid = ownerID
@@ -87,29 +95,6 @@ struct PhotoGallerySection: View {
                 await importPickedImages(newItems)
                 pickedItems = []
             }
-        }
-        .sheet(isPresented: $isShowingBrowser) {
-            NavigationStack {
-                PhotoGalleryBrowserView(
-                    ownerKind: ownerKind,
-                    ownerID: ownerID,
-                    graphID: graphID,
-                    mainImageData: $mainImageData,
-                    mainImagePath: $mainImagePath,
-                    mainStableID: mainStableID
-                )
-            }
-        }
-        .fullScreenCover(item: $viewerRequest) { req in
-            PhotoGalleryViewerView(
-                ownerKind: ownerKind,
-                ownerID: ownerID,
-                graphID: graphID,
-                startAttachmentID: req.startAttachmentID,
-                mainImageData: $mainImageData,
-                mainImagePath: $mainImagePath,
-                mainStableID: mainStableID
-            )
         }
         .alert("Galerie", isPresented: Binding(
             get: { errorMessage != nil },
@@ -150,13 +135,13 @@ struct PhotoGallerySection: View {
 
                 ForEach(galleryImages.prefix(12)) { att in
                     PhotoGalleryThumbnailTile(attachment: att, side: 78) {
-                        viewerRequest = PhotoGalleryViewerRequest(startAttachmentID: att.id)
+                        onOpenViewer(att.id)
                     }
                 }
 
                 if galleryImages.count > 12 {
                     Button {
-                        isShowingBrowser = true
+                        onOpenBrowser()
                     } label: {
                         PhotoGalleryMoreTile(count: galleryImages.count)
                     }
@@ -177,7 +162,7 @@ struct PhotoGallerySection: View {
             Spacer(minLength: 0)
 
             Button {
-                isShowingBrowser = true
+                onOpenBrowser()
             } label: {
                 Label("Alle anzeigen", systemImage: "square.grid.2x2")
                     .font(.callout)

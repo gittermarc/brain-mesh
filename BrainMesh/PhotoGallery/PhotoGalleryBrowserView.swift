@@ -109,7 +109,10 @@ struct PhotoGalleryBrowserView: View {
                 pickedItems = []
             }
         }
-        .fullScreenCover(item: $viewerRequest) { req in
+        // IMPORTANT: This view is presented inside a sheet.
+        // Presenting another modal on top can race and dismiss immediately.
+        // Use navigation push instead.
+        .navigationDestination(item: $viewerRequest) { req in
             PhotoGalleryViewerView(
                 ownerKind: ownerKind,
                 ownerID: ownerID,
@@ -119,6 +122,10 @@ struct PhotoGalleryBrowserView: View {
                 mainImagePath: $mainImagePath,
                 mainStableID: mainStableID
             )
+            .onDisappear {
+                // Allow opening the same image again after popping back.
+                viewerRequest = nil
+            }
         }
         .alert("Bild löschen?", isPresented: Binding(
             get: { confirmDelete != nil },

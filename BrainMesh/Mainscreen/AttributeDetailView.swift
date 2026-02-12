@@ -16,6 +16,11 @@ struct AttributeDetailView: View {
 
     @State private var showAddLink = false
 
+    // Gallery presentation is owned by the screen (stable host) to avoid
+    // SwiftUI modal races when triggered from inside List rows.
+    @State private var showGalleryBrowser: Bool = false
+    @State private var galleryViewerRequest: PhotoGalleryViewerRequest? = nil
+
     init(attribute: MetaAttribute) {
         self.attribute = attribute
 
@@ -68,7 +73,13 @@ struct AttributeDetailView: View {
                 graphID: attribute.graphID,
                 mainImageData: $attribute.imageData,
                 mainImagePath: $attribute.imagePath,
-                mainStableID: attribute.id
+                mainStableID: attribute.id,
+                onOpenBrowser: {
+                    showGalleryBrowser = true
+                },
+                onOpenViewer: { startID in
+                    galleryViewerRequest = PhotoGalleryViewerRequest(startAttachmentID: startID)
+                }
             )
             .id("gallery-attribute-\(attribute.id.uuidString)")
 
@@ -99,6 +110,29 @@ struct AttributeDetailView: View {
                 }
                 .accessibilityLabel("Link hinzufügen")
             }
+        }
+        .sheet(isPresented: $showGalleryBrowser) {
+            NavigationStack {
+                PhotoGalleryBrowserView(
+                    ownerKind: .attribute,
+                    ownerID: attribute.id,
+                    graphID: attribute.graphID,
+                    mainImageData: $attribute.imageData,
+                    mainImagePath: $attribute.imagePath,
+                    mainStableID: attribute.id
+                )
+            }
+        }
+        .fullScreenCover(item: $galleryViewerRequest) { req in
+            PhotoGalleryViewerView(
+                ownerKind: .attribute,
+                ownerID: attribute.id,
+                graphID: attribute.graphID,
+                startAttachmentID: req.startAttachmentID,
+                mainImageData: $attribute.imageData,
+                mainImagePath: $attribute.imagePath,
+                mainStableID: attribute.id
+            )
         }
         .addLinkSheet(isPresented: $showAddLink, source: attribute.nodeRef, graphID: attribute.graphID)
     }
