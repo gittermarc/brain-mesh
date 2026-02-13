@@ -51,16 +51,10 @@ struct PhotoGalleryBrowserView: View {
         self._mainImagePath = mainImagePath
         self.mainStableID = mainStableID
 
-        let kindRaw = ownerKind.rawValue
-        let oid = ownerID
-        let gid = graphID
-        let galleryRaw = AttachmentContentKind.galleryImage.rawValue
-
-        _galleryImages = Query(
-            filter: #Predicate<MetaAttachment> { a in
-                a.ownerKindRaw == kindRaw && a.ownerID == oid && (gid == nil || a.graphID == gid) && a.contentKindRaw == galleryRaw
-            },
-            sort: [SortDescriptor(\MetaAttachment.createdAt, order: .reverse)]
+        _galleryImages = PhotoGalleryQueryBuilder.galleryImagesQuery(
+            ownerKind: ownerKind,
+            ownerID: ownerID,
+            graphID: graphID
         )
     }
 
@@ -80,7 +74,16 @@ struct PhotoGalleryBrowserView: View {
                         },
                         onSetAsMain: {
                             Task { @MainActor in
-                                await setAsMainPhoto(att)
+                                do {
+                                    try await PhotoGalleryActions(modelContext: modelContext).setAsMainPhoto(
+                                        att,
+                                        mainStableID: mainStableID,
+                                        mainImageData: $mainImageData,
+                                        mainImagePath: $mainImagePath
+                                    )
+                                } catch {
+                                    errorMessage = error.localizedDescription
+                                }
                             }
                         },
                         onDelete: {
@@ -109,7 +112,17 @@ struct PhotoGalleryBrowserView: View {
         .onChange(of: pickedItems) { _, newItems in
             guard !newItems.isEmpty else { return }
             Task { @MainActor in
-                await importPickedImages(newItems)
+                let result = await PhotoGalleryImportController.importPickedImages(
+                    newItems,
+                    ownerKind: ownerKind,
+                    ownerID: ownerID,
+                    graphID: graphID,
+                    in: modelContext
+                )
+
+                if result.didFailAnything {
+                    errorMessage = "Einige Bilder konnten nicht importiert werden (\(result.failed))."
+                }
                 pickedItems = []
             }
         }
@@ -137,7 +150,7 @@ struct PhotoGalleryBrowserView: View {
         )) {
             Button("Löschen", role: .destructive) {
                 if let att = confirmDelete {
-                    delete(att)
+                    PhotoGalleryActions(modelContext: modelContext).delete(att)
                 }
                 confirmDelete = nil
             }
@@ -179,103 +192,6 @@ struct PhotoGalleryBrowserView: View {
         )
     }
 
-    // MARK: - Import
-
-    @MainActor
-    private func importPickedImages(_ items: [PhotosPickerItem]) async {
-        var failures: Int = 0
-
-        for item in items {
-            do {
-                guard let raw = try await item.loadTransferable(type: Data.self) else {
-                    failures += 1
-                    continue
-                }
-
-                guard let decoded = ImageImportPipeline.decodeImageSafely(from: raw, maxPixelSize: 3200) else {
-                    failures += 1
-                    continue
-                }
-
-                guard let jpeg = ImageImportPipeline.prepareJPEGForGallery(decoded) else {
-                    failures += 1
-                    continue
-                }
-
-                let id = UUID()
-                let ext = "jpg"
-                let local = try? AttachmentStore.writeToCache(data: jpeg, attachmentID: id, fileExtension: ext)
-
-                let att = MetaAttachment(
-                    id: id,
-                    ownerKind: ownerKind,
-                    ownerID: ownerID,
-                    graphID: graphID,
-                    contentKind: .galleryImage,
-                    title: "",
-                    originalFilename: "Foto.\(ext)",
-                    contentTypeIdentifier: UTType.jpeg.identifier,
-                    fileExtension: ext,
-                    byteCount: jpeg.count,
-                    fileData: jpeg,
-                    localPath: local
-                )
-
-                modelContext.insert(att)
-            } catch {
-                failures += 1
-            }
-        }
-
-        try? modelContext.save()
-
-        if failures > 0 {
-            errorMessage = "Einige Bilder konnten nicht importiert werden (\(failures))."
-        }
-    }
-
-    // MARK: - Actions
-
-    @MainActor
-    private func setAsMainPhoto(_ attachment: MetaAttachment) async {
-        guard let ui = await loadUIImageForFullRes(attachment) else {
-            errorMessage = "Bild konnte nicht geladen werden."
-            return
-        }
-
-        guard let jpeg = ImageImportPipeline.prepareJPEGForCloudKit(ui) else {
-            errorMessage = "JPEG-Erzeugung fehlgeschlagen."
-            return
-        }
-
-        let filename = "\(mainStableID.uuidString).jpg"
-        ImageStore.delete(path: mainImagePath)
-
-        do {
-            _ = try ImageStore.saveJPEG(jpeg, preferredName: filename)
-            mainImagePath = filename
-            mainImageData = jpeg
-            try? modelContext.save()
-        } catch {
-            errorMessage = error.localizedDescription
-        }
-    }
-
-    @MainActor
-    private func delete(_ attachment: MetaAttachment) {
-        AttachmentCleanup.deleteCachedFiles(for: attachment)
-        modelContext.delete(attachment)
-        try? modelContext.save()
-    }
-
-    @MainActor
-    private func loadUIImageForFullRes(_ attachment: MetaAttachment) async -> UIImage? {
-        guard let url = AttachmentStore.ensurePreviewURL(for: attachment) else { return nil }
-
-        return await Task.detached(priority: .userInitiated) {
-            UIImage(contentsOfFile: url.path)
-        }.value
-    }
 }
 
 private struct PhotoGalleryGridTile: View {

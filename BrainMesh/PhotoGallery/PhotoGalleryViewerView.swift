@@ -48,16 +48,10 @@ struct PhotoGalleryViewerView: View {
         self._mainImagePath = mainImagePath
         self.mainStableID = mainStableID
 
-        let kindRaw = ownerKind.rawValue
-        let oid = ownerID
-        let gid = graphID
-        let galleryRaw = AttachmentContentKind.galleryImage.rawValue
-
-        _galleryImages = Query(
-            filter: #Predicate<MetaAttachment> { a in
-                a.ownerKindRaw == kindRaw && a.ownerID == oid && (gid == nil || a.graphID == gid) && a.contentKindRaw == galleryRaw
-            },
-            sort: [SortDescriptor(\MetaAttachment.createdAt, order: .reverse)]
+        _galleryImages = PhotoGalleryQueryBuilder.galleryImagesQuery(
+            ownerKind: ownerKind,
+            ownerID: ownerID,
+            graphID: graphID
         )
 
         _selectionID = State(initialValue: startAttachmentID)
@@ -219,24 +213,13 @@ struct PhotoGalleryViewerView: View {
     private func setSelectedAsMainPhoto() async {
         guard let selected = selectedAttachment else { return }
 
-        guard let ui = await loadUIImageForFullRes(selected) else {
-            errorMessage = "Bild konnte nicht geladen werden."
-            return
-        }
-
-        guard let jpeg = ImageImportPipeline.prepareJPEGForCloudKit(ui) else {
-            errorMessage = "JPEG-Erzeugung fehlgeschlagen."
-            return
-        }
-
-        let filename = "\(mainStableID.uuidString).jpg"
-        ImageStore.delete(path: mainImagePath)
-
         do {
-            _ = try ImageStore.saveJPEG(jpeg, preferredName: filename)
-            mainImagePath = filename
-            mainImageData = jpeg
-            try? modelContext.save()
+            try await PhotoGalleryActions(modelContext: modelContext).setAsMainPhoto(
+                selected,
+                mainStableID: mainStableID,
+                mainImageData: $mainImageData,
+                mainImagePath: $mainImagePath
+            )
         } catch {
             errorMessage = error.localizedDescription
         }
@@ -248,9 +231,7 @@ struct PhotoGalleryViewerView: View {
 
         let currentIndex = galleryImages.firstIndex(where: { $0.id == selectionID }) ?? 0
 
-        AttachmentCleanup.deleteCachedFiles(for: selected)
-        modelContext.delete(selected)
-        try? modelContext.save()
+        PhotoGalleryActions(modelContext: modelContext).delete(selected)
 
         let remaining = galleryImages.filter { $0.id != selected.id }
         if remaining.isEmpty {
@@ -262,14 +243,6 @@ struct PhotoGalleryViewerView: View {
         selectionID = remaining[nextIndex].id
     }
 
-    @MainActor
-    private func loadUIImageForFullRes(_ attachment: MetaAttachment) async -> UIImage? {
-        guard let url = AttachmentStore.ensurePreviewURL(for: attachment) else { return nil }
-
-        return await Task.detached(priority: .userInitiated) {
-            UIImage(contentsOfFile: url.path)
-        }.value
-    }
 }
 
 private struct PhotoGalleryViewerPage: View {

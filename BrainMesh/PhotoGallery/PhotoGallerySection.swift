@@ -58,16 +58,10 @@ struct PhotoGallerySection: View {
         self.onOpenBrowser = onOpenBrowser
         self.onOpenViewer = onOpenViewer
 
-        let kindRaw = ownerKind.rawValue
-        let oid = ownerID
-        let gid = graphID
-        let galleryRaw = AttachmentContentKind.galleryImage.rawValue
-
-        _galleryImages = Query(
-            filter: #Predicate<MetaAttachment> { a in
-                a.ownerKindRaw == kindRaw && a.ownerID == oid && (gid == nil || a.graphID == gid) && a.contentKindRaw == galleryRaw
-            },
-            sort: [SortDescriptor(\MetaAttachment.createdAt, order: .reverse)]
+        _galleryImages = PhotoGalleryQueryBuilder.galleryImagesQuery(
+            ownerKind: ownerKind,
+            ownerID: ownerID,
+            graphID: graphID
         )
     }
 
@@ -87,12 +81,27 @@ struct PhotoGallerySection: View {
             )
         }
         .task {
-            await migrateLegacyImageAttachmentsIfNeeded()
+            await PhotoGalleryActions(modelContext: modelContext)
+                .migrateLegacyImageAttachmentsIfNeeded(
+                    ownerKind: ownerKind,
+                    ownerID: ownerID,
+                    graphID: graphID
+                )
         }
         .onChange(of: pickedItems) { _, newItems in
             guard !newItems.isEmpty else { return }
             Task { @MainActor in
-                await importPickedImages(newItems)
+                let result = await PhotoGalleryImportController.importPickedImages(
+                    newItems,
+                    ownerKind: ownerKind,
+                    ownerID: ownerID,
+                    graphID: graphID,
+                    in: modelContext
+                )
+
+                if result.didFailAnything {
+                    errorMessage = "Einige Bilder konnten nicht importiert werden (\(result.failed))."
+                }
                 pickedItems = []
             }
         }
@@ -171,100 +180,6 @@ struct PhotoGallerySection: View {
         .padding(.top, 2)
     }
 
-    // MARK: - Migration (in-place, owner scoped)
-
-    @MainActor
-    private func migrateLegacyImageAttachmentsIfNeeded() async {
-        let kindRaw = ownerKind.rawValue
-        let oid = ownerID
-        let gid = graphID
-        let galleryRaw = AttachmentContentKind.galleryImage.rawValue
-
-        let fd = FetchDescriptor<MetaAttachment>(
-            predicate: #Predicate { a in
-                a.ownerKindRaw == kindRaw && a.ownerID == oid && (gid == nil || a.graphID == gid) && a.contentKindRaw != galleryRaw
-            }
-        )
-
-        guard let found = try? modelContext.fetch(fd), !found.isEmpty else { return }
-
-        var didChange = false
-        for att in found {
-            guard let type = UTType(att.contentTypeIdentifier) else { continue }
-            guard type.conforms(to: .image) else { continue }
-            att.contentKindRaw = galleryRaw
-            didChange = true
-        }
-
-        if didChange {
-            try? modelContext.save()
-        }
-    }
-
-    // MARK: - Import
-
-    @MainActor
-    private func importPickedImages(_ items: [PhotosPickerItem]) async {
-        var imported = 0
-        var failed = 0
-
-        for item in items {
-            do {
-                guard let raw = try await item.loadTransferable(type: Data.self) else {
-                    failed += 1
-                    continue
-                }
-
-                guard let decoded = ImageImportPipeline.decodeImageSafely(from: raw, maxPixelSize: 3200) else {
-                    failed += 1
-                    continue
-                }
-
-                guard let jpeg = ImageImportPipeline.prepareJPEGForGallery(decoded) else {
-                    failed += 1
-                    continue
-                }
-
-                let attachmentID = UUID()
-                let ext = "jpg"
-                let typeID = UTType.jpeg.identifier
-
-                let cachedFilename = (try? AttachmentStore.writeToCache(
-                    data: jpeg,
-                    attachmentID: attachmentID,
-                    fileExtension: ext
-                ))
-
-                let att = MetaAttachment(
-                    id: attachmentID,
-                    ownerKind: ownerKind,
-                    ownerID: ownerID,
-                    graphID: graphID,
-                    contentKind: .galleryImage,
-                    title: "",
-                    originalFilename: "Foto.\(ext)",
-                    contentTypeIdentifier: typeID,
-                    fileExtension: ext,
-                    byteCount: jpeg.count,
-                    fileData: jpeg,
-                    localPath: cachedFilename
-                )
-
-                modelContext.insert(att)
-                imported += 1
-            } catch {
-                failed += 1
-            }
-        }
-
-        if imported > 0 {
-            try? modelContext.save()
-        }
-
-        if failed > 0 {
-            errorMessage = "Einige Bilder konnten nicht importiert werden (\(failed))."
-        }
-    }
 }
 
 struct PhotoGalleryViewerRequest: Identifiable, Hashable {
