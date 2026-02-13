@@ -32,6 +32,25 @@ enum ImageHydrator {
         await hydrate(using: modelContext, mode: .forceRebuild)
     }
 
+    /// On-demand hydration (Selection): ensures the deterministic cached JPEG exists locally.
+    /// Returns the deterministic filename if the cache file exists (after the operation).
+    static func ensureCachedJPEGExists(stableID: UUID, jpegData: Data?) async -> String? {
+        guard let d = jpegData, !d.isEmpty else { return nil }
+
+        let filename = "\(stableID.uuidString).jpg"
+
+        if ImageStore.fileExists(path: filename) {
+            return filename
+        }
+
+        let dataCopy = d
+        await Task.detached(priority: .userInitiated) {
+            _ = try? ImageStore.saveJPEG(dataCopy, preferredName: filename)
+        }.value
+
+        return ImageStore.fileExists(path: filename) ? filename : nil
+    }
+
     private enum HydrationMode {
         case incremental
         case forceRebuild

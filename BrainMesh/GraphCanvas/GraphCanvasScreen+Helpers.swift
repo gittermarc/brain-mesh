@@ -80,6 +80,66 @@ extension GraphCanvasScreen {
     }
 
 
+    // MARK: - On-demand image hydration (Fix A)
+
+    /// Ensures that the selected node's main image is available as a local cached JPEG file.
+    ///
+    /// Why: The graph overlay loads thumbnails from the local file cache for performance.
+    /// If a record was synced to this device, `imagePath` may exist while the local file does not yet.
+    /// This method writes the deterministic file on-demand (only for the current selection) and updates the render cache.
+    @MainActor
+    func ensureLocalMainImageCacheForSelectionIfNeeded(_ key: NodeKey) async {
+        switch key.kind {
+        case .entity:
+            guard let e = fetchEntity(id: key.uuid) else { return }
+            guard let d = e.imageData, !d.isEmpty else { return }
+
+            let expected = "\(e.id.uuidString).jpg"
+            let currentPath = (e.imagePath?.isEmpty == false) ? e.imagePath! : expected
+            let hasFile = ImageStore.fileExists(path: currentPath)
+
+            // Force a `selectedImagePath` change (nil -> filename) so GraphCanvasView refreshes its thumbnail cache.
+            if !hasFile, selection == key {
+                imagePathCache.removeValue(forKey: key)
+            }
+
+            guard let ensured = await ImageHydrator.ensureCachedJPEGExists(stableID: e.id, jpegData: d) else { return }
+
+            var didModelChange = false
+            if e.imagePath != ensured {
+                e.imagePath = ensured
+                didModelChange = true
+            }
+            if didModelChange { try? modelContext.save() }
+
+            imagePathCache[key] = ensured
+
+        case .attribute:
+            guard let a = fetchAttribute(id: key.uuid) else { return }
+            guard let d = a.imageData, !d.isEmpty else { return }
+
+            let expected = "\(a.id.uuidString).jpg"
+            let currentPath = (a.imagePath?.isEmpty == false) ? a.imagePath! : expected
+            let hasFile = ImageStore.fileExists(path: currentPath)
+
+            if !hasFile, selection == key {
+                imagePathCache.removeValue(forKey: key)
+            }
+
+            guard let ensured = await ImageHydrator.ensureCachedJPEGExists(stableID: a.id, jpegData: d) else { return }
+
+            var didModelChange = false
+            if a.imagePath != ensured {
+                a.imagePath = ensured
+                didModelChange = true
+            }
+            if didModelChange { try? modelContext.save() }
+
+            imagePathCache[key] = ensured
+        }
+    }
+
+
     var selectedImagePathValue: String? { selectedImagePath() }
 
     func prefetchSelectedFullImage() {

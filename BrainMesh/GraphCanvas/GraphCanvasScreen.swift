@@ -305,8 +305,15 @@ struct GraphCanvasScreen: View {
         .onChange(of: lensDepth) { _, _ in recomputeDerivedState() }
 
         // ✅ Selection change: reset “more”
-        .onChange(of: selection) { _, _ in
+        .onChange(of: selection) { _, newSelection in
             showAllLinksForSelection = false
+
+            if let key = newSelection {
+                Task {
+                    await ensureLocalMainImageCacheForSelectionIfNeeded(key)
+                }
+            }
+
             prefetchSelectedFullImage()
             recomputeDerivedState()
         }
