@@ -3,6 +3,7 @@
 //  BrainMesh
 //
 //  P0.1: Split GraphCanvasView.swift -> Rendering
+//  P0.3: Rendering perf: per-frame screen cache + label offset cache + outgoing note prefilter
 //
 
 import SwiftUI
@@ -16,6 +17,23 @@ extension GraphCanvasView {
         let showNotes: Bool
         let thumbAlpha: CGFloat
         let spotlightLabelsOnly: Bool
+    }
+
+    private struct PreparedOutgoingNote {
+        let text: String
+        let side: CGFloat
+    }
+
+    private struct FrameCache {
+        let screenPoints: [NodeKey: CGPoint]
+        let labelOffsets: [NodeKey: CGPoint]
+        let outgoingNotesByTarget: [NodeKey: PreparedOutgoingNote]?
+    }
+
+    private enum LabelConstants {
+        static let xChoices: [CGFloat] = [-14, 0, 14]
+        static let yChoicesEntity: [CGFloat] = [0, 6, 12]
+        static let yChoicesAttr: [CGFloat] = [0, -6, -12]
     }
 
     func zoomAlphas() -> ZoomAlphas {
@@ -39,14 +57,13 @@ extension GraphCanvasView {
 
     func renderCanvas(in context: GraphicsContext, size: CGSize, alphas: ZoomAlphas, theme: GraphTheme, colorScheme: ColorScheme) {
         let center = CGPoint(x: size.width / 2 + pan.width, y: size.height / 2 + pan.height)
+        let frame = buildFrameCache(center: center, alphas: alphas)
 
         // edges (DRAW)
         for e in drawEdges {
             if lens.hideNonRelevant && (lens.isHidden(e.a) || lens.isHidden(e.b)) { continue }
 
-            guard let p1 = positions[e.a], let p2 = positions[e.b] else { continue }
-            let a = toScreen(p1, center: center)
-            let b = toScreen(p2, center: center)
+            guard let a = frame.screenPoints[e.a], let b = frame.screenPoints[e.b] else { continue }
 
             let edgeAlpha = lens.edgeOpacity(a: e.a, b: e.b)
 
@@ -66,11 +83,15 @@ extension GraphCanvasView {
             }
 
             // ✅ Notizen: nur im Nah-Zoom + nur für Kanten der selektierten Node (ausgehend)
-            if alphas.showNotes, let sel = selection, e.type == .link {
-                if sel == e.a {
-                    drawOutgoingNoteIfAny(source: e.a, target: e.b, from: a, to: b, alpha: alphas.noteAlpha, in: context)
-                } else if sel == e.b {
-                    drawOutgoingNoteIfAny(source: e.b, target: e.a, from: b, to: a, alpha: alphas.noteAlpha, in: context)
+            if let sel = selection,
+               let notes = frame.outgoingNotesByTarget,
+               alphas.showNotes,
+               e.type == .link {
+
+                if sel == e.a, let note = notes[e.b] {
+                    drawEdgeNotePrepared(note, source: e.a, target: e.b, from: a, to: b, alpha: alphas.noteAlpha, in: context)
+                } else if sel == e.b, let note = notes[e.a] {
+                    drawEdgeNotePrepared(note, source: e.b, target: e.a, from: b, to: a, alpha: alphas.noteAlpha, in: context)
                 }
             }
         }
@@ -78,9 +99,7 @@ extension GraphCanvasView {
         // nodes
         for n in nodes {
             if lens.hideNonRelevant && lens.isHidden(n.key) { continue }
-            guard let p = positions[n.key] else { continue }
-
-            let s = toScreen(p, center: center)
+            guard let s = frame.screenPoints[n.key] else { continue }
 
             let isPinned = pinned.contains(n.key)
             let isSelected = (selection == n.key)
@@ -121,7 +140,7 @@ extension GraphCanvasView {
                     let baseMin: CGFloat = (selection == nil) ? 0.34 : 0.10
                     let labelA = max(max(alphas.entityLabelAlpha, baseMin), isSelected ? 1.0 : 0.0) * nodeAlpha
                     if labelA > 0.04 {
-                        let off = labelOffset(for: n.key, kind: .entity)
+                        let off = frame.labelOffsets[n.key] ?? .zero
                         drawLabel(
                             n.label,
                             at: CGPoint(x: s.x + off.x, y: s.y + 28 + off.y),
@@ -176,7 +195,7 @@ extension GraphCanvasView {
                 if allowLabel {
                     let labelA = max(alphas.attributeLabelAlpha, isSelected ? 1.0 : 0.0) * nodeAlpha
                     if labelA > 0.06 {
-                        let off = labelOffset(for: n.key, kind: .attribute)
+                        let off = frame.labelOffsets[n.key] ?? .zero
                         drawLabel(
                             n.label,
                             at: CGPoint(x: s.x + off.x, y: s.y + 24 + off.y),
@@ -199,6 +218,103 @@ extension GraphCanvasView {
                 }
             }
         }
+    }
+
+    private func buildFrameCache(center: CGPoint, alphas: ZoomAlphas) -> FrameCache {
+        var screenPoints: [NodeKey: CGPoint] = [:]
+        screenPoints.reserveCapacity(nodes.count + (drawEdges.count * 2))
+
+        var labelOffsets: [NodeKey: CGPoint] = [:]
+        labelOffsets.reserveCapacity(nodes.count)
+
+        // NodeKey reconstruction for directed edge notes (keys store string identifiers)
+        var keyByIdentifier: [String: NodeKey] = [:]
+        keyByIdentifier.reserveCapacity(positions.count)
+
+        for (k, _) in positions {
+            keyByIdentifier[k.identifier] = k
+        }
+
+        // Cache for nodes (also precomputes label offsets)
+        for n in nodes {
+            let key = n.key
+            if lens.hideNonRelevant && lens.isHidden(key) { continue }
+
+            if let p = positions[key] {
+                screenPoints[key] = toScreen(p, center: center)
+            }
+
+            // label offset is deterministic -> compute once per frame (no allocations per node)
+            let seed = stableSeed(key.identifier)
+            switch key.kind {
+            case .entity:
+                labelOffsets[key] = labelOffset(seed: seed, kind: .entity)
+            case .attribute:
+                labelOffsets[key] = labelOffset(seed: seed, kind: .attribute)
+            }
+        }
+
+        // Ensure endpoints exist for edges (defensive, in case edges reference nodes not in `nodes`)
+        for e in drawEdges {
+            if lens.hideNonRelevant && (lens.isHidden(e.a) || lens.isHidden(e.b)) { continue }
+
+            if screenPoints[e.a] == nil, let p = positions[e.a] {
+                screenPoints[e.a] = toScreen(p, center: center)
+            }
+            if screenPoints[e.b] == nil, let p = positions[e.b] {
+                screenPoints[e.b] = toScreen(p, center: center)
+            }
+
+            if labelOffsets[e.a] == nil {
+                let seed = stableSeed(e.a.identifier)
+                labelOffsets[e.a] = labelOffset(seed: seed, kind: e.a.kind == .entity ? .entity : .attribute)
+            }
+            if labelOffsets[e.b] == nil {
+                let seed = stableSeed(e.b.identifier)
+                labelOffsets[e.b] = labelOffset(seed: seed, kind: e.b.kind == .entity ? .entity : .attribute)
+            }
+        }
+
+        var outgoingNotesByTarget: [NodeKey: PreparedOutgoingNote]? = nil
+        if alphas.showNotes, let sel = selection {
+            outgoingNotesByTarget = prepareOutgoingNotes(for: sel, keyByIdentifier: keyByIdentifier)
+        }
+
+        return FrameCache(
+            screenPoints: screenPoints,
+            labelOffsets: labelOffsets,
+            outgoingNotesByTarget: outgoingNotesByTarget
+        )
+    }
+
+    private func prepareOutgoingNotes(for selection: NodeKey, keyByIdentifier: [String: NodeKey]) -> [NodeKey: PreparedOutgoingNote]? {
+        let maxChars = 46
+
+        var map: [NodeKey: PreparedOutgoingNote] = [:]
+        map.reserveCapacity(8)
+
+        for (k, raw) in directedEdgeNotes {
+            guard k.type == GraphEdgeType.link.rawValue else { continue }
+            guard k.sourceID == selection.identifier else { continue }
+            guard let targetKey = keyByIdentifier[k.targetID] else { continue }
+
+            let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !trimmed.isEmpty else { continue }
+
+            let textStr: String
+            if trimmed.count > maxChars {
+                textStr = String(trimmed.prefix(maxChars)) + "…"
+            } else {
+                textStr = trimmed
+            }
+
+            let edgeSeed = stableSeed(k.sourceID + "->" + k.targetID)
+            let side: CGFloat = (edgeSeed % 2 == 0) ? 1 : -1
+
+            map[targetKey] = PreparedOutgoingNote(text: textStr, side: side)
+        }
+
+        return map.isEmpty ? nil : map
     }
 
     @ViewBuilder
@@ -272,18 +388,18 @@ extension GraphCanvasView {
 
     private enum LabelKind { case entity, attribute }
 
+    private func labelOffset(seed: Int, kind: LabelKind) -> CGPoint {
+        let xChoices = LabelConstants.xChoices
+        let yChoices = (kind == .entity) ? LabelConstants.yChoicesEntity : LabelConstants.yChoicesAttr
+
+        let xi = abs(seed) % xChoices.count
+        let yi = abs(seed / 7) % yChoices.count
+
+        return CGPoint(x: xChoices[xi], y: yChoices[yi])
+    }
+
     private func labelOffset(for key: NodeKey, kind: LabelKind) -> CGPoint {
-        let h = stableSeed(key.identifier)
-        let xChoices: [CGFloat] = [-14, 0, 14]
-        let yChoicesEntity: [CGFloat] = [0, 6, 12]
-        let yChoicesAttr: [CGFloat] = [0, -6, -12]
-
-        let xi = abs(h) % xChoices.count
-        let yi = abs(h / 7) % 3
-
-        let x = xChoices[xi]
-        let y = (kind == .entity) ? yChoicesEntity[yi] : yChoicesAttr[yi]
-        return CGPoint(x: x, y: y)
+        labelOffset(seed: stableSeed(key.identifier), kind: kind)
     }
 
     // MARK: - Label drawing (Halo)
@@ -337,8 +453,8 @@ extension GraphCanvasView {
         drawEdgeNote(note, source: source, target: target, from: a, to: b, alpha: alpha, in: context)
     }
 
-    private func drawEdgeNote(
-        _ raw: String,
+    private func drawEdgeNotePrepared(
+        _ prepared: PreparedOutgoingNote,
         source: NodeKey,
         target: NodeKey,
         from a: CGPoint,
@@ -346,11 +462,8 @@ extension GraphCanvasView {
         alpha: CGFloat,
         in context: GraphicsContext
     ) {
-        let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmed.isEmpty else { return }
-
-        let maxChars = 46
-        let textStr = trimmed.count > maxChars ? (String(trimmed.prefix(maxChars)) + "…") : trimmed
+        let textStr = prepared.text
+        guard !textStr.isEmpty else { return }
 
         let midBase = CGPoint(x: (a.x + b.x) / 2, y: (a.y + b.y) / 2)
 
@@ -360,7 +473,7 @@ extension GraphCanvasView {
         let nx = -dy / len
         let ny = dx / len
 
-        let side = (stableSeed(source.identifier + "->" + target.identifier) % 2 == 0) ? CGFloat(1) : CGFloat(-1)
+        let side = prepared.side
         var offset: CGFloat = 14
         if len < 120 { offset = 20 }
 
@@ -387,5 +500,33 @@ extension GraphCanvasView {
         context.fill(bgPath, with: .color(.primary.opacity(0.12 * alpha)))
         context.stroke(bgPath, with: .color(.primary.opacity(0.28 * alpha)), lineWidth: 1)
         context.draw(resolved, at: mid, anchor: .center)
+    }
+
+    private func drawEdgeNote(
+        _ raw: String,
+        source: NodeKey,
+        target: NodeKey,
+        from a: CGPoint,
+        to b: CGPoint,
+        alpha: CGFloat,
+        in context: GraphicsContext
+    ) {
+        let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return }
+
+        let maxChars = 46
+        let textStr = trimmed.count > maxChars ? (String(trimmed.prefix(maxChars)) + "…") : trimmed
+        let sideSeed = stableSeed(source.identifier + "->" + target.identifier)
+        let side: CGFloat = (sideSeed % 2 == 0) ? 1 : -1
+
+        drawEdgeNotePrepared(
+            PreparedOutgoingNote(text: textStr, side: side),
+            source: source,
+            target: target,
+            from: a,
+            to: b,
+            alpha: alpha,
+            in: context
+        )
     }
 }
