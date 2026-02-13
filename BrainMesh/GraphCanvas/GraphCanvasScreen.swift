@@ -22,7 +22,6 @@ struct GraphCanvasScreen: View {
     var graphs: [MetaGraph]
 
     @State var showGraphPicker = false
-    @State var showSettings = false
 
     // NOTE: Must not be `private` because GraphCanvasScreen is split into multiple files via extensions.
     @AppStorage("BMOnboardingHidden") var onboardingHidden: Bool = false
@@ -202,69 +201,34 @@ struct GraphCanvasScreen: View {
             .navigationTitle("Graph")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
-                ToolbarItemGroup(placement: .topBarTrailing) {
+                // NOTE:
+                // SwiftUI will collapse overflowing toolbar items into a system “…” overflow button.
+                // On some devices / layouts this overflow button can become non-interactive.
+                // We avoid the overflow entirely by keeping the top bar intentionally small:
+                // - Graph Picker (leading)
+                // - Inspector (trailing)
+                // Everything else stays reachable inside the Inspector.
 
+                ToolbarItem(placement: .topBarLeading) {
                     Button { showGraphPicker = true } label: {
                         Image(systemName: "square.stack.3d.up")
                     }
                     .accessibilityLabel("Graph wählen")
+                }
 
-                    Button {
-                        showFocusPicker = true
-                    } label: {
-                        Image(systemName: "scope")
-                    }
-
-                    Button {
-                        workMode = (workMode == .explore) ? .edit : .explore
-                    } label: {
-                        Image(systemName: workMode.icon)
-                    }
-                    .accessibilityLabel(workMode == .explore ? "In Edit-Modus wechseln" : "In Explore-Modus wechseln")
-
-                    Button {
-                        if let sel = selection { cameraCommand = CameraCommand(kind: .center(sel)) }
-                        else if let f = focusEntity { cameraCommand = CameraCommand(kind: .center(NodeKey(kind: .entity, uuid: f.id))) }
-                    } label: {
-                        Image(systemName: "dot.scope")
-                    }
-                    .disabled(selection == nil && focusEntity == nil)
-
-                    Button {
-                        cameraCommand = CameraCommand(kind: .fitAll)
-                    } label: {
-                        Image(systemName: "arrow.up.left.and.down.right.magnifyingglass")
-                    }
-                    .disabled(nodes.isEmpty)
-
-                    Button {
-                        cameraCommand = CameraCommand(kind: .reset)
-                    } label: {
-                        Image(systemName: "arrow.counterclockwise")
-                    }
-
+                ToolbarItem(placement: .topBarTrailing) {
                     Button {
                         showInspector = true
                     } label: {
                         Image(systemName: "slider.horizontal.3")
                     }
-
-                    Button {
-                        showSettings = true
-                    } label: {
-                        Image(systemName: "gearshape")
-                    }
-                    .accessibilityLabel("Einstellungen")
+                    .accessibilityLabel("Inspector")
                 }
             }
 
             // ✅ Graph Picker
             .sheet(isPresented: $showGraphPicker) {
                 GraphPickerSheet()
-            }
-
-            .sheet(isPresented: $showSettings) {
-                NavigationStack { SettingsView() }
             }
 
             // Focus picker

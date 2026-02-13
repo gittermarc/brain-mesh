@@ -22,8 +22,8 @@ extension GraphCanvasScreen {
                             .lineLimit(1)
                     }
 
-                    Button {
-                        showGraphPicker = true
+                    NavigationLink {
+                        GraphPickerSheet()
                     } label: {
                         Label("Graph wechseln", systemImage: "square.stack.3d.up")
                     }
@@ -86,6 +86,32 @@ extension GraphCanvasScreen {
                         Text("Wenn eine Node ausgewählt ist, werden Nachbarn hervorgehoben und der Rest gedimmt (oder ausgeblendet).")
                             .font(.caption)
                             .foregroundStyle(.secondary)
+                    }
+                }
+
+                Section("Kamera") {
+                    Button {
+                        if let sel = selection {
+                            cameraCommand = CameraCommand(kind: .center(sel))
+                        } else if let f = focusEntity {
+                            cameraCommand = CameraCommand(kind: .center(NodeKey(kind: .entity, uuid: f.id)))
+                        }
+                    } label: {
+                        Label("Zentrieren", systemImage: "dot.scope")
+                    }
+                    .disabled(selection == nil && focusEntity == nil)
+
+                    Button {
+                        cameraCommand = CameraCommand(kind: .fitAll)
+                    } label: {
+                        Label("Alles einpassen", systemImage: "arrow.up.left.and.down.right.magnifyingglass")
+                    }
+                    .disabled(nodes.isEmpty)
+
+                    Button {
+                        cameraCommand = CameraCommand(kind: .reset)
+                    } label: {
+                        Label("Ansicht zurücksetzen", systemImage: "arrow.counterclockwise")
                     }
                 }
 
@@ -155,6 +181,14 @@ extension GraphCanvasScreen {
                         Label("Unpin all", systemImage: "pin.slash")
                     }
                     .disabled(pinned.isEmpty)
+                }
+
+                Section("App") {
+                    NavigationLink {
+                        SettingsView()
+                    } label: {
+                        Label("Einstellungen", systemImage: "gearshape")
+                    }
                 }
             }
             .navigationTitle("Inspector")
