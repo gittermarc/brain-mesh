@@ -489,6 +489,13 @@ struct NodeMediaAllView: View {
 
 		// Let the navigation animation finish before we start any work.
 		await Task.yield()
+		// Legacy safety: if older attachments for this owner still have `graphID == nil`,
+		// migrate them so all queries can use AND-only predicates.
+		await MediaAllLoader.shared.migrateLegacyGraphIDIfNeeded(
+			ownerKindRaw: ownerKind.rawValue,
+			ownerID: ownerID,
+			graphID: graphID
+		)
 		await refreshCounts()
 		// IMPORTANT: Keep SwiftData access strictly serialized.
 		await loadMoreGallery()

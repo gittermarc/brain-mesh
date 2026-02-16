@@ -41,22 +41,45 @@ enum NodeMediaPreviewLoader {
     ) throws -> NodeMediaPreview {
         let kindRaw = ownerKind.rawValue
         let oid = ownerID
-        let gid = graphID
         let galleryRaw = AttachmentContentKind.galleryImage.rawValue
 
-        let galleryPredicate = #Predicate<MetaAttachment> { a in
-            a.ownerKindRaw == kindRaw &&
-            a.ownerID == oid &&
-            (gid == nil || a.graphID == gid) &&
-            a.contentKindRaw == galleryRaw
-        }
+		// Legacy safety: if older attachments for this owner still have `graphID == nil`,
+		// migrate them so all queries can use AND-only predicates.
+		AttachmentGraphIDMigration.migrateIfNeeded(
+			context: context,
+			ownerKindRaw: kindRaw,
+			ownerID: oid,
+			graphID: graphID
+		)
 
-        let attachmentPredicate = #Predicate<MetaAttachment> { a in
-            a.ownerKindRaw == kindRaw &&
-            a.ownerID == oid &&
-            (gid == nil || a.graphID == gid) &&
-            a.contentKindRaw != galleryRaw
-        }
+		// IMPORTANT: Keep predicates store-translatable (avoid OR / optional tricks).
+		let galleryPredicate: Predicate<MetaAttachment>
+		let attachmentPredicate: Predicate<MetaAttachment>
+		if let gid = graphID {
+			galleryPredicate = #Predicate { a in
+				a.ownerKindRaw == kindRaw &&
+				a.ownerID == oid &&
+				a.graphID == gid &&
+				a.contentKindRaw == galleryRaw
+			}
+			attachmentPredicate = #Predicate { a in
+				a.ownerKindRaw == kindRaw &&
+				a.ownerID == oid &&
+				a.graphID == gid &&
+				a.contentKindRaw != galleryRaw
+			}
+		} else {
+			galleryPredicate = #Predicate { a in
+				a.ownerKindRaw == kindRaw &&
+				a.ownerID == oid &&
+				a.contentKindRaw == galleryRaw
+			}
+			attachmentPredicate = #Predicate { a in
+				a.ownerKindRaw == kindRaw &&
+				a.ownerID == oid &&
+				a.contentKindRaw != galleryRaw
+			}
+		}
 
         // Counts (cheap, avoids loading full objects).
         let galleryCount = try context.fetchCount(FetchDescriptor<MetaAttachment>(predicate: galleryPredicate))

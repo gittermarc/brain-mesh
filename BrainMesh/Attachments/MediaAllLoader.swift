@@ -50,6 +50,21 @@ actor MediaAllLoader {
         self.container = container
     }
 
+    /// Migrates legacy attachments for this owner where `graphID == nil`.
+    ///
+    /// This keeps subsequent queries simple (AND-only), which avoids SwiftData
+    /// falling back to in-memory filtering.
+    func migrateLegacyGraphIDIfNeeded(ownerKindRaw: Int, ownerID: UUID, graphID: UUID?) async {
+        guard let graphID else { return }
+        guard let container else { return }
+        await AttachmentGraphIDMigration.migrateIfNeeded(
+            container: container,
+            ownerKindRaw: ownerKindRaw,
+            ownerID: ownerID,
+            graphID: graphID
+        )
+    }
+
     func fetchCounts(ownerKindRaw: Int, ownerID: UUID, graphID: UUID?) async -> (gallery: Int, attachments: Int) {
         guard let container else { return (0, 0) }
 
@@ -59,27 +74,46 @@ actor MediaAllLoader {
 
             let kindRaw = ownerKindRaw
             let oid = ownerID
-            let gid = graphID
             let galleryRaw = AttachmentContentKind.galleryImage.rawValue
 
             do {
-                let galleryCountDescriptor = FetchDescriptor<MetaAttachment>(
-                    predicate: #Predicate { a in
-                        a.ownerKindRaw == kindRaw &&
-                        a.ownerID == oid &&
-                        (gid == nil || a.graphID == gid) &&
-                        a.contentKindRaw == galleryRaw
-                    }
-                )
+                // IMPORTANT: keep predicates store-translatable (avoid OR / optional tricks).
+                let galleryCountDescriptor: FetchDescriptor<MetaAttachment>
+                let attachmentCountDescriptor: FetchDescriptor<MetaAttachment>
 
-                let attachmentCountDescriptor = FetchDescriptor<MetaAttachment>(
-                    predicate: #Predicate { a in
-                        a.ownerKindRaw == kindRaw &&
-                        a.ownerID == oid &&
-                        (gid == nil || a.graphID == gid) &&
-                        a.contentKindRaw != galleryRaw
-                    }
-                )
+                if let gid = graphID {
+                    galleryCountDescriptor = FetchDescriptor<MetaAttachment>(
+                        predicate: #Predicate { a in
+                            a.ownerKindRaw == kindRaw &&
+                            a.ownerID == oid &&
+                            a.graphID == gid &&
+                            a.contentKindRaw == galleryRaw
+                        }
+                    )
+                    attachmentCountDescriptor = FetchDescriptor<MetaAttachment>(
+                        predicate: #Predicate { a in
+                            a.ownerKindRaw == kindRaw &&
+                            a.ownerID == oid &&
+                            a.graphID == gid &&
+                            a.contentKindRaw != galleryRaw
+                        }
+                    )
+                } else {
+                    galleryCountDescriptor = FetchDescriptor<MetaAttachment>(
+                        predicate: #Predicate { a in
+                            a.ownerKindRaw == kindRaw &&
+                            a.ownerID == oid &&
+                            a.contentKindRaw == galleryRaw
+                        }
+                    )
+                    attachmentCountDescriptor = FetchDescriptor<MetaAttachment>(
+                        predicate: #Predicate { a in
+                            a.ownerKindRaw == kindRaw &&
+                            a.ownerID == oid &&
+                            a.contentKindRaw != galleryRaw
+                        }
+                    )
+                }
 
                 let g = try context.fetchCount(galleryCountDescriptor)
                 let a = try context.fetchCount(attachmentCountDescriptor)
@@ -140,16 +174,43 @@ actor MediaAllLoader {
 
             let kindRaw = ownerKindRaw
             let oid = ownerID
-            let gid = graphID
             let galleryRaw = AttachmentContentKind.galleryImage.rawValue
 
+            let predicate: Predicate<MetaAttachment>
+            if includeGalleryImages {
+                if let gid = graphID {
+                    predicate = #Predicate { a in
+                        a.ownerKindRaw == kindRaw &&
+                        a.ownerID == oid &&
+                        a.graphID == gid &&
+                        a.contentKindRaw == galleryRaw
+                    }
+                } else {
+                    predicate = #Predicate { a in
+                        a.ownerKindRaw == kindRaw &&
+                        a.ownerID == oid &&
+                        a.contentKindRaw == galleryRaw
+                    }
+                }
+            } else {
+                if let gid = graphID {
+                    predicate = #Predicate { a in
+                        a.ownerKindRaw == kindRaw &&
+                        a.ownerID == oid &&
+                        a.graphID == gid &&
+                        a.contentKindRaw != galleryRaw
+                    }
+                } else {
+                    predicate = #Predicate { a in
+                        a.ownerKindRaw == kindRaw &&
+                        a.ownerID == oid &&
+                        a.contentKindRaw != galleryRaw
+                    }
+                }
+            }
+
             var descriptor = FetchDescriptor<MetaAttachment>(
-                predicate: #Predicate { a in
-                    a.ownerKindRaw == kindRaw &&
-                    a.ownerID == oid &&
-                    (gid == nil || a.graphID == gid) &&
-                    (includeGalleryImages ? (a.contentKindRaw == galleryRaw) : (a.contentKindRaw != galleryRaw))
-                },
+                predicate: predicate,
                 sortBy: [SortDescriptor(\MetaAttachment.createdAt, order: .reverse)]
             )
             descriptor.fetchLimit = max(1, limit)

@@ -24,18 +24,29 @@ enum PhotoGalleryQueryBuilder {
     ) -> Query<MetaAttachment, [MetaAttachment]> {
         let kindRaw = ownerKind.rawValue
         let oid = ownerID
-        let gid = graphID
         let galleryRaw = AttachmentContentKind.galleryImage.rawValue
 
-        return Query<MetaAttachment, [MetaAttachment]>(
-            filter: #Predicate<MetaAttachment> { a in
-                a.ownerKindRaw == kindRaw &&
-                a.ownerID == oid &&
-                (gid == nil || a.graphID == gid) &&
-                a.contentKindRaw == galleryRaw
-            },
-            sort: [SortDescriptor(\MetaAttachment.createdAt, order: .reverse)]
-        )
+		// IMPORTANT: keep predicates store-translatable (avoid OR / optional tricks).
+		let predicate: Predicate<MetaAttachment>
+		if let gid = graphID {
+			predicate = #Predicate { a in
+				a.ownerKindRaw == kindRaw &&
+				a.ownerID == oid &&
+				a.graphID == gid &&
+				a.contentKindRaw == galleryRaw
+			}
+		} else {
+			predicate = #Predicate { a in
+				a.ownerKindRaw == kindRaw &&
+				a.ownerID == oid &&
+				a.contentKindRaw == galleryRaw
+			}
+		}
+
+		return Query<MetaAttachment, [MetaAttachment]>(
+			filter: predicate,
+			sort: [SortDescriptor(\MetaAttachment.createdAt, order: .reverse)]
+		)
     }
 
     /// FetchDescriptor for legacy attachments that might actually be images,
@@ -49,16 +60,24 @@ enum PhotoGalleryQueryBuilder {
     ) -> FetchDescriptor<MetaAttachment> {
         let kindRaw = ownerKind.rawValue
         let oid = ownerID
-        let gid = graphID
         let galleryRaw = AttachmentContentKind.galleryImage.rawValue
 
-        return FetchDescriptor<MetaAttachment>(
-            predicate: #Predicate { a in
-                a.ownerKindRaw == kindRaw &&
-                a.ownerID == oid &&
-                (gid == nil || a.graphID == gid) &&
-                a.contentKindRaw != galleryRaw
-            }
-        )
+		let predicate: Predicate<MetaAttachment>
+		if let gid = graphID {
+			predicate = #Predicate { a in
+				a.ownerKindRaw == kindRaw &&
+				a.ownerID == oid &&
+				a.graphID == gid &&
+				a.contentKindRaw != galleryRaw
+			}
+		} else {
+			predicate = #Predicate { a in
+				a.ownerKindRaw == kindRaw &&
+				a.ownerID == oid &&
+				a.contentKindRaw != galleryRaw
+			}
+		}
+
+		return FetchDescriptor<MetaAttachment>(predicate: predicate)
     }
 }

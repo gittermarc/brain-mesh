@@ -41,12 +41,27 @@ struct AttachmentsSection: View {
         let gid = graphID
         let galleryRaw = AttachmentContentKind.galleryImage.rawValue
 
-        _attachments = Query(
-            filter: #Predicate<MetaAttachment> { a in
-                a.ownerKindRaw == kindRaw && a.ownerID == oid && (gid == nil || a.graphID == gid) && a.contentKindRaw != galleryRaw
-            },
-            sort: [SortDescriptor(\MetaAttachment.createdAt, order: .reverse)]
-        )
+		// IMPORTANT: keep predicates store-translatable (avoid OR / optional tricks).
+		if let gid {
+			_attachments = Query(
+				filter: #Predicate<MetaAttachment> { a in
+					a.ownerKindRaw == kindRaw &&
+					a.ownerID == oid &&
+					a.graphID == gid &&
+					a.contentKindRaw != galleryRaw
+				},
+				sort: [SortDescriptor(\MetaAttachment.createdAt, order: .reverse)]
+			)
+		} else {
+			_attachments = Query(
+				filter: #Predicate<MetaAttachment> { a in
+					a.ownerKindRaw == kindRaw &&
+					a.ownerID == oid &&
+					a.contentKindRaw != galleryRaw
+				},
+				sort: [SortDescriptor(\MetaAttachment.createdAt, order: .reverse)]
+			)
+		}
     }
 
     var body: some View {

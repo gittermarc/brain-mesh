@@ -42,6 +42,15 @@ struct PhotoGalleryActions {
         ownerID: UUID,
         graphID: UUID?
     ) async {
+
+        // First, ensure legacy attachments (graphID == nil) get the current graph scope.
+        AttachmentGraphIDMigration.migrateIfNeeded(
+            context: modelContext,
+            ownerKindRaw: ownerKind.rawValue,
+            ownerID: ownerID,
+            graphID: graphID
+        )
+
         let fd = PhotoGalleryQueryBuilder.legacyImageMigrationCandidates(
             ownerKind: ownerKind,
             ownerID: ownerID,
