@@ -80,7 +80,7 @@ struct NotesAndPhotoSection: View {
 
     private var photoBlock: some View {
         VStack(alignment: .leading, spacing: 10) {
-            if let ui = currentUIImage() {
+            if let ui = currentUIImage(maxPixelSize: 2000) {
                 Image(uiImage: ui)
                     .resizable()
                     .scaledToFit()
@@ -88,7 +88,8 @@ struct NotesAndPhotoSection: View {
                     .overlay(RoundedRectangle(cornerRadius: 12).stroke(.secondary.opacity(0.25)))
                     .padding(.top, 6)
                     .onTapGesture {
-                        fullscreenImage = ui
+                        // Fullscreen should still be reasonably sharp, but must not decode huge originals.
+                        fullscreenImage = currentUIImage(maxPixelSize: 3200) ?? ui
                         showFullscreen = true
                     }
             } else {
@@ -124,12 +125,12 @@ struct NotesAndPhotoSection: View {
         "\(stableID.uuidString).jpg"
     }
 
-    private func currentUIImage() -> UIImage? {
+    private func currentUIImage(maxPixelSize: Int) -> UIImage? {
         // 1) Cache-Datei bevorzugen
-        if let ui = ImageStore.loadUIImage(path: imagePath) { return ui }
+        if let p = imagePath, let ui = ImageStore.loadUIImage(path: p, maxPixelSize: maxPixelSize) { return ui }
 
-        // 2) Fallback: direkt aus gesyncten Daten
-        if let d = imageData, let ui = UIImage(data: d) { return ui }
+        // 2) Fallback: direkt aus gesyncten Daten (downsampled)
+        if let ui = ImageStore.loadUIImage(data: imageData, maxPixelSize: maxPixelSize) { return ui }
 
         return nil
     }

@@ -88,13 +88,22 @@ enum AttachmentStore {
 
     /// Returns an existing local file URL if present on disk (localPath or deterministic filename).
     static func existingCachedFileURL(for attachment: MetaAttachment) -> URL? {
-        if let lp = attachment.localPath,
+        existingCachedFileURL(
+            localPath: attachment.localPath,
+            attachmentID: attachment.id,
+            fileExtension: attachment.fileExtension
+        )
+    }
+
+    /// Same as `existingCachedFileURL(for:)`, but without needing a SwiftData model instance.
+    static func existingCachedFileURL(localPath: String?, attachmentID: UUID, fileExtension: String) -> URL? {
+        if let lp = localPath,
            let url = url(forLocalPath: lp),
            FileManager.default.fileExists(atPath: url.path) {
             return url
         }
 
-        let fallback = makeLocalFilename(attachmentID: attachment.id, fileExtension: attachment.fileExtension)
+        let fallback = makeLocalFilename(attachmentID: attachmentID, fileExtension: fileExtension)
         if let url = url(forLocalPath: fallback),
            FileManager.default.fileExists(atPath: url.path) {
             return url
@@ -103,7 +112,7 @@ enum AttachmentStore {
         return nil
     }
 
-    /// Ensures a local file exists on disk for thumbnailing.
+/// Ensures a local file exists on disk for thumbnailing.
     /// Important: does NOT mutate the SwiftData model (no localPath writes).
     static func materializeFileURLForThumbnailIfNeeded(for attachment: MetaAttachment) -> URL? {
         if let existing = existingCachedFileURL(for: attachment) {
@@ -120,7 +129,15 @@ enum AttachmentStore {
         }
     }
 
-    /// Ensures we have a file URL for preview.
+    
+    /// Async + throttled materialization for thumbnailing in UI grids/lists.
+    ///
+    /// This avoids the classic "open a big grid -> spawn 30 disk writes & image decodes at once" meltdown.
+    static func materializeFileURLForThumbnailIfNeededAsync(for attachment: MetaAttachment) async -> URL? {
+        await AttachmentThumbnailMaterializer.shared.materialize(for: attachment)
+    }
+
+/// Ensures we have a file URL for preview.
     /// - If `localPath` exists, returns that.
     /// - Else, tries the deterministic filename (id + extension) if it exists on disk.
     /// - Else, writes `fileData` to cache for preview and persists `localPath`.
@@ -208,5 +225,105 @@ enum AttachmentStore {
             }
         }
         return total
+    }
+}
+
+
+// MARK: - Throttled thumbnail materialization
+
+/// Materializes attachment bytes into a local cache file, but throttles concurrent work to avoid memory spikes.
+/// This is used by thumbnail loaders (grids/lists) before handing URLs to thumbnail generators.
+fileprivate actor AttachmentThumbnailMaterializer {
+
+    static let shared = AttachmentThumbnailMaterializer()
+
+    private let maxConcurrent: Int = 1
+    private var active: Int = 0
+    private var waiters: [CheckedContinuation<Void, Never>] = []
+
+    private var inFlight: [UUID: [CheckedContinuation<URL?, Never>]] = [:]
+
+    private struct Snapshot: Sendable {
+        let id: UUID
+        let fileExtension: String
+        let localPath: String?
+    }
+
+    private func acquire() async {
+        if active < maxConcurrent {
+            active += 1
+            return
+        }
+
+        await withCheckedContinuation { cont in
+            waiters.append(cont)
+        }
+    }
+
+    private func release() {
+        if !waiters.isEmpty {
+            let cont = waiters.removeFirst()
+            cont.resume()
+            return
+        }
+        active = max(0, active - 1)
+    }
+
+    func materialize(for attachment: MetaAttachment) async -> URL? {
+        let snap = await MainActor.run {
+            Snapshot(
+                id: attachment.id,
+                fileExtension: attachment.fileExtension,
+                localPath: attachment.localPath
+            )
+        }
+
+        if let existing = AttachmentStore.existingCachedFileURL(
+            localPath: snap.localPath,
+            attachmentID: snap.id,
+            fileExtension: snap.fileExtension
+        ) {
+            return existing
+        }
+
+        if inFlight[snap.id] != nil {
+            return await withCheckedContinuation { cont in
+                inFlight[snap.id, default: []].append(cont)
+            }
+        }
+
+        inFlight[snap.id] = []
+        await acquire()
+        defer { release() }
+
+        // Re-check after acquiring the permit (another call might have materialized meanwhile).
+        var result: URL? = AttachmentStore.existingCachedFileURL(
+            localPath: snap.localPath,
+            attachmentID: snap.id,
+            fileExtension: snap.fileExtension
+        )
+
+        if result == nil {
+            let data = await MainActor.run { attachment.fileData }
+            if let data {
+                do {
+                    let local = try AttachmentStore.writeToCache(
+                        data: data,
+                        attachmentID: snap.id,
+                        fileExtension: snap.fileExtension
+                    )
+                    result = AttachmentStore.url(forLocalPath: local)
+                } catch {
+                    result = nil
+                }
+            }
+        }
+
+        let conts = inFlight.removeValue(forKey: snap.id) ?? []
+        for cont in conts {
+            cont.resume(returning: result)
+        }
+
+        return result
     }
 }

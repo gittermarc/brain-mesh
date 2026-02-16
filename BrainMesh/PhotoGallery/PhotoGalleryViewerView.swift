@@ -9,6 +9,7 @@ import SwiftUI
 import SwiftData
 import UniformTypeIdentifiers
 import UIKit
+import ImageIO
 
 struct PhotoGalleryViewerView: View {
     @Environment(\.dismiss) private var dismiss
@@ -65,9 +66,13 @@ struct PhotoGalleryViewerView: View {
                 emptyState
             } else {
                 TabView(selection: $selectionID) {
-                    ForEach(galleryImages) { att in
-                        PhotoGalleryViewerPage(attachment: att)
-                            .tag(att.id)
+                    let pages = Array(galleryImages.enumerated())
+                    ForEach(pages, id: \.element.id) { idx, att in
+                        PhotoGalleryViewerPage(
+                            attachment: att,
+                            shouldLoad: shouldLoadPage(at: idx, total: pages.count)
+                        )
+                        .tag(att.id)
                     }
                 }
                 .tabViewStyle(.page(indexDisplayMode: .automatic))
@@ -191,6 +196,11 @@ struct PhotoGalleryViewerView: View {
         galleryImages.first(where: { $0.id == selectionID })
     }
 
+    private func shouldLoadPage(at index: Int, total: Int) -> Bool {
+        guard let current = galleryImages.firstIndex(where: { $0.id == selectionID }) else { return false }
+        return abs(index - current) <= 1
+    }
+
     private var indexLabel: String? {
         guard let idx = galleryImages.firstIndex(where: { $0.id == selectionID }) else { return nil }
         return "\(idx + 1)/\(galleryImages.count)"
@@ -249,6 +259,7 @@ private struct PhotoGalleryViewerPage: View {
     @Environment(\.modelContext) private var modelContext
 
     let attachment: MetaAttachment
+    let shouldLoad: Bool
 
     @State private var uiImage: UIImage? = nil
     @State private var isLoading: Bool = false
@@ -268,13 +279,19 @@ private struct PhotoGalleryViewerPage: View {
                 }
             }
         }
-        .task(id: attachment.id) {
+        .task(id: "\(attachment.id.uuidString)|\(shouldLoad)") {
             await loadIfNeeded()
+        }
+        .onChange(of: shouldLoad) { _, newValue in
+            if !newValue {
+                uiImage = nil
+            }
         }
     }
 
     @MainActor
     private func loadIfNeeded() async {
+        guard shouldLoad else { return }
         if uiImage != nil { return }
         if isLoading { return }
         isLoading = true
@@ -288,10 +305,35 @@ private struct PhotoGalleryViewerPage: View {
         }
 
         let loaded = await Task.detached(priority: .userInitiated) {
-            UIImage(contentsOfFile: url.path)
+            ImageDownsampler.downsample(url: url, maxPixelSize: 3200)
         }.value
 
         uiImage = loaded
         isLoading = false
+    }
+}
+
+private enum ImageDownsampler {
+    static func downsample(url: URL, maxPixelSize: Int) -> UIImage? {
+        let sourceOptions: [CFString: Any] = [
+            kCGImageSourceShouldCache: false
+        ]
+
+        guard let src = CGImageSourceCreateWithURL(url as CFURL, sourceOptions as CFDictionary) else {
+            return UIImage(contentsOfFile: url.path)
+        }
+
+        let options: [CFString: Any] = [
+            kCGImageSourceCreateThumbnailFromImageAlways: true,
+            kCGImageSourceCreateThumbnailWithTransform: true,
+            kCGImageSourceThumbnailMaxPixelSize: maxPixelSize,
+            kCGImageSourceShouldCacheImmediately: true
+        ]
+
+        guard let cg = CGImageSourceCreateThumbnailAtIndex(src, 0, options as CFDictionary) else {
+            return UIImage(contentsOfFile: url.path)
+        }
+
+        return UIImage(cgImage: cg)
     }
 }

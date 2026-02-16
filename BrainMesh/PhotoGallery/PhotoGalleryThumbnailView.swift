@@ -11,7 +11,7 @@ import UIKit
 /// Thumbnail renderer used across gallery strip + browser grid.
 ///
 /// Goal: consistent tiles for portrait + landscape photos.
-/// - Background: blurred fill (keeps the tile "full")
+/// - Background: soft fill (keeps the tile "full")
 /// - Foreground: aspect-fit (keeps the whole photo visible)
 struct PhotoGalleryThumbnailView: View {
     let uiImage: UIImage
@@ -23,8 +23,7 @@ struct PhotoGalleryThumbnailView: View {
             Image(uiImage: uiImage)
                 .resizable()
                 .scaledToFill()
-                .blur(radius: 12)
-                .saturation(1.1)
+                                .saturation(1.1)
                 .opacity(0.92)
                 .overlay(Color.black.opacity(0.20))
 

@@ -292,11 +292,9 @@ private struct PhotoGalleryThumbnailTile: View {
         }
     }
 
-    @MainActor
     private func loadThumbnailIfNeeded() async {
         if thumbnail != nil { return }
-
-        guard let url = AttachmentStore.materializeFileURLForThumbnailIfNeeded(for: attachment) else { return }
+        guard let url = await AttachmentStore.materializeFileURLForThumbnailIfNeededAsync(for: attachment) else { return }
 
         let scale = UIScreen.main.scale
         let requestSize = CGSize(width: thumbRequestSide, height: thumbRequestSide)
@@ -304,11 +302,16 @@ private struct PhotoGalleryThumbnailTile: View {
         let img = await AttachmentThumbnailStore.shared.thumbnail(
             attachmentID: attachment.id,
             fileURL: url,
+            contentTypeIdentifier: attachment.contentTypeIdentifier,
+            fileExtension: attachment.fileExtension,
             isVideo: false,
             requestSize: requestSize,
             scale: scale
         )
 
-        thumbnail = img
+        await MainActor.run {
+            thumbnail = img
+        }
     }
+
 }

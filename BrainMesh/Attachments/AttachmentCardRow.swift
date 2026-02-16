@@ -12,6 +12,14 @@ import UniformTypeIdentifiers
 struct AttachmentCardRow: View {
 
     let attachment: MetaAttachment
+    let showsThumbnail: Bool
+    let showsVideoDuration: Bool
+
+    init(attachment: MetaAttachment, showsThumbnail: Bool = true, showsVideoDuration: Bool = true) {
+        self.attachment = attachment
+        self.showsThumbnail = showsThumbnail
+        self.showsVideoDuration = showsVideoDuration
+    }
 
     private let defaultThumbSide: CGFloat = 54
     private let videoThumbHeight: CGFloat = 54
@@ -41,8 +49,14 @@ struct AttachmentCardRow: View {
         .contentShape(Rectangle())
         .task(id: attachment.id) {
             await resetStateForNewAttachment()
-            await loadThumbnailIfPossible()
-            await loadVideoDurationIfNeeded()
+
+            if showsThumbnail {
+                await loadThumbnailIfPossible()
+            }
+
+            if showsVideoDuration {
+                await loadVideoDurationIfNeeded()
+            }
         }
     }
 
@@ -119,7 +133,7 @@ struct AttachmentCardRow: View {
     }
 
     private func loadThumbnailIfPossible() async {
-        guard let fileURL = AttachmentStore.materializeFileURLForThumbnailIfNeeded(for: attachment) else {
+        guard let fileURL = await AttachmentStore.materializeFileURLForThumbnailIfNeededAsync(for: attachment) else {
             return
         }
 
@@ -129,6 +143,8 @@ struct AttachmentCardRow: View {
         let image = await AttachmentThumbnailStore.shared.thumbnail(
             attachmentID: attachment.id,
             fileURL: fileURL,
+            contentTypeIdentifier: attachment.contentTypeIdentifier,
+            fileExtension: attachment.fileExtension,
             isVideo: isVideo,
             requestSize: requestSize,
             scale: scale
@@ -143,7 +159,7 @@ struct AttachmentCardRow: View {
         guard isVideo else { return }
         guard videoDurationText == nil else { return }
 
-        guard let fileURL = AttachmentStore.materializeFileURLForThumbnailIfNeeded(for: attachment) else {
+        guard let fileURL = await AttachmentStore.materializeFileURLForThumbnailIfNeededAsync(for: attachment) else {
             return
         }
 

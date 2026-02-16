@@ -34,7 +34,7 @@ struct PhotoGalleryBrowserView: View {
 
     /// One disk-cached thumbnail per attachment id.
     /// Keep this reasonably large so it still looks crisp in the full browser grid.
-    private let thumbRequestSide: CGFloat = 520
+    private let thumbRequestSide: CGFloat = 220
 
     init(
         ownerKind: NodeKind,
@@ -268,10 +268,9 @@ private struct PhotoGalleryGridTile: View {
         }
     }
 
-    @MainActor
     private func loadThumbnailIfNeeded() async {
         if thumbnail != nil { return }
-        guard let url = AttachmentStore.materializeFileURLForThumbnailIfNeeded(for: attachment) else { return }
+        guard let url = await AttachmentStore.materializeFileURLForThumbnailIfNeededAsync(for: attachment) else { return }
 
         let scale = UIScreen.main.scale
         let requestSize = CGSize(width: thumbRequestSide, height: thumbRequestSide)
@@ -279,11 +278,16 @@ private struct PhotoGalleryGridTile: View {
         let img = await AttachmentThumbnailStore.shared.thumbnail(
             attachmentID: attachment.id,
             fileURL: url,
+            contentTypeIdentifier: attachment.contentTypeIdentifier,
+            fileExtension: attachment.fileExtension,
             isVideo: false,
             requestSize: requestSize,
             scale: scale
         )
 
-        thumbnail = img
+        await MainActor.run {
+            thumbnail = img
+        }
     }
+
 }

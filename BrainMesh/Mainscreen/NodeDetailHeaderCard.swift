@@ -34,8 +34,9 @@ struct NodeDetailHeaderCard: View {
     var chips: [NodeHeaderChip] = []
 
     private var previewImage: UIImage? {
-        if let ui = ImageStore.loadUIImage(path: imagePath) { return ui }
-        if let d = imageData, let ui = UIImage(data: d) { return ui }
+        // Small card preview: keep decode tiny to avoid memory spikes.
+        if let p = imagePath, let ui = ImageStore.loadUIImage(path: p, maxPixelSize: 420) { return ui }
+        if let ui = ImageStore.loadUIImage(data: imageData, maxPixelSize: 420) { return ui }
         return nil
     }
 

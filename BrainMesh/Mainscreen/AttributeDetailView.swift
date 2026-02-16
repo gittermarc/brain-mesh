@@ -86,318 +86,299 @@ struct AttributeDetailView: View {
         )
     }
 
-    private var noteSnippet: String {
-    attribute.notes.trimmingCharacters(in: .whitespacesAndNewlines)
-}
+    var body: some View {
+        ScrollViewReader { proxy in
+            ScrollView {
+                VStack(spacing: 14) {
+                    NodeHeroCard(
+                        kindTitle: "Attribut",
+                        placeholderIcon: attribute.iconSymbolName ?? "tag",
+                        imageData: attribute.imageData,
+                        imagePath: attribute.imagePath,
+                        title: Binding(
+                            get: { attribute.name },
+                            set: { attribute.name = $0 }
+                        ),
+                        subtitle: attribute.owner?.name,
+                        pills: [
+                            NodeStatPill(title: "\(outgoingLinks.count)", systemImage: "arrow.up.right"),
+                            NodeStatPill(title: "\(incomingLinks.count)", systemImage: "arrow.down.left"),
+                            NodeStatPill(title: "\(galleryImages.count + attachments.count)", systemImage: "photo.on.rectangle")
+                        ]
+                    )
 
-private var hasNote: Bool {
-    !noteSnippet.isEmpty
-}
+                    NodeToolbelt {
+                        NodeToolbeltButton(title: "Link", systemImage: "link") {
+                            showLinkChooser = true
+                        }
 
-private var topLinks: [NodeRef] {
-    NodeTopLinks.compute(outgoing: outgoingLinks, incoming: incomingLinks, max: 2)
-}
+                        NodeToolbeltButton(title: "Foto", systemImage: "photo") {
+                            showGalleryBrowser = true
+                        }
 
-private var mediaSummaryText: String {
-    "\(galleryImages.count) Fotos · \(attachments.count) Anhänge"
-}
+                        NodeToolbeltButton(title: "Datei", systemImage: "paperclip") {
+                            showAttachmentChooser = true
+                        }
+                    }
 
-var body: some View {
-    ScrollViewReader { proxy in
-        screen(proxy: proxy)
-    }
-}
+                    let noteSnippet = attribute.notes.trimmingCharacters(in: .whitespacesAndNewlines)
+                    let hasNote = !noteSnippet.isEmpty
+                    let topLinks = NodeTopLinks.compute(outgoing: outgoingLinks, incoming: incomingLinks, max: 2)
 
-private func screen(proxy: ScrollViewProxy) -> some View {
-    ScrollView {
-        VStack(spacing: 14) {
-            heroCard()
+                    NodeHighlightsRow {
+                        NodeHighlightTile(
+                            title: "Notiz",
+                            systemImage: "note.text",
+                            subtitle: hasNote ? NodeTopLinks.previewText(noteSnippet, maxChars: 80) : "Noch keine Notiz",
+                            footer: hasNote ? "Tippen zum Bearbeiten" : "Tippen zum Schreiben",
+                            onTap: {
+                                showNotesEditor = true
+                            }
+                        )
 
-            toolbelt()
+                        NodeHighlightTile(
+                            title: "Medien",
+                            systemImage: "photo.on.rectangle",
+                            subtitle: "\(galleryImages.count) Fotos · \(attachments.count) Anhänge",
+                            footer: galleryImages.isEmpty && attachments.isEmpty ? "Tippen zum Hinzufügen" : "Tippen zum Ansehen",
+                            onTap: {
+                                proxy.scrollTo(NodeDetailAnchor.media.rawValue, anchor: .top)
+                            },
+                            accessory: {
+                                NodeMiniThumbStrip(attachments: Array(galleryImages.prefix(3)))
+                            }
+                        )
 
-            highlightsRow(proxy: proxy)
+                        NodeHighlightTile(
+                            title: "Top Links",
+                            systemImage: "link",
+                            subtitle: topLinks.isEmpty ? "Keine Links" : topLinks.map { $0.label }.joined(separator: " · "),
+                            footer: "Tippen für Alle",
+                            onTap: {
+                                proxy.scrollTo(NodeDetailAnchor.connections.rawValue, anchor: .top)
+                            }
+                        )
+                    }
 
-            notesCard()
+                    NodeNotesCard(
+                        notes: Binding(
+                            get: { attribute.notes },
+                            set: { attribute.notes = $0 }
+                        ),
+                        onEdit: { showNotesEditor = true }
+                    )
+                    .id(NodeDetailAnchor.notes.rawValue)
 
-            ownerCard()
+                    if let owner = attribute.owner {
+                        NodeOwnerCard(owner: owner)
+                    }
 
-            connectionsCard()
+                    NodeConnectionsCard(
+                        ownerKind: .attribute,
+                        ownerID: attribute.id,
+                        graphID: attribute.graphID,
+                        outgoing: outgoingLinks,
+                        incoming: incomingLinks,
+                        segment: $connectionsSegment,
+                        previewLimit: 5
+                    )
+                    .id(NodeDetailAnchor.connections.rawValue)
 
-            mediaCard()
+                    NodeMediaCard(
+                        ownerKind: .attribute,
+                        ownerID: attribute.id,
+                        graphID: attribute.graphID,
+                        mainImageData: Binding(
+                            get: { attribute.imageData },
+                            set: { attribute.imageData = $0 }
+                        ),
+                        mainImagePath: Binding(
+                            get: { attribute.imagePath },
+                            set: { attribute.imagePath = $0 }
+                        ),
+                        mainStableID: attribute.id,
+                        galleryImages: galleryImages,
+                        attachments: attachments,
+                        onOpenAll: {},
+                        onManage: {
+                            showMediaManageChooser = true
+                        },
+                        onTapGallery: { id in
+                            galleryViewerRequest = PhotoGalleryViewerRequest(startAttachmentID: id)
+                        },
+                        onTapAttachment: { att in
+                            openAttachment(att)
+                        }
+                    )
+                    .id(NodeDetailAnchor.media.rawValue)
 
-            appearanceCard()
+                    NodeAppearanceCard(iconSymbolName: Binding(
+                        get: { attribute.iconSymbolName },
+                        set: { attribute.iconSymbolName = $0 }
+                    ))
 
-            Spacer(minLength: 8)
-        }
-        .padding(.horizontal, 16)
-        .padding(.top, 12)
-        .padding(.bottom, 18)
-    }
-    .background(Color(uiColor: .systemGroupedBackground).ignoresSafeArea())
-    .scrollDismissesKeyboard(.interactively)
-    .navigationTitle(attribute.displayName)
-    .navigationBarTitleDisplayMode(.inline)
-    .toolbar {
-        ToolbarItem(placement: .primaryAction) {
-            Menu {
-                Button(role: .destructive) {
-                    confirmDelete = true
-                } label: {
-                    Label("Löschen", systemImage: "trash")
+                    Spacer(minLength: 8)
                 }
-            } label: {
-                Image(systemName: "ellipsis.circle")
+                .padding(.horizontal, 16)
+                .padding(.top, 12)
+                .padding(.bottom, 18)
             }
-            .accessibilityLabel("Menü")
-        }
-    }
-    .confirmationDialog(
-        "Link hinzufügen",
-        isPresented: $showLinkChooser,
-        titleVisibility: .visible
-    ) {
-        Button("Link hinzufügen") { showAddLink = true }
-        Button("Mehrere Links hinzufügen…") { showBulkLink = true }
-        Button("Abbrechen", role: .cancel) {}
-    }
-    .confirmationDialog(
-        "Datei hinzufügen",
-        isPresented: $showAttachmentChooser,
-        titleVisibility: .visible
-    ) {
-        Button("Datei auswählen") { isImportingFile = true }
-        Button("Video aus Fotos") { isPickingVideo = true }
-        Button("Anhänge verwalten") { showAttachmentsManager = true }
-        Button("Abbrechen", role: .cancel) {}
-    }
-    .confirmationDialog(
-        "Medien verwalten",
-        isPresented: $showMediaManageChooser,
-        titleVisibility: .visible
-    ) {
-        Button("Galerie verwalten") { showGalleryBrowser = true }
-        Button("Anhänge verwalten") { showAttachmentsManager = true }
-        Button("Abbrechen", role: .cancel) {}
-    }
-    .alert("Attribut löschen?", isPresented: $confirmDelete) {
-        Button("Löschen", role: .destructive) {
-            deleteAttribute()
-        }
-        Button("Abbrechen", role: .cancel) {}
-    } message: {
-        Text("Diese Löschung kann nicht rückgängig gemacht werden.")
-    }
-    .alert("BrainMesh", isPresented: Binding(
-        get: { errorMessage != nil },
-        set: { if !$0 { errorMessage = nil } }
-    )) {
-        Button("OK", role: .cancel) {}
-    } message: {
-        Text(errorMessage ?? "")
-    }
-    .sheet(isPresented: $showGalleryBrowser) {
-        NavigationStack {
-            PhotoGalleryBrowserView(
-                ownerKind: .attribute,
-                ownerID: attribute.id,
-                graphID: attribute.graphID,
-                mainImageData: $attribute.imageData,
-                mainImagePath: $attribute.imagePath,
-                mainStableID: attribute.id
+            .background(Color(uiColor: .systemGroupedBackground).ignoresSafeArea())
+            .scrollDismissesKeyboard(.interactively)
+            .navigationTitle(attribute.displayName)
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .primaryAction) {
+                    Menu {
+                        Button(role: .destructive) {
+                            confirmDelete = true
+                        } label: {
+                            Label("Löschen", systemImage: "trash")
+                        }
+                    } label: {
+                        Image(systemName: "ellipsis.circle")
+                    }
+                    .accessibilityLabel("Menü")
+                }
+            }
+            .confirmationDialog(
+                "Link hinzufügen",
+                isPresented: $showLinkChooser,
+                titleVisibility: .visible
+            ) {
+                Button("Link hinzufügen") { showAddLink = true }
+                Button("Mehrere Links hinzufügen…") { showBulkLink = true }
+                Button("Abbrechen", role: .cancel) {}
+            }
+            .confirmationDialog(
+                "Datei hinzufügen",
+                isPresented: $showAttachmentChooser,
+                titleVisibility: .visible
+            ) {
+                Button("Datei auswählen") { isImportingFile = true }
+                Button("Video aus Fotos") { isPickingVideo = true }
+                Button("Anhänge verwalten") { showAttachmentsManager = true }
+                Button("Abbrechen", role: .cancel) {}
+            }
+            .confirmationDialog(
+                "Medien verwalten",
+                isPresented: $showMediaManageChooser,
+                titleVisibility: .visible
+            ) {
+                Button("Galerie verwalten") { showGalleryBrowser = true }
+                Button("Anhänge verwalten") { showAttachmentsManager = true }
+                Button("Abbrechen", role: .cancel) {}
+            }
+            .alert("Attribut löschen?", isPresented: $confirmDelete) {
+                Button("Löschen", role: .destructive) {
+                    deleteAttribute()
+                }
+                Button("Abbrechen", role: .cancel) {}
+            } message: {
+                Text("Diese Löschung kann nicht rückgängig gemacht werden.")
+            }
+            .alert("BrainMesh", isPresented: Binding(
+                get: { errorMessage != nil },
+                set: { if !$0 { errorMessage = nil } }
+            )) {
+                Button("OK", role: .cancel) {}
+            } message: {
+                Text(errorMessage ?? "")
+            }
+            .sheet(isPresented: $showGalleryBrowser) {
+                NavigationStack {
+                    PhotoGalleryBrowserView(
+                        ownerKind: .attribute,
+                        ownerID: attribute.id,
+                        graphID: attribute.graphID,
+                        mainImageData: Binding(
+                            get: { attribute.imageData },
+                            set: { attribute.imageData = $0 }
+                        ),
+                        mainImagePath: Binding(
+                            get: { attribute.imagePath },
+                            set: { attribute.imagePath = $0 }
+                        ),
+                        mainStableID: attribute.id
+                    )
+                }
+            }
+            .sheet(isPresented: $showAttachmentsManager) {
+                NavigationStack {
+                    NodeAttachmentsManageView(
+                        ownerKind: .attribute,
+                        ownerID: attribute.id,
+                        graphID: attribute.graphID
+                    )
+                }
+            }
+            .fullScreenCover(item: $galleryViewerRequest) { req in
+                PhotoGalleryViewerView(
+                    ownerKind: .attribute,
+                    ownerID: attribute.id,
+                    graphID: attribute.graphID,
+                    startAttachmentID: req.startAttachmentID,
+                    mainImageData: Binding(
+                        get: { attribute.imageData },
+                        set: { attribute.imageData = $0 }
+                    ),
+                    mainImagePath: Binding(
+                        get: { attribute.imagePath },
+                        set: { attribute.imagePath = $0 }
+                    ),
+                    mainStableID: attribute.id
+                )
+            }
+            .sheet(item: $attachmentPreviewSheet) { state in
+                AttachmentPreviewSheet(
+                    title: state.title,
+                    url: state.url,
+                    contentTypeIdentifier: state.contentTypeIdentifier,
+                    fileExtension: state.fileExtension
+                )
+            }
+            .background(
+                VideoPickerPresenter(isPresented: $isPickingVideo) { result in
+                    Task { @MainActor in
+                        await handlePickedVideo(result)
+                    }
+                }
+                .frame(width: 0, height: 0)
             )
-        }
-    }
-    .sheet(isPresented: $showAttachmentsManager) {
-        NavigationStack {
-            NodeAttachmentsManageView(
-                ownerKind: .attribute,
-                ownerID: attribute.id,
-                graphID: attribute.graphID
+            .background(
+                VideoPlaybackPresenter(request: $videoPlayback)
+                    .frame(width: 0, height: 0)
             )
-        }
-    }
-    .fullScreenCover(item: $galleryViewerRequest) { req in
-        PhotoGalleryViewerView(
-            ownerKind: .attribute,
-            ownerID: attribute.id,
-            graphID: attribute.graphID,
-            startAttachmentID: req.startAttachmentID,
-            mainImageData: $attribute.imageData,
-            mainImagePath: $attribute.imagePath,
-            mainStableID: attribute.id
-        )
-    }
-    .sheet(item: $attachmentPreviewSheet) { state in
-        AttachmentPreviewSheet(
-            title: state.title,
-            url: state.url,
-            contentTypeIdentifier: state.contentTypeIdentifier,
-            fileExtension: state.fileExtension
-        )
-    }
-    .background(
-        VideoPickerPresenter(isPresented: $isPickingVideo) { result in
-            Task { @MainActor in
-                await handlePickedVideo(result)
+            .fileImporter(
+                isPresented: $isImportingFile,
+                allowedContentTypes: [.item],
+                allowsMultipleSelection: false
+            ) { result in
+                switch result {
+                case .success(let urls):
+                    guard let url = urls.first else { return }
+                    importFile(from: url)
+                case .failure(let error):
+                    errorMessage = error.localizedDescription
+                }
+            }
+            .addLinkSheet(isPresented: $showAddLink, source: attribute.nodeRef, graphID: attribute.graphID)
+            .bulkLinkSheet(isPresented: $showBulkLink, source: attribute.nodeRef, graphID: attribute.graphID)
+            .sheet(isPresented: $showNotesEditor) {
+                NavigationStack {
+                    NodeNotesEditorView(
+                        title: attribute.displayName.isEmpty ? "Notiz" : "Notiz – \(attribute.displayName)",
+                        notes: Binding(
+                            get: { attribute.notes },
+                            set: { attribute.notes = $0 }
+                        )
+                    )
+                }
             }
         }
-        .frame(width: 0, height: 0)
-    )
-    .background(
-        VideoPlaybackPresenter(request: $videoPlayback)
-            .frame(width: 0, height: 0)
-    )
-    .fileImporter(
-        isPresented: $isImportingFile,
-        allowedContentTypes: [.item],
-        allowsMultipleSelection: false
-    ) { result in
-        switch result {
-        case .success(let urls):
-            guard let url = urls.first else { return }
-            importFile(from: url)
-        case .failure(let error):
-            errorMessage = error.localizedDescription
-        }
     }
-    .addLinkSheet(isPresented: $showAddLink, source: attribute.nodeRef, graphID: attribute.graphID)
-    .bulkLinkSheet(isPresented: $showBulkLink, source: attribute.nodeRef, graphID: attribute.graphID)
-    .sheet(isPresented: $showNotesEditor) {
-        NavigationStack {
-            NodeNotesEditorView(
-                title: attribute.displayName.isEmpty ? "Notiz" : "Notiz – \(attribute.displayName)",
-                notes: $attribute.notes
-            )
-        }
-    }
-}
 
-private func heroCard() -> some View {
-    NodeHeroCard(
-        kindTitle: "Attribut",
-        placeholderIcon: attribute.iconSymbolName ?? "tag",
-        imageData: attribute.imageData,
-        imagePath: attribute.imagePath,
-        title: $attribute.name,
-        subtitle: attribute.owner?.name,
-        pills: [
-            NodeStatPill(title: "\(outgoingLinks.count)", systemImage: "arrow.up.right"),
-            NodeStatPill(title: "\(incomingLinks.count)", systemImage: "arrow.down.left"),
-            NodeStatPill(title: "\(galleryImages.count + attachments.count)", systemImage: "photo.on.rectangle")
-        ]
-    )
-}
-
-private func toolbelt() -> some View {
-    NodeToolbelt {
-        NodeToolbeltButton(title: "Link", systemImage: "link") {
-            showLinkChooser = true
-        }
-
-        NodeToolbeltButton(title: "Foto", systemImage: "photo") {
-            showGalleryBrowser = true
-        }
-
-        NodeToolbeltButton(title: "Datei", systemImage: "paperclip") {
-            showAttachmentChooser = true
-        }
-    }
-}
-
-private func highlightsRow(proxy: ScrollViewProxy) -> some View {
-    NodeHighlightsRow {
-        NodeHighlightTile(
-            title: "Notiz",
-            systemImage: "note.text",
-            subtitle: hasNote ? NodeTopLinks.previewText(noteSnippet, maxChars: 80) : "Noch keine Notiz",
-            footer: hasNote ? "Tippen zum Bearbeiten" : "Tippen zum Schreiben",
-            onTap: {
-                showNotesEditor = true
-            }
-        )
-
-        NodeHighlightTile(
-            title: "Medien",
-            systemImage: "photo.on.rectangle",
-            subtitle: mediaSummaryText,
-            footer: galleryImages.isEmpty && attachments.isEmpty ? "Tippen zum Hinzufügen" : "Tippen zum Ansehen",
-            accessory: {
-                NodeMiniThumbStrip(attachments: Array(galleryImages.prefix(3)))
-            },
-            onTap: {
-                proxy.scrollTo(NodeDetailAnchor.media.rawValue, anchor: .top)
-            }
-        )
-
-        NodeHighlightTile(
-            title: "Top Links",
-            systemImage: "link",
-            subtitle: topLinks.isEmpty ? "Keine Links" : topLinks.map { $0.label }.joined(separator: " · "),
-            footer: "Tippen für Alle",
-            onTap: {
-                proxy.scrollTo(NodeDetailAnchor.connections.rawValue, anchor: .top)
-            }
-        )
-    }
-}
-
-private func notesCard() -> some View {
-    NodeNotesCard(
-        notes: $attribute.notes,
-        onEdit: { showNotesEditor = true }
-    )
-    .id(NodeDetailAnchor.notes.rawValue)
-}
-
-@ViewBuilder
-private func ownerCard() -> some View {
-    if let owner = attribute.owner {
-        NodeOwnerCard(owner: owner)
-    }
-}
-
-private func connectionsCard() -> some View {
-    NodeConnectionsCard(
-        ownerKind: .attribute,
-        ownerID: attribute.id,
-        graphID: attribute.graphID,
-        outgoing: outgoingLinks,
-        incoming: incomingLinks,
-        segment: $connectionsSegment,
-        previewLimit: 5
-    )
-    .id(NodeDetailAnchor.connections.rawValue)
-}
-
-private func mediaCard() -> some View {
-    NodeMediaCard(
-        ownerKind: .attribute,
-        ownerID: attribute.id,
-        graphID: attribute.graphID,
-        mainImageData: $attribute.imageData,
-        mainImagePath: $attribute.imagePath,
-        mainStableID: attribute.id,
-        galleryImages: galleryImages,
-        attachments: attachments,
-        onOpenAll: {},
-        onManage: {
-            showMediaManageChooser = true
-        },
-        onTapGallery: { id in
-            galleryViewerRequest = PhotoGalleryViewerRequest(startAttachmentID: id)
-        },
-        onTapAttachment: { att in
-            openAttachment(att)
-        }
-    )
-    .id(NodeDetailAnchor.media.rawValue)
-}
-
-private func appearanceCard() -> some View {
-    NodeAppearanceCard(iconSymbolName: $attribute.iconSymbolName)
-}
-
-// MARK: - Attachments (Preview)
+    // MARK: - Attachments (Preview)
 
     private func openAttachment(_ attachment: MetaAttachment) {
         guard let url = AttachmentStore.ensurePreviewURL(for: attachment) else {

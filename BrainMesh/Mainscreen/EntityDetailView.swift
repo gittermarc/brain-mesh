@@ -375,11 +375,11 @@ struct EntityDetailView: View {
                 systemImage: "photo.on.rectangle",
                 subtitle: "\(galleryImages.count) Fotos · \(attachments.count) Anhänge",
                 footer: galleryImages.isEmpty && attachments.isEmpty ? "Tippen zum Hinzufügen" : "Tippen für Alle",
-                accessory: {
-                    NodeMiniThumbStrip(attachments: Array(galleryImages.prefix(3)))
-                },
                 onTap: {
                     proxy.scrollTo(NodeDetailAnchor.media.rawValue, anchor: .top)
+                },
+                accessory: {
+                    NodeMiniThumbStrip(attachments: Array(galleryImages.prefix(3)))
                 }
             )
 
@@ -654,8 +654,9 @@ struct NodeHeroCard: View {
     let pills: [NodeStatPill]
 
     private var previewImage: UIImage? {
-        if let ui = ImageStore.loadUIImage(path: imagePath) { return ui }
-        if let d = imageData, let ui = UIImage(data: d) { return ui }
+        // Hero image: downsample to a sensible size for the header.
+        if let p = imagePath, let ui = ImageStore.loadUIImage(path: p, maxPixelSize: 1800) { return ui }
+        if let ui = ImageStore.loadUIImage(data: imageData, maxPixelSize: 1800) { return ui }
         return nil
     }
 
@@ -665,7 +666,7 @@ struct NodeHeroCard: View {
                 .fill(Color(uiColor: .secondarySystemGroupedBackground))
                 .overlay(
                     RoundedRectangle(cornerRadius: 24, style: .continuous)
-                        .stroke(Color.secondary.opacity(0.12))
+                        .stroke(.secondary.opacity(0.12))
                 )
 
             if let ui = previewImage {
@@ -772,7 +773,7 @@ struct NodeToolbeltButton: View {
             .background(Color(uiColor: .secondarySystemGroupedBackground), in: RoundedRectangle(cornerRadius: 18, style: .continuous))
             .overlay(
                 RoundedRectangle(cornerRadius: 18, style: .continuous)
-                    .stroke(Color.secondary.opacity(0.12))
+                    .stroke(.secondary.opacity(0.12))
             )
         }
         .buttonStyle(.plain)
@@ -817,6 +818,25 @@ struct NodeHighlightTile<Accessory: View>: View {
         self.onTap = onTap
     }
 
+    init(
+        title: String,
+        systemImage: String,
+        subtitle: String,
+        footer: String,
+        onTap: @escaping () -> Void,
+        accessory: (() -> Accessory)? = nil
+    ) {
+        self.init(
+            title: title,
+            systemImage: systemImage,
+            subtitle: subtitle,
+            footer: footer,
+            accessory: accessory,
+            onTap: onTap
+        )
+    }
+
+
     var body: some View {
         Button(action: onTap) {
             VStack(alignment: .leading, spacing: 10) {
@@ -848,11 +868,12 @@ struct NodeHighlightTile<Accessory: View>: View {
             .background(Color(uiColor: .secondarySystemGroupedBackground), in: RoundedRectangle(cornerRadius: 20, style: .continuous))
             .overlay(
                 RoundedRectangle(cornerRadius: 20, style: .continuous)
-                    .stroke(Color.secondary.opacity(0.12))
+                    .stroke(.secondary.opacity(0.12))
             )
         }
         .buttonStyle(.plain)
     }
+
 }
 
 extension NodeHighlightTile where Accessory == EmptyView {
@@ -874,7 +895,8 @@ extension NodeHighlightTile where Accessory == EmptyView {
     }
 }
 
-struct NodeMiniThumbStrip: View {
+struct NodeMiniThumbStrip
+: View {
     let attachments: [MetaAttachment]
 
     var body: some View {
@@ -914,24 +936,28 @@ private struct NodeThumbMiniTile: View {
         }
     }
 
-    @MainActor
     private func loadThumbnailIfNeeded() async {
         if thumbnail != nil { return }
-        guard let url = AttachmentStore.materializeFileURLForThumbnailIfNeeded(for: attachment) else { return }
+        guard let url = await AttachmentStore.materializeFileURLForThumbnailIfNeededAsync(for: attachment) else { return }
 
         let scale = UIScreen.main.scale
-        let requestSize = CGSize(width: 140, height: 140)
+        let requestSize = CGSize(width: 90, height: 90)
 
         let img = await AttachmentThumbnailStore.shared.thumbnail(
             attachmentID: attachment.id,
             fileURL: url,
+            contentTypeIdentifier: attachment.contentTypeIdentifier,
+            fileExtension: attachment.fileExtension,
             isVideo: false,
             requestSize: requestSize,
             scale: scale
         )
 
-        thumbnail = img
+        await MainActor.run {
+            thumbnail = img
+        }
     }
+
 }
 
 struct NodeNotesCard: View {
@@ -971,7 +997,7 @@ struct NodeNotesCard: View {
         .background(Color(uiColor: .secondarySystemGroupedBackground), in: RoundedRectangle(cornerRadius: 24, style: .continuous))
         .overlay(
             RoundedRectangle(cornerRadius: 24, style: .continuous)
-                .stroke(Color.secondary.opacity(0.12))
+                .stroke(.secondary.opacity(0.12))
         )
     }
 }
@@ -1037,7 +1063,7 @@ struct NodeOwnerCard: View {
         .background(Color(uiColor: .secondarySystemGroupedBackground), in: RoundedRectangle(cornerRadius: 24, style: .continuous))
         .overlay(
             RoundedRectangle(cornerRadius: 24, style: .continuous)
-                .stroke(Color.secondary.opacity(0.12))
+                .stroke(.secondary.opacity(0.12))
         )
     }
 }
@@ -1108,7 +1134,7 @@ struct NodeConnectionsCard: View {
         .background(Color(uiColor: .secondarySystemGroupedBackground), in: RoundedRectangle(cornerRadius: 24, style: .continuous))
         .overlay(
             RoundedRectangle(cornerRadius: 24, style: .continuous)
-                .stroke(Color.secondary.opacity(0.12))
+                .stroke(.secondary.opacity(0.12))
         )
     }
 }
@@ -1244,7 +1270,7 @@ struct NodeMediaCard: View {
         .background(Color(uiColor: .secondarySystemGroupedBackground), in: RoundedRectangle(cornerRadius: 24, style: .continuous))
         .overlay(
             RoundedRectangle(cornerRadius: 24, style: .continuous)
-                .stroke(Color.secondary.opacity(0.12))
+                .stroke(.secondary.opacity(0.12))
         )
     }
 }
@@ -1311,24 +1337,28 @@ private struct NodeGalleryThumbTile: View {
         }
     }
 
-    @MainActor
     private func loadThumbnailIfNeeded() async {
         if thumbnail != nil { return }
-        guard let url = AttachmentStore.materializeFileURLForThumbnailIfNeeded(for: attachment) else { return }
+        guard let url = await AttachmentStore.materializeFileURLForThumbnailIfNeededAsync(for: attachment) else { return }
 
         let scale = UIScreen.main.scale
-        let requestSize = CGSize(width: 420, height: 420)
+        let requestSize = CGSize(width: 220, height: 220)
 
         let img = await AttachmentThumbnailStore.shared.thumbnail(
             attachmentID: attachment.id,
             fileURL: url,
+            contentTypeIdentifier: attachment.contentTypeIdentifier,
+            fileExtension: attachment.fileExtension,
             isVideo: false,
             requestSize: requestSize,
             scale: scale
         )
 
-        thumbnail = img
+        await MainActor.run {
+            thumbnail = img
+        }
     }
+
 }
 
 struct NodeEntityAttributesCard: View {
@@ -1384,7 +1414,7 @@ struct NodeEntityAttributesCard: View {
         .background(Color(uiColor: .secondarySystemGroupedBackground), in: RoundedRectangle(cornerRadius: 24, style: .continuous))
         .overlay(
             RoundedRectangle(cornerRadius: 24, style: .continuous)
-                .stroke(Color.secondary.opacity(0.12))
+                .stroke(.secondary.opacity(0.12))
         )
     }
 }
@@ -1404,7 +1434,7 @@ struct NodeAppearanceCard: View {
         .background(Color(uiColor: .secondarySystemGroupedBackground), in: RoundedRectangle(cornerRadius: 24, style: .continuous))
         .overlay(
             RoundedRectangle(cornerRadius: 24, style: .continuous)
-                .stroke(Color.secondary.opacity(0.12))
+                .stroke(.secondary.opacity(0.12))
         )
     }
 }
@@ -1677,7 +1707,7 @@ struct NodeMediaAllView: View {
 
     var body: some View {
         ScrollView {
-            VStack(alignment: .leading, spacing: 14) {
+            LazyVStack(alignment: .leading, spacing: 14) {
                 if galleryImages.isEmpty {
                     Text("Keine Fotos in der Galerie.")
                         .foregroundStyle(.secondary)
@@ -1692,14 +1722,12 @@ struct NodeMediaAllView: View {
                 }
 
                 if !attachments.isEmpty {
-                    VStack(alignment: .leading, spacing: 8) {
-                        Text("Anhänge")
-                            .font(.headline)
+                    Text("Anhänge")
+                        .font(.headline)
 
-                        ForEach(attachments) { att in
-                            AttachmentCardRow(attachment: att)
-                                .onTapGesture { openAttachment(att) }
-                        }
+                    ForEach(attachments) { att in
+                        AttachmentCardRow(attachment: att)
+                            .onTapGesture { openAttachment(att) }
                     }
                 } else {
                     Text("Keine Anhänge.")
