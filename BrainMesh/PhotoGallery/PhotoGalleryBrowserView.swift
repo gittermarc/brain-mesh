@@ -268,10 +268,16 @@ private struct PhotoGalleryGridTile: View {
         }
     }
 
-    @MainActor
     private func loadThumbnailIfNeeded() async {
         if thumbnail != nil { return }
-        guard let url = await AttachmentStore.materializeFileURLForThumbnailIfNeededAsync(for: attachment) else { return }
+
+        guard let url = await AttachmentHydrator.shared.ensureFileURL(
+            attachmentID: attachment.id,
+            fileExtension: attachment.fileExtension,
+            localPath: attachment.localPath
+        ) else {
+            return
+        }
 
         let scale = UIScreen.main.scale
         let requestSize = CGSize(width: thumbRequestSide, height: thumbRequestSide)
@@ -284,6 +290,8 @@ private struct PhotoGalleryGridTile: View {
             scale: scale
         )
 
-        thumbnail = img
+        await MainActor.run {
+            thumbnail = img
+        }
     }
 }

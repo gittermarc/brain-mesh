@@ -12,11 +12,6 @@ enum AttachmentStore {
 
     private static let folderName = "BrainMeshAttachments"
 
-    // Patch 3: throttle expensive cache materialization (externalStorage load + disk write).
-    // This prevents UI freezes when many thumbnails are requested at once.
-    private static let materializeLimiter = AsyncLimiter(maxConcurrent: 2)
-
-
     static func directoryURL() throws -> URL {
         let fm = FileManager.default
         let base = try fm.url(
@@ -93,13 +88,25 @@ enum AttachmentStore {
 
     /// Returns an existing local file URL if present on disk (localPath or deterministic filename).
     static func existingCachedFileURL(for attachment: MetaAttachment) -> URL? {
-        if let lp = attachment.localPath,
-           let url = url(forLocalPath: lp),
+        existingCachedFileURL(
+            localPath: attachment.localPath,
+            attachmentID: attachment.id,
+            fileExtension: attachment.fileExtension
+        )
+    }
+
+    /// Returns an existing local file URL if present on disk (localPath or deterministic filename).
+    ///
+    /// This helper exists so call-sites (and background hydrators) don't have to pass SwiftData model objects
+    /// across actor boundaries.
+    static func existingCachedFileURL(localPath: String?, attachmentID: UUID, fileExtension: String) -> URL? {
+        if let localPath,
+           let url = url(forLocalPath: localPath),
            FileManager.default.fileExists(atPath: url.path) {
             return url
         }
 
-        let fallback = makeLocalFilename(attachmentID: attachment.id, fileExtension: attachment.fileExtension)
+        let fallback = makeLocalFilename(attachmentID: attachmentID, fileExtension: fileExtension)
         if let url = url(forLocalPath: fallback),
            FileManager.default.fileExists(atPath: url.path) {
             return url
@@ -124,48 +131,6 @@ enum AttachmentStore {
             return nil
         }
     }
-
-    /// Async variant for thumbnailing:
-    /// - Reads SwiftData properties on the MainActor (safe).
-    /// - Moves disk writes off the MainActor.
-    /// - Throttles concurrent materialization to avoid IO storms.
-    @MainActor
-    static func materializeFileURLForThumbnailIfNeededAsync(for attachment: MetaAttachment) async -> URL? {
-        // Fast path: already cached.
-        if let existing = existingCachedFileURL(for: attachment) {
-            return existing
-        }
-
-        // Throttle the expensive path (externalStorage load + disk write).
-        return await materializeLimiter.withPermit {
-            // Re-check inside the permit (another task might have written it).
-            if let existing = existingCachedFileURL(for: attachment) {
-                return existing
-            }
-
-            guard let data = attachment.fileData else { return nil }
-
-            let filename = makeLocalFilename(attachmentID: attachment.id, fileExtension: attachment.fileExtension)
-
-            return await Task.detached(priority: .utility) {
-                if Task.isCancelled { return nil }
-                guard let url = url(forLocalPath: filename) else { return nil }
-
-                let fm = FileManager.default
-                if fm.fileExists(atPath: url.path) {
-                    return url
-                }
-
-                do {
-                    try data.write(to: url, options: [.atomic])
-                    return url
-                } catch {
-                    return nil
-                }
-            }.value
-        }
-    }
-
 
     /// Ensures we have a file URL for preview.
     /// - If `localPath` exists, returns that.

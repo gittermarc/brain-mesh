@@ -45,6 +45,13 @@ struct BrainMeshApp: App {
             }
             #endif
         }
+
+        // Patch 4: Provide the SwiftData container to the attachment hydrator.
+        // This allows cache hydration (fileData fetch + disk write) to happen off the UI thread.
+        let containerForHydrator = sharedModelContainer
+        Task.detached(priority: .utility) {
+            await AttachmentHydrator.shared.configure(container: AnyModelContainer(containerForHydrator))
+        }
     }
 
     var body: some Scene {

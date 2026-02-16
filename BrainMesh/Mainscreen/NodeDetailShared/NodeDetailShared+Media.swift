@@ -171,7 +171,14 @@ private struct NodeGalleryThumbTile: View {
 
     private func loadThumbnailIfNeeded() async {
         if thumbnail != nil { return }
-        guard let url = await AttachmentStore.materializeFileURLForThumbnailIfNeededAsync(for: attachment) else { return }
+
+        guard let url = await AttachmentHydrator.shared.ensureFileURL(
+            attachmentID: attachment.id,
+            fileExtension: attachment.fileExtension,
+            localPath: attachment.localPath
+        ) else {
+            return
+        }
 
         let scale = UIScreen.main.scale
         let requestSize = CGSize(width: 420, height: 420)
@@ -475,7 +482,29 @@ struct NodeMediaAllView: View {
 			group.addTask { await loadMoreGallery() }
 			group.addTask { await loadMoreAttachments() }
 		}
+
+        // Patch 4 (bonus): Warm up a small set of visible items with strict throttling.
+        // This prevents "cache-miss storms" on fresh installs / cleared caches.
+        prewarmFirstItemsIfHelpful()
 	}
+
+    private func prewarmFirstItemsIfHelpful() {
+        let galleryReqs: [(UUID, String, String?)] = galleryImages.prefix(12).map { ($0.id, $0.fileExtension, $0.localPath) }
+        let attachmentReqs: [(UUID, String, String?)] = attachments.prefix(8).map { ($0.id, $0.fileExtension, $0.localPath) }
+        let reqs = galleryReqs + attachmentReqs
+
+        guard !reqs.isEmpty else { return }
+
+        Task.detached(priority: .utility) {
+            for (id, ext, lp) in reqs {
+                _ = await AttachmentHydrator.shared.ensureFileURL(
+                    attachmentID: id,
+                    fileExtension: ext,
+                    localPath: lp
+                )
+            }
+        }
+    }
 
 	private func refreshCounts() async {
 		let kindRaw = ownerKind.rawValue

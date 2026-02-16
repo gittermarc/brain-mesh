@@ -119,7 +119,11 @@ struct AttachmentCardRow: View {
     }
 
     private func loadThumbnailIfPossible() async {
-        guard let fileURL = await AttachmentStore.materializeFileURLForThumbnailIfNeededAsync(for: attachment) else {
+        guard let fileURL = await AttachmentHydrator.shared.ensureFileURL(
+            attachmentID: attachment.id,
+            fileExtension: attachment.fileExtension,
+            localPath: attachment.localPath
+        ) else {
             return
         }
 
@@ -143,7 +147,11 @@ struct AttachmentCardRow: View {
         guard isVideo else { return }
         guard videoDurationText == nil else { return }
 
-        guard let fileURL = await AttachmentStore.materializeFileURLForThumbnailIfNeededAsync(for: attachment) else {
+        guard let fileURL = await AttachmentHydrator.shared.ensureFileURL(
+            attachmentID: attachment.id,
+            fileExtension: attachment.fileExtension,
+            localPath: attachment.localPath
+        ) else {
             return
         }
 
