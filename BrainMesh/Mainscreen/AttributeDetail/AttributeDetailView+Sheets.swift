@@ -1,23 +1,22 @@
 //
-//  EntityDetailView+Sheets.swift
+//  AttributeDetailView+Sheets.swift
 //  BrainMesh
 //
-//  P0.3 Split: Sheets / dialogs / routing modifiers
+//  P0.4 Split: Sheets / dialogs / routing modifiers
 //
 
 import SwiftUI
 import SwiftData
 import UniformTypeIdentifiers
 
-
-extension EntityDetailView {
+extension AttributeDetailView {
 
     @ViewBuilder
     func decorate<Content: View>(_ content: Content) -> some View {
         content
             .background(Color(uiColor: .systemGroupedBackground).ignoresSafeArea())
             .scrollDismissesKeyboard(.interactively)
-            .navigationTitle(entity.name.isEmpty ? "Entität" : entity.name)
+            .navigationTitle(attribute.name.isEmpty ? "Attribut" : attribute.name)
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .primaryAction) {
@@ -61,9 +60,9 @@ extension EntityDetailView {
                 Button("Anhänge verwalten") { showAttachmentsManager = true }
                 Button("Abbrechen", role: .cancel) {}
             }
-            .alert("Entität löschen?", isPresented: $confirmDelete) {
+            .alert("Attribut löschen?", isPresented: $confirmDelete) {
                 Button("Löschen", role: .destructive) {
-                    deleteEntity()
+                    deleteAttribute()
                 }
                 Button("Abbrechen", role: .cancel) {}
             } message: {
@@ -77,51 +76,48 @@ extension EntityDetailView {
             } message: {
                 Text(errorMessage ?? "")
             }
-            .sheet(isPresented: $showAddAttribute) {
-                AddAttributeView(entity: entity)
-            }
             .sheet(isPresented: $showGalleryBrowser) {
                 NavigationStack {
                     PhotoGalleryBrowserView(
-                        ownerKind: .entity,
-                        ownerID: entity.id,
-                        graphID: entity.graphID,
+                        ownerKind: .attribute,
+                        ownerID: attribute.id,
+                        graphID: attribute.graphID,
                         mainImageData: Binding(
-                            get: { entity.imageData },
-                            set: { entity.imageData = $0 }
+                            get: { attribute.imageData },
+                            set: { attribute.imageData = $0 }
                         ),
                         mainImagePath: Binding(
-                            get: { entity.imagePath },
-                            set: { entity.imagePath = $0 }
+                            get: { attribute.imagePath },
+                            set: { attribute.imagePath = $0 }
                         ),
-                        mainStableID: entity.id
+                        mainStableID: attribute.id
                     )
                 }
             }
             .sheet(isPresented: $showAttachmentsManager) {
                 NavigationStack {
                     NodeAttachmentsManageView(
-                        ownerKind: .entity,
-                        ownerID: entity.id,
-                        graphID: entity.graphID
+                        ownerKind: .attribute,
+                        ownerID: attribute.id,
+                        graphID: attribute.graphID
                     )
                 }
             }
             .fullScreenCover(item: $galleryViewerRequest) { req in
                 PhotoGalleryViewerView(
-                    ownerKind: .entity,
-                    ownerID: entity.id,
-                    graphID: entity.graphID,
+                    ownerKind: .attribute,
+                    ownerID: attribute.id,
+                    graphID: attribute.graphID,
                     startAttachmentID: req.startAttachmentID,
                     mainImageData: Binding(
-                        get: { entity.imageData },
-                        set: { entity.imageData = $0 }
+                        get: { attribute.imageData },
+                        set: { attribute.imageData = $0 }
                     ),
                     mainImagePath: Binding(
-                        get: { entity.imagePath },
-                        set: { entity.imagePath = $0 }
+                        get: { attribute.imagePath },
+                        set: { attribute.imagePath = $0 }
                     ),
-                    mainStableID: entity.id
+                    mainStableID: attribute.id
                 )
             }
             .sheet(item: $attachmentPreviewSheet) { state in
@@ -152,38 +148,29 @@ extension EntityDetailView {
                 switch result {
                 case .success(let urls):
                     guard let url = urls.first else { return }
-                    importFile(from: url, ownerKind: .entity, ownerID: entity.id, graphID: entity.graphID)
+                    importFile(from: url)
                 case .failure(let error):
                     errorMessage = error.localizedDescription
                 }
             }
-            .addLinkSheet(isPresented: $showAddLink, source: entity.nodeRef, graphID: entity.graphID)
-            .bulkLinkSheet(isPresented: $showBulkLink, source: entity.nodeRef, graphID: entity.graphID)
+            .addLinkSheet(isPresented: $showAddLink, source: attribute.nodeRef, graphID: attribute.graphID)
+            .bulkLinkSheet(isPresented: $showBulkLink, source: attribute.nodeRef, graphID: attribute.graphID)
             .sheet(isPresented: $showNotesEditor) {
                 NavigationStack {
                     NodeNotesEditorView(
-                        title: entity.name.isEmpty ? "Notiz" : "Notiz – \(entity.name)",
+                        title: attribute.name.isEmpty ? "Notiz" : "Notiz – \(attribute.name)",
                         notes: Binding(
-                            get: { entity.notes },
-                            set: { entity.notes = $0 }
+                            get: { attribute.notes },
+                            set: { attribute.notes = $0 }
                         )
                     )
                 }
             }
     }
 
-    // MARK: - Delete
-
-    fileprivate func deleteEntity() {
-        AttachmentCleanup.deleteAttachments(ownerKind: .entity, ownerID: entity.id, in: modelContext)
-        for attr in entity.attributesList {
-            AttachmentCleanup.deleteAttachments(ownerKind: .attribute, ownerID: attr.id, in: modelContext)
-        }
-
-        LinkCleanup.deleteLinks(referencing: .entity, id: entity.id, graphID: entity.graphID, in: modelContext)
-
-        modelContext.delete(entity)
+    func deleteAttribute() {
+        modelContext.delete(attribute)
         try? modelContext.save()
+        dismiss()
     }
-
 }

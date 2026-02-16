@@ -1,23 +1,23 @@
 //
-//  EntityDetailView+HeroAndToolbelt.swift
+//  AttributeDetailView+HeroAndToolbelt.swift
 //  BrainMesh
 //
-//  P0.3 Split: Hero + Toolbelt (host-level wrapper)
+//  P0.4 Split: Hero + Toolbelt wrapper
 //
 
 import SwiftUI
 
-struct EntityDetailHeroAndToolbelt: View {
+struct AttributeDetailHeroAndToolbelt: View {
     let kindTitle: String
     let placeholderIcon: String
     let imageData: Data?
     let imagePath: String?
 
     @Binding var title: String
+    let subtitle: String?
     let pills: [NodeStatPill]
 
     let onAddLink: () -> Void
-    let onAddAttribute: () -> Void
     let onAddPhoto: () -> Void
     let onAddFile: () -> Void
 
@@ -29,13 +29,12 @@ struct EntityDetailHeroAndToolbelt: View {
                 imageData: imageData,
                 imagePath: imagePath,
                 title: $title,
-                subtitle: nil,
+                subtitle: subtitle,
                 pills: pills
             )
 
             NodeToolbelt {
                 NodeToolbeltButton(title: "Link", systemImage: "link") { onAddLink() }
-                NodeToolbeltButton(title: "Attribut", systemImage: "tag") { onAddAttribute() }
                 NodeToolbeltButton(title: "Foto", systemImage: "photo") { onAddPhoto() }
                 NodeToolbeltButton(title: "Datei", systemImage: "paperclip") { onAddFile() }
             }

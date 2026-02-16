@@ -1,15 +1,15 @@
 //
-//  EntityDetailView+MediaSection.swift
+//  AttributeDetailView+MediaSection.swift
 //  BrainMesh
 //
-//  P0.3 Split: Media helpers (shared media UI lives in NodeDetailShared)
+//  P0.4 Split: Media helpers (shared media UI lives in NodeDetailShared)
 //
 
 import SwiftUI
 import SwiftData
 import UniformTypeIdentifiers
 
-extension EntityDetailView {
+extension AttributeDetailView {
 
     // MARK: - Attachments (Preview)
 
@@ -39,7 +39,7 @@ extension EntityDetailView {
 
     // MARK: - Import (Files / Videos)
 
-    func importFile(from url: URL, ownerKind: NodeKind, ownerID: UUID, graphID: UUID?) {
+    func importFile(from url: URL) {
         let scoped = url.startAccessingSecurityScopedResource()
         defer {
             if scoped { url.stopAccessingSecurityScopedResource() }
@@ -89,9 +89,9 @@ extension EntityDetailView {
 
             let att = MetaAttachment(
                 id: attachmentID,
-                ownerKind: ownerKind,
-                ownerID: ownerID,
-                graphID: graphID,
+                ownerKind: .attribute,
+                ownerID: attribute.id,
+                graphID: attribute.graphID,
                 contentKind: inferredKind,
                 title: title,
                 originalFilename: fileName,
@@ -119,10 +119,7 @@ extension EntityDetailView {
                 picked.url,
                 suggestedFilename: picked.suggestedFilename,
                 contentTypeIdentifier: picked.contentTypeIdentifier,
-                fileExtension: picked.fileExtension,
-                ownerKind: .entity,
-                ownerID: entity.id,
-                graphID: entity.graphID
+                fileExtension: picked.fileExtension
             )
         case .failure(let error):
             if let pickerError = error as? VideoPickerError, pickerError == .cancelled {
@@ -137,10 +134,7 @@ extension EntityDetailView {
         _ url: URL,
         suggestedFilename: String,
         contentTypeIdentifier: String,
-        fileExtension: String,
-        ownerKind: NodeKind,
-        ownerID: UUID,
-        graphID: UUID?
+        fileExtension: String
     ) async {
         do {
             let fileSize = (try? url.resourceValues(forKeys: [.fileSizeKey]).fileSize) ?? 0
@@ -181,9 +175,9 @@ extension EntityDetailView {
 
             let att = MetaAttachment(
                 id: attachmentID,
-                ownerKind: ownerKind,
-                ownerID: ownerID,
-                graphID: graphID,
+                ownerKind: .attribute,
+                ownerID: attribute.id,
+                graphID: attribute.graphID,
                 contentKind: .video,
                 title: title.isEmpty ? "Video" : title,
                 originalFilename: originalName,

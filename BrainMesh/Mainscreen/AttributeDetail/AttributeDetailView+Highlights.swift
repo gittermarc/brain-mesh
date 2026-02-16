@@ -1,13 +1,13 @@
 //
-//  EntityDetailView+Highlights.swift
+//  AttributeDetailView+Highlights.swift
 //  BrainMesh
 //
-//  P0.3 Split: Highlights row wrapper (shared tiles live in NodeDetailShared)
+//  P0.4 Split: Highlights row wrapper
 //
 
 import SwiftUI
 
-struct EntityDetailHighlightsRow: View {
+struct AttributeDetailHighlightsRow: View {
     let notes: String
     let outgoingLinks: [MetaLink]
     let incomingLinks: [MetaLink]
