@@ -146,7 +146,7 @@ private struct NodeThumbMiniTile: View {
     @MainActor
     private func loadThumbnailIfNeeded() async {
         if thumbnail != nil { return }
-        guard let url = AttachmentStore.materializeFileURLForThumbnailIfNeeded(for: attachment) else { return }
+        guard let url = await AttachmentStore.materializeFileURLForThumbnailIfNeededAsync(for: attachment) else { return }
 
         let scale = UIScreen.main.scale
         let requestSize = CGSize(width: 140, height: 140)
