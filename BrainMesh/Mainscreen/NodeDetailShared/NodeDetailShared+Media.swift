@@ -197,6 +197,7 @@ private struct NodeGalleryThumbTile: View {
     }
 }
 
+@MainActor
 struct NodeMediaAllView: View {
     @Environment(\.modelContext) private var modelContext
 
@@ -225,14 +226,16 @@ struct NodeMediaAllView: View {
 	@State private var galleryHasMore: Bool = true
 	@State private var attachmentsHasMore: Bool = true
 
-	private let galleryPageSize: Int = 48
-	private let attachmentPageSize: Int = 60
+	private let galleryPageSize: Int = 18
+	private let attachmentPageSize: Int = 24
 
     @State private var viewerRequest: PhotoGalleryViewerRequest? = nil
     @State private var attachmentPreviewSheet: AttachmentPreviewSheetState? = nil
     @State private var videoPlayback: VideoPlaybackRequest? = nil
 
     @State private var errorMessage: String? = nil
+
+    @State private var didLoadOnce: Bool = false
 
     init(
         ownerKind: NodeKind,
@@ -329,11 +332,6 @@ struct NodeMediaAllView: View {
 						NodeGalleryThumbTile(attachment: att) {
 							viewerRequest = PhotoGalleryViewerRequest(startAttachmentID: att.id)
 						}
-						.onAppear {
-							if att.id == galleryImages.last?.id {
-								loadMoreGalleryIfNeeded()
-							}
-						}
 					}
 
 					if galleryHasMore {
@@ -377,11 +375,6 @@ struct NodeMediaAllView: View {
 					ForEach(attachments) { att in
 						AttachmentCardRow(attachment: att)
 							.onTapGesture { openAttachment(att) }
-							.onAppear {
-								if att.id == attachments.last?.id {
-									loadMoreAttachmentsIfNeeded()
-								}
-							}
 					}
 
 					if attachmentsHasMore {
@@ -474,38 +467,16 @@ struct NodeMediaAllView: View {
 	}
 
 	private func loadInitialIfNeeded() async {
+		if didLoadOnce { return }
+		didLoadOnce = true
 		if !galleryImages.isEmpty || !attachments.isEmpty { return }
 		if isLoadingGallery || isLoadingAttachments { return }
 
 		await refreshCounts()
-		await withTaskGroup(of: Void.self) { group in
-			group.addTask { await loadMoreGallery() }
-			group.addTask { await loadMoreAttachments() }
-		}
-
-        // Patch 4 (bonus): Warm up a small set of visible items with strict throttling.
-        // This prevents "cache-miss storms" on fresh installs / cleared caches.
-        prewarmFirstItemsIfHelpful()
+		// IMPORTANT: Keep SwiftData access strictly serialized.
+		await loadMoreGallery()
+		await loadMoreAttachments()
 	}
-
-    private func prewarmFirstItemsIfHelpful() {
-        let galleryReqs: [(UUID, String, String?)] = galleryImages.prefix(12).map { ($0.id, $0.fileExtension, $0.localPath) }
-        let attachmentReqs: [(UUID, String, String?)] = attachments.prefix(8).map { ($0.id, $0.fileExtension, $0.localPath) }
-        let reqs = galleryReqs + attachmentReqs
-
-        guard !reqs.isEmpty else { return }
-
-        Task.detached(priority: .utility) {
-            for (id, ext, lp) in reqs {
-                _ = await AttachmentHydrator.shared.ensureFileURL(
-                    attachmentID: id,
-                    fileExtension: ext,
-                    localPath: lp
-                )
-            }
-        }
-    }
-
 	private func refreshCounts() async {
 		let kindRaw = ownerKind.rawValue
 		let oid = ownerID
@@ -570,6 +541,11 @@ struct NodeMediaAllView: View {
 			}
 			let existing = Set(galleryImages.map(\.id))
 			let filtered = page.filter { !existing.contains($0.id) }
+			if filtered.isEmpty {
+				// No progress (e.g. offset ignored / duplicates). Stop to avoid runaway loops.
+				galleryHasMore = false
+				return
+			}
 			galleryImages.append(contentsOf: filtered)
 			galleryOffset += page.count
 
@@ -614,6 +590,11 @@ struct NodeMediaAllView: View {
 			}
 			let existing = Set(attachments.map(\.id))
 			let filtered = page.filter { !existing.contains($0.id) }
+			if filtered.isEmpty {
+				// No progress (e.g. offset ignored / duplicates). Stop to avoid runaway loops.
+				attachmentsHasMore = false
+				return
+			}
 			attachments.append(contentsOf: filtered)
 			attachmentOffset += page.count
 
