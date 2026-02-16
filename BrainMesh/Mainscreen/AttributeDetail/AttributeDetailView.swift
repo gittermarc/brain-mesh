@@ -17,8 +17,8 @@ struct AttributeDetailView: View {
     @Query var outgoingLinks: [MetaLink]
     @Query var incomingLinks: [MetaLink]
 
-    @Query var galleryImages: [MetaAttachment]
-    @Query var attachments: [MetaAttachment]
+    // P0.2: Media preview + counts (fetch-limited, no full-load @Query).
+    @State var mediaPreview: NodeMediaPreview = .empty
 
     @State var segment: NodeLinkDirectionSegment = .outgoing
 
@@ -52,23 +52,6 @@ struct AttributeDetailView: View {
 
         _outgoingLinks = NodeLinksQueryBuilder.outgoingLinksQuery(kind: .attribute, id: attribute.id, graphID: attribute.graphID)
         _incomingLinks = NodeLinksQueryBuilder.incomingLinksQuery(kind: .attribute, id: attribute.id, graphID: attribute.graphID)
-
-        _galleryImages = PhotoGalleryQueryBuilder.galleryImagesQuery(ownerKind: .attribute, ownerID: attribute.id, graphID: attribute.graphID)
-
-        let kindRaw = NodeKind.attribute.rawValue
-        let oid = attribute.id
-        let gid = attribute.graphID
-        let galleryRaw = AttachmentContentKind.galleryImage.rawValue
-
-        _attachments = Query(
-            filter: #Predicate<MetaAttachment> { a in
-                a.ownerKindRaw == kindRaw &&
-                a.ownerID == oid &&
-                (gid == nil || a.graphID == gid) &&
-                a.contentKindRaw != galleryRaw
-            },
-            sort: [SortDescriptor(\MetaAttachment.createdAt, order: .reverse)]
-        )
     }
 
     var body: some View {
@@ -96,8 +79,9 @@ struct AttributeDetailView: View {
                             notes: attribute.notes,
                             outgoingLinks: outgoingLinks,
                             incomingLinks: incomingLinks,
-                            galleryImages: galleryImages,
-                            attachments: attachments,
+                            galleryThumbs: mediaPreview.galleryPreview,
+                            galleryCount: mediaPreview.galleryCount,
+                            attachmentCount: mediaPreview.attachmentCount,
                             onEditNotes: { showNotesEditor = true },
                             onJumpToMedia: {
                                 withAnimation(.snappy) {
@@ -148,8 +132,10 @@ struct AttributeDetailView: View {
                                 set: { attribute.imagePath = $0 }
                             ),
                             mainStableID: attribute.id,
-                            galleryImages: galleryImages,
-                            attachments: attachments,
+                            galleryImages: mediaPreview.galleryPreview,
+                            attachments: mediaPreview.attachmentPreview,
+                            galleryCount: mediaPreview.galleryCount,
+                            attachmentCount: mediaPreview.attachmentCount,
                             onOpenAll: {},
                             onManage: { showMediaManageChooser = true },
                             onTapGallery: { id in
@@ -173,6 +159,9 @@ struct AttributeDetailView: View {
                     .padding(.horizontal, 16)
                     .padding(.top, 12)
                     .padding(.bottom, 26)
+                    .task(id: attribute.id) {
+                        await reloadMediaPreview()
+                    }
                 }
             )
         }
@@ -180,7 +169,7 @@ struct AttributeDetailView: View {
 
     private var heroPills: [NodeStatPill] {
         let linkCount = outgoingLinks.count + incomingLinks.count
-        let mediaCount = galleryImages.count + attachments.count
+        let mediaCount = mediaPreview.totalCount
 
         var pills: [NodeStatPill] = []
         pills.append(NodeStatPill(title: "\(linkCount)", systemImage: "link"))

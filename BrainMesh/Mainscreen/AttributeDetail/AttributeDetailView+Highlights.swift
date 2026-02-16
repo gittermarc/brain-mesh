@@ -11,8 +11,11 @@ struct AttributeDetailHighlightsRow: View {
     let notes: String
     let outgoingLinks: [MetaLink]
     let incomingLinks: [MetaLink]
-    let galleryImages: [MetaAttachment]
-    let attachments: [MetaAttachment]
+
+    /// Media preview + counts (P0.2).
+    let galleryThumbs: [MetaAttachment]
+    let galleryCount: Int
+    let attachmentCount: Int
 
     let onEditNotes: () -> Void
     let onJumpToMedia: () -> Void
@@ -22,6 +25,7 @@ struct AttributeDetailHighlightsRow: View {
         let noteSnippet = notes.trimmingCharacters(in: .whitespacesAndNewlines)
         let hasNote = !noteSnippet.isEmpty
         let topLinks = NodeTopLinks.compute(outgoing: outgoingLinks, incoming: incomingLinks, max: 2)
+        let hasMedia = (galleryCount + attachmentCount) > 0
 
         return NodeHighlightsRow {
             NodeHighlightTile(
@@ -35,9 +39,9 @@ struct AttributeDetailHighlightsRow: View {
             NodeHighlightTile(
                 title: "Medien",
                 systemImage: "photo.on.rectangle",
-                subtitle: "\(galleryImages.count) Fotos · \(attachments.count) Anhänge",
-                footer: galleryImages.isEmpty && attachments.isEmpty ? "Tippen zum Hinzufügen" : "Tippen für Alle",
-                accessory: { NodeMiniThumbStrip(attachments: Array(galleryImages.prefix(3))) },
+                subtitle: "\(galleryCount) Fotos · \(attachmentCount) Anhänge",
+                footer: hasMedia ? "Tippen für Alle" : "Tippen zum Hinzufügen",
+                accessory: { NodeMiniThumbStrip(attachments: Array(galleryThumbs.prefix(3))) },
                 onTap: { onJumpToMedia() }
             )
 

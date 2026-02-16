@@ -16,8 +16,8 @@ struct EntityDetailView: View {
     @Query var outgoingLinks: [MetaLink]
     @Query var incomingLinks: [MetaLink]
 
-    @Query var galleryImages: [MetaAttachment]
-    @Query var attachments: [MetaAttachment]
+    // P0.2: Media preview + counts (fetch-limited, no full-load @Query).
+    @State var mediaPreview: NodeMediaPreview = .empty
 
     @State var showAddAttribute = false
 
@@ -63,27 +63,6 @@ struct EntityDetailView: View {
             id: entity.id,
             graphID: entity.graphID
         )
-
-        _galleryImages = PhotoGalleryQueryBuilder.galleryImagesQuery(
-            ownerKind: .entity,
-            ownerID: entity.id,
-            graphID: entity.graphID
-        )
-
-        let kindRaw = NodeKind.entity.rawValue
-        let oid = entity.id
-        let gid = entity.graphID
-        let galleryRaw = AttachmentContentKind.galleryImage.rawValue
-
-        _attachments = Query(
-            filter: #Predicate<MetaAttachment> { a in
-                a.ownerKindRaw == kindRaw &&
-                a.ownerID == oid &&
-                (gid == nil || a.graphID == gid) &&
-                a.contentKindRaw != galleryRaw
-            },
-            sort: [SortDescriptor(\MetaAttachment.createdAt, order: .reverse)]
-        )
     }
 
     var body: some View {
@@ -104,7 +83,7 @@ struct EntityDetailView: View {
                                 NodeStatPill(title: "\(entity.attributesList.count)", systemImage: "tag"),
                                 NodeStatPill(title: "\(outgoingLinks.count)", systemImage: "arrow.up.right"),
                                 NodeStatPill(title: "\(incomingLinks.count)", systemImage: "arrow.down.left"),
-                                NodeStatPill(title: "\(galleryImages.count + attachments.count)", systemImage: "photo.on.rectangle")
+                                NodeStatPill(title: "\(mediaPreview.totalCount)", systemImage: "photo.on.rectangle")
                             ],
                             onAddLink: { showLinkChooser = true },
                             onAddAttribute: { showAddAttribute = true },
@@ -116,8 +95,9 @@ struct EntityDetailView: View {
                             notes: entity.notes,
                             outgoingLinks: outgoingLinks,
                             incomingLinks: incomingLinks,
-                            galleryImages: galleryImages,
-                            attachments: attachments,
+                            galleryThumbs: mediaPreview.galleryPreview,
+                            galleryCount: mediaPreview.galleryCount,
+                            attachmentCount: mediaPreview.attachmentCount,
                             onEditNotes: { showNotesEditor = true },
                             onJumpToMedia: { proxy.scrollTo(NodeDetailAnchor.media.rawValue, anchor: .top) },
                             onJumpToConnections: { proxy.scrollTo(NodeDetailAnchor.connections.rawValue, anchor: .top) }
@@ -156,8 +136,10 @@ struct EntityDetailView: View {
                                 set: { entity.imagePath = $0 }
                             ),
                             mainStableID: entity.id,
-                            galleryImages: galleryImages,
-                            attachments: attachments,
+                            galleryImages: mediaPreview.galleryPreview,
+                            attachments: mediaPreview.attachmentPreview,
+                            galleryCount: mediaPreview.galleryCount,
+                            attachmentCount: mediaPreview.attachmentCount,
                             onOpenAll: {},
                             onManage: { showMediaManageChooser = true },
                             onTapGallery: { id in
@@ -182,6 +164,9 @@ struct EntityDetailView: View {
                     .padding(.horizontal, 16)
                     .padding(.top, 12)
                     .padding(.bottom, 18)
+                    .task(id: entity.id) {
+                        await reloadMediaPreview()
+                    }
                 }
             )
         }

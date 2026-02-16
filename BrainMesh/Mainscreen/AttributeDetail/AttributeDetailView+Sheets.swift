@@ -16,6 +16,20 @@ extension AttributeDetailView {
         content
             .background(Color(uiColor: .systemGroupedBackground).ignoresSafeArea())
             .scrollDismissesKeyboard(.interactively)
+            .onChange(of: showGalleryBrowser) { isPresented in
+                if !isPresented {
+                    Task { @MainActor in
+                        await reloadMediaPreview()
+                    }
+                }
+            }
+            .onChange(of: showAttachmentsManager) { isPresented in
+                if !isPresented {
+                    Task { @MainActor in
+                        await reloadMediaPreview()
+                    }
+                }
+            }
             .navigationTitle(attribute.name.isEmpty ? "Attribut" : attribute.name)
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {

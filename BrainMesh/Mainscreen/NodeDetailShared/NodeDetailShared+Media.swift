@@ -18,8 +18,13 @@ struct NodeMediaCard: View {
     @Binding var mainImagePath: String?
     let mainStableID: UUID
 
+    /// Preview-only data (fetch-limited).
     let galleryImages: [MetaAttachment]
     let attachments: [MetaAttachment]
+
+    /// Total counts (cheap via `fetchCount`).
+    let galleryCount: Int
+    let attachmentCount: Int
 
     let onOpenAll: () -> Void
     let onManage: () -> Void
@@ -30,7 +35,7 @@ struct NodeMediaCard: View {
         VStack(alignment: .leading, spacing: 12) {
             NodeCardHeader(title: "Medien", systemImage: "photo.on.rectangle")
 
-            if galleryImages.isEmpty && attachments.isEmpty {
+            if galleryCount == 0 && attachmentCount == 0 {
                 NodeEmptyStateRow(
                     text: "Noch keine Fotos oder Anhänge.",
                     ctaTitle: "Medien hinzufügen",
@@ -43,17 +48,23 @@ struct NodeMediaCard: View {
                     onTap: onTapGallery
                 )
 
-                if !attachments.isEmpty {
+                if attachmentCount > 0 {
                     VStack(alignment: .leading, spacing: 8) {
                         Text("Anhänge")
                             .font(.caption.weight(.semibold))
                             .foregroundStyle(.secondary)
 
-                        ForEach(attachments.prefix(3)) { att in
-                            AttachmentCardRow(attachment: att)
-                                .onTapGesture {
-                                    onTapAttachment(att)
-                                }
+                        if attachments.isEmpty {
+                            Text("Anhänge werden geladen …")
+                                .font(.footnote)
+                                .foregroundStyle(.secondary)
+                        } else {
+                            ForEach(attachments.prefix(3)) { att in
+                                AttachmentCardRow(attachment: att)
+                                    .onTapGesture {
+                                        onTapAttachment(att)
+                                    }
+                            }
                         }
                     }
                 }
@@ -198,6 +209,10 @@ struct NodeMediaAllView: View {
 
     @State private var errorMessage: String? = nil
 
+    // P0.1: Render/paging limits to prevent creating hundreds/thousands of rows at once.
+    @State private var attachmentRenderLimit: Int = 60
+    private let attachmentPageSize: Int = 60
+
     init(
         ownerKind: NodeKind,
         ownerID: UUID,
@@ -235,9 +250,18 @@ struct NodeMediaAllView: View {
         )
     }
 
+    private var visibleAttachments: ArraySlice<MetaAttachment> {
+        let limit = max(0, min(attachments.count, attachmentRenderLimit))
+        return attachments.prefix(limit)
+    }
+
+    private var canLoadMoreAttachments: Bool {
+        attachments.count > attachmentRenderLimit
+    }
+
     var body: some View {
         ScrollView {
-            VStack(alignment: .leading, spacing: 14) {
+            LazyVStack(alignment: .leading, spacing: 14) {
                 if galleryImages.isEmpty {
                     Text("Keine Fotos in der Galerie.")
                         .foregroundStyle(.secondary)
@@ -252,13 +276,44 @@ struct NodeMediaAllView: View {
                 }
 
                 if !attachments.isEmpty {
-                    VStack(alignment: .leading, spacing: 8) {
+                    VStack(alignment: .leading, spacing: 10) {
                         Text("Anhänge")
                             .font(.headline)
 
-                        ForEach(attachments) { att in
-                            AttachmentCardRow(attachment: att)
-                                .onTapGesture { openAttachment(att) }
+                        LazyVStack(alignment: .leading, spacing: 0) {
+                            ForEach(visibleAttachments) { att in
+                                AttachmentCardRow(attachment: att)
+                                    .onTapGesture { openAttachment(att) }
+                                    .onAppear {
+                                        // Auto-advance page when the last rendered item becomes visible.
+                                        if att.id == visibleAttachments.last?.id {
+                                            increaseAttachmentLimitIfNeeded()
+                                        }
+                                    }
+                            }
+
+                            if canLoadMoreAttachments {
+                                HStack {
+                                    Spacer(minLength: 0)
+
+                                    Button {
+                                        increaseAttachmentLimitIfNeeded(force: true)
+                                    } label: {
+                                        HStack(spacing: 8) {
+                                            ProgressView()
+                                                .scaleEffect(0.9)
+                                            Text("Weitere laden")
+                                                .font(.callout.weight(.semibold))
+                                        }
+                                        .padding(.vertical, 10)
+                                        .padding(.horizontal, 14)
+                                    }
+                                    .buttonStyle(.bordered)
+
+                                    Spacer(minLength: 0)
+                                }
+                                .padding(.top, 4)
+                            }
                         }
                     }
                 } else {
@@ -302,6 +357,11 @@ struct NodeMediaAllView: View {
             VideoPlaybackPresenter(request: $videoPlayback)
                 .frame(width: 0, height: 0)
         )
+    }
+
+    private func increaseAttachmentLimitIfNeeded(force: Bool = false) {
+        guard force || canLoadMoreAttachments else { return }
+        attachmentRenderLimit = min(attachments.count, attachmentRenderLimit + attachmentPageSize)
     }
 
     private func openAttachment(_ attachment: MetaAttachment) {

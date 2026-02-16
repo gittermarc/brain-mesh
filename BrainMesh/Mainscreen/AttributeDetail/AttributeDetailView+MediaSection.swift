@@ -11,6 +11,25 @@ import UniformTypeIdentifiers
 
 extension AttributeDetailView {
 
+    // MARK: - Media Preview (P0.2)
+
+    @MainActor
+    func reloadMediaPreview() async {
+        do {
+            let preview = try NodeMediaPreviewLoader.load(
+                context: modelContext,
+                ownerKind: .attribute,
+                ownerID: attribute.id,
+                graphID: attribute.graphID,
+                galleryLimit: 6,
+                attachmentLimit: 3
+            )
+            mediaPreview = preview
+        } catch {
+            // Keep last state; no user-facing alert for preview failures.
+        }
+    }
+
     // MARK: - Attachments (Preview)
 
     func openAttachment(_ attachment: MetaAttachment) {
@@ -104,6 +123,10 @@ extension AttributeDetailView {
 
             modelContext.insert(att)
             try? modelContext.save()
+
+            Task { @MainActor in
+                await reloadMediaPreview()
+            }
         } catch {
             errorMessage = error.localizedDescription
         }
@@ -190,6 +213,8 @@ extension AttributeDetailView {
 
             modelContext.insert(att)
             try? modelContext.save()
+
+            await reloadMediaPreview()
         } catch {
             errorMessage = error.localizedDescription
         }

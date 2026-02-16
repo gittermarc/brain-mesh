@@ -17,6 +17,20 @@ extension EntityDetailView {
         content
             .background(Color(uiColor: .systemGroupedBackground).ignoresSafeArea())
             .scrollDismissesKeyboard(.interactively)
+            .onChange(of: showGalleryBrowser) { isPresented in
+                if !isPresented {
+                    Task { @MainActor in
+                        await reloadMediaPreview()
+                    }
+                }
+            }
+            .onChange(of: showAttachmentsManager) { isPresented in
+                if !isPresented {
+                    Task { @MainActor in
+                        await reloadMediaPreview()
+                    }
+                }
+            }
             .navigationTitle(entity.name.isEmpty ? "Entität" : entity.name)
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
