@@ -52,6 +52,13 @@ struct BrainMeshApp: App {
         Task.detached(priority: .utility) {
             await AttachmentHydrator.shared.configure(container: AnyModelContainer(containerForHydrator))
         }
+
+        // Also provide the container to the media loader used by the "Alle" media screen.
+        // This avoids blocking the main thread with SwiftData fetches during navigation.
+        let containerForMediaLoader = sharedModelContainer
+        Task.detached(priority: .utility) {
+            await MediaAllLoader.shared.configure(container: AnyModelContainer(containerForMediaLoader))
+        }
     }
 
     var body: some Scene {

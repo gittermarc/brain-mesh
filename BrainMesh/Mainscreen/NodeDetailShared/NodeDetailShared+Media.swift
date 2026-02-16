@@ -5,9 +5,11 @@
 //  Shared media UI for Entity/Attribute detail screens.
 //
 
+import Foundation
 import SwiftUI
 import SwiftData
 import UIKit
+import UniformTypeIdentifiers
 
 struct NodeMediaCard: View {
     let ownerKind: NodeKind
@@ -120,7 +122,11 @@ private struct NodeGalleryThumbGrid: View {
     var body: some View {
         LazyVGrid(columns: columns, spacing: 10) {
             ForEach(attachments.prefix(6)) { att in
-                NodeGalleryThumbTile(attachment: att) {
+                NodeGalleryThumbTile(
+                    attachmentID: att.id,
+                    fileExtension: att.fileExtension,
+                    localPath: att.localPath
+                ) {
                     onTap(att.id)
                 }
             }
@@ -143,7 +149,9 @@ private struct NodeGalleryThumbGrid: View {
 }
 
 private struct NodeGalleryThumbTile: View {
-    let attachment: MetaAttachment
+    let attachmentID: UUID
+    let fileExtension: String
+    let localPath: String?
     let onTap: () -> Void
 
     @State private var thumbnail: UIImage? = nil
@@ -164,7 +172,7 @@ private struct NodeGalleryThumbTile: View {
             .frame(height: 82)
         }
         .buttonStyle(.plain)
-        .task(id: attachment.id) {
+        .task(id: attachmentID) {
             await loadThumbnailIfNeeded()
         }
     }
@@ -173,9 +181,9 @@ private struct NodeGalleryThumbTile: View {
         if thumbnail != nil { return }
 
         guard let url = await AttachmentHydrator.shared.ensureFileURL(
-            attachmentID: attachment.id,
-            fileExtension: attachment.fileExtension,
-            localPath: attachment.localPath
+            attachmentID: attachmentID,
+            fileExtension: fileExtension,
+            localPath: localPath
         ) else {
             return
         }
@@ -184,7 +192,7 @@ private struct NodeGalleryThumbTile: View {
         let requestSize = CGSize(width: 420, height: 420)
 
         let img = await AttachmentThumbnailStore.shared.thumbnail(
-            attachmentID: attachment.id,
+            attachmentID: attachmentID,
             fileURL: url,
             isVideo: false,
             requestSize: requestSize,
@@ -199,8 +207,6 @@ private struct NodeGalleryThumbTile: View {
 
 @MainActor
 struct NodeMediaAllView: View {
-    @Environment(\.modelContext) private var modelContext
-
     let ownerKind: NodeKind
     let ownerID: UUID
     let graphID: UUID?
@@ -211,8 +217,8 @@ struct NodeMediaAllView: View {
 
 	// Patch 1 (real paging): avoid @Query "load everything" storms.
 	// We fetch pages via FetchDescriptor (limit/offset) and append.
-	@State private var galleryImages: [MetaAttachment] = []
-	@State private var attachments: [MetaAttachment] = []
+	@State private var galleryImages: [AttachmentListItem] = []
+	@State private var attachments: [AttachmentListItem] = []
 
 	@State private var galleryTotalCount: Int = 0
 	@State private var attachmentTotalCount: Int = 0
@@ -226,8 +232,9 @@ struct NodeMediaAllView: View {
 	@State private var galleryHasMore: Bool = true
 	@State private var attachmentsHasMore: Bool = true
 
-	private let galleryPageSize: Int = 18
-	private let attachmentPageSize: Int = 24
+	// Keep initial work small. Users can load more explicitly.
+	private let galleryPageSize: Int = 12
+	private let attachmentPageSize: Int = 20
 
     @State private var viewerRequest: PhotoGalleryViewerRequest? = nil
     @State private var attachmentPreviewSheet: AttachmentPreviewSheetState? = nil
@@ -329,7 +336,11 @@ struct NodeMediaAllView: View {
 			} else {
 				LazyVGrid(columns: [GridItem(.adaptive(minimum: 110, maximum: 180), spacing: 12)], spacing: 12) {
 					ForEach(galleryImages) { att in
-						NodeGalleryThumbTile(attachment: att) {
+						NodeGalleryThumbTile(
+							attachmentID: att.id,
+							fileExtension: att.fileExtension,
+							localPath: att.localPath
+						) {
 							viewerRequest = PhotoGalleryViewerRequest(startAttachmentID: att.id)
 						}
 					}
@@ -373,8 +384,12 @@ struct NodeMediaAllView: View {
 			} else {
 				LazyVStack(alignment: .leading, spacing: 0) {
 					ForEach(attachments) { att in
-						AttachmentCardRow(attachment: att)
+						AttachmentListRowLight(attachment: att)
+							.contentShape(Rectangle())
 							.onTapGesture { openAttachment(att) }
+						if att.id != attachments.last?.id {
+							Divider()
+						}
 					}
 
 					if attachmentsHasMore {
@@ -472,42 +487,21 @@ struct NodeMediaAllView: View {
 		if !galleryImages.isEmpty || !attachments.isEmpty { return }
 		if isLoadingGallery || isLoadingAttachments { return }
 
+		// Let the navigation animation finish before we start any work.
+		await Task.yield()
 		await refreshCounts()
 		// IMPORTANT: Keep SwiftData access strictly serialized.
 		await loadMoreGallery()
 		await loadMoreAttachments()
 	}
 	private func refreshCounts() async {
-		let kindRaw = ownerKind.rawValue
-		let oid = ownerID
-		let gid = graphID
-		let galleryRaw = AttachmentContentKind.galleryImage.rawValue
-
-		do {
-			let galleryCountDescriptor = FetchDescriptor<MetaAttachment>(
-				predicate: #Predicate { a in
-					a.ownerKindRaw == kindRaw &&
-					a.ownerID == oid &&
-					(gid == nil || a.graphID == gid) &&
-					a.contentKindRaw == galleryRaw
-				}
-			)
-
-			let attachmentCountDescriptor = FetchDescriptor<MetaAttachment>(
-				predicate: #Predicate { a in
-					a.ownerKindRaw == kindRaw &&
-					a.ownerID == oid &&
-					(gid == nil || a.graphID == gid) &&
-					a.contentKindRaw != galleryRaw
-				}
-			)
-
-			galleryTotalCount = try modelContext.fetchCount(galleryCountDescriptor)
-			attachmentTotalCount = try modelContext.fetchCount(attachmentCountDescriptor)
-		} catch {
-			galleryTotalCount = 0
-			attachmentTotalCount = 0
-		}
+		let counts = await MediaAllLoader.shared.fetchCounts(
+			ownerKindRaw: ownerKind.rawValue,
+			ownerID: ownerID,
+			graphID: graphID
+		)
+		galleryTotalCount = counts.gallery
+		attachmentTotalCount = counts.attachments
 	}
 
 	private func loadMoreGallery() async {
@@ -516,46 +510,32 @@ struct NodeMediaAllView: View {
 		isLoadingGallery = true
 		defer { isLoadingGallery = false }
 
-		let kindRaw = ownerKind.rawValue
-		let oid = ownerID
-		let gid = graphID
-		let galleryRaw = AttachmentContentKind.galleryImage.rawValue
-
-		var descriptor = FetchDescriptor<MetaAttachment>(
-			predicate: #Predicate { a in
-				a.ownerKindRaw == kindRaw &&
-				a.ownerID == oid &&
-				(gid == nil || a.graphID == gid) &&
-				a.contentKindRaw == galleryRaw
-			},
-			sortBy: [SortDescriptor(\MetaAttachment.createdAt, order: .reverse)]
+		let page = await MediaAllLoader.shared.fetchGalleryPage(
+			ownerKindRaw: ownerKind.rawValue,
+			ownerID: ownerID,
+			graphID: graphID,
+			offset: galleryOffset,
+			limit: galleryPageSize
 		)
-		descriptor.fetchLimit = galleryPageSize
-		descriptor.fetchOffset = galleryOffset
-
-		do {
-			let page = try modelContext.fetch(descriptor)
-			if page.isEmpty {
-				galleryHasMore = false
-				return
-			}
-			let existing = Set(galleryImages.map(\.id))
-			let filtered = page.filter { !existing.contains($0.id) }
-			if filtered.isEmpty {
-				// No progress (e.g. offset ignored / duplicates). Stop to avoid runaway loops.
-				galleryHasMore = false
-				return
-			}
-			galleryImages.append(contentsOf: filtered)
-			galleryOffset += page.count
-
-			if galleryTotalCount > 0 {
-				galleryHasMore = galleryImages.count < galleryTotalCount
-			} else {
-				galleryHasMore = page.count >= galleryPageSize
-			}
-		} catch {
+		if page.isEmpty {
 			galleryHasMore = false
+			return
+		}
+
+		let existing = Set(galleryImages.map(\.id))
+		let filtered = page.filter { !existing.contains($0.id) }
+		if filtered.isEmpty {
+			// No progress. Stop to avoid runaway loops.
+			galleryHasMore = false
+			return
+		}
+		galleryImages.append(contentsOf: filtered)
+		galleryOffset += page.count
+
+		if galleryTotalCount > 0 {
+			galleryHasMore = galleryImages.count < galleryTotalCount
+		} else {
+			galleryHasMore = page.count >= galleryPageSize
 		}
 	}
 
@@ -565,70 +545,174 @@ struct NodeMediaAllView: View {
 		isLoadingAttachments = true
 		defer { isLoadingAttachments = false }
 
-		let kindRaw = ownerKind.rawValue
-		let oid = ownerID
-		let gid = graphID
-		let galleryRaw = AttachmentContentKind.galleryImage.rawValue
-
-		var descriptor = FetchDescriptor<MetaAttachment>(
-			predicate: #Predicate { a in
-				a.ownerKindRaw == kindRaw &&
-				a.ownerID == oid &&
-				(gid == nil || a.graphID == gid) &&
-				a.contentKindRaw != galleryRaw
-			},
-			sortBy: [SortDescriptor(\MetaAttachment.createdAt, order: .reverse)]
+		let page = await MediaAllLoader.shared.fetchAttachmentPage(
+			ownerKindRaw: ownerKind.rawValue,
+			ownerID: ownerID,
+			graphID: graphID,
+			offset: attachmentOffset,
+			limit: attachmentPageSize
 		)
-		descriptor.fetchLimit = attachmentPageSize
-		descriptor.fetchOffset = attachmentOffset
-
-		do {
-			let page = try modelContext.fetch(descriptor)
-			if page.isEmpty {
-				attachmentsHasMore = false
-				return
-			}
-			let existing = Set(attachments.map(\.id))
-			let filtered = page.filter { !existing.contains($0.id) }
-			if filtered.isEmpty {
-				// No progress (e.g. offset ignored / duplicates). Stop to avoid runaway loops.
-				attachmentsHasMore = false
-				return
-			}
-			attachments.append(contentsOf: filtered)
-			attachmentOffset += page.count
-
-			if attachmentTotalCount > 0 {
-				attachmentsHasMore = attachments.count < attachmentTotalCount
-			} else {
-				attachmentsHasMore = page.count >= attachmentPageSize
-			}
-		} catch {
+		if page.isEmpty {
 			attachmentsHasMore = false
+			return
+		}
+
+		let existing = Set(attachments.map(\.id))
+		let filtered = page.filter { !existing.contains($0.id) }
+		if filtered.isEmpty {
+			// No progress. Stop to avoid runaway loops.
+			attachmentsHasMore = false
+			return
+		}
+		attachments.append(contentsOf: filtered)
+		attachmentOffset += page.count
+
+		if attachmentTotalCount > 0 {
+			attachmentsHasMore = attachments.count < attachmentTotalCount
+		} else {
+			attachmentsHasMore = page.count >= attachmentPageSize
 		}
 	}
 
-    private func openAttachment(_ attachment: MetaAttachment) {
-        guard let url = AttachmentStore.ensurePreviewURL(for: attachment) else {
-            errorMessage = "Vorschau ist nicht verfügbar (keine Daten/Datei gefunden)."
-            return
+    private func openAttachment(_ attachment: AttachmentListItem) {
+        Task { @MainActor in
+            guard let url = await AttachmentHydrator.shared.ensureFileURL(
+                attachmentID: attachment.id,
+                fileExtension: attachment.fileExtension,
+                localPath: attachment.localPath
+            ) else {
+                errorMessage = "Vorschau ist nicht verfügbar (keine Daten/Datei gefunden)."
+                return
+            }
+
+            let isVideo = AttachmentStore.isVideo(contentTypeIdentifier: attachment.contentTypeIdentifier)
+                || ["mov", "mp4", "m4v"].contains(attachment.fileExtension.lowercased())
+
+            if isVideo {
+                videoPlayback = VideoPlaybackRequest(url: url, title: attachment.displayTitle)
+                return
+            }
+
+            attachmentPreviewSheet = AttachmentPreviewSheetState(
+                url: url,
+                title: attachment.displayTitle,
+                contentTypeIdentifier: attachment.contentTypeIdentifier,
+                fileExtension: attachment.fileExtension
+            )
         }
+    }
+}
 
-        let isVideo = AttachmentStore.isVideo(contentTypeIdentifier: attachment.contentTypeIdentifier)
-            || ["mov", "mp4", "m4v"].contains(attachment.fileExtension.lowercased())
+// MARK: - Lightweight attachment row (no auto-hydration / no thumbnails)
 
-        if isVideo {
-            try? modelContext.save()
-            videoPlayback = VideoPlaybackRequest(url: url, title: attachment.title.isEmpty ? attachment.originalFilename : attachment.title)
-            return
+/// The full `AttachmentCardRow` generates QuickLook/video thumbnails and can trigger
+/// attachment hydration for many items at once.
+///
+/// For the "Alle" screen we want to avoid any work-storm on initial navigation:
+/// - show lightweight rows (icon + metadata)
+/// - hydrate only when the user taps an item
+private struct AttachmentListRowLight: View {
+
+    let attachment: AttachmentListItem
+
+    var body: some View {
+        HStack(spacing: 12) {
+            iconTile
+
+            VStack(alignment: .leading, spacing: 4) {
+                Text(displayTitle)
+                    .lineLimit(1)
+
+                metadataLine
+                    .lineLimit(1)
+            }
+
+            Spacer(minLength: 8)
+
+            Image(systemName: "chevron.right")
+                .font(.footnote)
+                .foregroundStyle(.secondary)
         }
+        .padding(.vertical, 8)
+    }
 
-        try? modelContext.save()
-        attachmentPreviewSheet = AttachmentPreviewSheetState(
-            url: url,
-            title: attachment.title.isEmpty ? attachment.originalFilename : attachment.title,
+    private var iconTile: some View {
+        let iconName = AttachmentStore.iconName(
             contentTypeIdentifier: attachment.contentTypeIdentifier,
             fileExtension: attachment.fileExtension
         )
+
+        return ZStack {
+            RoundedRectangle(cornerRadius: 12, style: .continuous)
+                .fill(.quaternary)
+
+            Image(systemName: iconName)
+                .font(.system(size: 18, weight: .semibold))
+                .foregroundStyle(.tint)
+
+            if isVideo {
+                Image(systemName: "play.fill")
+                    .font(.system(size: 10, weight: .bold))
+                    .foregroundStyle(.white)
+                    .padding(6)
+                    .background(.black.opacity(0.55))
+                    .clipShape(Circle())
+            }
+
+            Text(typeBadge)
+                .font(.caption2)
+                .padding(.horizontal, 6)
+                .padding(.vertical, 3)
+                .background(.ultraThinMaterial)
+                .clipShape(Capsule())
+                .padding(6)
+                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottomTrailing)
+        }
+        .frame(width: 54, height: 54)
+        .clipped()
+    }
+
+    private var metadataLine: some View {
+        HStack(spacing: 0) {
+            Text(kindLabel)
+            Text(" · ")
+
+            if attachment.byteCount > 0 {
+                Text(ByteCountFormatter.string(fromByteCount: Int64(attachment.byteCount), countStyle: .file))
+                Text(" · ")
+            }
+
+            Text(attachment.createdAt, format: .dateTime.day(.twoDigits).month(.twoDigits).year().hour().minute())
+        }
+        .font(.footnote)
+        .foregroundStyle(.secondary)
+    }
+
+    private var displayTitle: String { attachment.displayTitle }
+
+    private var isVideo: Bool {
+        if AttachmentStore.isVideo(contentTypeIdentifier: attachment.contentTypeIdentifier) { return true }
+        return ["mov", "mp4", "m4v"].contains(attachment.fileExtension.lowercased())
+    }
+
+    private var kindLabel: String {
+        if let type = UTType(attachment.contentTypeIdentifier) {
+            if type.conforms(to: .pdf) { return "PDF" }
+            if type.conforms(to: .image) { return "Bild" }
+            if type.conforms(to: .audio) { return "Audio" }
+            if type.conforms(to: .movie) || type.conforms(to: .video) { return "Video" }
+            if type.conforms(to: .archive) { return "Archiv" }
+            if type.conforms(to: .text) { return "Text" }
+        }
+
+        let ext = attachment.fileExtension.trimmingCharacters(in: CharacterSet(charactersIn: ".")).uppercased()
+        if !ext.isEmpty { return ext }
+        return "Datei"
+    }
+
+    private var typeBadge: String {
+        let ext = attachment.fileExtension.trimmingCharacters(in: CharacterSet(charactersIn: ".")).uppercased()
+        if !ext.isEmpty { return ext }
+        return kindLabel.uppercased()
     }
 }
