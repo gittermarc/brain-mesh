@@ -169,7 +169,6 @@ private struct NodeGalleryThumbTile: View {
         }
     }
 
-    @MainActor
     private func loadThumbnailIfNeeded() async {
         if thumbnail != nil { return }
         guard let url = AttachmentStore.materializeFileURLForThumbnailIfNeeded(for: attachment) else { return }
@@ -185,7 +184,9 @@ private struct NodeGalleryThumbTile: View {
             scale: scale
         )
 
-        thumbnail = img
+        await MainActor.run {
+            thumbnail = img
+        }
     }
 }
 
@@ -200,18 +201,31 @@ struct NodeMediaAllView: View {
     @Binding var mainImagePath: String?
     let mainStableID: UUID
 
-    @Query private var galleryImages: [MetaAttachment]
-    @Query private var attachments: [MetaAttachment]
+	// Patch 1 (real paging): avoid @Query "load everything" storms.
+	// We fetch pages via FetchDescriptor (limit/offset) and append.
+	@State private var galleryImages: [MetaAttachment] = []
+	@State private var attachments: [MetaAttachment] = []
+
+	@State private var galleryTotalCount: Int = 0
+	@State private var attachmentTotalCount: Int = 0
+
+	@State private var galleryOffset: Int = 0
+	@State private var attachmentOffset: Int = 0
+
+	@State private var isLoadingGallery: Bool = false
+	@State private var isLoadingAttachments: Bool = false
+
+	@State private var galleryHasMore: Bool = true
+	@State private var attachmentsHasMore: Bool = true
+
+	private let galleryPageSize: Int = 48
+	private let attachmentPageSize: Int = 60
 
     @State private var viewerRequest: PhotoGalleryViewerRequest? = nil
     @State private var attachmentPreviewSheet: AttachmentPreviewSheetState? = nil
     @State private var videoPlayback: VideoPlaybackRequest? = nil
 
     @State private var errorMessage: String? = nil
-
-    // P0.1: Render/paging limits to prevent creating hundreds/thousands of rows at once.
-    @State private var attachmentRenderLimit: Int = 60
-    private let attachmentPageSize: Int = 60
 
     init(
         ownerKind: NodeKind,
@@ -224,108 +238,25 @@ struct NodeMediaAllView: View {
         self.ownerKind = ownerKind
         self.ownerID = ownerID
         self.graphID = graphID
-        self._mainImageData = mainImageData
-        self._mainImagePath = mainImagePath
-        self.mainStableID = mainStableID
-
-        _galleryImages = PhotoGalleryQueryBuilder.galleryImagesQuery(
-            ownerKind: ownerKind,
-            ownerID: ownerID,
-            graphID: graphID
-        )
-
-        let kindRaw = ownerKind.rawValue
-        let oid = ownerID
-        let gid = graphID
-        let galleryRaw = AttachmentContentKind.galleryImage.rawValue
-
-        _attachments = Query(
-            filter: #Predicate<MetaAttachment> { a in
-                a.ownerKindRaw == kindRaw &&
-                a.ownerID == oid &&
-                (gid == nil || a.graphID == gid) &&
-                a.contentKindRaw != galleryRaw
-            },
-            sort: [SortDescriptor(\MetaAttachment.createdAt, order: .reverse)]
-        )
-    }
-
-    private var visibleAttachments: ArraySlice<MetaAttachment> {
-        let limit = max(0, min(attachments.count, attachmentRenderLimit))
-        return attachments.prefix(limit)
-    }
-
-    private var canLoadMoreAttachments: Bool {
-        attachments.count > attachmentRenderLimit
+		self._mainImageData = mainImageData
+		self._mainImagePath = mainImagePath
+		self.mainStableID = mainStableID
     }
 
     var body: some View {
-        ScrollView {
-            LazyVStack(alignment: .leading, spacing: 14) {
-                if galleryImages.isEmpty {
-                    Text("Keine Fotos in der Galerie.")
-                        .foregroundStyle(.secondary)
-                } else {
-                    LazyVGrid(columns: [GridItem(.adaptive(minimum: 110, maximum: 180), spacing: 12)], spacing: 12) {
-                        ForEach(galleryImages) { att in
-                            NodeGalleryThumbTile(attachment: att) {
-                                viewerRequest = PhotoGalleryViewerRequest(startAttachmentID: att.id)
-                            }
-                        }
-                    }
-                }
-
-                if !attachments.isEmpty {
-                    VStack(alignment: .leading, spacing: 10) {
-                        Text("Anhänge")
-                            .font(.headline)
-
-                        LazyVStack(alignment: .leading, spacing: 0) {
-                            ForEach(visibleAttachments) { att in
-                                AttachmentCardRow(attachment: att)
-                                    .onTapGesture { openAttachment(att) }
-                                    .onAppear {
-                                        // Auto-advance page when the last rendered item becomes visible.
-                                        if att.id == visibleAttachments.last?.id {
-                                            increaseAttachmentLimitIfNeeded()
-                                        }
-                                    }
-                            }
-
-                            if canLoadMoreAttachments {
-                                HStack {
-                                    Spacer(minLength: 0)
-
-                                    Button {
-                                        increaseAttachmentLimitIfNeeded(force: true)
-                                    } label: {
-                                        HStack(spacing: 8) {
-                                            ProgressView()
-                                                .scaleEffect(0.9)
-                                            Text("Weitere laden")
-                                                .font(.callout.weight(.semibold))
-                                        }
-                                        .padding(.vertical, 10)
-                                        .padding(.horizontal, 14)
-                                    }
-                                    .buttonStyle(.bordered)
-
-                                    Spacer(minLength: 0)
-                                }
-                                .padding(.top, 4)
-                            }
-                        }
-                    }
-                } else {
-                    Text("Keine Anhänge.")
-                        .foregroundStyle(.secondary)
-                }
-            }
-            .padding(.horizontal, 16)
-            .padding(.vertical, 14)
-        }
+		ScrollView {
+			LazyVStack(alignment: .leading, spacing: 14) {
+				gallerySection
+				attachmentsSection
+			}
+			.padding(.horizontal, 16)
+			.padding(.vertical, 14)
+		}
         .navigationTitle("Medien")
         .navigationBarTitleDisplayMode(.inline)
+		.task {
+			await loadInitialIfNeeded()
+		}
         .alert("BrainMesh", isPresented: Binding(
             get: { errorMessage != nil },
             set: { if !$0 { errorMessage = nil } }
@@ -359,10 +290,313 @@ struct NodeMediaAllView: View {
         )
     }
 
-    private func increaseAttachmentLimitIfNeeded(force: Bool = false) {
-        guard force || canLoadMoreAttachments else { return }
-        attachmentRenderLimit = min(attachments.count, attachmentRenderLimit + attachmentPageSize)
-    }
+	// MARK: - Sections
+
+	@ViewBuilder
+	private var gallerySection: some View {
+		VStack(alignment: .leading, spacing: 10) {
+			HStack(alignment: .firstTextBaseline, spacing: 8) {
+				Text("Fotos")
+					.font(.headline)
+
+				if galleryTotalCount > 0 {
+					Text("\(min(galleryImages.count, galleryTotalCount))/\(galleryTotalCount)")
+						.font(.caption.weight(.semibold))
+						.foregroundStyle(.secondary)
+				}
+
+				Spacer(minLength: 0)
+
+				if isLoadingGallery {
+					ProgressView()
+						.scaleEffect(0.85)
+				}
+			}
+
+			if galleryImages.isEmpty {
+				Text(isLoadingGallery ? "Galerie wird geladen …" : "Keine Fotos in der Galerie.")
+					.foregroundStyle(.secondary)
+			} else {
+				LazyVGrid(columns: [GridItem(.adaptive(minimum: 110, maximum: 180), spacing: 12)], spacing: 12) {
+					ForEach(galleryImages) { att in
+						NodeGalleryThumbTile(attachment: att) {
+							viewerRequest = PhotoGalleryViewerRequest(startAttachmentID: att.id)
+						}
+						.onAppear {
+							if att.id == galleryImages.last?.id {
+								loadMoreGalleryIfNeeded()
+							}
+						}
+					}
+
+					if galleryHasMore {
+						loadMoreGridTile(
+							title: isLoadingGallery ? "Lade …" : "Mehr",
+							isLoading: isLoadingGallery,
+							action: { forceLoadMoreGallery() }
+						)
+					}
+				}
+			}
+		}
+	}
+
+	@ViewBuilder
+	private var attachmentsSection: some View {
+		VStack(alignment: .leading, spacing: 10) {
+			HStack(alignment: .firstTextBaseline, spacing: 8) {
+				Text("Anhänge")
+					.font(.headline)
+
+				if attachmentTotalCount > 0 {
+					Text("\(min(attachments.count, attachmentTotalCount))/\(attachmentTotalCount)")
+						.font(.caption.weight(.semibold))
+						.foregroundStyle(.secondary)
+				}
+
+				Spacer(minLength: 0)
+
+				if isLoadingAttachments {
+					ProgressView()
+						.scaleEffect(0.85)
+				}
+			}
+
+			if attachments.isEmpty {
+				Text(isLoadingAttachments ? "Anhänge werden geladen …" : "Keine Anhänge.")
+					.foregroundStyle(.secondary)
+			} else {
+				LazyVStack(alignment: .leading, spacing: 0) {
+					ForEach(attachments) { att in
+						AttachmentCardRow(attachment: att)
+							.onTapGesture { openAttachment(att) }
+							.onAppear {
+								if att.id == attachments.last?.id {
+									loadMoreAttachmentsIfNeeded()
+								}
+							}
+					}
+
+					if attachmentsHasMore {
+						loadMoreRow(
+							title: isLoadingAttachments ? "Lade …" : "Weitere laden",
+							isLoading: isLoadingAttachments,
+							action: { forceLoadMoreAttachments() }
+						)
+						.padding(.top, 4)
+					}
+				}
+			}
+		}
+	}
+
+	@ViewBuilder
+	private func loadMoreRow(title: String, isLoading: Bool, action: @escaping () -> Void) -> some View {
+		HStack {
+			Spacer(minLength: 0)
+
+			Button(action: action) {
+				HStack(spacing: 8) {
+					if isLoading {
+						ProgressView().scaleEffect(0.9)
+					} else {
+						Image(systemName: "arrow.down.circle")
+							.font(.system(size: 14, weight: .semibold))
+					}
+
+					Text(title)
+						.font(.callout.weight(.semibold))
+				}
+				.padding(.vertical, 10)
+				.padding(.horizontal, 14)
+			}
+			.buttonStyle(.bordered)
+			.disabled(isLoading)
+
+			Spacer(minLength: 0)
+		}
+	}
+
+	@ViewBuilder
+	private func loadMoreGridTile(title: String, isLoading: Bool, action: @escaping () -> Void) -> some View {
+		Button(action: action) {
+			ZStack {
+				RoundedRectangle(cornerRadius: 16, style: .continuous)
+					.fill(.quaternary)
+
+				VStack(spacing: 8) {
+					if isLoading {
+						ProgressView().scaleEffect(0.9)
+					} else {
+						Image(systemName: "plus")
+							.font(.system(size: 16, weight: .semibold))
+							.foregroundStyle(.secondary)
+					}
+
+					Text(title)
+						.font(.caption.weight(.semibold))
+						.foregroundStyle(.secondary)
+				}
+			}
+			.frame(height: 82)
+		}
+		.buttonStyle(.plain)
+		.disabled(isLoading)
+	}
+
+	// MARK: - Paging
+
+	private func loadMoreGalleryIfNeeded() {
+		guard galleryHasMore, !isLoadingGallery else { return }
+		Task { await loadMoreGallery() }
+	}
+
+	private func forceLoadMoreGallery() {
+		guard galleryHasMore, !isLoadingGallery else { return }
+		Task { await loadMoreGallery() }
+	}
+
+	private func loadMoreAttachmentsIfNeeded() {
+		guard attachmentsHasMore, !isLoadingAttachments else { return }
+		Task { await loadMoreAttachments() }
+	}
+
+	private func forceLoadMoreAttachments() {
+		guard attachmentsHasMore, !isLoadingAttachments else { return }
+		Task { await loadMoreAttachments() }
+	}
+
+	private func loadInitialIfNeeded() async {
+		if !galleryImages.isEmpty || !attachments.isEmpty { return }
+		if isLoadingGallery || isLoadingAttachments { return }
+
+		await refreshCounts()
+		await withTaskGroup(of: Void.self) { group in
+			group.addTask { await loadMoreGallery() }
+			group.addTask { await loadMoreAttachments() }
+		}
+	}
+
+	private func refreshCounts() async {
+		let kindRaw = ownerKind.rawValue
+		let oid = ownerID
+		let gid = graphID
+		let galleryRaw = AttachmentContentKind.galleryImage.rawValue
+
+		do {
+			let galleryCountDescriptor = FetchDescriptor<MetaAttachment>(
+				predicate: #Predicate { a in
+					a.ownerKindRaw == kindRaw &&
+					a.ownerID == oid &&
+					(gid == nil || a.graphID == gid) &&
+					a.contentKindRaw == galleryRaw
+				}
+			)
+
+			let attachmentCountDescriptor = FetchDescriptor<MetaAttachment>(
+				predicate: #Predicate { a in
+					a.ownerKindRaw == kindRaw &&
+					a.ownerID == oid &&
+					(gid == nil || a.graphID == gid) &&
+					a.contentKindRaw != galleryRaw
+				}
+			)
+
+			galleryTotalCount = try modelContext.fetchCount(galleryCountDescriptor)
+			attachmentTotalCount = try modelContext.fetchCount(attachmentCountDescriptor)
+		} catch {
+			galleryTotalCount = 0
+			attachmentTotalCount = 0
+		}
+	}
+
+	private func loadMoreGallery() async {
+		guard galleryHasMore else { return }
+		if isLoadingGallery { return }
+		isLoadingGallery = true
+		defer { isLoadingGallery = false }
+
+		let kindRaw = ownerKind.rawValue
+		let oid = ownerID
+		let gid = graphID
+		let galleryRaw = AttachmentContentKind.galleryImage.rawValue
+
+		var descriptor = FetchDescriptor<MetaAttachment>(
+			predicate: #Predicate { a in
+				a.ownerKindRaw == kindRaw &&
+				a.ownerID == oid &&
+				(gid == nil || a.graphID == gid) &&
+				a.contentKindRaw == galleryRaw
+			},
+			sortBy: [SortDescriptor(\MetaAttachment.createdAt, order: .reverse)]
+		)
+		descriptor.fetchLimit = galleryPageSize
+		descriptor.fetchOffset = galleryOffset
+
+		do {
+			let page = try modelContext.fetch(descriptor)
+			if page.isEmpty {
+				galleryHasMore = false
+				return
+			}
+			let existing = Set(galleryImages.map(\.id))
+			let filtered = page.filter { !existing.contains($0.id) }
+			galleryImages.append(contentsOf: filtered)
+			galleryOffset += page.count
+
+			if galleryTotalCount > 0 {
+				galleryHasMore = galleryImages.count < galleryTotalCount
+			} else {
+				galleryHasMore = page.count >= galleryPageSize
+			}
+		} catch {
+			galleryHasMore = false
+		}
+	}
+
+	private func loadMoreAttachments() async {
+		guard attachmentsHasMore else { return }
+		if isLoadingAttachments { return }
+		isLoadingAttachments = true
+		defer { isLoadingAttachments = false }
+
+		let kindRaw = ownerKind.rawValue
+		let oid = ownerID
+		let gid = graphID
+		let galleryRaw = AttachmentContentKind.galleryImage.rawValue
+
+		var descriptor = FetchDescriptor<MetaAttachment>(
+			predicate: #Predicate { a in
+				a.ownerKindRaw == kindRaw &&
+				a.ownerID == oid &&
+				(gid == nil || a.graphID == gid) &&
+				a.contentKindRaw != galleryRaw
+			},
+			sortBy: [SortDescriptor(\MetaAttachment.createdAt, order: .reverse)]
+		)
+		descriptor.fetchLimit = attachmentPageSize
+		descriptor.fetchOffset = attachmentOffset
+
+		do {
+			let page = try modelContext.fetch(descriptor)
+			if page.isEmpty {
+				attachmentsHasMore = false
+				return
+			}
+			let existing = Set(attachments.map(\.id))
+			let filtered = page.filter { !existing.contains($0.id) }
+			attachments.append(contentsOf: filtered)
+			attachmentOffset += page.count
+
+			if attachmentTotalCount > 0 {
+				attachmentsHasMore = attachments.count < attachmentTotalCount
+			} else {
+				attachmentsHasMore = page.count >= attachmentPageSize
+			}
+		} catch {
+			attachmentsHasMore = false
+		}
+	}
 
     private func openAttachment(_ attachment: MetaAttachment) {
         guard let url = AttachmentStore.ensurePreviewURL(for: attachment) else {

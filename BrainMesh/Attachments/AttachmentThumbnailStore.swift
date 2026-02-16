@@ -18,6 +18,10 @@ actor AttachmentThumbnailStore {
 
     static let shared = AttachmentThumbnailStore()
 
+    /// Patch 2 (real throttling): limit the number of concurrent thumbnail generations.
+    /// Without this, a large grid/list can trigger dozens/hundreds of QuickLook/AV jobs at once.
+    private let generationLimiter = AsyncLimiter(maxConcurrent: 3)
+
     private let memoryCache: NSCache<NSString, UIImage> = {
         let c = NSCache<NSString, UIImage>()
         c.countLimit = 250
@@ -51,23 +55,25 @@ actor AttachmentThumbnailStore {
         }
 
         let task = Task<UIImage?, Never> {
-            guard FileManager.default.fileExists(atPath: fileURL.path) else { return nil }
+            await self.generationLimiter.withPermit {
+                guard FileManager.default.fileExists(atPath: fileURL.path) else { return nil }
 
-            // Try QuickLook thumbnail first (works for PDFs, docs, many videos, etc.)
-            if let ql = await Self.generateQuickLookThumbnail(
-                fileURL: fileURL,
-                size: requestSize,
-                scale: scale
-            ) {
-                return ql
+                // Try QuickLook thumbnail first (works for PDFs, docs, many videos, etc.)
+                if let ql = await Self.generateQuickLookThumbnail(
+                    fileURL: fileURL,
+                    size: requestSize,
+                    scale: scale
+                ) {
+                    return ql
+                }
+
+                // Fallback: Videos (first frame)
+                if isVideo, let frame = await Self.generateVideoFrameThumbnail(fileURL: fileURL) {
+                    return frame
+                }
+
+                return nil
             }
-
-            // Fallback: Videos (first frame)
-            if isVideo, let frame = await Self.generateVideoFrameThumbnail(fileURL: fileURL) {
-                return frame
-            }
-
-            return nil
         }
 
         inFlight[attachmentID] = task
@@ -142,5 +148,48 @@ actor AttachmentThumbnailStore {
 
     private func cacheKey(for attachmentID: UUID) -> NSString {
         attachmentID.uuidString as NSString
+    }
+}
+
+// MARK: - Concurrency limiter
+
+/// A tiny async semaphore.
+///
+/// - `withPermit` suspends until a permit is available, runs the operation, then releases.
+/// - FIFO fairness is "good enough" for UI thumbnail work.
+actor AsyncLimiter {
+
+    private let maxConcurrent: Int
+    private var available: Int
+    private var waiters: [CheckedContinuation<Void, Never>] = []
+
+    init(maxConcurrent: Int) {
+        self.maxConcurrent = max(1, maxConcurrent)
+        self.available = max(1, maxConcurrent)
+    }
+
+    func withPermit<T>(_ operation: @Sendable () async -> T) async -> T {
+        await acquire()
+        defer { release() }
+        return await operation()
+    }
+
+    private func acquire() async {
+        if available > 0 {
+            available -= 1
+            return
+        }
+        await withCheckedContinuation { cont in
+            waiters.append(cont)
+        }
+    }
+
+    private func release() {
+        if !waiters.isEmpty {
+            let cont = waiters.removeFirst()
+            cont.resume()
+            return
+        }
+        available = min(maxConcurrent, available + 1)
     }
 }
