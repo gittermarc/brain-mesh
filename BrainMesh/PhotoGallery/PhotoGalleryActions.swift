@@ -72,21 +72,37 @@ struct PhotoGalleryActions {
         mainImageData: Binding<Data?>,
         mainImagePath: Binding<String?>
     ) async throws {
+
         guard let ui = await loadUIImageForFullRes(attachment) else {
             throw PhotoGalleryActionError.imageLoadFailed
         }
 
-        guard let jpeg = ImageImportPipeline.prepareJPEGForCloudKit(ui) else {
+        let jpeg = await Task.detached(priority: .userInitiated) { () -> Data? in
+            ImageImportPipeline.prepareJPEGForCloudKit(ui)
+        }.value
+
+        guard let jpeg else {
             throw PhotoGalleryActionError.jpegCreationFailed
         }
 
         let filename = "\(mainStableID.uuidString).jpg"
-        ImageStore.delete(path: mainImagePath.wrappedValue)
+        let oldPath = mainImagePath.wrappedValue
 
         do {
-            _ = try ImageStore.saveJPEG(jpeg, preferredName: filename)
+            if let oldPath, !oldPath.isEmpty, oldPath != filename {
+                await ImageStore.deleteAsync(path: oldPath)
+            }
+
+            _ = try await ImageStore.saveJPEGAsync(jpeg, preferredName: filename)
+
             mainImagePath.wrappedValue = filename
             mainImageData.wrappedValue = jpeg
+
+            // Warm memory cache for instant UI.
+            if let preview = UIImage(data: jpeg) {
+                ImageStore.cacheUIImage(preview, path: filename)
+            }
+
             try? modelContext.save()
         } catch {
             throw PhotoGalleryActionError.jpegSaveFailed(underlying: error)

@@ -54,7 +54,7 @@ extension GraphCanvasScreen {
                     Button(role: .destructive) {
                         focusEntity = nil
                         selection = nil
-                        Task { await loadGraph() }
+                        scheduleLoadGraph(resetLayout: true)
                     } label: {
                         Label("Fokus löschen", systemImage: "xmark.circle")
                     }
@@ -161,7 +161,7 @@ extension GraphCanvasScreen {
                     }
 
                     Button {
-                        Task { await loadGraph(resetLayout: true) }
+                        scheduleLoadGraph(resetLayout: true)
                     } label: {
                         Label("Neu laden & layouten", systemImage: "wand.and.rays")
                     }

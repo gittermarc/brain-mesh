@@ -106,6 +106,10 @@ struct GraphCanvasScreen: View {
     @State var loadError: String?
     @State var showInspector = false
 
+    // ✅ Cancellable loads (avoid overlapping work when multiple triggers fire quickly)
+    // NOTE: Must not be `private` because the load pipeline lives in extension files.
+    @State var loadTask: Task<Void, Never>?
+
     // MiniMap emphasis
     @State var miniMapEmphasized: Bool = false
     @State var miniMapPulseTask: Task<Void, Never>?
@@ -238,7 +242,7 @@ struct GraphCanvasScreen: View {
                         focusEntity = entity
                         selection = NodeKey(kind: .entity, uuid: entity.id)
                         showFocusPicker = false
-                        Task { await loadGraph() }
+                        scheduleLoadGraph(resetLayout: true)
                     } else {
                         showFocusPicker = false
                     }
@@ -274,18 +278,18 @@ struct GraphCanvasScreen: View {
                 focusEntity = nil
                 selection = nil
                 pinned.removeAll()
-                Task { await loadGraph(resetLayout: true) }
+                scheduleLoadGraph(resetLayout: true)
             }
 
             // Neighborhood reload
             .task(id: hops) {
                 guard focusEntity != nil else { return }
-                await loadGraph()
+                scheduleLoadGraph(resetLayout: true)
             }
 
             .task(id: showAttributes) {
                 guard focusEntity != nil else { return }
-                await loadGraph()
+                scheduleLoadGraph(resetLayout: true)
             }
         }
         .onChange(of: pan) { _, _ in pulseMiniMap() }
@@ -293,6 +297,10 @@ struct GraphCanvasScreen: View {
         .onAppear {
             prefetchSelectedFullImage()
             recomputeDerivedState()
+        }
+        .onDisappear {
+            // Best-effort: If the screen goes away, stop any in-flight load.
+            loadTask?.cancel()
         }
 
         // ✅ Derived state updates (only when its true inputs change)
@@ -322,6 +330,17 @@ struct GraphCanvasScreen: View {
         .fullScreenCover(isPresented: $showGraphPhotoFullscreen) {
             if let img = graphFullscreenImage {
                 FullscreenPhotoView(image: img)
+            }
+        }
+    }
+
+    // MARK: - Cancellable loading
+
+    func scheduleLoadGraph(resetLayout: Bool) {
+        Task { @MainActor in
+            loadTask?.cancel()
+            loadTask = Task {
+                await loadGraph(resetLayout: resetLayout)
             }
         }
     }

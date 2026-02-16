@@ -27,6 +27,9 @@ struct NotesAndPhotoSection: View {
     @State private var pickerItem: PhotosPickerItem?
     @State private var loadError: String?
 
+    // Display cache (avoid disk reads inside `body`)
+    @State private var previewUIImage: UIImage?
+
     // Fullscreen preview
     @State private var showFullscreen = false
     @State private var fullscreenImage: UIImage?
@@ -42,9 +45,18 @@ struct NotesAndPhotoSection: View {
                 subtitle: "Notizen sind durchsuchbar. Bilder werden iCloud-schonend gespeichert."
             )
         }
-        .task { ensureLocalCacheIfPossible() }
+        .task {
+            await ensureLocalCacheIfPossibleAsync()
+            await refreshPreviewImageAsync()
+        }
         .onChange(of: imageData) { _, _ in
-            ensureLocalCacheIfPossible()
+            Task {
+                await ensureLocalCacheIfPossibleAsync()
+                await refreshPreviewImageAsync()
+            }
+        }
+        .onChange(of: imagePath) { _, _ in
+            Task { await refreshPreviewImageAsync() }
         }
         .onChange(of: pickerItem) { _, newItem in
             guard let newItem else { return }
@@ -80,7 +92,7 @@ struct NotesAndPhotoSection: View {
 
     private var photoBlock: some View {
         VStack(alignment: .leading, spacing: 10) {
-            if let ui = currentUIImage() {
+            if let ui = previewUIImage {
                 Image(uiImage: ui)
                     .resizable()
                     .scaledToFit()
@@ -104,10 +116,15 @@ struct NotesAndPhotoSection: View {
 
                 if imageData != nil || (imagePath?.isEmpty == false) {
                     Button(role: .destructive) {
-                        ImageStore.delete(path: imagePath)
+                        let oldPath = imagePath
                         imagePath = nil
                         imageData = nil
-                        try? modelContext.save()
+                        previewUIImage = nil
+
+                        Task {
+                            await ImageStore.deleteAsync(path: oldPath)
+                            await MainActor.run { try? modelContext.save() }
+                        }
                     } label: {
                         Label("Entfernen", systemImage: "trash")
                     }
@@ -124,34 +141,47 @@ struct NotesAndPhotoSection: View {
         "\(stableID.uuidString).jpg"
     }
 
-    private func currentUIImage() -> UIImage? {
-        // 1) Cache-Datei bevorzugen
-        if let ui = ImageStore.loadUIImage(path: imagePath) { return ui }
-
-        // 2) Fallback: direkt aus gesyncten Daten
-        if let d = imageData, let ui = UIImage(data: d) { return ui }
-
-        return nil
-    }
-
-    /// Wenn `imageData` vorhanden ist, aber Cache-Datei fehlt → schreibe sie.
-    private func ensureLocalCacheIfPossible() {
-        guard let d = imageData, !d.isEmpty else { return }
-
-        // deterministischer Name (wichtig für Sync-Konfliktfreiheit)
-        let filename = stableFilename()
-        if imagePath != filename { imagePath = filename }
-
-        if ImageStore.fileExists(path: imagePath) { return }
-
-        do {
-            _ = try ImageStore.saveJPEG(d, preferredName: filename)
-        } catch {
-            // Nicht fatal – Bild ist trotzdem via imageData verfügbar
+    private func refreshPreviewImageAsync() async {
+        // Prefer local file cache
+        if let path = imagePath, !path.isEmpty {
+            if let ui = await ImageStore.loadUIImageAsync(path: path) {
+                await MainActor.run { previewUIImage = ui }
+                return
+            }
         }
 
-        // imagePath ggf. persistieren (damit andere Views stabil sind)
-        try? modelContext.save()
+        // Fallback: synced bytes
+        if let d = imageData, !d.isEmpty {
+            let ui = UIImage(data: d)
+            await MainActor.run { previewUIImage = ui }
+            return
+        }
+
+        await MainActor.run { previewUIImage = nil }
+    }
+
+    /// If `imageData` exists but the deterministic cache file is missing, write it off-main.
+    private func ensureLocalCacheIfPossibleAsync() async {
+        guard let d = imageData, !d.isEmpty else { return }
+
+        let filename = stableFilename()
+
+        // Keep the path deterministic (important for sync conflict freedom)
+        if imagePath != filename {
+            await MainActor.run { imagePath = filename }
+        }
+
+        if ImageStore.fileExists(path: filename) {
+            return
+        }
+
+        do {
+            _ = try await ImageStore.saveJPEGAsync(d, preferredName: filename)
+        } catch {
+            // Not fatal – image is still available via `imageData`.
+        }
+
+        await MainActor.run { try? modelContext.save() }
     }
 
     // MARK: - Import
@@ -164,38 +194,45 @@ struct NotesAndPhotoSection: View {
                 return
             }
 
-            // ✅ robustes Decode → verhindert „2266x0 image slot“
-            guard let decoded = ImageImportPipeline.decodeImageSafely(from: raw, maxPixelSize: 2200) else {
+            let filename = stableFilename()
+            let oldPath = imagePath
+
+            let processed = await Task.detached(priority: .userInitiated) { () -> (jpeg: Data, preview: UIImage)? in
+                guard let decoded = ImageImportPipeline.decodeImageSafely(from: raw, maxPixelSize: 2200) else {
+                    return nil
+                }
+                guard let jpeg = ImageImportPipeline.prepareJPEGForCloudKit(decoded) else {
+                    return nil
+                }
+                let preview = UIImage(data: jpeg) ?? decoded
+                return (jpeg: jpeg, preview: preview)
+            }.value
+
+            guard let processed else {
                 loadError = "Bild konnte nicht dekodiert werden."
                 return
             }
 
-            // ✅ CloudKit-freundlich: runter skalieren + stark komprimieren
-            guard let jpeg = ImageImportPipeline.prepareJPEGForCloudKit(decoded) else {
-                loadError = "JPEG-Erzeugung fehlgeschlagen."
-                return
+            imageData = processed.jpeg
+            imagePath = filename
+            previewUIImage = processed.preview
+
+            if let oldPath, !oldPath.isEmpty, oldPath != filename {
+                await ImageStore.deleteAsync(path: oldPath)
             }
 
-            // deterministischer Dateiname
-            let filename = stableFilename()
+            do {
+                _ = try await ImageStore.saveJPEGAsync(processed.jpeg, preferredName: filename)
+                ImageStore.cacheUIImage(processed.preview, path: filename)
+            } catch {
+                // CloudKit sync still works via `imageData`.
+            }
 
-            // altes lokales File weg (falls vorhanden)
-            ImageStore.delete(path: imagePath)
-
-            // cloud: data setzen (synct)
-            imageData = jpeg
-
-            // local: cache schreiben + path setzen (deterministisch)
-            _ = try ImageStore.saveJPEG(jpeg, preferredName: filename)
-            imagePath = filename
-
-            // ✅ wichtig: explizit speichern, damit SwiftData es sicher exportiert
             try? modelContext.save()
-
             pickerItem = nil
+
         } catch {
             loadError = error.localizedDescription
         }
     }
-
 }

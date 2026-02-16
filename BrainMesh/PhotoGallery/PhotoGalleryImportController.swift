@@ -36,6 +36,7 @@ enum PhotoGalleryImportController {
         graphID: UUID?,
         in modelContext: ModelContext
     ) async -> PhotoGalleryImportResult {
+
         var imported: Int = 0
         var failed: Int = 0
 
@@ -46,41 +47,49 @@ enum PhotoGalleryImportController {
                     continue
                 }
 
-                guard let decoded = ImageImportPipeline.decodeImageSafely(from: raw, maxPixelSize: 3200) else {
+                let prepared = await Task.detached(priority: .userInitiated) { () -> (id: UUID, jpeg: Data, local: String?, ext: String)? in
+                    guard let decoded = ImageImportPipeline.decodeImageSafely(from: raw, maxPixelSize: 3200) else {
+                        return nil
+                    }
+
+                    guard let jpeg = ImageImportPipeline.prepareJPEGForGallery(decoded) else {
+                        return nil
+                    }
+
+                    let id = UUID()
+                    let ext = "jpg"
+                    let local = try? AttachmentStore.writeToCache(
+                        data: jpeg,
+                        attachmentID: id,
+                        fileExtension: ext
+                    )
+
+                    return (id: id, jpeg: jpeg, local: local, ext: ext)
+                }.value
+
+                guard let prepared else {
                     failed += 1
                     continue
                 }
-
-                guard let jpeg = ImageImportPipeline.prepareJPEGForGallery(decoded) else {
-                    failed += 1
-                    continue
-                }
-
-                let id = UUID()
-                let ext = "jpg"
-                let local = try? AttachmentStore.writeToCache(
-                    data: jpeg,
-                    attachmentID: id,
-                    fileExtension: ext
-                )
 
                 let att = MetaAttachment(
-                    id: id,
+                    id: prepared.id,
                     ownerKind: ownerKind,
                     ownerID: ownerID,
                     graphID: graphID,
                     contentKind: .galleryImage,
                     title: "",
-                    originalFilename: "Foto.\(ext)",
+                    originalFilename: "Foto.\(prepared.ext)",
                     contentTypeIdentifier: UTType.jpeg.identifier,
-                    fileExtension: ext,
-                    byteCount: jpeg.count,
-                    fileData: jpeg,
-                    localPath: local
+                    fileExtension: prepared.ext,
+                    byteCount: prepared.jpeg.count,
+                    fileData: prepared.jpeg,
+                    localPath: prepared.local
                 )
 
                 modelContext.insert(att)
                 imported += 1
+
             } catch {
                 failed += 1
             }

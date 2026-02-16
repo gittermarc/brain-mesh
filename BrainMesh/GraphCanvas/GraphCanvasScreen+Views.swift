@@ -16,7 +16,7 @@ extension GraphCanvasScreen {
                 .foregroundStyle(.secondary)
             Text("Fehler").font(.headline)
             Text(text).foregroundStyle(.secondary).multilineTextAlignment(.center)
-            Button("Erneut versuchen") { Task { await loadGraph() } }
+            Button("Erneut versuchen") { scheduleLoadGraph(resetLayout: true) }
                 .buttonStyle(.borderedProminent)
         }
         .padding()

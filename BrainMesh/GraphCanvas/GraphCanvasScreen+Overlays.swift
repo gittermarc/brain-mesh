@@ -158,7 +158,7 @@ extension GraphCanvasScreen {
                 Button {
                     if let e = fetchEntity(id: node.key.uuid) {
                         focusEntity = e
-                        Task { await loadGraph() }
+                        scheduleLoadGraph(resetLayout: true)
                         cameraCommand = CameraCommand(kind: .center(node.key))
                     }
                 } label: {

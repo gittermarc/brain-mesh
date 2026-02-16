@@ -44,6 +44,17 @@ enum IconCatalog {
         searchIndex.search(term: term, limit: limit)
     }
 
+    /// Warm up JSON decode + search index construction off the main thread.
+    /// Call this early (e.g. on app startup) to avoid the first Icon-Picker opening hitching.
+    static func prewarm() {
+        // Touch lazy statics.
+        _ = categories.count
+        _ = allSymbols.count
+        _ = searchIndex
+
+        log.debug("prewarm ok categories=\(categories.count, privacy: .public) symbols=\(allSymbols.count, privacy: .public)")
+    }
+
     // MARK: - Loading
 
     private struct IconCatalogPayload: Codable {

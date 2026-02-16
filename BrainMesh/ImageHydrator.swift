@@ -43,10 +43,11 @@ enum ImageHydrator {
             return filename
         }
 
-        let dataCopy = d
-        await Task.detached(priority: .userInitiated) {
-            _ = try? ImageStore.saveJPEG(dataCopy, preferredName: filename)
-        }.value
+        do {
+            _ = try await ImageStore.saveJPEGAsync(d, preferredName: filename)
+        } catch {
+            // ignore
+        }
 
         return ImageStore.fileExists(path: filename) ? filename : nil
     }
@@ -58,7 +59,6 @@ enum ImageHydrator {
 
     private static func hydrate(using modelContext: ModelContext, mode: HydrationMode) async {
         var changed = false
-
         let forceWrite = (mode == .forceRebuild)
 
         // Entities (only those with imageData)
@@ -68,12 +68,7 @@ enum ImageHydrator {
             })
             let ents = try modelContext.fetch(fd)
             for e in ents {
-                let did = hydrateOne(
-                    stableID: e.id,
-                    imageData: e.imageData,
-                    imagePath: &e.imagePath,
-                    forceWrite: forceWrite
-                )
+                let did = await hydrateEntity(e, forceWrite: forceWrite)
                 if did { changed = true }
             }
         } catch {
@@ -87,12 +82,7 @@ enum ImageHydrator {
             })
             let attrs = try modelContext.fetch(fd)
             for a in attrs {
-                let did = hydrateOne(
-                    stableID: a.id,
-                    imageData: a.imageData,
-                    imagePath: &a.imagePath,
-                    forceWrite: forceWrite
-                )
+                let did = await hydrateAttribute(a, forceWrite: forceWrite)
                 if did { changed = true }
             }
         } catch {
@@ -104,31 +94,48 @@ enum ImageHydrator {
         }
     }
 
-    private static func hydrateOne(
-        stableID: UUID,
-        imageData: Data?,
-        imagePath: inout String?,
-        forceWrite: Bool
-    ) -> Bool {
-        guard let d = imageData, !d.isEmpty else { return false }
+    private static func hydrateEntity(_ e: MetaEntity, forceWrite: Bool) async -> Bool {
+        guard let d = e.imageData, !d.isEmpty else { return false }
 
-        let filename = "\(stableID.uuidString).jpg"
-
+        let filename = "\(e.id.uuidString).jpg"
         var didChange = false
-        if imagePath != filename {
-            imagePath = filename
+
+        if e.imagePath != filename {
+            e.imagePath = filename
             didChange = true
         }
 
-        if !forceWrite, ImageStore.fileExists(path: imagePath) {
+        if !forceWrite, ImageStore.fileExists(path: filename) {
             return didChange
         }
 
         do {
-            _ = try ImageStore.saveJPEG(d, preferredName: filename)
+            _ = try await ImageStore.saveJPEGAsync(d, preferredName: filename)
             return true
         } catch {
-            // not fatal
+            return didChange
+        }
+    }
+
+    private static func hydrateAttribute(_ a: MetaAttribute, forceWrite: Bool) async -> Bool {
+        guard let d = a.imageData, !d.isEmpty else { return false }
+
+        let filename = "\(a.id.uuidString).jpg"
+        var didChange = false
+
+        if a.imagePath != filename {
+            a.imagePath = filename
+            didChange = true
+        }
+
+        if !forceWrite, ImageStore.fileExists(path: filename) {
+            return didChange
+        }
+
+        do {
+            _ = try await ImageStore.saveJPEGAsync(d, preferredName: filename)
+            return true
+        } catch {
             return didChange
         }
     }

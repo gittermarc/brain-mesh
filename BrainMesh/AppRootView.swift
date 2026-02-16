@@ -64,6 +64,11 @@ struct AppRootView: View {
 
         didRunStartupOnce = true
 
+        // ✅ Prewarm SF Symbols catalog off-main to avoid the first Icon-Picker stutter.
+        Task.detached(priority: .utility) {
+            IconCatalog.prewarm()
+        }
+
         await bootstrapGraphing()
         await enforceLockIfNeeded()
         await autoHydrateImagesIfDue()

@@ -9,6 +9,15 @@ import os
 
 extension GraphCanvasScreen {
 
+    private struct GraphLoadResult {
+        let nodes: [GraphNode]
+        let edges: [GraphEdge]
+        let directedEdgeNotes: [DirectedEdgeKey: String]
+        let labelCache: [NodeKey: String]
+        let imagePathCache: [NodeKey: String]
+        let iconSymbolCache: [NodeKey: String]
+    }
+
     // MARK: - Data loading
 
     @MainActor
@@ -18,11 +27,16 @@ extension GraphCanvasScreen {
             BMLog.load.info("auto-selected first graph id=\(first.id.uuidString, privacy: .public)")
             return
         }
-        await loadGraph()
+        scheduleLoadGraph(resetLayout: true)
     }
 
     @MainActor
     func loadGraph(resetLayout: Bool = true) async {
+        if Task.isCancelled {
+            isLoading = false
+            return
+        }
+
         let t = BMDuration()
         let mode: String = (focusEntity != nil) ? "neighborhood" : "global"
         let focusID: String = focusEntity?.id.uuidString ?? "-"
@@ -33,23 +47,46 @@ extension GraphCanvasScreen {
         loadError = nil
 
         do {
+            let result: GraphLoadResult
             if let focus = focusEntity {
-                try loadNeighborhood(centerID: focus.id, hops: hops, includeAttributes: showAttributes)
+                result = try loadNeighborhood(centerID: focus.id, hops: hops, includeAttributes: showAttributes)
             } else {
-                try loadGlobal()
+                result = try loadGlobal()
             }
 
-            let nodeKeys = Set(nodes.map(\.key))
-            pinned = pinned.intersection(nodeKeys)
-            if let sel = selection, !nodeKeys.contains(sel) { selection = nil }
+            if Task.isCancelled {
+                isLoading = false
+                return
+            }
 
-            let validDirected = Set(edges.flatMap {
+            let nodeKeys = Set(result.nodes.map(\.key))
+
+            let newPinned = pinned.intersection(nodeKeys)
+            var newSelection = selection
+            if let sel = newSelection, !nodeKeys.contains(sel) { newSelection = nil }
+
+            let validDirected = Set(result.edges.flatMap {
                 [
                     DirectedEdgeKey.make(source: $0.a, target: $0.b, type: $0.type),
                     DirectedEdgeKey.make(source: $0.b, target: $0.a, type: $0.type)
                 ]
             })
-            directedEdgeNotes = directedEdgeNotes.filter { validDirected.contains($0.key) }
+            let newDirectedNotes = result.directedEdgeNotes.filter { validDirected.contains($0.key) }
+
+            // ✅ Commit the result in one go (prevents cancelled/older loads from partially overriding state)
+            nodes = result.nodes
+            edges = result.edges
+            labelCache = result.labelCache
+            imagePathCache = result.imagePathCache
+            iconSymbolCache = result.iconSymbolCache
+            pinned = newPinned
+            selection = newSelection
+            directedEdgeNotes = newDirectedNotes
+
+            if Task.isCancelled {
+                isLoading = false
+                return
+            }
 
             if resetLayout { seedLayout(preservePinned: true) }
             isLoading = false
@@ -67,7 +104,7 @@ extension GraphCanvasScreen {
         }
     }
 
-    private func loadGlobal() throws {
+    private func loadGlobal() throws -> GraphLoadResult {
         var eFD: FetchDescriptor<MetaEntity>
         if let gid = activeGraphID {
             eFD = FetchDescriptor(
@@ -104,10 +141,10 @@ extension GraphCanvasScreen {
         let nodeIDs = Set(ents.map { $0.id })
         let filteredLinks = links.filter { nodeIDs.contains($0.sourceID) && nodeIDs.contains($0.targetID) }
 
-        nodes = ents.map { GraphNode(key: NodeKey(kind: .entity, uuid: $0.id), label: $0.name) }
+        let newNodes: [GraphNode] = ents.map { GraphNode(key: NodeKey(kind: .entity, uuid: $0.id), label: $0.name) }
 
         var notes: [DirectedEdgeKey: String] = [:]
-        edges = filteredLinks.map { l in
+        let newEdges: [GraphEdge] = filteredLinks.map { l in
             let s = NodeKey(kind: .entity, uuid: l.sourceID)
             let t = NodeKey(kind: .entity, uuid: l.targetID)
 
@@ -118,8 +155,6 @@ extension GraphCanvasScreen {
 
             return GraphEdge(a: s, b: t, type: .link)
         }.unique()
-
-        directedEdgeNotes = notes
 
         // ✅ Render caches (Labels/Bilder) einmalig pro Load – kein SwiftData-Fetch im Render-Pfad
         var newLabelCache: [NodeKey: String] = [:]
@@ -133,13 +168,17 @@ extension GraphCanvasScreen {
             if let s = e.iconSymbolName, !s.isEmpty { newIconSymbolCache[k] = s }
         }
 
-        labelCache = newLabelCache
-        imagePathCache = newImagePathCache
-        iconSymbolCache = newIconSymbolCache
-
+        return GraphLoadResult(
+            nodes: newNodes,
+            edges: newEdges,
+            directedEdgeNotes: notes,
+            labelCache: newLabelCache,
+            imagePathCache: newImagePathCache,
+            iconSymbolCache: newIconSymbolCache
+        )
     }
 
-    private func loadNeighborhood(centerID: UUID, hops: Int, includeAttributes: Bool) throws {
+    private func loadNeighborhood(centerID: UUID, hops: Int, includeAttributes: Bool) throws -> GraphLoadResult {
         let kEntity = NodeKind.entity.rawValue
         let gid = activeGraphID
 
@@ -352,9 +391,7 @@ extension GraphCanvasScreen {
             }
         }
 
-        nodes = newNodes
-        edges = newEdges.unique()
-        directedEdgeNotes = notes
+        let uniqueEdges = newEdges.unique()
 
         // ✅ Render caches (Labels/Bilder) einmalig pro Load – kein SwiftData-Fetch im Render-Pfad
         var newLabelCache: [NodeKey: String] = [:]
@@ -375,10 +412,14 @@ extension GraphCanvasScreen {
             if let s = a.iconSymbolName, !s.isEmpty { newIconSymbolCache[k] = s }
         }
 
-        labelCache = newLabelCache
-        imagePathCache = newImagePathCache
-        iconSymbolCache = newIconSymbolCache
-
+        return GraphLoadResult(
+            nodes: newNodes,
+            edges: uniqueEdges,
+            directedEdgeNotes: notes,
+            labelCache: newLabelCache,
+            imagePathCache: newImagePathCache,
+            iconSymbolCache: newIconSymbolCache
+        )
     }
 
 }
