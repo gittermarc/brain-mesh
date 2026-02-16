@@ -33,12 +33,6 @@ struct NodeDetailHeaderCard: View {
     var subtitle: String? = nil
     var chips: [NodeHeaderChip] = []
 
-    private var previewImage: UIImage? {
-        if let ui = ImageStore.loadUIImage(path: imagePath) { return ui }
-        if let d = imageData, let ui = UIImage(data: d) { return ui }
-        return nil
-    }
-
     var body: some View {
         HStack(alignment: .center, spacing: 14) {
             ZStack {
@@ -49,12 +43,15 @@ struct NodeDetailHeaderCard: View {
                             .stroke(.secondary.opacity(0.18))
                     )
 
-                if let ui = previewImage {
+                NodeAsyncPreviewImageView(
+                    imagePath: imagePath,
+                    imageData: imageData
+                ) { ui in
                     Image(uiImage: ui)
                         .resizable()
                         .scaledToFill()
                         .clipShape(RoundedRectangle(cornerRadius: 14))
-                } else {
+                } placeholder: {
                     Image(systemName: iconSymbolName ?? "square.dashed")
                         .font(.system(size: 22, weight: .semibold))
                         .foregroundStyle(.tint)

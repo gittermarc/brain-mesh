@@ -44,10 +44,10 @@ struct NodeHeroCard: View {
     let subtitle: String?
     let pills: [NodeStatPill]
 
-    private var previewImage: UIImage? {
-        if let ui = ImageStore.loadUIImage(path: imagePath) { return ui }
-        if let d = imageData, let ui = UIImage(data: d) { return ui }
-        return nil
+    @State private var resolvedImage: UIImage? = nil
+
+    private var hasResolvedImage: Bool {
+        resolvedImage != nil
     }
 
     var body: some View {
@@ -59,7 +59,11 @@ struct NodeHeroCard: View {
                         .stroke(Color.secondary.opacity(0.12))
                 )
 
-            if let ui = previewImage {
+            NodeAsyncPreviewImageView(
+                imagePath: imagePath,
+                imageData: imageData,
+                resolvedImage: $resolvedImage
+            ) { ui in
                 Image(uiImage: ui)
                     .resizable()
                     .scaledToFill()
@@ -75,7 +79,7 @@ struct NodeHeroCard: View {
                         )
                         .clipShape(RoundedRectangle(cornerRadius: 24, style: .continuous))
                     )
-            } else {
+            } placeholder: {
                 VStack(spacing: 8) {
                     Image(systemName: placeholderIcon)
                         .font(.system(size: 34, weight: .semibold))
@@ -91,18 +95,18 @@ struct NodeHeroCard: View {
             VStack(alignment: .leading, spacing: 10) {
                 Text(kindTitle)
                     .font(.caption.weight(.semibold))
-                    .foregroundStyle(previewImage == nil ? Color.secondary : Color.white.opacity(0.85))
+                    .foregroundStyle(hasResolvedImage ? Color.white.opacity(0.85) : Color.secondary)
 
                 TextField("Name", text: $title)
                     .font(.title2.weight(.semibold))
-                    .foregroundStyle(previewImage == nil ? Color.primary : Color.white)
+                    .foregroundStyle(hasResolvedImage ? Color.white : Color.primary)
                     .textInputAutocapitalization(.words)
                     .autocorrectionDisabled(false)
 
                 if let subtitle, !subtitle.isEmpty {
                     Text(subtitle)
                         .font(.subheadline)
-                        .foregroundStyle(previewImage == nil ? Color.secondary : Color.white.opacity(0.85))
+                        .foregroundStyle(hasResolvedImage ? Color.white.opacity(0.85) : Color.secondary)
                         .lineLimit(2)
                 }
 
@@ -115,12 +119,12 @@ struct NodeHeroCard: View {
                                 .padding(.horizontal, 10)
                                 .padding(.vertical, 6)
                                 .background(
-                                    (previewImage == nil
-                                     ? AnyShapeStyle(Color(uiColor: .tertiarySystemGroupedBackground))
-                                     : AnyShapeStyle(.ultraThinMaterial)),
+                                    (hasResolvedImage
+                                     ? AnyShapeStyle(.ultraThinMaterial)
+                                     : AnyShapeStyle(Color(uiColor: .tertiarySystemGroupedBackground))),
                                     in: Capsule()
                                 )
-                                .foregroundStyle(previewImage == nil ? Color.secondary : Color.white)
+                                .foregroundStyle(hasResolvedImage ? Color.white : Color.secondary)
                         }
                         Spacer(minLength: 0)
                     }
@@ -130,6 +134,96 @@ struct NodeHeroCard: View {
         }
         .frame(height: 210)
         .accessibilityElement(children: .contain)
+    }
+}
+
+// MARK: - Async preview image loader
+
+/// Loads an image from the local `ImageStore` (disk/memory) asynchronously.
+/// If no image exists at `imagePath`, it falls back to decoding `imageData` (off-main).
+///
+/// Use this to keep `ImageStore.loadUIImage(path:)` out of SwiftUI `body` / computed properties.
+struct NodeAsyncPreviewImageView<Content: View, Placeholder: View>: View {
+    let imagePath: String?
+    let imageData: Data?
+
+    /// Optional external binding to expose the resolved image to the parent.
+    /// Useful when the parent needs to adjust styling based on whether an image exists.
+    var resolvedImage: Binding<UIImage?>? = nil
+
+    @ViewBuilder let content: (UIImage) -> Content
+    @ViewBuilder let placeholder: () -> Placeholder
+
+    @State private var internalImage: UIImage? = nil
+
+    private struct LoadKey: Hashable {
+        let path: String
+        let dataHash: Int
+    }
+
+    private var loadKey: LoadKey {
+        LoadKey(
+            path: imagePath ?? "",
+            dataHash: imageData?.hashValue ?? 0
+        )
+    }
+
+    private var currentImage: UIImage? {
+        resolvedImage?.wrappedValue ?? internalImage
+    }
+
+    var body: some View {
+        Group {
+            if let ui = currentImage {
+                content(ui)
+            } else {
+                placeholder()
+            }
+        }
+        .task(id: loadKey) {
+            await loadImage()
+        }
+    }
+
+    @MainActor
+    private func setResolvedImage(_ image: UIImage?) {
+        if let binding = resolvedImage {
+            binding.wrappedValue = image
+        } else {
+            internalImage = image
+        }
+    }
+
+    private func loadImage() async {
+        await MainActor.run {
+            setResolvedImage(nil)
+        }
+
+        if Task.isCancelled { return }
+
+        if let path = imagePath, !path.isEmpty {
+            if let ui = await ImageStore.loadUIImageAsync(path: path) {
+                if Task.isCancelled { return }
+                await MainActor.run {
+                    setResolvedImage(ui)
+                }
+                return
+            }
+        }
+
+        if let data = imageData, !data.isEmpty {
+            let dataCopy = data
+            let decoded: UIImage? = await Task.detached(priority: .userInitiated) {
+                autoreleasepool {
+                    UIImage(data: dataCopy)
+                }
+            }.value
+
+            if Task.isCancelled { return }
+            await MainActor.run {
+                setResolvedImage(decoded)
+            }
+        }
     }
 }
 
