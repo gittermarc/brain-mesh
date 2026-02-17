@@ -12,7 +12,8 @@ import UIKit
 ///
 /// Goal: classic "Photos-app" look.
 /// - No vignette, no border, no blur.
-/// - Grid tiles are aspect-fill cropped (like the Photos app grid).
+/// - The parent controls the tile size/aspect.
+/// - The image is always aspect-fill cropped and clipped to bounds.
 ///
 /// Note: `contentPadding` is kept for call-site compatibility (older style used padding + blurred background).
 /// It is intentionally not used anymore.
@@ -22,15 +23,10 @@ struct PhotoGalleryThumbnailView: View {
     let contentPadding: CGFloat
 
     var body: some View {
-        // Hard guarantee: thumbnails are always a square "Photos-like" crop.
-        // The parent (grid/strip) controls the actual size; we just ensure
-        // the content fills a square tile and never bleeds outside.
         Image(uiImage: uiImage)
             .resizable()
             .scaledToFill()
-            .frame(maxWidth: .infinity, maxHeight: .infinity)
             .clipped()
-            .aspectRatio(1, contentMode: .fit)
             .clipShape(RoundedRectangle(cornerRadius: cornerRadius, style: .continuous))
             .contentShape(RoundedRectangle(cornerRadius: cornerRadius, style: .continuous))
     }

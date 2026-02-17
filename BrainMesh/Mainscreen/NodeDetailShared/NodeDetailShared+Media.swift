@@ -117,14 +117,17 @@ private struct NodeGalleryThumbGrid: View {
     let attachments: [MetaAttachment]
     let onTap: (UUID) -> Void
 
-    /// Adaptive columns so tiles get enough room on small devices.
-    /// This prevents cramped tiles that visually bleed into each other.
+    /// Adaptive columns so tiles keep a stable, modern look.
+    ///
+    /// We intentionally keep the minimum on the "Photos-ish" side to:
+    /// - avoid cramped tiles (which can make overlays feel like they overlap)
+    /// - keep a consistent square tile size even with mixed aspect ratio images
     private let columns: [GridItem] = [
-        GridItem(.adaptive(minimum: 96, maximum: 160), spacing: 12)
+        GridItem(.adaptive(minimum: 104, maximum: 170), spacing: 10)
     ]
 
     var body: some View {
-        LazyVGrid(columns: columns, spacing: 12) {
+        LazyVGrid(columns: columns, spacing: 10) {
             ForEach(attachments.prefix(6)) { att in
                 NodeGalleryThumbTile(
                     attachmentID: att.id,
@@ -162,21 +165,12 @@ private struct NodeGalleryThumbTile: View {
 
     var body: some View {
         Button(action: onTap) {
-            ZStack {
-                RoundedRectangle(cornerRadius: 16, style: .continuous)
-                    .fill(.quaternary)
-
-                if let thumbnail {
-                    PhotoGalleryThumbnailView(uiImage: thumbnail, cornerRadius: 16, contentPadding: 8)
-                        .frame(maxWidth: .infinity, maxHeight: .infinity)
-                } else {
-                    ProgressView()
-                        .scaleEffect(0.9)
-                }
+            PhotoGallerySquareTile(thumbnail: thumbnail, cornerRadius: 16) {
+                ProgressView()
+                    .scaleEffect(0.9)
+            } overlay: {
+                EmptyView()
             }
-            .aspectRatio(1, contentMode: .fit)
-            .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
-            .contentShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
         }
         .buttonStyle(.plain)
         .task(id: attachmentID) {
@@ -341,7 +335,7 @@ struct NodeMediaAllView: View {
 				Text(isLoadingGallery ? "Galerie wird geladen …" : "Keine Fotos in der Galerie.")
 					.foregroundStyle(.secondary)
 			} else {
-				LazyVGrid(columns: [GridItem(.adaptive(minimum: 110, maximum: 180), spacing: 12)], spacing: 12) {
+				LazyVGrid(columns: [GridItem(.adaptive(minimum: 104, maximum: 180), spacing: 10)], spacing: 10) {
 					ForEach(galleryImages) { att in
 						NodeGalleryThumbTile(
 							attachmentID: att.id,

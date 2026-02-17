@@ -60,7 +60,7 @@ struct PhotoGalleryBrowserView: View {
 
     var body: some View {
         ScrollView {
-            LazyVGrid(columns: columns, spacing: 12) {
+            LazyVGrid(columns: columns, spacing: 10) {
                 PhotosPicker(selection: $pickedItems, maxSelectionCount: maxSelectionCount, matching: .images) {
                     addTile
                 }
@@ -169,7 +169,7 @@ struct PhotoGalleryBrowserView: View {
     }
 
     private var columns: [GridItem] {
-        [GridItem(.adaptive(minimum: 110, maximum: 180), spacing: 12)]
+        [GridItem(.adaptive(minimum: 104, maximum: 180), spacing: 10)]
     }
 
     private var addTile: some View {
@@ -200,28 +200,15 @@ private struct PhotoGalleryGridTile: View {
     @State private var thumbnail: UIImage? = nil
 
     var body: some View {
-        ZStack(alignment: .topTrailing) {
-            RoundedRectangle(cornerRadius: 18)
-                .fill(.secondary.opacity(0.10))
-
-            if let thumbnail {
-                PhotoGalleryThumbnailView(
-                    uiImage: thumbnail,
-                    cornerRadius: 18,
-                    contentPadding: 10
-                )
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
-            } else {
-                VStack(spacing: 8) {
-                    ProgressView()
-                        .scaleEffect(0.9)
-                    Image(systemName: "photo")
-                        .font(.system(size: 16, weight: .semibold))
-                        .foregroundStyle(.secondary)
-                }
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
+        PhotoGallerySquareTile(thumbnail: thumbnail, cornerRadius: 18) {
+            VStack(spacing: 8) {
+                ProgressView()
+                    .scaleEffect(0.9)
+                Image(systemName: "photo")
+                    .font(.system(size: 16, weight: .semibold))
+                    .foregroundStyle(.secondary)
             }
-
+        } overlay: {
             Menu {
                 Button {
                     onTap()
@@ -250,11 +237,9 @@ private struct PhotoGalleryGridTile: View {
                 Image(systemName: "ellipsis.circle.fill")
                     .font(.system(size: 18, weight: .semibold))
                     .foregroundStyle(.primary.opacity(0.85))
-                    .padding(10)
+                    .padding(8)
             }
         }
-        .aspectRatio(1, contentMode: .fit)
-        .clipShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
         .contentShape(Rectangle())
         .onTapGesture { onTap() }
         .task(id: attachment.id) {
