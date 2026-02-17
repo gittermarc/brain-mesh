@@ -30,6 +30,7 @@ struct NodeMediaCard: View {
 
     let onOpenAll: () -> Void
     let onManage: () -> Void
+    let onManageGallery: () -> Void
     let onTapGallery: (UUID) -> Void
     let onTapAttachment: (MetaAttachment) -> Void
 
@@ -72,16 +73,7 @@ struct NodeMediaCard: View {
                 }
 
                 VStack(spacing: 10) {
-                    NavigationLink {
-                        NodeImagesManageView(
-                            ownerKind: ownerKind,
-                            ownerID: ownerID,
-                            graphID: graphID,
-                            mainImageData: $mainImageData,
-                            mainImagePath: $mainImagePath,
-                            mainStableID: mainStableID
-                        )
-                    } label: {
+                    Button(action: onManageGallery) {
                         Label("Bilder verwalten", systemImage: "photo")
                             .font(.callout.weight(.semibold))
                             .frame(maxWidth: .infinity)

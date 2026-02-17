@@ -138,6 +138,7 @@ struct AttributeDetailView: View {
                             attachmentCount: mediaPreview.attachmentCount,
                             onOpenAll: {},
                             onManage: { showMediaManageChooser = true },
+                            onManageGallery: { showGalleryBrowser = true },
                             onTapGallery: { id in
                                 galleryViewerRequest = PhotoGalleryViewerRequest(startAttachmentID: id)
                             },
