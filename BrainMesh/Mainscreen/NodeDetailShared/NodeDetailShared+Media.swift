@@ -175,6 +175,8 @@ private struct NodeGalleryThumbTile: View {
                 }
             }
             .aspectRatio(1, contentMode: .fit)
+            .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
+            .contentShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
         }
         .buttonStyle(.plain)
         .task(id: attachmentID) {

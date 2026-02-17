@@ -22,10 +22,16 @@ struct PhotoGalleryThumbnailView: View {
     let contentPadding: CGFloat
 
     var body: some View {
+        // Hard guarantee: thumbnails are always a square "Photos-like" crop.
+        // The parent (grid/strip) controls the actual size; we just ensure
+        // the content fills a square tile and never bleeds outside.
         Image(uiImage: uiImage)
             .resizable()
             .scaledToFill()
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
             .clipped()
+            .aspectRatio(1, contentMode: .fit)
             .clipShape(RoundedRectangle(cornerRadius: cornerRadius, style: .continuous))
+            .contentShape(RoundedRectangle(cornerRadius: cornerRadius, style: .continuous))
     }
 }

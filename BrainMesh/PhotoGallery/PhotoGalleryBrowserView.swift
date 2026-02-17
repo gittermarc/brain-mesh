@@ -210,6 +210,7 @@ private struct PhotoGalleryGridTile: View {
                     cornerRadius: 18,
                     contentPadding: 10
                 )
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
             } else {
                 VStack(spacing: 8) {
                     ProgressView()
@@ -253,6 +254,7 @@ private struct PhotoGalleryGridTile: View {
             }
         }
         .aspectRatio(1, contentMode: .fit)
+        .clipShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
         .contentShape(Rectangle())
         .onTapGesture { onTap() }
         .task(id: attachment.id) {
