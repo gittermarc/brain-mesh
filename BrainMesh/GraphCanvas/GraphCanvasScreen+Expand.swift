@@ -54,14 +54,14 @@ extension GraphCanvasScreen {
         if let gid {
             outFD = FetchDescriptor(
                 predicate: #Predicate<MetaLink> { l in
-                    (l.graphID == gid || l.graphID == nil) &&
+                    l.graphID == gid &&
                     l.sourceKindRaw == kindRaw && l.sourceID == id
                 },
                 sortBy: [SortDescriptor(\MetaLink.createdAt, order: .reverse)]
             )
             inFD = FetchDescriptor(
                 predicate: #Predicate<MetaLink> { l in
-                    (l.graphID == gid || l.graphID == nil) &&
+                    l.graphID == gid &&
                     l.targetKindRaw == kindRaw && l.targetID == id
                 },
                 sortBy: [SortDescriptor(\MetaLink.createdAt, order: .reverse)]
@@ -127,7 +127,7 @@ extension GraphCanvasScreen {
                     if remaining > 0 {
                         let sortedAttrs = e.attributesList.sorted { $0.name < $1.name }
                         for a in sortedAttrs.prefix(remaining) {
-                            if let gid, !(a.graphID == gid || a.graphID == nil) { continue }
+                            if let gid, a.graphID != gid { continue }
                             let ak = NodeKey(kind: .attribute, uuid: a.id)
                             ensureNode(ak)
                             newEdges.append(GraphEdge(a: key, b: ak, type: .containment))

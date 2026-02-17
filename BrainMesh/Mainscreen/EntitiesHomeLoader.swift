@@ -139,48 +139,72 @@ actor EntitiesHomeLoader {
     ) throws -> [MetaEntity] {
         let gid = graphID
 
-        // Empty search: show *all* entities for the active graph (plus legacy nil-scope).
+        // Empty search: show *all* entities for the active graph.
         if foldedSearch.isEmpty {
-            let fd = FetchDescriptor<MetaEntity>(
-                predicate: #Predicate<MetaEntity> { e in
-                    gid == nil || e.graphID == gid || e.graphID == nil
-                },
-                sortBy: [SortDescriptor(\MetaEntity.name)]
-            )
-
-            return try context.fetch(fd)
+            if let gid {
+                let fd = FetchDescriptor<MetaEntity>(
+                    predicate: #Predicate<MetaEntity> { e in
+                        e.graphID == gid
+                    },
+                    sortBy: [SortDescriptor(\MetaEntity.name)]
+                )
+                return try context.fetch(fd)
+            } else {
+                let fd = FetchDescriptor<MetaEntity>(sortBy: [SortDescriptor(\MetaEntity.name)])
+                return try context.fetch(fd)
+            }
         }
 
         let term = foldedSearch
         var unique: [UUID: MetaEntity] = [:]
 
         // 1) Entity name match
-        let fdEntities = FetchDescriptor<MetaEntity>(
-            predicate: #Predicate<MetaEntity> { e in
-                (gid == nil || e.graphID == gid || e.graphID == nil) &&
-                e.nameFolded.contains(term)
-            },
-            sortBy: [SortDescriptor(\MetaEntity.name)]
-        )
+        let fdEntities: FetchDescriptor<MetaEntity>
+        if let gid {
+            fdEntities = FetchDescriptor<MetaEntity>(
+                predicate: #Predicate<MetaEntity> { e in
+                    e.graphID == gid && e.nameFolded.contains(term)
+                },
+                sortBy: [SortDescriptor(\MetaEntity.name)]
+            )
+        } else {
+            fdEntities = FetchDescriptor<MetaEntity>(
+                predicate: #Predicate<MetaEntity> { e in
+                    e.nameFolded.contains(term)
+                },
+                sortBy: [SortDescriptor(\MetaEntity.name)]
+            )
+        }
         for e in try context.fetch(fdEntities) {
             unique[e.id] = e
         }
 
         // 2) Attribute displayName match (entity · attribute)
-        let fdAttrs = FetchDescriptor<MetaAttribute>(
-            predicate: #Predicate<MetaAttribute> { a in
-                (gid == nil || a.graphID == gid || a.graphID == nil) &&
-                a.searchLabelFolded.contains(term)
-            },
-            sortBy: [SortDescriptor(\MetaAttribute.name)]
-        )
+        let fdAttrs: FetchDescriptor<MetaAttribute>
+        if let gid {
+            fdAttrs = FetchDescriptor<MetaAttribute>(
+                predicate: #Predicate<MetaAttribute> { a in
+                    a.graphID == gid && a.searchLabelFolded.contains(term)
+                },
+                sortBy: [SortDescriptor(\MetaAttribute.name)]
+            )
+        } else {
+            fdAttrs = FetchDescriptor<MetaAttribute>(
+                predicate: #Predicate<MetaAttribute> { a in
+                    a.searchLabelFolded.contains(term)
+                },
+                sortBy: [SortDescriptor(\MetaAttribute.name)]
+            )
+        }
         let attrs = try context.fetch(fdAttrs)
 
         // Note: `#Predicate` doesn't reliably support `ids.contains(e.id)` for UUID arrays.
         // We therefore resolve owners directly from the matching attributes.
         for a in attrs {
             guard let owner = a.owner else { continue }
-            if gid == nil || owner.graphID == gid || owner.graphID == nil {
+            if let gid {
+                if owner.graphID == gid { unique[owner.id] = owner }
+            } else {
                 unique[owner.id] = owner
             }
         }
@@ -199,13 +223,18 @@ actor EntitiesHomeLoader {
         if relevantEntityIDs.isEmpty { return [:] }
 
         let gid = graphID
-        let fd = FetchDescriptor<MetaAttribute>(
-            predicate: #Predicate<MetaAttribute> { a in
-                gid == nil || a.graphID == gid || a.graphID == nil
-            }
-        )
-
-        let attrs = try context.fetch(fd)
+        let attrs: [MetaAttribute]
+        if let gid {
+            let fd = FetchDescriptor<MetaAttribute>(
+                predicate: #Predicate<MetaAttribute> { a in
+                    a.graphID == gid
+                }
+            )
+            attrs = try context.fetch(fd)
+        } else {
+            let fd = FetchDescriptor<MetaAttribute>()
+            attrs = try context.fetch(fd)
+        }
         var counts: [UUID: Int] = [:]
         counts.reserveCapacity(min(relevantEntityIDs.count, 512))
 

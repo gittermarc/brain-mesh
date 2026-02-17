@@ -91,7 +91,7 @@ actor GraphCanvasDataLoader {
         var eFD: FetchDescriptor<MetaEntity>
         if let gid = activeGraphID {
             eFD = FetchDescriptor(
-                predicate: #Predicate<MetaEntity> { e in e.graphID == gid || e.graphID == nil },
+                predicate: #Predicate<MetaEntity> { e in e.graphID == gid },
                 sortBy: [SortDescriptor(\MetaEntity.name)]
             )
         } else {
@@ -105,7 +105,7 @@ actor GraphCanvasDataLoader {
         if let gid = activeGraphID {
             lFD = FetchDescriptor(
                 predicate: #Predicate<MetaLink> { l in
-                    (l.graphID == gid || l.graphID == nil) &&
+                    l.graphID == gid &&
                     l.sourceKindRaw == kEntity && l.targetKindRaw == kEntity
                 },
                 sortBy: [SortDescriptor(\MetaLink.createdAt, order: .reverse)]
@@ -198,7 +198,7 @@ actor GraphCanvasDataLoader {
                 if let gid {
                     hopFD = FetchDescriptor(
                         predicate: #Predicate<MetaLink> { l in
-                            (l.graphID == gid || l.graphID == nil) &&
+                            l.graphID == gid &&
                             l.sourceKindRaw == kEntity &&
                             l.targetKindRaw == kEntity &&
                             (frontierIDs.contains(l.sourceID) || frontierIDs.contains(l.targetID))
@@ -254,7 +254,7 @@ actor GraphCanvasDataLoader {
         if let gid {
             eFD = FetchDescriptor(
                 predicate: #Predicate<MetaEntity> { e in
-                    entityIDs.contains(e.id) && (e.graphID == gid || e.graphID == nil)
+                    entityIDs.contains(e.id) && e.graphID == gid
                 },
                 sortBy: [SortDescriptor(\MetaEntity.name)]
             )
@@ -275,7 +275,7 @@ actor GraphCanvasDataLoader {
                 for e in ents {
                     let sortedAttrs = e.attributesList.sorted { $0.name < $1.name }
                     for a in sortedAttrs {
-                        if let gid, !(a.graphID == gid || a.graphID == nil) { continue }
+                        if let gid, a.graphID != gid { continue }
                         attrs.append(a)
                         if attrs.count >= remaining { break }
                     }
@@ -343,7 +343,7 @@ actor GraphCanvasDataLoader {
                 if let gid {
                     linkFD = FetchDescriptor(
                         predicate: #Predicate<MetaLink> { l in
-                            (l.graphID == gid || l.graphID == nil) &&
+                            l.graphID == gid &&
                             (visibleIDs.contains(l.sourceID) || visibleIDs.contains(l.targetID))
                         },
                         sortBy: [SortDescriptor(\MetaLink.createdAt, order: .reverse)]

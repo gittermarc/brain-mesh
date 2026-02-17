@@ -92,21 +92,33 @@ actor NodePickerLoader {
 
         let fd: FetchDescriptor<MetaEntity>
         if foldedSearch.isEmpty {
-            fd = FetchDescriptor(
-                predicate: #Predicate<MetaEntity> { e in
-                    gid == nil || e.graphID == gid || e.graphID == nil
-                },
-                sortBy: [SortDescriptor(\MetaEntity.name)]
-            )
+            if let gid {
+                fd = FetchDescriptor(
+                    predicate: #Predicate<MetaEntity> { e in
+                        e.graphID == gid
+                    },
+                    sortBy: [SortDescriptor(\MetaEntity.name)]
+                )
+            } else {
+                fd = FetchDescriptor(sortBy: [SortDescriptor(\MetaEntity.name)])
+            }
         } else {
             let term = foldedSearch
-            fd = FetchDescriptor(
-                predicate: #Predicate<MetaEntity> { e in
-                    (gid == nil || e.graphID == gid || e.graphID == nil) &&
-                    e.nameFolded.contains(term)
-                },
-                sortBy: [SortDescriptor(\MetaEntity.name)]
-            )
+            if let gid {
+                fd = FetchDescriptor(
+                    predicate: #Predicate<MetaEntity> { e in
+                        e.graphID == gid && e.nameFolded.contains(term)
+                    },
+                    sortBy: [SortDescriptor(\MetaEntity.name)]
+                )
+            } else {
+                fd = FetchDescriptor(
+                    predicate: #Predicate<MetaEntity> { e in
+                        e.nameFolded.contains(term)
+                    },
+                    sortBy: [SortDescriptor(\MetaEntity.name)]
+                )
+            }
         }
 
         var descriptor = fd
@@ -132,21 +144,33 @@ actor NodePickerLoader {
 
         let fd: FetchDescriptor<MetaAttribute>
         if foldedSearch.isEmpty {
-            fd = FetchDescriptor(
-                predicate: #Predicate<MetaAttribute> { a in
-                    gid == nil || a.graphID == gid || a.graphID == nil
-                },
-                sortBy: [SortDescriptor(\MetaAttribute.name)]
-            )
+            if let gid {
+                fd = FetchDescriptor(
+                    predicate: #Predicate<MetaAttribute> { a in
+                        a.graphID == gid
+                    },
+                    sortBy: [SortDescriptor(\MetaAttribute.name)]
+                )
+            } else {
+                fd = FetchDescriptor(sortBy: [SortDescriptor(\MetaAttribute.name)])
+            }
         } else {
             let term = foldedSearch
-            fd = FetchDescriptor(
-                predicate: #Predicate<MetaAttribute> { a in
-                    (gid == nil || a.graphID == gid || a.graphID == nil) &&
-                    a.searchLabelFolded.contains(term)
-                },
-                sortBy: [SortDescriptor(\MetaAttribute.name)]
-            )
+            if let gid {
+                fd = FetchDescriptor(
+                    predicate: #Predicate<MetaAttribute> { a in
+                        a.graphID == gid && a.searchLabelFolded.contains(term)
+                    },
+                    sortBy: [SortDescriptor(\MetaAttribute.name)]
+                )
+            } else {
+                fd = FetchDescriptor(
+                    predicate: #Predicate<MetaAttribute> { a in
+                        a.searchLabelFolded.contains(term)
+                    },
+                    sortBy: [SortDescriptor(\MetaAttribute.name)]
+                )
+            }
         }
 
         var descriptor = fd
