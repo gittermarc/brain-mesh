@@ -84,6 +84,13 @@ struct BrainMeshApp: App {
         Task.detached(priority: .utility) {
             await EntitiesHomeLoader.shared.configure(container: AnyModelContainer(containerForEntitiesHomeLoader))
         }
+
+        // P0.2: Provide the container to the NodeConnections loader.
+        // The "Alle" connections screen can include hundreds of links; loading off-main avoids UI stalls.
+        let containerForNodeConnectionsLoader = sharedModelContainer
+        Task.detached(priority: .utility) {
+            await NodeConnectionsLoader.shared.configure(container: AnyModelContainer(containerForNodeConnectionsLoader))
+        }
     }
 
     var body: some Scene {
