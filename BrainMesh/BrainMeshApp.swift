@@ -68,6 +68,14 @@ struct BrainMeshApp: App {
         Task.detached(priority: .utility) {
             await GraphCanvasDataLoader.shared.configure(container: AnyModelContainer(containerForGraphCanvasLoader))
         }
+
+        // P0.1: Provide the container to the GraphStats loader.
+        // Stats performs multiple SwiftData counts and summary fetches.
+        // Running that work off the UI thread keeps the Stats tab snappy.
+        let containerForGraphStatsLoader = sharedModelContainer
+        Task.detached(priority: .utility) {
+            await GraphStatsLoader.shared.configure(container: AnyModelContainer(containerForGraphStatsLoader))
+        }
     }
 
     var body: some Scene {

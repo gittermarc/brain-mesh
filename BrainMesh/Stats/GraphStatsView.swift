@@ -15,8 +15,6 @@ import SwiftData
 /// UI sections are split into separate files (GraphStatsView+*.swift) to keep compile
 /// times stable and responsibilities small.
 struct GraphStatsView: View {
-    @Environment(\.modelContext) private var modelContext
-
     @AppStorage("BMActiveGraphID") private var activeGraphIDString: String = ""
     var activeGraphID: UUID? { UUID(uuidString: activeGraphIDString) }
 
@@ -146,35 +144,26 @@ struct GraphStatsView: View {
         let pickedGraphID = graphIDs.first(where: { $0 == activeGraphID }) ?? graphIDs.first
         dashboardGraphID = pickedGraphID
 
-        let context = modelContext
-
-        loadTask = Task { @MainActor in
-            let service = GraphStatsService(context: context)
-
+        loadTask = Task {
             do {
-                total = try service.totalCounts()
-                perGraph[nil] = try service.counts(for: nil)
+                // In case the loader is configured in a detached task during app startup,
+                // yield once before the first attempt to reduce race likelihood.
+                await Task.yield()
 
-                for gid in graphIDs {
-                    try Task.checkCancellation()
-                    perGraph[gid] = try service.counts(for: gid)
+                let snapshot = try await GraphStatsLoader.shared.loadSnapshot(
+                    graphIDs: graphIDs,
+                    activeGraphID: activeGraphID,
+                    days: 7
+                )
 
-                    if gid == pickedGraphID {
-                        activeMedia = try service.mediaSnapshot(for: gid)
-                        activeStructure = try service.structureSnapshot(for: gid)
-                        activeTrends = try service.trendsSnapshot(for: gid, days: 7)
-                    }
+                try Task.checkCancellation()
 
-                    await Task.yield()
-                }
-
-                if pickedGraphID != nil && activeMedia == nil {
-                    if let gid = pickedGraphID {
-                        activeMedia = try service.mediaSnapshot(for: gid)
-                        activeStructure = try service.structureSnapshot(for: gid)
-                        activeTrends = try service.trendsSnapshot(for: gid, days: 7)
-                    }
-                }
+                total = snapshot.total
+                perGraph = snapshot.perGraph
+                dashboardGraphID = snapshot.dashboardGraphID
+                activeMedia = snapshot.activeMedia
+                activeStructure = snapshot.activeStructure
+                activeTrends = snapshot.activeTrends
             } catch {
                 if Task.isCancelled { return }
                 loadError = error.localizedDescription

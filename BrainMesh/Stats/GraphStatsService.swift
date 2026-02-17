@@ -132,7 +132,6 @@ struct GraphStructureSnapshot: Equatable, Sendable {
     let topHubs: [GraphHubItem]
 }
 
-@MainActor
 final class GraphStatsService {
     private let context: ModelContext
 
