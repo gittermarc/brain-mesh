@@ -164,8 +164,10 @@ struct EntityDetailView: View {
                     .padding(.horizontal, 16)
                     .padding(.top, 12)
                     .padding(.bottom, 18)
-                    .task(id: entity.id) {
-                        await reloadMediaPreview()
+                    .onAppear {
+                        Task { @MainActor in
+                            await reloadMediaPreview()
+                        }
                     }
                 }
             )

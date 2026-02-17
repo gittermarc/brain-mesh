@@ -71,19 +71,9 @@ struct NodeMediaCard: View {
                     }
                 }
 
-                HStack {
-                    Button {
-                        onManage()
-                    } label: {
-                        Label("Verwalten", systemImage: "slider.horizontal.3")
-                            .font(.callout.weight(.semibold))
-                    }
-                    .buttonStyle(.bordered)
-
-                    Spacer(minLength: 0)
-
+                VStack(spacing: 10) {
                     NavigationLink {
-                        NodeMediaAllView(
+                        NodeImagesManageView(
                             ownerKind: ownerKind,
                             ownerID: ownerID,
                             graphID: graphID,
@@ -92,8 +82,22 @@ struct NodeMediaCard: View {
                             mainStableID: mainStableID
                         )
                     } label: {
-                        Label("Alle", systemImage: "chevron.right")
+                        Label("Bilder verwalten", systemImage: "photo")
                             .font(.callout.weight(.semibold))
+                            .frame(maxWidth: .infinity)
+                    }
+                    .buttonStyle(.bordered)
+
+                    NavigationLink {
+                        NodeAttachmentsManageView(
+                            ownerKind: ownerKind,
+                            ownerID: ownerID,
+                            graphID: graphID
+                        )
+                    } label: {
+                        Label("Anhänge verwalten", systemImage: "paperclip")
+                            .font(.callout.weight(.semibold))
+                            .frame(maxWidth: .infinity)
                     }
                     .buttonStyle(.bordered)
                 }
