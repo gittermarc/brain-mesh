@@ -60,6 +60,14 @@ struct BrainMeshApp: App {
         Task.detached(priority: .utility) {
             await MediaAllLoader.shared.configure(container: AnyModelContainer(containerForMediaLoader))
         }
+
+        // P0.1: Provide the container to the GraphCanvas loader.
+        // GraphCanvas performs heavy SwiftData fetches (nodes/links + neighborhood BFS).
+        // Running that work off the UI thread avoids main-thread stalls when switching graphs.
+        let containerForGraphCanvasLoader = sharedModelContainer
+        Task.detached(priority: .utility) {
+            await GraphCanvasDataLoader.shared.configure(container: AnyModelContainer(containerForGraphCanvasLoader))
+        }
     }
 
     var body: some Scene {
