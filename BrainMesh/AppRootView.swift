@@ -39,8 +39,13 @@ struct AppRootView: View {
             .onChange(of: scenePhase) { _, newPhase in
                 if newPhase == .active {
                     Task { await handleBecameActive() }
-                } else if newPhase == .inactive || newPhase == .background {
-                    // Auto-lock when leaving the app.
+                } else if newPhase == .background {
+                    // Auto-lock when the app actually goes to background.
+                    //
+                    // Important: Don't lock on `.inactive`.
+                    // System flows like Photos' "Hidden" album Face ID prompt can transiently flip
+                    // the scene to `.inactive`. Locking there would re-lock protected graphs and
+                    // dismiss the Photos picker mid-selection.
                     graphLock.lockAll()
                 }
             }
