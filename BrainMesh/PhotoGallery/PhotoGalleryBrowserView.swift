@@ -186,10 +186,6 @@ struct PhotoGalleryBrowserView: View {
             .foregroundStyle(.secondary)
         }
         .aspectRatio(1, contentMode: .fit)
-        .overlay(
-            RoundedRectangle(cornerRadius: 18)
-                .stroke(.secondary.opacity(0.18))
-        )
     }
 
 }
@@ -257,10 +253,6 @@ private struct PhotoGalleryGridTile: View {
             }
         }
         .aspectRatio(1, contentMode: .fit)
-        .overlay(
-            RoundedRectangle(cornerRadius: 18)
-                .stroke(.secondary.opacity(0.18))
-        )
         .contentShape(Rectangle())
         .onTapGesture { onTap() }
         .task(id: attachment.id) {

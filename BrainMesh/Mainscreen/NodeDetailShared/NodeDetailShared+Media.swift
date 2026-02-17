@@ -175,10 +175,6 @@ private struct NodeGalleryThumbTile: View {
                 }
             }
             .aspectRatio(1, contentMode: .fit)
-            .overlay(
-                RoundedRectangle(cornerRadius: 16, style: .continuous)
-                    .stroke(Color.secondary.opacity(0.12))
-            )
         }
         .buttonStyle(.plain)
         .task(id: attachmentID) {

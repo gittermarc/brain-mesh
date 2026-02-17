@@ -194,10 +194,6 @@ private struct PhotoGalleryAddTile: View {
         ZStack {
             RoundedRectangle(cornerRadius: 16)
                 .fill(.secondary.opacity(0.14))
-                .overlay(
-                    RoundedRectangle(cornerRadius: 16)
-                        .stroke(.secondary.opacity(0.20))
-                )
 
             VStack(spacing: 6) {
                 Image(systemName: "plus")
@@ -221,10 +217,6 @@ private struct PhotoGalleryMoreTile: View {
         ZStack {
             RoundedRectangle(cornerRadius: 16)
                 .fill(.secondary.opacity(0.12))
-                .overlay(
-                    RoundedRectangle(cornerRadius: 16)
-                        .stroke(.secondary.opacity(0.18))
-                )
 
             VStack(spacing: 6) {
                 Image(systemName: "square.grid.2x2")
@@ -281,10 +273,6 @@ private struct PhotoGalleryThumbnailTile: View {
             }
         }
         .frame(width: side, height: side)
-        .overlay(
-            RoundedRectangle(cornerRadius: 16)
-                .stroke(.secondary.opacity(0.18))
-        )
         .contentShape(Rectangle())
         .onTapGesture { onTap() }
         .task(id: attachment.id) {
