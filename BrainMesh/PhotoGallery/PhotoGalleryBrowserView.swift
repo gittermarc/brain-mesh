@@ -29,6 +29,7 @@ struct PhotoGalleryBrowserView: View {
     @State private var viewerRequest: PhotoGalleryViewerRequest? = nil
     @State private var confirmDelete: MetaAttachment? = nil
     @State private var errorMessage: String? = nil
+    @StateObject private var importProgress = ImportProgressState()
 
     private let maxSelectionCount: Int = 24
 
@@ -95,6 +96,11 @@ struct PhotoGalleryBrowserView: View {
             .padding(.horizontal, 16)
             .padding(.vertical, 14)
         }
+        .safeAreaInset(edge: .bottom) {
+            ImportProgressCard(progress: importProgress)
+                .padding(.horizontal, 16)
+                .padding(.bottom, 10)
+        }
         .navigationTitle("Galerie")
         .navigationBarTitleDisplayMode(.inline)
         .toolbar {
@@ -117,7 +123,8 @@ struct PhotoGalleryBrowserView: View {
                     ownerKind: ownerKind,
                     ownerID: ownerID,
                     graphID: graphID,
-                    in: modelContext
+                    in: modelContext,
+                    progress: importProgress
                 )
 
                 if result.didFailAnything {

@@ -15,74 +15,54 @@ extension AttachmentsSection {
     // MARK: - Import (Files)
 
     func importFile(from url: URL) {
-        let scoped = url.startAccessingSecurityScopedResource()
-        defer {
-            if scoped { url.stopAccessingSecurityScopedResource() }
-        }
-
-        let fileName = url.lastPathComponent
-        let ext = url.pathExtension
-
-        let contentType = (try? url.resourceValues(forKeys: [.contentTypeKey]).contentType)?.identifier ?? ""
-        let fileSize = (try? url.resourceValues(forKeys: [.fileSizeKey]).fileSize) ?? 0
-
-        if fileSize > maxBytes {
-            errorMessage = "Datei ist zu groß (\(ByteCountFormatter.string(fromByteCount: Int64(fileSize), countStyle: .file))). Bitte nur kleine Anhänge hinzufügen."
-            return
-        }
-
-        let attachmentID = UUID()
-
-        do {
-            // Copy to sandbox first (security scoped URLs are not stable).
-            let copiedName = try AttachmentStore.copyIntoCache(from: url, attachmentID: attachmentID, fileExtension: ext)
-            guard let copiedURL = AttachmentStore.url(forLocalPath: copiedName) else {
-                errorMessage = "Lokale Datei konnte nicht erstellt werden."
-                return
-            }
-
-            let data = try Data(contentsOf: copiedURL, options: [.mappedIfSafe])
-            if data.count > maxBytes {
-                // Just in case fileSizeKey was missing.
-                AttachmentStore.delete(localPath: copiedName)
-                errorMessage = "Datei ist zu groß (\(ByteCountFormatter.string(fromByteCount: Int64(data.count), countStyle: .file))). Bitte nur kleine Anhänge hinzufügen."
-                return
-            }
-
-            let title = url.deletingPathExtension().lastPathComponent
-
-            let inferredKind: AttachmentContentKind
-            if let t = UTType(contentType) {
-                if t.conforms(to: .image) {
-                    inferredKind = .galleryImage
-                } else if t.conforms(to: .movie) || t.conforms(to: .video) {
-                    inferredKind = .video
-                } else {
-                    inferredKind = .file
-                }
-            } else {
-                inferredKind = .file
-            }
-
-            let att = MetaAttachment(
-                id: attachmentID,
-                ownerKind: ownerKind,
-                ownerID: ownerID,
-                graphID: graphID,
-                contentKind: inferredKind,
-                title: title,
-                originalFilename: fileName,
-                contentTypeIdentifier: contentType,
-                fileExtension: ext,
-                byteCount: data.count,
-                fileData: data,
-                localPath: copiedName
+        Task { @MainActor in
+            importProgress.begin(
+                title: "Importiere Datei…",
+                subtitle: url.lastPathComponent,
+                totalUnitCount: 2,
+                indeterminate: false
             )
+            await Task.yield()
 
-            modelContext.insert(att)
-            try? modelContext.save()
-        } catch {
-            errorMessage = error.localizedDescription
+            do {
+                let attachmentID = UUID()
+
+                importProgress.updateSubtitle("Vorbereiten…")
+                let prepared = try await Task.detached(priority: .userInitiated) {
+                    try AttachmentImportPipeline.prepareFileImport(
+                        from: url,
+                        attachmentID: attachmentID,
+                        maxBytes: maxBytes
+                    )
+                }.value
+
+                importProgress.setCompleted(1)
+
+                let att = MetaAttachment(
+                    id: prepared.id,
+                    ownerKind: ownerKind,
+                    ownerID: ownerID,
+                    graphID: graphID,
+                    contentKind: prepared.inferredKind,
+                    title: prepared.title,
+                    originalFilename: prepared.originalFilename,
+                    contentTypeIdentifier: prepared.contentTypeIdentifier,
+                    fileExtension: prepared.fileExtension,
+                    byteCount: prepared.byteCount,
+                    fileData: prepared.fileData,
+                    localPath: prepared.localPath
+                )
+
+                modelContext.insert(att)
+                try? modelContext.save()
+
+                importProgress.setCompleted(2)
+                importProgress.finish(finalSubtitle: "Fertig")
+
+            } catch {
+                importProgress.finish(finalSubtitle: "Fehlgeschlagen")
+                errorMessage = error.localizedDescription
+            }
         }
     }
 
@@ -117,62 +97,54 @@ extension AttachmentsSection {
         contentTypeIdentifier: String,
         fileExtension: String
     ) async {
+        importProgress.begin(
+            title: "Importiere Video…",
+            subtitle: suggestedFilename.isEmpty ? "Video" : suggestedFilename,
+            totalUnitCount: 2,
+            indeterminate: false
+        )
+        await Task.yield()
+
         do {
-            let fileSize = (try? url.resourceValues(forKeys: [.fileSizeKey]).fileSize) ?? 0
-            if fileSize > maxBytes {
-                errorMessage = "Video ist zu groß (\(ByteCountFormatter.string(fromByteCount: Int64(fileSize), countStyle: .file))). Bitte nur kleine Videos hinzufügen."
-                return
-            }
-
             let attachmentID = UUID()
-            let ext = fileExtension.trimmingCharacters(in: CharacterSet(charactersIn: ".")).isEmpty ? "mov" : fileExtension
 
-            let cachedFilename = try AttachmentStore.copyIntoCache(from: url, attachmentID: attachmentID, fileExtension: ext)
-            guard let cachedURL = AttachmentStore.url(forLocalPath: cachedFilename) else {
-                errorMessage = "Lokale Videodatei konnte nicht erstellt werden."
-                return
-            }
+            importProgress.updateSubtitle("Vorbereiten…")
+            let prepared = try await Task.detached(priority: .userInitiated) {
+                try AttachmentImportPipeline.prepareVideoImport(
+                    from: url,
+                    attachmentID: attachmentID,
+                    suggestedFilename: suggestedFilename,
+                    contentTypeIdentifier: contentTypeIdentifier,
+                    fileExtension: fileExtension,
+                    maxBytes: maxBytes
+                )
+            }.value
 
-            // The picker may hand us a stable temp URL; we don't need it after copying.
-            try? FileManager.default.removeItem(at: url)
-
-            let data = try Data(contentsOf: cachedURL, options: [.mappedIfSafe])
-            if data.count > maxBytes {
-                AttachmentStore.delete(localPath: cachedFilename)
-                errorMessage = "Video ist zu groß (\(ByteCountFormatter.string(fromByteCount: Int64(data.count), countStyle: .file))). Bitte nur kleine Videos hinzufügen."
-                return
-            }
-
-            let title = URL(fileURLWithPath: suggestedFilename).deletingPathExtension().lastPathComponent
-            let originalName = suggestedFilename.isEmpty ? "Video.\(ext)" : suggestedFilename
-
-            let typeID: String
-            if !contentTypeIdentifier.isEmpty {
-                typeID = contentTypeIdentifier
-            } else if let t = UTType(filenameExtension: ext)?.identifier {
-                typeID = t
-            } else {
-                typeID = UTType.movie.identifier
-            }
+            importProgress.setCompleted(1)
 
             let att = MetaAttachment(
-                id: attachmentID,
+                id: prepared.id,
                 ownerKind: ownerKind,
                 ownerID: ownerID,
                 graphID: graphID,
-                contentKind: .video,
-                title: title.isEmpty ? "Video" : title,
-                originalFilename: originalName,
-                contentTypeIdentifier: typeID,
-                fileExtension: ext,
-                byteCount: data.count,
-                fileData: data,
-                localPath: cachedFilename
+                contentKind: prepared.inferredKind,
+                title: prepared.title,
+                originalFilename: prepared.originalFilename,
+                contentTypeIdentifier: prepared.contentTypeIdentifier,
+                fileExtension: prepared.fileExtension,
+                byteCount: prepared.byteCount,
+                fileData: prepared.fileData,
+                localPath: prepared.localPath
             )
 
             modelContext.insert(att)
             try? modelContext.save()
+
+            importProgress.setCompleted(2)
+            importProgress.finish(finalSubtitle: "Fertig")
+
         } catch {
+            importProgress.finish(finalSubtitle: "Fehlgeschlagen")
             errorMessage = error.localizedDescription
         }
     }

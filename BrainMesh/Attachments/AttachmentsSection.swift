@@ -19,6 +19,9 @@ struct AttachmentsSection: View {
 
     @Query var attachments: [MetaAttachment]
 
+    // NOTE: must be module-visible because the import pipeline lives in a separate extension file.
+    @StateObject var importProgress = ImportProgressState()
+
     @State var isImportingFile = false
     @State var isPickingVideo = false
     @State var videoPlayback: VideoPlaybackRequest? = nil
@@ -66,6 +69,12 @@ struct AttachmentsSection: View {
 
     var body: some View {
         Section {
+            if importProgress.isPresented {
+                ImportProgressCard(progress: importProgress)
+                    .listRowBackground(Color.clear)
+                    .listRowSeparator(.hidden)
+            }
+
             if attachments.isEmpty {
                 Text("Keine Anhänge hinzugefügt.")
                     .foregroundStyle(.secondary)

@@ -30,6 +30,7 @@ struct PhotoGallerySection: View {
 
     @State private var pickedItems: [PhotosPickerItem] = []
     @State private var errorMessage: String? = nil
+    @StateObject private var importProgress = ImportProgressState()
 
     /// Presentation is intentionally owned by the parent screen.
     /// Presenting sheets/covers from inside a List row can cause SwiftUI
@@ -67,6 +68,12 @@ struct PhotoGallerySection: View {
 
     var body: some View {
         Section {
+            if importProgress.isPresented {
+                ImportProgressCard(progress: importProgress)
+                    .listRowBackground(Color.clear)
+                    .listRowSeparator(.hidden)
+            }
+
             if galleryImages.isEmpty {
                 emptyState
             } else {
@@ -96,7 +103,8 @@ struct PhotoGallerySection: View {
                     ownerKind: ownerKind,
                     ownerID: ownerID,
                     graphID: graphID,
-                    in: modelContext
+                    in: modelContext,
+                    progress: importProgress
                 )
 
                 if result.didFailAnything {

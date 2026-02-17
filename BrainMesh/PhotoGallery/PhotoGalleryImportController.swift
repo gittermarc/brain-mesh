@@ -23,6 +23,10 @@ struct PhotoGalleryImportResult: Sendable {
 ///
 /// This file intentionally contains all "PhotosPicker -> bytes -> JPEG -> attachment" logic,
 /// so the UI files remain small and easy to reason about.
+///
+/// Progress:
+/// If a `ImportProgressState` is passed in, it will be updated on the MainActor so the UI
+/// can show a determinate progress bar while items are imported.
 enum PhotoGalleryImportController {
 
     /// Imports the selected items into SwiftData as `MetaAttachment` with contentKind `.galleryImage`.
@@ -34,16 +38,43 @@ enum PhotoGalleryImportController {
         ownerKind: NodeKind,
         ownerID: UUID,
         graphID: UUID?,
-        in modelContext: ModelContext
+        in modelContext: ModelContext,
+        progress: ImportProgressState? = nil
     ) async -> PhotoGalleryImportResult {
 
         var imported: Int = 0
         var failed: Int = 0
 
-        for item in items {
+        if !items.isEmpty {
+            progress?.begin(
+                title: items.count == 1 ? "Importiere Bild…" : "Importiere Bilder…",
+                subtitle: "0 von \(items.count)",
+                totalUnitCount: items.count,
+                indeterminate: false
+            )
+        }
+
+        defer {
+            if items.isEmpty {
+                progress?.cancel()
+            } else {
+                let summary: String
+                if failed > 0 {
+                    summary = "Fertig (\(imported) ok, \(failed) fehlgeschlagen)"
+                } else {
+                    summary = "Fertig"
+                }
+                progress?.finish(finalSubtitle: summary)
+            }
+        }
+
+        for (index, item) in items.enumerated() {
             do {
+                progress?.updateSubtitle("Bild \(index + 1) von \(items.count)")
+
                 guard let raw = try await item.loadTransferable(type: Data.self) else {
                     failed += 1
+                    progress?.advance(didFail: true)
                     continue
                 }
 
@@ -69,6 +100,7 @@ enum PhotoGalleryImportController {
 
                 guard let prepared else {
                     failed += 1
+                    progress?.advance(didFail: true)
                     continue
                 }
 
@@ -89,9 +121,11 @@ enum PhotoGalleryImportController {
 
                 modelContext.insert(att)
                 imported += 1
+                progress?.advance(didFail: false)
 
             } catch {
                 failed += 1
+                progress?.advance(didFail: true)
             }
         }
 
