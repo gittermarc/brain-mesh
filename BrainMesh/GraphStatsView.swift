@@ -24,6 +24,7 @@ struct GraphStatsView: View {
     @State private var perGraph: [UUID?: GraphCounts] = [:]
     @State private var activeMedia: GraphMediaSnapshot? = nil
     @State private var activeStructure: GraphStructureSnapshot? = nil
+    @State private var activeTrends: GraphTrendsSnapshot? = nil
     @State private var dashboardGraphID: UUID? = nil
     @State private var loadError: String? = nil
     @State private var loadTask: Task<Void, Never>? = nil
@@ -56,7 +57,7 @@ struct GraphStatsView: View {
     }
 
     private var isLoadingDetails: Bool {
-        (activeMedia == nil || activeStructure == nil) && loadError == nil
+        (activeMedia == nil || activeStructure == nil || activeTrends == nil) && loadError == nil
     }
 
     var body: some View {
@@ -83,6 +84,7 @@ struct GraphStatsView: View {
                     }
 
                     dashboardKPIGrid
+                    trendsBreakdown
                     mediaBreakdown
                     structureBreakdown
 
@@ -198,28 +200,36 @@ struct GraphStatsView: View {
                         icon: "square.grid.2x2",
                         title: "Knoten",
                         value: formatInt(dashboardCounts?.entities, plus: dashboardCounts?.attributes),
-                        detail: detailNodes
+                        detail: detailNodes,
+                        sparkline: nil,
+                        sparklineLabel: nil
                     )
 
                     KPICard(
                         icon: "link",
                         title: "Links",
                         value: formatInt(dashboardCounts?.links),
-                        detail: detailLinks
+                        detail: detailLinks,
+                        sparkline: activeTrends?.linkDensitySeries,
+                        sparklineLabel: "Linkdichte Verlauf (7 Tage)"
                     )
 
                     KPICard(
                         icon: "photo.on.rectangle",
                         title: "Medien",
                         value: mediaTotalString,
-                        detail: mediaDetail
+                        detail: mediaDetail,
+                        sparkline: nil,
+                        sparklineLabel: nil
                     )
 
                     KPICard(
                         icon: "externaldrive",
                         title: "Speicher",
                         value: formatBytes(dashboardCounts?.attachmentBytes) ?? "—",
-                        detail: "Nur Anhänge" 
+                        detail: "Nur Anhänge",
+                        sparkline: nil,
+                        sparklineLabel: nil
                     )
                 }
             }
@@ -245,6 +255,49 @@ struct GraphStatsView: View {
     private var mediaDetail: String? {
         guard let c = dashboardCounts else { return nil }
         return "Header: \(c.images) • Anhänge: \(c.attachments)"
+    }
+
+    // MARK: - Trends (7 Tage)
+
+    private var trendsBreakdown: some View {
+        StatsCard {
+            VStack(alignment: .leading, spacing: 12) {
+                HStack {
+                    Text("Trends (7 Tage)")
+                        .font(.headline)
+                    Spacer()
+                    if activeTrends == nil && loadError == nil {
+                        ProgressView()
+                            .controlSize(.small)
+                    }
+                }
+
+                if let t = activeTrends {
+                    LazyVGrid(
+                        columns: [GridItem(.flexible(), spacing: 12), GridItem(.flexible(), spacing: 12)],
+                        spacing: 12
+                    ) {
+                        TrendMiniMetric(
+                            icon: "link",
+                            title: "Links",
+                            labels: t.dayLabels,
+                            values: t.linkCounts,
+                            delta: t.linkDelta
+                        )
+
+                        TrendMiniMetric(
+                            icon: "paperclip",
+                            title: "Anhänge",
+                            labels: t.dayLabels,
+                            values: t.attachmentCounts,
+                            delta: t.attachmentDelta
+                        )
+                    }
+                } else {
+                    PlaceholderBlock(text: "Trends werden geladen…")
+                }
+            }
+        }
     }
 
     // MARK: - Media Breakdown
@@ -326,6 +379,25 @@ struct GraphStatsView: View {
                                 VStack(spacing: 8) {
                                     ForEach(m.largestAttachments, id: \.id) { a in
                                         LargestAttachmentRow(item: a)
+                                    }
+                                }
+                            }
+                        }
+
+                        Divider()
+
+                        VStack(alignment: .leading, spacing: 10) {
+                            Text("Top Knoten mit Medien")
+                                .font(.subheadline)
+                                .foregroundStyle(.secondary)
+
+                            if m.topMediaNodes.isEmpty {
+                                Text("—")
+                                    .foregroundStyle(.secondary)
+                            } else {
+                                VStack(spacing: 8) {
+                                    ForEach(Array(m.topMediaNodes.enumerated()), id: \.element.id) { index, item in
+                                        MediaNodeRow(rank: index + 1, item: item)
                                     }
                                 }
                             }
@@ -467,6 +539,7 @@ struct GraphStatsView: View {
         perGraph = [:]
         activeMedia = nil
         activeStructure = nil
+        activeTrends = nil
         loadError = nil
 
         let pickedGraphID = graphIDs.first(where: { $0 == activeGraphID }) ?? graphIDs.first
@@ -488,6 +561,7 @@ struct GraphStatsView: View {
                     if gid == pickedGraphID {
                         activeMedia = try service.mediaSnapshot(for: gid)
                         activeStructure = try service.structureSnapshot(for: gid)
+                        activeTrends = try service.trendsSnapshot(for: gid, days: 7)
                     }
 
                     await Task.yield()
@@ -497,6 +571,7 @@ struct GraphStatsView: View {
                     if let gid = pickedGraphID {
                         activeMedia = try service.mediaSnapshot(for: gid)
                         activeStructure = try service.structureSnapshot(for: gid)
+                        activeTrends = try service.trendsSnapshot(for: gid, days: 7)
                     }
                 }
             } catch {
@@ -548,6 +623,8 @@ private struct KPICard: View {
     let title: String
     let value: String
     let detail: String?
+    let sparkline: [Double]?
+    let sparklineLabel: String?
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
@@ -571,6 +648,12 @@ private struct KPICard: View {
                     .font(.caption)
                     .foregroundStyle(.secondary)
                     .lineLimit(2)
+            }
+
+            if let sparkline, sparkline.isEmpty == false {
+                MiniLineChart(values: sparkline)
+                    .frame(height: 24)
+                    .accessibilityLabel(sparklineLabel ?? title)
             }
         }
         .padding(12)
@@ -656,6 +739,151 @@ private struct TagChip: View {
     }
 }
 
+// MARK: - Mini charts + Trends
+
+private struct TrendMiniMetric: View {
+    let icon: String
+    let title: String
+    let labels: [String]
+    let values: [Int]
+    let delta: GraphTrendDelta
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            HStack {
+                Image(systemName: icon)
+                    .foregroundStyle(.secondary)
+                Text(title)
+                    .font(.subheadline)
+                    .foregroundStyle(.secondary)
+                Spacer()
+            }
+
+            HStack(alignment: .firstTextBaseline, spacing: 10) {
+                Text("\(delta.current)")
+                    .font(.title2)
+                    .fontWeight(.semibold)
+                    .monospacedDigit()
+
+                Text(deltaText)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+
+                Spacer()
+            }
+
+            MiniBarChart(values: values)
+                .frame(height: 28)
+                .accessibilityLabel("\(title) pro Tag")
+
+            if labels.count == values.count {
+                HStack {
+                    Text(labels.first ?? "")
+                    Spacer()
+                    Text(labels.last ?? "")
+                }
+                .font(.caption2)
+                .foregroundStyle(.secondary)
+            }
+        }
+        .padding(12)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(
+            RoundedRectangle(cornerRadius: 16, style: .continuous)
+                .fill(.ultraThinMaterial)
+        )
+    }
+
+    private var deltaText: String {
+        let current = delta.current
+        let previous = delta.previous
+
+        if previous == 0 {
+            if current == 0 { return "vs davor: —" }
+            return "vs davor: neu"
+        }
+
+        let diff = current - previous
+        let sign = diff > 0 ? "+" : ""
+        let pct = Int((Double(diff) / Double(previous) * 100).rounded())
+        let pctSign = pct > 0 ? "+" : ""
+        return "vs davor: \(sign)\(diff) (\(pctSign)\(pct)%)"
+    }
+}
+
+private struct MiniBarChart: View {
+    let values: [Int]
+
+    var body: some View {
+        GeometryReader { geo in
+            let maxVal = max(1, values.max() ?? 1)
+            let width = geo.size.width
+            let height = geo.size.height
+            let spacing: CGFloat = 4
+            let count = max(1, values.count)
+            let barWidth = (width - CGFloat(count - 1) * spacing) / CGFloat(count)
+
+            HStack(alignment: .bottom, spacing: spacing) {
+                ForEach(Array(values.enumerated()), id: \.offset) { _, v in
+                    let ratio = CGFloat(v) / CGFloat(maxVal)
+                    RoundedRectangle(cornerRadius: 3, style: .continuous)
+                        .fill(.secondary.opacity(0.35))
+                        .overlay(
+                            RoundedRectangle(cornerRadius: 3, style: .continuous)
+                                .fill(.primary.opacity(0.65))
+                                .frame(height: max(2, height * ratio)),
+                            alignment: .bottom
+                        )
+                        .frame(width: barWidth)
+                        .accessibilityValue("\(v)")
+                }
+            }
+        }
+    }
+}
+
+private struct MiniLineChart: View {
+    let values: [Double]
+
+    var body: some View {
+        GeometryReader { geo in
+            let w = geo.size.width
+            let h = geo.size.height
+            let count = values.count
+
+            if count <= 1 {
+                RoundedRectangle(cornerRadius: 3, style: .continuous)
+                    .fill(.secondary.opacity(0.25))
+            } else {
+                let minV = values.min() ?? 0
+                let maxV = values.max() ?? 1
+                let span = max(0.000_001, maxV - minV)
+
+                ZStack {
+                    RoundedRectangle(cornerRadius: 3, style: .continuous)
+                        .fill(.secondary.opacity(0.18))
+
+                    Path { path in
+                        for i in 0..<count {
+                            let x = w * CGFloat(i) / CGFloat(count - 1)
+                            let norm = (values[i] - minV) / span
+                            let y = h - h * CGFloat(norm)
+                            if i == 0 {
+                                path.move(to: CGPoint(x: x, y: y))
+                            } else {
+                                path.addLine(to: CGPoint(x: x, y: y))
+                            }
+                        }
+                    }
+                    .stroke(.primary.opacity(0.65), style: StrokeStyle(lineWidth: 2, lineCap: .round, lineJoin: .round))
+                    .padding(.horizontal, 2)
+                    .padding(.vertical, 4)
+                }
+            }
+        }
+    }
+}
+
 private struct LargestAttachmentRow: View {
     let item: GraphLargestAttachment
 
@@ -738,6 +966,56 @@ private struct HubRow: View {
             Spacer()
         }
         .padding(.vertical, 2)
+    }
+
+    private func iconForKind(_ kind: NodeKind) -> String {
+        switch kind {
+        case .entity: return "cube"
+        case .attribute: return "tag"
+        }
+    }
+}
+
+private struct MediaNodeRow: View {
+    let rank: Int
+    let item: GraphMediaNodeItem
+
+    var body: some View {
+        HStack(spacing: 10) {
+            Text("\(rank)")
+                .font(.caption)
+                .fontWeight(.semibold)
+                .foregroundStyle(.secondary)
+                .frame(width: 18, alignment: .trailing)
+                .monospacedDigit()
+
+            Image(systemName: iconForKind(item.kind))
+                .frame(width: 22)
+                .foregroundStyle(.secondary)
+
+            VStack(alignment: .leading, spacing: 2) {
+                Text(item.label)
+                    .lineLimit(1)
+                Text(detailLine)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+            }
+
+            Spacer()
+
+            Text("\(item.mediaCount)")
+                .font(.caption)
+                .fontWeight(.semibold)
+                .foregroundStyle(.secondary)
+                .monospacedDigit()
+        }
+        .padding(.vertical, 2)
+    }
+
+    private var detailLine: String {
+        let header = item.headerImageCount > 0 ? "Header 1" : "Header 0"
+        return "Anhänge: \(item.attachmentCount) • \(header)"
     }
 
     private func iconForKind(_ kind: NodeKind) -> String {

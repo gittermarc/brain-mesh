@@ -63,6 +63,21 @@ struct GraphLargestAttachment: Equatable, Sendable {
     let fileExtension: String
 }
 
+/// Ranking item for "Top nodes with media".
+///
+/// Media count is computed as: attachments + headerImage(0/1)
+struct GraphMediaNodeItem: Equatable, Sendable {
+    let id: UUID
+    let label: String
+    let kind: NodeKind
+    let attachmentCount: Int
+    let headerImageCount: Int
+
+    var mediaCount: Int {
+        attachmentCount + headerImageCount
+    }
+}
+
 /// Media breakdown (attachments) + rankings for a given graph.
 struct GraphMediaSnapshot: Equatable, Sendable {
     let headerImages: Int
@@ -74,6 +89,31 @@ struct GraphMediaSnapshot: Equatable, Sendable {
 
     let topFileExtensions: [GraphTopItem]
     let largestAttachments: [GraphLargestAttachment]
+
+    let topMediaNodes: [GraphMediaNodeItem]
+}
+
+// MARK: - P1: Trends (7 days)
+
+struct GraphTrendDelta: Equatable, Sendable {
+    let current: Int
+    let previous: Int
+}
+
+struct GraphTrendsSnapshot: Equatable, Sendable {
+    /// Labels for the last N days (oldest -> newest).
+    let dayLabels: [String]
+
+    /// Counts for last N days (oldest -> newest).
+    let linkCounts: [Int]
+    let attachmentCounts: [Int]
+
+    /// Delta: last N days vs previous N days.
+    let linkDelta: GraphTrendDelta
+    let attachmentDelta: GraphTrendDelta
+
+    /// Link density over the last N days (approx. links-per-node over time).
+    let linkDensitySeries: [Double]
 }
 
 /// Top hub node (highest degree) derived from links.
@@ -239,6 +279,8 @@ final class GraphStatsService {
                 )
             }
 
+        let topMediaNodes = try topMediaNodes(for: graphID, attachments: attachments)
+
         return GraphMediaSnapshot(
             headerImages: headerImages,
             attachmentsTotal: attachments.count,
@@ -246,8 +288,192 @@ final class GraphStatsService {
             attachmentsVideo: videoCount,
             attachmentsGalleryImages: galleryCount,
             topFileExtensions: topFileExtensions,
-            largestAttachments: largestAttachments
+            largestAttachments: largestAttachments,
+            topMediaNodes: topMediaNodes
         )
+    }
+
+    private func topMediaNodes(for graphID: UUID?, attachments: [MetaAttachment]) throws -> [GraphMediaNodeItem] {
+        var attachmentCountByID: [UUID: Int] = [:]
+        var kindByID: [UUID: NodeKind] = [:]
+
+        for a in attachments {
+            attachmentCountByID[a.ownerID, default: 0] += 1
+            kindByID[a.ownerID] = a.ownerKind
+        }
+
+        // Fetch nodes (for labels + header image presence).
+        let entities = try context.fetch(
+            FetchDescriptor<MetaEntity>(predicate: entityGraphPredicate(for: graphID))
+        )
+        let attributes = try context.fetch(
+            FetchDescriptor<MetaAttribute>(predicate: attributeGraphPredicate(for: graphID))
+        )
+
+        var labelByID: [UUID: String] = [:]
+        var headerImageCountByID: [UUID: Int] = [:]
+
+        for e in entities {
+            let hasAttachment = attachmentCountByID[e.id] != nil
+            let hasHeader = (e.imageData != nil)
+            if hasAttachment || hasHeader {
+                labelByID[e.id] = e.name
+                headerImageCountByID[e.id] = hasHeader ? 1 : 0
+                kindByID[e.id] = .entity
+            }
+        }
+
+        for a in attributes {
+            let hasAttachment = attachmentCountByID[a.id] != nil
+            let hasHeader = (a.imageData != nil)
+            if hasAttachment || hasHeader {
+                labelByID[a.id] = a.displayName
+                headerImageCountByID[a.id] = hasHeader ? 1 : 0
+                kindByID[a.id] = .attribute
+            }
+        }
+
+        let candidateIDs = Set(attachmentCountByID.keys).union(headerImageCountByID.keys)
+
+        let items = candidateIDs
+            .map { id -> GraphMediaNodeItem in
+                let label = labelByID[id] ?? shortID(id)
+                let kind = kindByID[id] ?? .entity
+                let attachmentCount = attachmentCountByID[id] ?? 0
+                let headerCount = headerImageCountByID[id] ?? 0
+                return GraphMediaNodeItem(
+                    id: id,
+                    label: label,
+                    kind: kind,
+                    attachmentCount: attachmentCount,
+                    headerImageCount: headerCount
+                )
+            }
+            .filter { $0.mediaCount > 0 }
+            .sorted { lhs, rhs in
+                if lhs.mediaCount != rhs.mediaCount { return lhs.mediaCount > rhs.mediaCount }
+                if lhs.attachmentCount != rhs.attachmentCount { return lhs.attachmentCount > rhs.attachmentCount }
+                return lhs.label < rhs.label
+            }
+
+        return Array(items.prefix(10))
+    }
+
+    // MARK: - P1: Trends (7 days)
+
+    /// Trends for the last N days:
+    /// - Links created per day
+    /// - Attachments created per day
+    /// - Delta last N days vs the previous N days
+    /// - Link density mini-series (links-per-node over time, approximated)
+    func trendsSnapshot(for graphID: UUID?, days: Int = 7) throws -> GraphTrendsSnapshot {
+        let days = max(1, days)
+        let calendar = Calendar.current
+        let todayStart = calendar.startOfDay(for: Date())
+        let tomorrowStart = calendar.date(byAdding: .day, value: 1, to: todayStart) ?? Date()
+
+        let startCurrent = calendar.date(byAdding: .day, value: -(days - 1), to: todayStart) ?? todayStart
+        let startPrev = calendar.date(byAdding: .day, value: -(days * 2 - 1), to: todayStart) ?? startCurrent
+
+        let dayLabels = makeDayLabels(start: startCurrent, days: days, calendar: calendar)
+
+        let links14 = try context.fetch(
+            FetchDescriptor<MetaLink>(predicate: linkTrendsPredicate(for: graphID, start: startPrev, end: tomorrowStart))
+        )
+        let attachments14 = try context.fetch(
+            FetchDescriptor<MetaAttachment>(predicate: attachmentTrendsPredicate(for: graphID, start: startPrev, end: tomorrowStart))
+        )
+
+        let linkCounts14 = bucketCounts14(start: startPrev, days: days * 2, calendar: calendar, dates: links14.map { $0.createdAt })
+        let attachmentCounts14 = bucketCounts14(start: startPrev, days: days * 2, calendar: calendar, dates: attachments14.map { $0.createdAt })
+
+        let prevLinkTotal = linkCounts14.prefix(days).reduce(0, +)
+        let currentLinkCounts = Array(linkCounts14.dropFirst(days).prefix(days))
+        let currentLinkTotal = currentLinkCounts.reduce(0, +)
+
+        let prevAttachmentTotal = attachmentCounts14.prefix(days).reduce(0, +)
+        let currentAttachmentCounts = Array(attachmentCounts14.dropFirst(days).prefix(days))
+        let currentAttachmentTotal = currentAttachmentCounts.reduce(0, +)
+
+        let nodeCount = try nodeCount(for: graphID)
+        let totalLinkCount = try context.fetchCount(
+            FetchDescriptor<MetaLink>(predicate: linkGraphPredicate(for: graphID))
+        )
+
+        let baselineLinks = max(0, totalLinkCount - currentLinkTotal)
+        var cumulative = 0
+        var densitySeries: [Double] = []
+        densitySeries.reserveCapacity(days)
+
+        for c in currentLinkCounts {
+            cumulative += c
+            let linksAsOfDay = baselineLinks + cumulative
+            let density = Double(linksAsOfDay) / Double(max(1, nodeCount))
+            densitySeries.append(density)
+        }
+
+        return GraphTrendsSnapshot(
+            dayLabels: dayLabels,
+            linkCounts: currentLinkCounts,
+            attachmentCounts: currentAttachmentCounts,
+            linkDelta: GraphTrendDelta(current: currentLinkTotal, previous: prevLinkTotal),
+            attachmentDelta: GraphTrendDelta(current: currentAttachmentTotal, previous: prevAttachmentTotal),
+            linkDensitySeries: densitySeries
+        )
+    }
+
+    private func nodeCount(for graphID: UUID?) throws -> Int {
+        let entities = try context.fetchCount(
+            FetchDescriptor<MetaEntity>(predicate: entityGraphPredicate(for: graphID))
+        )
+        let attributes = try context.fetchCount(
+            FetchDescriptor<MetaAttribute>(predicate: attributeGraphPredicate(for: graphID))
+        )
+        return entities + attributes
+    }
+
+    private func makeDayLabels(start: Date, days: Int, calendar: Calendar) -> [String] {
+        let formatter = DateFormatter()
+        formatter.locale = Locale(identifier: "de_DE")
+        formatter.dateFormat = "E"
+
+        var labels: [String] = []
+        labels.reserveCapacity(days)
+        for i in 0..<days {
+            guard let d = calendar.date(byAdding: .day, value: i, to: start) else {
+                labels.append("—")
+                continue
+            }
+            let raw = formatter.string(from: d)
+            labels.append(raw.replacingOccurrences(of: ".", with: ""))
+        }
+        return labels
+    }
+
+    private func bucketCounts14(start: Date, days: Int, calendar: Calendar, dates: [Date]) -> [Int] {
+        var counts = Array(repeating: 0, count: days)
+        for date in dates {
+            let d = calendar.startOfDay(for: date)
+            let idx = calendar.dateComponents([.day], from: start, to: d).day ?? -1
+            if idx >= 0 && idx < days {
+                counts[idx] += 1
+            }
+        }
+        return counts
+    }
+
+    private func linkTrendsPredicate(for graphID: UUID?, start: Date, end: Date) -> Predicate<MetaLink> {
+        if let graphID {
+            return #Predicate<MetaLink> { $0.graphID == graphID && $0.createdAt >= start && $0.createdAt < end }
+        }
+        return #Predicate<MetaLink> { $0.graphID == nil && $0.createdAt >= start && $0.createdAt < end }
+    }
+
+    private func attachmentTrendsPredicate(for graphID: UUID?, start: Date, end: Date) -> Predicate<MetaAttachment> {
+        if let graphID {
+            return #Predicate<MetaAttachment> { $0.graphID == graphID && $0.createdAt >= start && $0.createdAt < end }
+        }
+        return #Predicate<MetaAttachment> { $0.graphID == nil && $0.createdAt >= start && $0.createdAt < end }
     }
 
     private func headerImagesCount(for graphID: UUID?) throws -> Int {
