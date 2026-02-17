@@ -56,7 +56,6 @@ struct PhotoGalleryThumbnailView: View {
                 .resizable()
                 .scaledToFit()
                 .padding(contentPadding)
-                .shadow(radius: 2)
         }
         .clipShape(RoundedRectangle(cornerRadius: cornerRadius, style: .continuous))
     }

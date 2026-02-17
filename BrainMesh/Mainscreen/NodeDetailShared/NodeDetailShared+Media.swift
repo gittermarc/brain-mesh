@@ -46,10 +46,18 @@ struct NodeMediaCard: View {
                     ctaAction: onManage
                 )
             } else {
-                NodeGalleryThumbGrid(
-                    attachments: Array(galleryImages.prefix(6)),
-                    onTap: onTapGallery
-                )
+                if galleryCount > 0 {
+                    VStack(alignment: .leading, spacing: 8) {
+                        Text("Fotos")
+                            .font(.caption.weight(.semibold))
+                            .foregroundStyle(.secondary)
+
+                        NodeGalleryThumbGrid(
+                            attachments: Array(galleryImages.prefix(6)),
+                            onTap: onTapGallery
+                        )
+                    }
+                }
 
                 if attachmentCount > 0 {
                     VStack(alignment: .leading, spacing: 8) {
@@ -93,7 +101,7 @@ struct NodeMediaCard: View {
                     }
                     .buttonStyle(.bordered)
                 }
-                .padding(.top, 4)
+                .padding(.top, 10)
             }
         }
         .padding(16)
@@ -109,14 +117,14 @@ private struct NodeGalleryThumbGrid: View {
     let attachments: [MetaAttachment]
     let onTap: (UUID) -> Void
 
+    /// Adaptive columns so tiles get enough room on small devices.
+    /// This prevents cramped tiles that visually bleed into each other.
     private let columns: [GridItem] = [
-        GridItem(.flexible(), spacing: 10),
-        GridItem(.flexible(), spacing: 10),
-        GridItem(.flexible(), spacing: 10)
+        GridItem(.adaptive(minimum: 96, maximum: 160), spacing: 12)
     ]
 
     var body: some View {
-        LazyVGrid(columns: columns, spacing: 10) {
+        LazyVGrid(columns: columns, spacing: 12) {
             ForEach(attachments.prefix(6)) { att in
                 NodeGalleryThumbTile(
                     attachmentID: att.id,
@@ -132,7 +140,7 @@ private struct NodeGalleryThumbGrid: View {
                 ForEach(0..<missing, id: \.self) { _ in
                     RoundedRectangle(cornerRadius: 16, style: .continuous)
                         .fill(.quaternary)
-                        .frame(height: 82)
+                        .aspectRatio(1, contentMode: .fit)
                         .overlay(
                             Image(systemName: "photo")
                                 .font(.system(size: 14, weight: .semibold))
@@ -160,12 +168,17 @@ private struct NodeGalleryThumbTile: View {
 
                 if let thumbnail {
                     PhotoGalleryThumbnailView(uiImage: thumbnail, cornerRadius: 16, contentPadding: 8)
+                        .frame(maxWidth: .infinity, maxHeight: .infinity)
                 } else {
                     ProgressView()
                         .scaleEffect(0.9)
                 }
             }
-            .frame(height: 82)
+            .aspectRatio(1, contentMode: .fit)
+            .overlay(
+                RoundedRectangle(cornerRadius: 16, style: .continuous)
+                    .stroke(Color.secondary.opacity(0.12))
+            )
         }
         .buttonStyle(.plain)
         .task(id: attachmentID) {
@@ -449,7 +462,7 @@ struct NodeMediaAllView: View {
 						.foregroundStyle(.secondary)
 				}
 			}
-			.frame(height: 82)
+			.aspectRatio(1, contentMode: .fit)
 		}
 		.buttonStyle(.plain)
 		.disabled(isLoading)
