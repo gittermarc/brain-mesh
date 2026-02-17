@@ -27,7 +27,7 @@ struct EntitiesHomeView: View {
     @AppStorage("BMOnboardingCompleted") private var onboardingCompleted: Bool = false
 
     // MARK: - Fetch-based list state (graph-scoped + debounced)
-    @State private var items: [MetaEntity] = []
+    @State private var rows: [EntitiesHomeRow] = []
     @State private var isLoading = false
     @State private var loadError: String?
 
@@ -60,14 +60,14 @@ struct EntitiesHomeView: View {
                         .buttonStyle(.borderedProminent)
                     }
                     .padding()
-                } else if isLoading && items.isEmpty {
+                } else if isLoading && rows.isEmpty {
                     VStack(spacing: 10) {
                         ProgressView()
                         Text("Lade Entitäten…")
                             .foregroundStyle(.secondary)
                     }
                     .padding()
-                } else if items.isEmpty {
+                } else if rows.isEmpty {
                     if searchText.isEmpty {
                         ScrollView {
                             VStack(spacing: 16) {
@@ -119,19 +119,19 @@ struct EntitiesHomeView: View {
                             }
                         }
 
-                        ForEach(items) { entity in
+                        ForEach(rows) { row in
                             NavigationLink {
-                                EntityDetailView(entity: entity)
+                                EntityDetailRouteView(entityID: row.id)
                             } label: {
                                 HStack(alignment: .top, spacing: 12) {
-                                    Image(systemName: entity.iconSymbolName ?? "cube")
+                                    Image(systemName: row.iconSymbolName ?? "cube")
                                         .font(.system(size: 18, weight: .semibold))
                                         .frame(width: 24, height: 24, alignment: .top)
                                         .foregroundStyle(.tint)
 
                                     VStack(alignment: .leading, spacing: 4) {
-                                        Text(entity.name).font(.headline)
-                                        Text("\(entity.attributesList.count) Attribute")
+                                        Text(row.name).font(.headline)
+                                        Text("\(row.attributeCount) Attribute")
                                             .font(.subheadline)
                                             .foregroundStyle(.secondary)
                                     }
@@ -191,7 +191,11 @@ struct EntitiesHomeView: View {
 
     @MainActor private func reload(forFolded folded: String) async {
         do {
-            items = try fetchEntities(foldedSearch: folded)
+            let snapshot = try await EntitiesHomeLoader.shared.loadSnapshot(
+                activeGraphID: activeGraphID,
+                foldedSearch: folded
+            )
+            rows = snapshot.rows
             isLoading = false
             loadError = nil
         } catch {
@@ -200,65 +204,23 @@ struct EntitiesHomeView: View {
         }
     }
 
-    private func fetchEntities(foldedSearch s: String) throws -> [MetaEntity] {
-        let gid = activeGraphID
-
-        // Empty search: show *all* entities for the active graph (plus legacy nil-scope)
-        if s.isEmpty {
-            let fd = FetchDescriptor<MetaEntity>(
-                predicate: #Predicate<MetaEntity> { e in
-                    gid == nil || e.graphID == gid || e.graphID == nil
-                },
-                sortBy: [SortDescriptor(\MetaEntity.name)]
-            )
-            return try modelContext.fetch(fd)
-        }
-
-        let term = s
-        var unique: [UUID: MetaEntity] = [:]
-
-        // 1) Entity name match
-        var fdEntities = FetchDescriptor<MetaEntity>(
-            predicate: #Predicate<MetaEntity> { e in
-                (gid == nil || e.graphID == gid || e.graphID == nil) &&
-                e.nameFolded.contains(term)
-            },
-            sortBy: [SortDescriptor(\MetaEntity.name)]
-        )
-        for e in try modelContext.fetch(fdEntities) {
-            unique[e.id] = e
-        }
-
-        // 2) Attribute displayName match (entity · attribute)
-        let fdAttrs = FetchDescriptor<MetaAttribute>(
-            predicate: #Predicate<MetaAttribute> { a in
-                (gid == nil || a.graphID == gid || a.graphID == nil) &&
-                a.searchLabelFolded.contains(term)
-            },
-            sortBy: [SortDescriptor(\MetaAttribute.name)]
-        )
-        let attrs = try modelContext.fetch(fdAttrs)
-
-        // Note: `#Predicate` doesn't reliably support `ids.contains(e.id)` for UUID arrays.
-        // We therefore resolve owners directly from the matching attributes.
-        for a in attrs {
-            guard let owner = a.owner else { continue }
-            if gid == nil || owner.graphID == gid || owner.graphID == nil {
-                unique[owner.id] = owner
+    private func fetchEntity(by id: UUID) -> MetaEntity? {
+        var fd = FetchDescriptor<MetaEntity>(
+            predicate: #Predicate { e in
+                e.id == id
             }
-        }
-
-        // Stable sort
-        return unique.values.sorted {
-            $0.name.localizedStandardCompare($1.name) == .orderedAscending
-        }
+        )
+        fd.fetchLimit = 1
+        return try? modelContext.fetch(fd).first
     }
 
     private func deleteEntities(at offsets: IndexSet) {
-        let entitiesToDelete: [MetaEntity] = offsets.compactMap { idx -> MetaEntity? in
-            guard items.indices.contains(idx) else { return nil }
-            return items[idx]
+        let idsToDelete: [UUID] = offsets.compactMap { idx in
+            guard rows.indices.contains(idx) else { return nil }
+            return rows[idx].id
         }
+
+        let entitiesToDelete: [MetaEntity] = idsToDelete.compactMap { fetchEntity(by: $0) }
 
         for entity in entitiesToDelete {
             // Attachments are not part of the graph rendering; they live only on detail level.
@@ -273,7 +235,7 @@ struct EntitiesHomeView: View {
         }
 
         // Update local list immediately and then re-fetch to stay in sync with SwiftData.
-        items.removeAll { e in entitiesToDelete.contains(where: { $0.id == e.id }) }
+        rows.removeAll { r in entitiesToDelete.contains(where: { $0.id == r.id }) }
         Task { await reload(forFolded: BMSearch.fold(searchText)) }
     }
 
@@ -302,6 +264,30 @@ struct EntitiesHomeView: View {
         )
         if let links = try? modelContext.fetch(fdTarget) {
             for l in links { modelContext.delete(l) }
+        }
+    }
+}
+
+private struct EntityDetailRouteView: View {
+    @Query private var entities: [MetaEntity]
+
+    init(entityID: UUID) {
+        _entities = Query(
+            filter: #Predicate<MetaEntity> { e in
+                e.id == entityID
+            }
+        )
+    }
+
+    var body: some View {
+        if let entity = entities.first {
+            EntityDetailView(entity: entity)
+        } else {
+            ContentUnavailableView {
+                Label("Entität nicht gefunden", systemImage: "questionmark.square.dashed")
+            } description: {
+                Text("Diese Entität existiert nicht mehr oder wurde auf einem anderen Gerät gelöscht.")
+            }
         }
     }
 }

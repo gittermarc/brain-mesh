@@ -76,6 +76,14 @@ struct BrainMeshApp: App {
         Task.detached(priority: .utility) {
             await GraphStatsLoader.shared.configure(container: AnyModelContainer(containerForGraphStatsLoader))
         }
+
+        // P0.1: Provide the container to the EntitiesHome loader.
+        // EntitiesHome performs SwiftData fetches for entity + attribute search.
+        // Running that work off the UI thread avoids main-thread stalls while typing.
+        let containerForEntitiesHomeLoader = sharedModelContainer
+        Task.detached(priority: .utility) {
+            await EntitiesHomeLoader.shared.configure(container: AnyModelContainer(containerForEntitiesHomeLoader))
+        }
     }
 
     var body: some Scene {
