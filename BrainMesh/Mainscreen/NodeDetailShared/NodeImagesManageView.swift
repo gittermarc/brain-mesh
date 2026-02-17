@@ -10,8 +10,6 @@
 
 import SwiftUI
 import SwiftData
-import PhotosUI
-import UniformTypeIdentifiers
 import UIKit
 
 struct NodeImagesManageView: View {
@@ -25,7 +23,7 @@ struct NodeImagesManageView: View {
     @Binding var mainImagePath: String?
     let mainStableID: UUID
 
-    @State private var pickedItems: [PhotosPickerItem] = []
+    @State private var showAddSheet: Bool = false
     @State private var viewerRequest: PhotoGalleryViewerRequest? = nil
 
     @State private var images: [AttachmentListItem] = []
@@ -40,7 +38,6 @@ struct NodeImagesManageView: View {
 
     private let pageSize: Int = 40
     private let thumbRequestSide: CGFloat = 220
-    private let maxSelectionCount: Int = 24
 
     var body: some View {
         List {
@@ -50,11 +47,9 @@ struct NodeImagesManageView: View {
                 } description: {
                     Text("Füge Bilder hinzu, um sie hier zu verwalten.")
                 } actions: {
-                    PhotosPicker(
-                        selection: $pickedItems,
-                        maxSelectionCount: maxSelectionCount,
-                        matching: .images
-                    ) {
+                    Button {
+                        showAddSheet = true
+                    } label: {
                         Label("Bilder hinzufügen", systemImage: "photo.badge.plus")
                     }
                 }
@@ -111,11 +106,9 @@ struct NodeImagesManageView: View {
         .navigationBarTitleDisplayMode(.inline)
         .toolbar {
             ToolbarItem(placement: .topBarTrailing) {
-                PhotosPicker(
-                    selection: $pickedItems,
-                    maxSelectionCount: maxSelectionCount,
-                    matching: .images
-                ) {
+                Button {
+                    showAddSheet = true
+                } label: {
                     Image(systemName: "photo.badge.plus")
                 }
                 .accessibilityLabel("Bilder hinzufügen")
@@ -127,23 +120,11 @@ struct NodeImagesManageView: View {
         .refreshable {
             await refresh()
         }
-        .onChange(of: pickedItems) { _, newItems in
-            guard !newItems.isEmpty else { return }
-            Task { @MainActor in
-                let result = await PhotoGalleryImportController.importPickedImages(
-                    newItems,
-                    ownerKind: ownerKind,
-                    ownerID: ownerID,
-                    graphID: graphID,
-                    in: modelContext
-                )
-
-                if result.didFailAnything {
-                    errorMessage = "Einige Bilder konnten nicht importiert werden (\(result.failed))."
+        .onChange(of: showAddSheet) { _, isPresented in
+            if !isPresented {
+                Task { @MainActor in
+                    await refresh()
                 }
-
-                pickedItems = []
-                await refresh()
             }
         }
         .navigationDestination(item: $viewerRequest) { req in
@@ -158,6 +139,18 @@ struct NodeImagesManageView: View {
             )
             .onDisappear {
                 viewerRequest = nil
+            }
+        }
+        .sheet(isPresented: $showAddSheet) {
+            NavigationStack {
+                PhotoGalleryBrowserView(
+                    ownerKind: ownerKind,
+                    ownerID: ownerID,
+                    graphID: graphID,
+                    mainImageData: $mainImageData,
+                    mainImagePath: $mainImagePath,
+                    mainStableID: mainStableID
+                )
             }
         }
         .alert("Bild löschen?", isPresented: Binding(
@@ -194,6 +187,9 @@ struct NodeImagesManageView: View {
     private func loadInitialIfNeeded() async {
         if didLoadOnce { return }
         didLoadOnce = true
+
+        // Let the navigation animation finish before we start any work.
+        await Task.yield()
 
         // IMPORTANT: Keep this screen lightweight on navigation.
         // There are no legacy migrations in your current DB, so we must not do any
