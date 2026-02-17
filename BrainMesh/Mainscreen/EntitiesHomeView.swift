@@ -183,7 +183,10 @@ struct EntitiesHomeView: View {
             .onChange(of: showAddEntity) { _, newValue in
                 // Ensure newly created entities show up even without @Query driving this list.
                 if newValue == false {
-                    Task { await reload(forFolded: BMSearch.fold(searchText)) }
+                    Task {
+                        await EntitiesHomeLoader.shared.invalidateCache(for: activeGraphID)
+                        await reload(forFolded: BMSearch.fold(searchText))
+                    }
                 }
             }
         }
@@ -236,7 +239,10 @@ struct EntitiesHomeView: View {
 
         // Update local list immediately and then re-fetch to stay in sync with SwiftData.
         rows.removeAll { r in entitiesToDelete.contains(where: { $0.id == r.id }) }
-        Task { await reload(forFolded: BMSearch.fold(searchText)) }
+        Task {
+            await EntitiesHomeLoader.shared.invalidateCache(for: activeGraphID)
+            await reload(forFolded: BMSearch.fold(searchText))
+        }
     }
 
     private func deleteLinks(referencing kind: NodeKind, id: UUID, graphID: UUID?) {

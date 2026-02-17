@@ -35,11 +35,31 @@ actor EntitiesHomeLoader {
     private var container: AnyModelContainer? = nil
     private let log = Logger(subsystem: "BrainMesh", category: "EntitiesHomeLoader")
 
+    // MARK: - Attribute count cache (avoid re-fetching all attributes while typing)
+
+    private struct GraphScopeKey: Hashable, Sendable {
+        let graphID: UUID?
+    }
+
+    private struct CountsCacheEntry: Sendable {
+        let fetchedAt: Date
+        let countsByEntityID: [UUID: Int]
+    }
+
+    private var countsCache: [GraphScopeKey: CountsCacheEntry] = [:]
+
+    /// Small TTL so counts don't stay stale for long, but typing/search doesn't repeatedly load all attributes.
+    private let countsCacheTTLSeconds: TimeInterval = 8
+
     func configure(container: AnyModelContainer) {
         self.container = container
         #if DEBUG
         log.debug("✅ configured")
         #endif
+    }
+
+    func invalidateCache(for graphID: UUID?) {
+        countsCache.removeValue(forKey: GraphScopeKey(graphID: graphID))
     }
 
     func loadSnapshot(activeGraphID: UUID?, foldedSearch: String) async throws -> EntitiesHomeSnapshot {
@@ -59,21 +79,64 @@ actor EntitiesHomeLoader {
             let context = ModelContext(configuredContainer.container)
             context.autosaveEnabled = false
 
-            let rows = try EntitiesHomeLoader.fetchRows(
+            let entities = try EntitiesHomeLoader.fetchEntities(
                 context: context,
                 graphID: gid,
                 foldedSearch: term
             )
 
+            let entityIDs = Set(entities.map { $0.id })
+
+            let now = Date()
+            let shouldUseCache = !term.isEmpty
+            let cachedCounts: [UUID: Int]? = shouldUseCache
+                ? await EntitiesHomeLoader.shared.cachedCounts(for: gid, now: now)
+                : nil
+
+            let counts: [UUID: Int]
+            if let cachedCounts {
+                counts = cachedCounts
+            } else {
+                counts = try EntitiesHomeLoader.computeAttributeCounts(
+                    context: context,
+                    graphID: gid,
+                    relevantEntityIDs: entityIDs
+                )
+                await EntitiesHomeLoader.shared.storeCounts(counts, for: gid, now: now)
+            }
+
+            let rows: [EntitiesHomeRow] = entities.map { e in
+                EntitiesHomeRow(
+                    id: e.id,
+                    name: e.name,
+                    iconSymbolName: e.iconSymbolName,
+                    attributeCount: counts[e.id] ?? 0
+                )
+            }
+
             return EntitiesHomeSnapshot(rows: rows)
         }.value
     }
 
-    private static func fetchRows(
+    private func cachedCounts(for graphID: UUID?, now: Date) -> [UUID: Int]? {
+        let key = GraphScopeKey(graphID: graphID)
+        guard let entry = countsCache[key] else { return nil }
+        if now.timeIntervalSince(entry.fetchedAt) > countsCacheTTLSeconds {
+            return nil
+        }
+        return entry.countsByEntityID
+    }
+
+    private func storeCounts(_ counts: [UUID: Int], for graphID: UUID?, now: Date) {
+        let key = GraphScopeKey(graphID: graphID)
+        countsCache[key] = CountsCacheEntry(fetchedAt: now, countsByEntityID: counts)
+    }
+
+    private static func fetchEntities(
         context: ModelContext,
         graphID: UUID?,
         foldedSearch: String
-    ) throws -> [EntitiesHomeRow] {
+    ) throws -> [MetaEntity] {
         let gid = graphID
 
         // Empty search: show *all* entities for the active graph (plus legacy nil-scope).
@@ -85,15 +148,7 @@ actor EntitiesHomeLoader {
                 sortBy: [SortDescriptor(\MetaEntity.name)]
             )
 
-            let entities = try context.fetch(fd)
-            return entities.map { e in
-                EntitiesHomeRow(
-                    id: e.id,
-                    name: e.name,
-                    iconSymbolName: e.iconSymbolName,
-                    attributeCount: e.attributesList.count
-                )
-            }
+            return try context.fetch(fd)
         }
 
         let term = foldedSearch
@@ -131,17 +186,36 @@ actor EntitiesHomeLoader {
         }
 
         // Stable sort
-        let entities = unique.values.sorted {
+        return unique.values.sorted {
             $0.name.localizedStandardCompare($1.name) == .orderedAscending
         }
+    }
 
-        return entities.map { e in
-            EntitiesHomeRow(
-                id: e.id,
-                name: e.name,
-                iconSymbolName: e.iconSymbolName,
-                attributeCount: e.attributesList.count
-            )
+    private static func computeAttributeCounts(
+        context: ModelContext,
+        graphID: UUID?,
+        relevantEntityIDs: Set<UUID>
+    ) throws -> [UUID: Int] {
+        if relevantEntityIDs.isEmpty { return [:] }
+
+        let gid = graphID
+        let fd = FetchDescriptor<MetaAttribute>(
+            predicate: #Predicate<MetaAttribute> { a in
+                gid == nil || a.graphID == gid || a.graphID == nil
+            }
+        )
+
+        let attrs = try context.fetch(fd)
+        var counts: [UUID: Int] = [:]
+        counts.reserveCapacity(min(relevantEntityIDs.count, 512))
+
+        for a in attrs {
+            guard let owner = a.owner else { continue }
+            let ownerID = owner.id
+            guard relevantEntityIDs.contains(ownerID) else { continue }
+            counts[ownerID, default: 0] += 1
         }
+
+        return counts
     }
 }
