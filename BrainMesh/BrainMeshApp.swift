@@ -91,6 +91,14 @@ struct BrainMeshApp: App {
         Task.detached(priority: .utility) {
             await NodeConnectionsLoader.shared.configure(container: AnyModelContainer(containerForNodeConnectionsLoader))
         }
+
+        // P0.1: Provide the container to the NodePicker loader.
+        // Node pickers are used across many flows (link creation, bulk actions). Loading off-main avoids
+        // main-thread stalls when opening the picker or typing search terms.
+        let containerForNodePickerLoader = sharedModelContainer
+        Task.detached(priority: .utility) {
+            await NodePickerLoader.shared.configure(container: AnyModelContainer(containerForNodePickerLoader))
+        }
     }
 
     var body: some Scene {

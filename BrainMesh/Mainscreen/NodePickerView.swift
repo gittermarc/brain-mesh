@@ -6,12 +6,10 @@
 //
 
 import SwiftUI
-import SwiftData
 
 /// Skalierender Picker (mit Suchfeld), graph-scoped.
 struct NodePickerView: View {
     @Environment(\.dismiss) private var dismiss
-    @Environment(\.modelContext) private var modelContext
 
     @AppStorage("BMActiveGraphID") private var activeGraphIDString: String = ""
     private var activeGraphID: UUID? { UUID(uuidString: activeGraphIDString) }
@@ -73,11 +71,16 @@ struct NodePickerView: View {
                     Button("Schließen") { dismiss() }
                 }
             }
-            .task { await reload() }
-            .task(id: searchText) {
+            .task(id: BMSearch.fold(searchText)) {
                 let folded = BMSearch.fold(searchText)
                 isLoading = true
                 loadError = nil
+
+                if folded.isEmpty {
+                    await reload(forFolded: "")
+                    return
+                }
+
                 try? await Task.sleep(nanoseconds: debounceNanos)
                 if Task.isCancelled { return }
                 await reload(forFolded: folded)
@@ -94,12 +97,18 @@ struct NodePickerView: View {
         loadError = nil
 
         do {
+            let gid = activeGraphID
+            let limit = folded.isEmpty ? emptySearchLimit : searchLimit
+
+            let rows: [NodePickerRowDTO]
             switch kind {
             case .entity:
-                items = try fetchEntities(foldedSearch: folded)
+                rows = try await NodePickerLoader.shared.loadEntities(graphID: gid, foldedSearch: folded, limit: limit)
             case .attribute:
-                items = try fetchAttributes(foldedSearch: folded)
+                rows = try await NodePickerLoader.shared.loadAttributes(graphID: gid, foldedSearch: folded, limit: limit)
             }
+
+            items = rows.compactMap(toNodeRef)
             isLoading = false
         } catch {
             isLoading = false
@@ -107,57 +116,8 @@ struct NodePickerView: View {
         }
     }
 
-    private func fetchEntities(foldedSearch s: String) throws -> [NodeRef] {
-        let gid = activeGraphID
-        var fd: FetchDescriptor<MetaEntity>
-
-        if s.isEmpty {
-            fd = FetchDescriptor(
-                predicate: #Predicate<MetaEntity> { e in
-                    gid == nil || e.graphID == gid || e.graphID == nil
-                },
-                sortBy: [SortDescriptor(\MetaEntity.name)]
-            )
-            fd.fetchLimit = emptySearchLimit
-        } else {
-            let term = s
-            fd = FetchDescriptor(
-                predicate: #Predicate<MetaEntity> { e in
-                    (gid == nil || e.graphID == gid || e.graphID == nil) &&
-                    e.nameFolded.contains(term)
-                },
-                sortBy: [SortDescriptor(\MetaEntity.name)]
-            )
-            fd.fetchLimit = searchLimit
-        }
-
-        return try modelContext.fetch(fd).map { NodeRef(kind: .entity, id: $0.id, label: $0.name, iconSymbolName: $0.iconSymbolName) }
-    }
-
-    private func fetchAttributes(foldedSearch s: String) throws -> [NodeRef] {
-        let gid = activeGraphID
-        var fd: FetchDescriptor<MetaAttribute>
-
-        if s.isEmpty {
-            fd = FetchDescriptor(
-                predicate: #Predicate<MetaAttribute> { a in
-                    gid == nil || a.graphID == gid || a.graphID == nil
-                },
-                sortBy: [SortDescriptor(\MetaAttribute.name)]
-            )
-            fd.fetchLimit = emptySearchLimit
-        } else {
-            let term = s
-            fd = FetchDescriptor(
-                predicate: #Predicate<MetaAttribute> { a in
-                    (gid == nil || a.graphID == gid || a.graphID == nil) &&
-                    a.searchLabelFolded.contains(term)
-                },
-                sortBy: [SortDescriptor(\MetaAttribute.name)]
-            )
-            fd.fetchLimit = searchLimit
-        }
-
-        return try modelContext.fetch(fd).map { NodeRef(kind: .attribute, id: $0.id, label: $0.displayName, iconSymbolName: $0.iconSymbolName) }
+    private func toNodeRef(_ dto: NodePickerRowDTO) -> NodeRef? {
+        guard let kind = NodeKind(rawValue: dto.kindRaw) else { return nil }
+        return NodeRef(kind: kind, id: dto.id, label: dto.label, iconSymbolName: dto.iconSymbolName)
     }
 }
