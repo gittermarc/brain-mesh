@@ -12,6 +12,7 @@ import UIKit
 
 struct NotesAndPhotoSection: View {
     @Environment(\.modelContext) private var modelContext
+    @EnvironmentObject private var systemModals: SystemModalCoordinator
 
     @Binding var notes: String
 
@@ -25,6 +26,8 @@ struct NotesAndPhotoSection: View {
     let stableID: UUID
 
     @State private var pickerItem: PhotosPickerItem?
+    @State private var isPickingPhoto: Bool = false
+    @State private var didMarkSystemModal: Bool = false
     @State private var loadError: String?
 
     // Display cache (avoid disk reads inside `body`)
@@ -62,6 +65,25 @@ struct NotesAndPhotoSection: View {
             guard let newItem else { return }
             Task { await importPhoto(newItem) }
         }
+        .onChange(of: isPickingPhoto) { _, isPresented in
+            if isPresented {
+                if !didMarkSystemModal {
+                    didMarkSystemModal = true
+                    systemModals.beginSystemModal()
+                }
+            } else {
+                if didMarkSystemModal {
+                    didMarkSystemModal = false
+                    systemModals.endSystemModal()
+                }
+            }
+        }
+        .onDisappear {
+            if didMarkSystemModal {
+                didMarkSystemModal = false
+                systemModals.endSystemModal()
+            }
+        }
         .alert("Bild konnte nicht geladen werden", isPresented: Binding(
             get: { loadError != nil },
             set: { if !$0 { loadError = nil } }
@@ -75,6 +97,11 @@ struct NotesAndPhotoSection: View {
                 FullscreenPhotoView(image: img)
             }
         }
+        .photosPicker(
+            isPresented: $isPickingPhoto,
+            selection: $pickerItem,
+            matching: .images
+        )
     }
 
     private var notesEditor: some View {
@@ -109,7 +136,9 @@ struct NotesAndPhotoSection: View {
             }
 
             HStack(spacing: 12) {
-                PhotosPicker(selection: $pickerItem, matching: .images) {
+                Button {
+                    isPickingPhoto = true
+                } label: {
                     Label((imageData == nil && imagePath == nil) ? "Bild auswählen" : "Bild ersetzen",
                           systemImage: "photo")
                 }

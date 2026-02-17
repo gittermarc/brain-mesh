@@ -14,6 +14,7 @@ struct BrainMeshApp: App {
     @StateObject private var appearanceStore = AppearanceStore()
     @StateObject private var onboardingCoordinator = OnboardingCoordinator()
     @StateObject private var graphLockCoordinator = GraphLockCoordinator()
+    @StateObject private var systemModalCoordinator = SystemModalCoordinator()
 
     private let sharedModelContainer: ModelContainer
 
@@ -67,6 +68,7 @@ struct BrainMeshApp: App {
                 .environmentObject(appearanceStore)
                 .environmentObject(onboardingCoordinator)
                 .environmentObject(graphLockCoordinator)
+                .environmentObject(systemModalCoordinator)
         }
         .modelContainer(sharedModelContainer)
     }

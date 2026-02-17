@@ -14,6 +14,7 @@ import UIKit
 struct PhotoGalleryBrowserView: View {
     @Environment(\.dismiss) private var dismiss
     @Environment(\.modelContext) private var modelContext
+    @EnvironmentObject private var systemModals: SystemModalCoordinator
 
     let ownerKind: NodeKind
     let ownerID: UUID
@@ -26,6 +27,8 @@ struct PhotoGalleryBrowserView: View {
     @Query private var galleryImages: [MetaAttachment]
 
     @State private var pickedItems: [PhotosPickerItem] = []
+    @State private var isPickingPhotos: Bool = false
+    @State private var didMarkSystemModal: Bool = false
     @State private var viewerRequest: PhotoGalleryViewerRequest? = nil
     @State private var confirmDelete: MetaAttachment? = nil
     @State private var errorMessage: String? = nil
@@ -62,9 +65,12 @@ struct PhotoGalleryBrowserView: View {
     var body: some View {
         ScrollView {
             LazyVGrid(columns: columns, spacing: 10) {
-                PhotosPicker(selection: $pickedItems, maxSelectionCount: maxSelectionCount, matching: .images) {
+                Button {
+                    isPickingPhotos = true
+                } label: {
                     addTile
                 }
+                .buttonStyle(.plain)
 
                 ForEach(galleryImages) { att in
                     PhotoGalleryGridTile(
@@ -109,7 +115,9 @@ struct PhotoGalleryBrowserView: View {
             }
 
             ToolbarItem(placement: .topBarTrailing) {
-                PhotosPicker(selection: $pickedItems, maxSelectionCount: maxSelectionCount, matching: .images) {
+                Button {
+                    isPickingPhotos = true
+                } label: {
                     Image(systemName: "photo.badge.plus")
                 }
                 .accessibilityLabel("Bilder hinzufügen")
@@ -131,6 +139,25 @@ struct PhotoGalleryBrowserView: View {
                     errorMessage = "Einige Bilder konnten nicht importiert werden (\(result.failed))."
                 }
                 pickedItems = []
+            }
+        }
+        .onChange(of: isPickingPhotos) { _, isPresented in
+            if isPresented {
+                if !didMarkSystemModal {
+                    didMarkSystemModal = true
+                    systemModals.beginSystemModal()
+                }
+            } else {
+                if didMarkSystemModal {
+                    didMarkSystemModal = false
+                    systemModals.endSystemModal()
+                }
+            }
+        }
+        .onDisappear {
+            if didMarkSystemModal {
+                didMarkSystemModal = false
+                systemModals.endSystemModal()
             }
         }
         // IMPORTANT: This view is presented inside a sheet.
@@ -173,6 +200,12 @@ struct PhotoGalleryBrowserView: View {
         } message: {
             Text(errorMessage ?? "")
         }
+        .photosPicker(
+            isPresented: $isPickingPhotos,
+            selection: $pickedItems,
+            maxSelectionCount: maxSelectionCount,
+            matching: .images
+        )
     }
 
     private var columns: [GridItem] {

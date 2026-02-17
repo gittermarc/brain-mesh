@@ -17,6 +17,7 @@ import UIKit
 /// Important: These images are NOT used in the graph.
 struct PhotoGallerySection: View {
     @Environment(\.modelContext) private var modelContext
+    @EnvironmentObject private var systemModals: SystemModalCoordinator
 
     let ownerKind: NodeKind
     let ownerID: UUID
@@ -29,6 +30,8 @@ struct PhotoGallerySection: View {
     @Query private var galleryImages: [MetaAttachment]
 
     @State private var pickedItems: [PhotosPickerItem] = []
+    @State private var isPickingPhotos: Bool = false
+    @State private var didMarkSystemModal: Bool = false
     @State private var errorMessage: String? = nil
     @StateObject private var importProgress = ImportProgressState()
 
@@ -113,6 +116,25 @@ struct PhotoGallerySection: View {
                 pickedItems = []
             }
         }
+        .onChange(of: isPickingPhotos) { _, isPresented in
+            if isPresented {
+                if !didMarkSystemModal {
+                    didMarkSystemModal = true
+                    systemModals.beginSystemModal()
+                }
+            } else {
+                if didMarkSystemModal {
+                    didMarkSystemModal = false
+                    systemModals.endSystemModal()
+                }
+            }
+        }
+        .onDisappear {
+            if didMarkSystemModal {
+                didMarkSystemModal = false
+                systemModals.endSystemModal()
+            }
+        }
         .alert("Galerie", isPresented: Binding(
             get: { errorMessage != nil },
             set: { if !$0 { errorMessage = nil } }
@@ -121,6 +143,12 @@ struct PhotoGallerySection: View {
         } message: {
             Text(errorMessage ?? "")
         }
+        .photosPicker(
+            isPresented: $isPickingPhotos,
+            selection: $pickedItems,
+            maxSelectionCount: maxSelectionCount,
+            matching: .images
+        )
     }
 
     private var emptyState: some View {
@@ -128,11 +156,9 @@ struct PhotoGallerySection: View {
             Text("Noch keine Bilder hinzugefügt.")
                 .foregroundStyle(.secondary)
 
-            PhotosPicker(
-                selection: $pickedItems,
-                maxSelectionCount: maxSelectionCount,
-                matching: .images
-            ) {
+            Button {
+                isPickingPhotos = true
+            } label: {
                 Label("Bilder hinzufügen", systemImage: "photo.badge.plus")
             }
         }
@@ -142,13 +168,12 @@ struct PhotoGallerySection: View {
     private var galleryStrip: some View {
         ScrollView(.horizontal, showsIndicators: false) {
             LazyHStack(spacing: 10) {
-                PhotosPicker(
-                    selection: $pickedItems,
-                    maxSelectionCount: maxSelectionCount,
-                    matching: .images
-                ) {
+                Button {
+                    isPickingPhotos = true
+                } label: {
                     PhotoGalleryAddTile()
                 }
+                .buttonStyle(.plain)
 
                 ForEach(galleryImages.prefix(12)) { att in
                     PhotoGalleryThumbnailTile(attachment: att, side: 78) {
