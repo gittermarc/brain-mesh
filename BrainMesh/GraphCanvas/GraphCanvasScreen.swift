@@ -7,7 +7,6 @@
 
 import SwiftUI
 import SwiftData
-import UIKit
 
 struct GraphCanvasScreen: View {
     @Environment(\.modelContext) var modelContext
@@ -37,11 +36,6 @@ struct GraphCanvasScreen: View {
     @State var showFocusPicker = false
     @State var hops: Int = 1
     @State var workMode: WorkMode = .explore
-
-    @State var showGraphPhotoFullscreen = false
-    @State var graphFullscreenImage: UIImage?
-    @State var cachedFullImagePath: String?
-    @State var cachedFullImage: UIImage?
 
     // Toggles
     @State var showAttributes: Bool = true
@@ -165,16 +159,8 @@ struct GraphCanvasScreen: View {
                         physicsRelevant: physicsRelevantCache,
                         selectedImagePath: selectedImagePath(),
                         onTapSelectedThumbnail: {
-                            if let img = cachedFullImage {
-                                graphFullscreenImage = img
-                                showGraphPhotoFullscreen = true
-                                return
-                            }
-                            // Fallback (sollte selten sein)
-                            guard let path = selectedImagePathValue,
-                                  let full = ImageStore.loadUIImage(path: path) else { return }
-                            graphFullscreenImage = full
-                            showGraphPhotoFullscreen = true
+                            guard let key = selection else { return }
+                            openDetails(for: key)
                         },
                         positions: $positions,
                         velocities: $velocities,
@@ -295,7 +281,6 @@ struct GraphCanvasScreen: View {
         .onChange(of: pan) { _, _ in pulseMiniMap() }
         .onChange(of: scale) { _, _ in pulseMiniMap() }
         .onAppear {
-            prefetchSelectedFullImage()
             recomputeDerivedState()
         }
         .onDisappear {
@@ -322,17 +307,9 @@ struct GraphCanvasScreen: View {
                 }
             }
 
-            prefetchSelectedFullImage()
             recomputeDerivedState()
         }
-
-        .onChange(of: selectedImagePathValue) { _, _ in prefetchSelectedFullImage() }
-        .fullScreenCover(isPresented: $showGraphPhotoFullscreen) {
-            if let img = graphFullscreenImage {
-                FullscreenPhotoView(image: img)
-            }
-        }
-    }
+}
 
     // MARK: - Cancellable loading
 

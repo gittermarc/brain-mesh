@@ -5,7 +5,6 @@
 
 import SwiftUI
 import SwiftData
-import UIKit
 
 extension GraphCanvasScreen {
 
@@ -136,28 +135,6 @@ extension GraphCanvasScreen {
             if didModelChange { try? modelContext.save() }
 
             imagePathCache[key] = ensured
-        }
-    }
-
-
-    var selectedImagePathValue: String? { selectedImagePath() }
-
-    func prefetchSelectedFullImage() {
-        let path = selectedImagePathValue
-        guard path != cachedFullImagePath else { return }
-
-        cachedFullImagePath = path
-        cachedFullImage = nil
-
-        guard let path, !path.isEmpty else { return }
-
-        DispatchQueue.global(qos: .userInitiated).async {
-            let img = ImageStore.loadUIImage(path: path)
-            DispatchQueue.main.async {
-                if cachedFullImagePath == path {
-                    cachedFullImage = img
-                }
-            }
         }
     }
 
