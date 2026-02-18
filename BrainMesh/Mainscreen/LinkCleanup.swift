@@ -21,24 +21,50 @@ enum LinkCleanup {
     ) {
         let k = kind.rawValue
         let nodeID = id
-        let gid = graphID
 
-        let fdSource = FetchDescriptor<MetaLink>(
-            predicate: #Predicate { l in
-                l.sourceKindRaw == k && l.sourceID == nodeID && (gid == nil || l.graphID == gid)
-            }
-        )
+        let fdSource: FetchDescriptor<MetaLink>
+        if let gid = graphID {
+            fdSource = FetchDescriptor<MetaLink>(
+                predicate: #Predicate { l in
+                    l.sourceKindRaw == k &&
+                    l.sourceID == nodeID &&
+                    l.graphID == gid
+                }
+            )
+        } else {
+            fdSource = FetchDescriptor<MetaLink>(
+                predicate: #Predicate { l in
+                    l.sourceKindRaw == k &&
+                    l.sourceID == nodeID
+                }
+            )
+        }
+
         if let links = try? modelContext.fetch(fdSource) {
             for l in links { modelContext.delete(l) }
         }
 
-        let fdTarget = FetchDescriptor<MetaLink>(
-            predicate: #Predicate { l in
-                l.targetKindRaw == k && l.targetID == nodeID && (gid == nil || l.graphID == gid)
-            }
-        )
+        let fdTarget: FetchDescriptor<MetaLink>
+        if let gid = graphID {
+            fdTarget = FetchDescriptor<MetaLink>(
+                predicate: #Predicate { l in
+                    l.targetKindRaw == k &&
+                    l.targetID == nodeID &&
+                    l.graphID == gid
+                }
+            )
+        } else {
+            fdTarget = FetchDescriptor<MetaLink>(
+                predicate: #Predicate { l in
+                    l.targetKindRaw == k &&
+                    l.targetID == nodeID
+                }
+            )
+        }
+
         if let links = try? modelContext.fetch(fdTarget) {
             for l in links { modelContext.delete(l) }
         }
     }
 }
+

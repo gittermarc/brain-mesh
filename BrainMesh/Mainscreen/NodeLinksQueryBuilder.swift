@@ -20,14 +20,27 @@ enum NodeLinksQueryBuilder {
     ) -> Query<MetaLink, [MetaLink]> {
         let k = kind.rawValue
         let nodeID = id
-        let gid = graphID
 
-        return Query(
-            filter: #Predicate<MetaLink> { l in
-                l.sourceKindRaw == k && l.sourceID == nodeID && (gid == nil || l.graphID == gid)
-            },
-            sort: [SortDescriptor(\MetaLink.createdAt, order: .reverse)]
-        )
+        let sort = [SortDescriptor(\MetaLink.createdAt, order: .reverse)]
+
+        if let gid = graphID {
+            return Query(
+                filter: #Predicate<MetaLink> { l in
+                    l.sourceKindRaw == k &&
+                    l.sourceID == nodeID &&
+                    l.graphID == gid
+                },
+                sort: sort
+            )
+        } else {
+            return Query(
+                filter: #Predicate<MetaLink> { l in
+                    l.sourceKindRaw == k &&
+                    l.sourceID == nodeID
+                },
+                sort: sort
+            )
+        }
     }
 
     static func incomingLinksQuery(
@@ -37,13 +50,26 @@ enum NodeLinksQueryBuilder {
     ) -> Query<MetaLink, [MetaLink]> {
         let k = kind.rawValue
         let nodeID = id
-        let gid = graphID
 
-        return Query(
-            filter: #Predicate<MetaLink> { l in
-                l.targetKindRaw == k && l.targetID == nodeID && (gid == nil || l.graphID == gid)
-            },
-            sort: [SortDescriptor(\MetaLink.createdAt, order: .reverse)]
-        )
+        let sort = [SortDescriptor(\MetaLink.createdAt, order: .reverse)]
+
+        if let gid = graphID {
+            return Query(
+                filter: #Predicate<MetaLink> { l in
+                    l.targetKindRaw == k &&
+                    l.targetID == nodeID &&
+                    l.graphID == gid
+                },
+                sort: sort
+            )
+        } else {
+            return Query(
+                filter: #Predicate<MetaLink> { l in
+                    l.targetKindRaw == k &&
+                    l.targetID == nodeID
+                },
+                sort: sort
+            )
+        }
     }
 }

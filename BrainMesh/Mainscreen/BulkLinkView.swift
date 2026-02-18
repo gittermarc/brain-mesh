@@ -155,26 +155,47 @@ struct BulkLinkView: View {
     private func loadExistingLinkSets() {
         let sKind = source.kind.rawValue
         let sID = source.id
-        let gid = graphID
 
         do {
-            let outgoingFD = FetchDescriptor<MetaLink>(
-                predicate: #Predicate { l in
-                    l.sourceKindRaw == sKind &&
-                    l.sourceID == sID &&
-                    (gid == nil || l.graphID == gid)
-                }
-            )
+            let outgoingFD: FetchDescriptor<MetaLink>
+            if let gid = graphID {
+                outgoingFD = FetchDescriptor<MetaLink>(
+                    predicate: #Predicate { l in
+                        l.sourceKindRaw == sKind &&
+                        l.sourceID == sID &&
+                        l.graphID == gid
+                    }
+                )
+            } else {
+                outgoingFD = FetchDescriptor<MetaLink>(
+                    predicate: #Predicate { l in
+                        l.sourceKindRaw == sKind &&
+                        l.sourceID == sID
+                    }
+                )
+            }
+
             let outgoing = try modelContext.fetch(outgoingFD)
             existingOutgoingTargets = Set(outgoing.map { NodeRefKey(kind: $0.targetKind, id: $0.targetID) })
 
-            let incomingFD = FetchDescriptor<MetaLink>(
-                predicate: #Predicate { l in
-                    l.targetKindRaw == sKind &&
-                    l.targetID == sID &&
-                    (gid == nil || l.graphID == gid)
-                }
-            )
+            let incomingFD: FetchDescriptor<MetaLink>
+            if let gid = graphID {
+                incomingFD = FetchDescriptor<MetaLink>(
+                    predicate: #Predicate { l in
+                        l.targetKindRaw == sKind &&
+                        l.targetID == sID &&
+                        l.graphID == gid
+                    }
+                )
+            } else {
+                incomingFD = FetchDescriptor<MetaLink>(
+                    predicate: #Predicate { l in
+                        l.targetKindRaw == sKind &&
+                        l.targetID == sID
+                    }
+                )
+            }
+
             let incoming = try modelContext.fetch(incomingFD)
             existingIncomingSources = Set(incoming.map { NodeRefKey(kind: $0.sourceKind, id: $0.sourceID) })
         } catch {

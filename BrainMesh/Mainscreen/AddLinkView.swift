@@ -125,29 +125,53 @@ struct AddLinkView: View {
         let tID = target.id
         let gid = graphID
 
-        let forwardFD = FetchDescriptor<MetaLink>(
-            predicate: #Predicate { l in
-                l.sourceKindRaw == sKind &&
-                l.sourceID == sID &&
-                l.targetKindRaw == tKind &&
-                l.targetID == tID &&
-                (gid == nil || l.graphID == gid)
-            }
-        )
+        let forwardFD: FetchDescriptor<MetaLink>
+        if let gid {
+            forwardFD = FetchDescriptor<MetaLink>(
+                predicate: #Predicate { l in
+                    l.sourceKindRaw == sKind &&
+                    l.sourceID == sID &&
+                    l.targetKindRaw == tKind &&
+                    l.targetID == tID &&
+                    l.graphID == gid
+                }
+            )
+        } else {
+            forwardFD = FetchDescriptor<MetaLink>(
+                predicate: #Predicate { l in
+                    l.sourceKindRaw == sKind &&
+                    l.sourceID == sID &&
+                    l.targetKindRaw == tKind &&
+                    l.targetID == tID
+                }
+            )
+        }
 
         let forwardExists = ((try? modelContext.fetchCount(forwardFD)) ?? 0) > 0
 
         var reverseExists = false
         if createBidirectional {
-            let reverseFD = FetchDescriptor<MetaLink>(
-                predicate: #Predicate { l in
-                    l.sourceKindRaw == tKind &&
-                    l.sourceID == tID &&
-                    l.targetKindRaw == sKind &&
-                    l.targetID == sID &&
-                    (gid == nil || l.graphID == gid)
-                }
-            )
+            let reverseFD: FetchDescriptor<MetaLink>
+            if let gid {
+                reverseFD = FetchDescriptor<MetaLink>(
+                    predicate: #Predicate { l in
+                        l.sourceKindRaw == tKind &&
+                        l.sourceID == tID &&
+                        l.targetKindRaw == sKind &&
+                        l.targetID == sID &&
+                        l.graphID == gid
+                    }
+                )
+            } else {
+                reverseFD = FetchDescriptor<MetaLink>(
+                    predicate: #Predicate { l in
+                        l.sourceKindRaw == tKind &&
+                        l.sourceID == tID &&
+                        l.targetKindRaw == sKind &&
+                        l.targetID == sID
+                    }
+                )
+            }
             reverseExists = ((try? modelContext.fetchCount(reverseFD)) ?? 0) > 0
         }
 

@@ -233,7 +233,7 @@ struct EntitiesHomeView: View {
                 AttachmentCleanup.deleteAttachments(ownerKind: .attribute, ownerID: attr.id, in: modelContext)
             }
 
-            deleteLinks(referencing: .entity, id: entity.id, graphID: entity.graphID ?? activeGraphID)
+            LinkCleanup.deleteLinks(referencing: .entity, id: entity.id, graphID: entity.graphID ?? activeGraphID, in: modelContext)
             modelContext.delete(entity)
         }
 
@@ -245,33 +245,6 @@ struct EntitiesHomeView: View {
         }
     }
 
-    private func deleteLinks(referencing kind: NodeKind, id: UUID, graphID: UUID?) {
-        let k = kind.rawValue
-        let nodeID = id
-        let gid = graphID
-
-        let fdSource = FetchDescriptor<MetaLink>(
-            predicate: #Predicate { l in
-                l.sourceKindRaw == k &&
-                l.sourceID == nodeID &&
-                (gid == nil || l.graphID == gid)
-            }
-        )
-        if let links = try? modelContext.fetch(fdSource) {
-            for l in links { modelContext.delete(l) }
-        }
-
-        let fdTarget = FetchDescriptor<MetaLink>(
-            predicate: #Predicate { l in
-                l.targetKindRaw == k &&
-                l.targetID == nodeID &&
-                (gid == nil || l.graphID == gid)
-            }
-        )
-        if let links = try? modelContext.fetch(fdTarget) {
-            for l in links { modelContext.delete(l) }
-        }
-    }
 }
 
 private struct EntityDetailRouteView: View {
