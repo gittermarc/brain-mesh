@@ -10,32 +10,37 @@ import SwiftData
 import UniformTypeIdentifiers
 
 struct NodeAttachmentsManageView: View {
-    @Environment(\.modelContext) private var modelContext
+    // NOTE: Kept non-private because this view is split across multiple files.
+    // Swift `private` is file-scoped, and extensions in other files would not be able to access it.
+    @Environment(\.modelContext) var modelContext
 
     let ownerKind: NodeKind
     let ownerID: UUID
     let graphID: UUID?
 
-    @State private var attachments: [AttachmentListItem] = []
-    @State private var totalCount: Int = 0
-    @State private var isLoading: Bool = false
-    @State private var hasMore: Bool = true
-    @State private var offset: Int = 0
-    @State private var didLoadOnce: Bool = false
+    // NOTE: These are intentionally not `private` because the implementation is split into
+    // multiple files via extensions (Loading / Actions / Import).
+    @State var attachments: [AttachmentListItem] = []
+    @State var totalCount: Int = 0
+    @State var isLoading: Bool = false
+    @State var hasMore: Bool = true
+    @State var offset: Int = 0
+    @State var didLoadOnce: Bool = false
 
-    @StateObject private var importProgress = ImportProgressState()
+    @StateObject var importProgress = ImportProgressState()
 
-    @State private var isImportingFile: Bool = false
-    @State private var isPickingVideo: Bool = false
+    @State var isImportingFile: Bool = false
+    @State var isPickingVideo: Bool = false
 
-    @State private var videoPlayback: VideoPlaybackRequest? = nil
-    @State private var attachmentPreviewSheet: AttachmentPreviewSheetState? = nil
+    @State var videoPlayback: VideoPlaybackRequest? = nil
+    @State var attachmentPreviewSheet: AttachmentPreviewSheetState? = nil
 
-    @State private var infoMessage: String? = nil
-    @State private var errorMessage: String? = nil
+    @State var infoMessage: String? = nil
+    @State var errorMessage: String? = nil
 
-    private let pageSize: Int = 40
-    private let maxBytes: Int = 25 * 1024 * 1024
+    // NOTE: Used by split extensions.
+    let pageSize: Int = 40
+    let maxBytes: Int = 25 * 1024 * 1024
 
     var body: some View {
         listView
@@ -220,270 +225,9 @@ struct NodeAttachmentsManageView: View {
         )
     }
 
-    // MARK: - Loading
-
-    @MainActor
-    private func loadInitialIfNeeded() async {
-        if didLoadOnce { return }
-        didLoadOnce = true
-
-        await MediaAllLoader.shared.migrateLegacyGraphIDIfNeeded(
-            ownerKindRaw: ownerKind.rawValue,
-            ownerID: ownerID,
-            graphID: graphID
-        )
-
-        await refresh()
-    }
-
-    @MainActor
-    private func refresh() async {
-        isLoading = true
-        offset = 0
-        hasMore = true
-        attachments = []
-
-        let counts = await MediaAllLoader.shared.fetchCounts(
-            ownerKindRaw: ownerKind.rawValue,
-            ownerID: ownerID,
-            graphID: graphID
-        )
-
-        totalCount = counts.attachments
-        await loadMore(force: true)
-
-        isLoading = false
-    }
-
-    @MainActor
-    private func loadMore(force: Bool = false) async {
-        if isLoading && !force { return }
-        if !hasMore { return }
-
-        isLoading = true
-
-        let page = await MediaAllLoader.shared.fetchAttachmentPage(
-            ownerKindRaw: ownerKind.rawValue,
-            ownerID: ownerID,
-            graphID: graphID,
-            offset: offset,
-            limit: pageSize
-        )
-
-        let existing = Set(attachments.map(\.id))
-        let filtered = page.filter { !existing.contains($0.id) }
-
-        if filtered.isEmpty {
-            hasMore = false
-            isLoading = false
-            return
-        }
-
-        attachments.append(contentsOf: filtered)
-        offset += page.count
-        hasMore = attachments.count < totalCount
-
-        isLoading = false
-    }
-
-    // MARK: - Open
-
-    @MainActor
-    private func openAttachment(_ item: AttachmentListItem) async {
-        guard let url = await AttachmentHydrator.shared.ensureFileURL(
-            attachmentID: item.id,
-            fileExtension: item.fileExtension,
-            localPath: item.localPath
-        ) else {
-            errorMessage = "Vorschau ist nicht verfügbar (keine Datei gefunden)."
-            return
-        }
-
-        let isVideo = AttachmentStore.isVideo(contentTypeIdentifier: item.contentTypeIdentifier)
-            || ["mov", "mp4", "m4v"].contains(item.fileExtension.lowercased())
-
-        if isVideo {
-            videoPlayback = VideoPlaybackRequest(url: url, title: item.title)
-            return
-        }
-
-        attachmentPreviewSheet = AttachmentPreviewSheetState(
-            url: url,
-            title: item.title,
-            contentTypeIdentifier: item.contentTypeIdentifier,
-            fileExtension: item.fileExtension
-        )
-    }
-
-    // MARK: - Delete
-
-    @MainActor
-    private func deleteAttachment(attachmentID: UUID) {
-        let id = attachmentID
-        let fd = FetchDescriptor<MetaAttachment>(predicate: #Predicate { a in
-            a.id == id
-        })
-
-        guard let att = (try? modelContext.fetch(fd))?.first else {
-            errorMessage = "Anhang konnte nicht gefunden werden."
-            return
-        }
-
-        AttachmentCleanup.deleteCachedFiles(for: att)
-        modelContext.delete(att)
-        try? modelContext.save()
-
-        attachments.removeAll { $0.id == attachmentID }
-        totalCount = max(0, totalCount - 1)
-        hasMore = attachments.count < totalCount
-    }
-
-    // MARK: - Import
-
-    private func requestFileImport() {
-        if isImportingFile { return }
-        isImportingFile = true
-    }
-
-    private func requestVideoPick() {
-        if isPickingVideo { return }
-        isPickingVideo = true
-    }
-
-    private func importFile(from url: URL) {
-        Task { @MainActor in
-            importProgress.begin(
-                title: "Importiere Datei…",
-                subtitle: url.lastPathComponent,
-                totalUnitCount: 2,
-                indeterminate: false
-            )
-            await Task.yield()
-
-            do {
-                let attachmentID = UUID()
-
-                importProgress.updateSubtitle("Vorbereiten…")
-                let prepared = try await Task.detached(priority: .userInitiated) {
-                    try AttachmentImportPipeline.prepareFileImport(
-                        from: url,
-                        attachmentID: attachmentID,
-                        maxBytes: maxBytes
-                    )
-                }.value
-
-                importProgress.setCompleted(1)
-
-                let att = MetaAttachment(
-                    id: prepared.id,
-                    ownerKind: ownerKind,
-                    ownerID: ownerID,
-                    graphID: graphID,
-                    contentKind: prepared.inferredKind,
-                    title: prepared.title,
-                    originalFilename: prepared.originalFilename,
-                    contentTypeIdentifier: prepared.contentTypeIdentifier,
-                    fileExtension: prepared.fileExtension,
-                    byteCount: prepared.byteCount,
-                    fileData: prepared.fileData,
-                    localPath: prepared.localPath
-                )
-
-                modelContext.insert(att)
-                try? modelContext.save()
-
-                if prepared.isGalleryImage {
-                    infoMessage = "Dieses Bild wurde zur Galerie einsortiert. Öffne „Bilder verwalten“, um es zu sehen."
-                }
-
-                importProgress.setCompleted(2)
-                importProgress.finish(finalSubtitle: "Fertig")
-
-                await refresh()
-            } catch {
-                importProgress.finish(finalSubtitle: "Fehlgeschlagen")
-                errorMessage = error.localizedDescription
-            }
-        }
-    }
-
-    @MainActor
-    private func handlePickedVideo(_ result: Result<PickedVideo, Error>) async {
-        isPickingVideo = false
-
-        switch result {
-        case .success(let picked):
-            await importVideoFromURL(
-                picked.url,
-                suggestedFilename: picked.suggestedFilename,
-                contentTypeIdentifier: picked.contentTypeIdentifier,
-                fileExtension: picked.fileExtension
-            )
-        case .failure(let error):
-            if let pickerError = error as? VideoPickerError, pickerError == .cancelled {
-                return
-            }
-            errorMessage = error.localizedDescription
-        }
-    }
-
-    @MainActor
-    private func importVideoFromURL(
-        _ url: URL,
-        suggestedFilename: String,
-        contentTypeIdentifier: String,
-        fileExtension: String
-    ) async {
-        importProgress.begin(
-            title: "Importiere Video…",
-            subtitle: suggestedFilename.isEmpty ? "Video" : suggestedFilename,
-            totalUnitCount: 2,
-            indeterminate: false
-        )
-        await Task.yield()
-
-        do {
-            let attachmentID = UUID()
-
-            importProgress.updateSubtitle("Vorbereiten…")
-            let prepared = try await Task.detached(priority: .userInitiated) {
-                try AttachmentImportPipeline.prepareVideoImport(
-                    from: url,
-                    attachmentID: attachmentID,
-                    suggestedFilename: suggestedFilename,
-                    contentTypeIdentifier: contentTypeIdentifier,
-                    fileExtension: fileExtension,
-                    maxBytes: maxBytes
-                )
-            }.value
-
-            importProgress.setCompleted(1)
-
-            let att = MetaAttachment(
-                id: prepared.id,
-                ownerKind: ownerKind,
-                ownerID: ownerID,
-                graphID: graphID,
-                contentKind: prepared.inferredKind,
-                title: prepared.title,
-                originalFilename: prepared.originalFilename,
-                contentTypeIdentifier: prepared.contentTypeIdentifier,
-                fileExtension: prepared.fileExtension,
-                byteCount: prepared.byteCount,
-                fileData: prepared.fileData,
-                localPath: prepared.localPath
-            )
-
-            modelContext.insert(att)
-            try? modelContext.save()
-
-            importProgress.setCompleted(2)
-            importProgress.finish(finalSubtitle: "Fertig")
-
-            await refresh()
-        } catch {
-            importProgress.finish(finalSubtitle: "Fehlgeschlagen")
-            errorMessage = error.localizedDescription
-        }
-    }
+    // MARK: - Implementation Split
+    // The implementation of this view is split into separate files to keep this host view small.
+    // - Loading: NodeAttachmentsManageView+Loading.swift
+    // - Actions (open/delete): NodeAttachmentsManageView+Actions.swift
+    // - Import (file/video): NodeAttachmentsManageView+Import.swift
 }
