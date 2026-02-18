@@ -20,6 +20,11 @@ struct ContentView: View {
 
             GraphStatsView()
                 .tabItem { Label("Stats", systemImage: "chart.bar") }
+
+            NavigationStack {
+                SettingsView(showDoneButton: false)
+            }
+            .tabItem { Label("Einstellungen", systemImage: "gearshape") }
         }
     }
 }

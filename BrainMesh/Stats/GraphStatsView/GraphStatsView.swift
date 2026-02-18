@@ -21,8 +21,6 @@ struct GraphStatsView: View {
     @Query(sort: [SortDescriptor(\MetaGraph.createdAt, order: .forward)])
     private var graphs: [MetaGraph]
 
-    @State private var showSettings = false
-
     // These states are read by section extensions in other files, therefore they cannot be `private`.
     @State var total: GraphCounts? = nil
     @State var perGraph: [UUID?: GraphCounts] = [:]
@@ -113,17 +111,6 @@ struct GraphStatsView: View {
             }
             .refreshable {
                 startReload(graphIDs: uniqueGraphs.map(\.id))
-            }
-            .toolbar {
-                ToolbarItem(placement: .topBarTrailing) {
-                    Button { showSettings = true } label: {
-                        Image(systemName: "gearshape")
-                    }
-                    .accessibilityLabel("Einstellungen")
-                }
-            }
-            .sheet(isPresented: $showSettings) {
-                NavigationStack { SettingsView() }
             }
         }
     }

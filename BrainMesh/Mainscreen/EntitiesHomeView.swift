@@ -21,7 +21,6 @@ struct EntitiesHomeView: View {
     @State private var searchText = ""
     @State private var showAddEntity = false
     @State private var showGraphPicker = false
-    @State private var showSettings = false
 
     @AppStorage("BMOnboardingHidden") private var onboardingHidden: Bool = false
     @AppStorage("BMOnboardingCompleted") private var onboardingCompleted: Bool = false
@@ -153,11 +152,6 @@ struct EntitiesHomeView: View {
                 }
                 ToolbarItemGroup(placement: .topBarTrailing) {
                     Button { showAddEntity = true } label: { Image(systemName: "plus") }
-
-                    Button { showSettings = true } label: {
-                        Image(systemName: "gearshape")
-                    }
-                    .accessibilityLabel("Einstellungen")
                 }
             }
             .sheet(isPresented: $showAddEntity) {
@@ -165,9 +159,6 @@ struct EntitiesHomeView: View {
             }
             .sheet(isPresented: $showGraphPicker) {
                 GraphPickerSheet()
-            }
-            .sheet(isPresented: $showSettings) {
-                NavigationStack { SettingsView() }
             }
             .task(id: taskToken) {
                 let folded = BMSearch.fold(searchText)

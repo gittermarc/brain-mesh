@@ -10,6 +10,12 @@ import SwiftUI
 import SwiftData
 
 struct SettingsView: View {
+    let showDoneButton: Bool
+
+    init(showDoneButton: Bool = false) {
+        self.showDoneButton = showDoneButton
+    }
+
     @Environment(\.dismiss) private var dismiss
     @Environment(\.modelContext) private var modelContext
     @EnvironmentObject private var onboarding: OnboardingCoordinator
@@ -144,8 +150,10 @@ struct SettingsView: View {
             )
         }
         .toolbar {
-            ToolbarItem(placement: .topBarTrailing) {
-                Button("Fertig") { dismiss() }
+            if showDoneButton {
+                ToolbarItem(placement: .topBarTrailing) {
+                    Button("Fertig") { dismiss() }
+                }
             }
         }
     }
@@ -171,7 +179,7 @@ struct SettingsView: View {
 
 #Preview {
     NavigationStack {
-        SettingsView()
+        SettingsView(showDoneButton: false)
             .environmentObject(OnboardingCoordinator())
     }
 }

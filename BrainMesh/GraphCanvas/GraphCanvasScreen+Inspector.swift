@@ -185,7 +185,7 @@ extension GraphCanvasScreen {
 
                 Section("App") {
                     NavigationLink {
-                        SettingsView()
+                        SettingsView(showDoneButton: false)
                     } label: {
                         Label("Einstellungen", systemImage: "gearshape")
                     }
