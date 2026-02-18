@@ -30,7 +30,8 @@ struct AttributeDetailHeroAndToolbelt: View {
                 imagePath: imagePath,
                 title: $title,
                 subtitle: subtitle,
-                pills: pills
+                pills: pills,
+                isTitleEditable: false
             )
 
             NodeToolbelt {

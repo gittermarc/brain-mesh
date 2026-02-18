@@ -106,6 +106,14 @@ struct BrainMeshApp: App {
         Task.detached(priority: .utility) {
             await NodePickerLoader.shared.configure(container: AnyModelContainer(containerForNodePickerLoader))
         }
+
+
+        // P0.X: Provide the container to the NodeRenameService.
+        // Renaming entities/attributes must also update denormalized link labels off-main.
+        let containerForNodeRenameService = sharedModelContainer
+        Task.detached(priority: .utility) {
+            await NodeRenameService.shared.configure(container: AnyModelContainer(containerForNodeRenameService))
+        }
     }
 
     var body: some Scene {

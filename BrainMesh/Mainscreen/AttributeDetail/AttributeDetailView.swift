@@ -40,6 +40,8 @@ struct AttributeDetailView: View {
 
     @State var confirmDelete: Bool = false
 
+    @State var showRenameSheet: Bool = false
+
     @State var isImportingFile: Bool = false
     @State var isPickingVideo: Bool = false
 

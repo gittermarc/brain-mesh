@@ -42,6 +42,8 @@ struct EntityDetailView: View {
     @State var showNotesEditor: Bool = false
 
     @State var confirmDelete: Bool = false
+
+    @State var showRenameSheet: Bool = false
     @State var errorMessage: String? = nil
 
     @State var connectionsSegment: NodeLinkDirectionSegment = .outgoing

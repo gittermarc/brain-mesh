@@ -1,247 +1,201 @@
-# PROJECT_CONTEXT.md
-_Last updated: 2026-02-18_
+# PROJECT_CONTEXT
+
+> Stand: 2026-02-18 (basierend auf Repository-Inhalt im ZIP)
 
 ## TL;DR
-BrainMesh is an iOS/iPadOS app (SwiftUI + SwiftData) for building and exploring personal “knowledge graphs”: Graphs contain Entities and Attributes, connected by Links, with Images/Files as Attachments. Minimum deployment target: iOS 26.0 (from Xcode build settings).
+BrainMesh ist eine SwiftUI-App (Minimum **iOS 26.0**) zum Erstellen und Erkunden von Wissens-Graphen. Persistenz & Sync laufen über **SwiftData + CloudKit (private DB, `.automatic`)** (siehe `BrainMesh/BrainMeshApp.swift`). Die Kernobjekte sind Graphen, Entitäten, Attribute, Links und Anhänge; der Graph kann optional per Face ID/Passwort gesperrt werden.
 
 ## Key Concepts / Domänenbegriffe
-- **Graph**: Ein Container/Scope für Daten (Multi-Graph). Aktiv über `@AppStorage("BMActiveGraphID")`. `BrainMesh/GraphSession.swift`, `BrainMesh/ContentView.swift`.
-- **Entity (MetaEntity)**: Primäres Objekt im Graph (z.B. “Projekt”, “Person”). Hat optional Icon + Bild + Notizen. `BrainMesh/Models.swift`.
-- **Attribute (MetaAttribute)**: Kind-Objekt einer Entity (z.B. “Status”, “Telefonnummer”). `owner: MetaEntity?`. `BrainMesh/Models.swift`.
-- **Link (MetaLink)**: Kante zwischen zwei Nodes (Entity/Attribute), speichert Source/Target als (Kind, UUID) + optional Note. `BrainMesh/Models.swift`.
-- **Attachment (MetaAttachment)**: Datei/Video/etc. “gehört” zu Entity/Attribute via `ownerKindRaw + ownerID`. Datei-Bytes in SwiftData als `.externalStorage`. Lokale Preview-Datei in App Support Cache. `BrainMesh/Attachments/MetaAttachment.swift`, `BrainMesh/Attachments/AttachmentStore.swift`.
-- **Graph Canvas**: Interaktive Visualisierung (Physik + Canvas-Rendering, Lens/Spotlight). `BrainMesh/GraphCanvas/*`.
-- **Graph Lock**: Optionaler Schutz pro Graph (Biometrics / Passwort). `BrainMesh/Security/*`.
+- **Graph**: Workspace/Scope für Daten (Multi-Graph), optional geschützt. Modell: `BrainMesh/Models.swift` (`MetaGraph`).
+- **Entität**: “Knoten” (z.B. Person/Projekt), gehört zu einem Graph (`graphID`). Modell: `BrainMesh/Models.swift` (`MetaEntity`).
+- **Attribut**: Unterobjekt einer Entität (1:n), ebenfalls graph-scoped. Modell: `BrainMesh/Models.swift` (`MetaAttribute`, `MetaEntity.attributes`).
+- **Link**: Kante zwischen zwei Nodes (Entität/Attribut), graph-scoped. Modell: `BrainMesh/Models.swift` (`MetaLink`, `NodeKind`).
+- **Attachment**: Datei/Video/Galeriebild, hängt an Entität oder Attribut (Owner via `(ownerKindRaw, ownerID)` statt Relationship). Modell: `BrainMesh/Attachments/MetaAttachment.swift` (`MetaAttachment`, `AttachmentContentKind`).
+- **Graph Scope / activeGraphID**: Aktiver Graph wird via `@AppStorage("BMActiveGraphID")` gehalten (z.B. `BrainMesh/AppRootView.swift`, `BrainMesh/ContentView.swift`).
+- **Hydration**: Hintergrundarbeit, die aus synchronisierten Bytes lokale Cache-Files erzeugt (z.B. Bild-/Attachment-Cache), um UI/Preview schnell zu machen. Siehe `BrainMesh/ImageHydrator.swift`, `BrainMesh/Attachments/AttachmentHydrator.swift`.
+- **Lens / WorkMode**: Canvas-Filter/Interaktionsmodus (Explore/Edit etc.). Siehe `BrainMesh/GraphCanvas/GraphCanvasScreen.swift` und `BrainMesh/GraphCanvas/GraphCanvasTypes.swift`.
 
 ## Architecture Map
-Textuelles Abhängigkeitsmodell (→ = “nutzt”):
+**UI (SwiftUI Views)**
+- Root Tabs: `BrainMesh/ContentView.swift` (Tabs: Entitäten / Graph / Stats / Einstellungen)
+- App orchestration (Startup, scenePhase, auto-hydration, auto-lock): `BrainMesh/AppRootView.swift`
+- Home/Detail/Flows: `BrainMesh/Mainscreen/*`
+- Graph Canvas: `BrainMesh/GraphCanvas/*`
+- Stats: `BrainMesh/Stats/*`
+- Settings: `BrainMesh/Settings/SettingsView.swift`
+- Graph management: `BrainMesh/GraphPickerSheet.swift` + `BrainMesh/GraphPicker/*`
+- Onboarding: `BrainMesh/Onboarding/*`
 
-- **App/Bootstrap**
-  - `BrainMesh/BrainMeshApp.swift` → erstellt `ModelContainer` + konfiguriert Loader/Hydrator + startet Bootstrap.
-  - `BrainMesh/AppRootView.swift` → ScenePhase/Lock-Policy + Root-Navigation.
-  - `BrainMesh/ContentView.swift` → Tab-Bar (Home / Graph / Stats).
+**Domain Model (SwiftData)**
+- Schema + Container: `BrainMesh/BrainMeshApp.swift` (Schema: `MetaGraph`, `MetaEntity`, `MetaAttribute`, `MetaLink`, `MetaAttachment`)
+- Models: `BrainMesh/Models.swift`, `BrainMesh/Attachments/MetaAttachment.swift`
 
-- **Domain Model (SwiftData)**
-  - `BrainMesh/Models.swift`, `BrainMesh/Attachments/MetaAttachment.swift`
-  - UI/Loader greifen **nur** über IDs/DTOs über Actor-Grenzen.
-
-- **Storage & Caches**
-  - Images: `BrainMesh/ImageStore.swift`, `BrainMesh/ImageHydrator.swift`
-  - Attachments: `BrainMesh/Attachments/AttachmentStore.swift`, `BrainMesh/Attachments/AttachmentHydrator.swift`, `BrainMesh/Attachments/AttachmentThumbnailStore.swift`
-
-- **Loaders (off-main Snapshots)**
+**Data Access / Background Loaders (off-main Snapshots)**
+- Pattern: actor + background `ModelContext` via `AnyModelContainer`, Rückgabe als value-only DTO.
+- Beispiele:
   - `BrainMesh/Mainscreen/EntitiesHomeLoader.swift`
-  - `BrainMesh/Mainscreen/NodePickerLoader.swift`
-  - `BrainMesh/Mainscreen/NodeDetailShared/NodeConnectionsLoader.swift`
   - `BrainMesh/GraphCanvas/GraphCanvasDataLoader.swift`
   - `BrainMesh/Stats/GraphStatsLoader.swift`
+  - `BrainMesh/Mainscreen/NodeDetailShared/NodeConnectionsLoader.swift`
+  - `BrainMesh/Mainscreen/NodePickerLoader.swift`
   - `BrainMesh/Attachments/MediaAllLoader.swift`
 
-- **UI (SwiftUI)**
-  - Mainscreen: `BrainMesh/Mainscreen/*`
-  - Graph Canvas: `BrainMesh/GraphCanvas/*`
-  - Stats: `BrainMesh/Stats/*`
-  - Settings: `BrainMesh/Settings/*`, Appearance: `BrainMesh/Appearance/*`
+**Caching & Filesystem**
+- Images: `BrainMesh/ImageStore.swift` (Memory + Disk: Application Support / `BrainMeshImages`)
+- Attachments: `BrainMesh/Attachments/AttachmentStore.swift` (Application Support / `BrainMeshAttachments`)
+- Thumbnails: `BrainMesh/Attachments/AttachmentThumbnailStore.swift` (NSCache + Disk + QuickLook/AV/ImageIO)
 
-## Folder Map (Ordner → Zweck)
-- `BrainMesh/` (Root):
-  - `BrainMeshApp.swift` (App + ModelContainer + Configure)
-  - `AppRootView.swift` (Root + Lock/ScenePhase)
-  - `ContentView.swift` (Tabs)
-  - `Models.swift` (SwiftData Modelle: Graph/Entity/Attribute/Link + Helpers)
-  - `ImageStore.swift`, `ImageHydrator.swift` (Bildcache)
-  - `GraphBootstrap.swift` (Default-Graph + Legacy-Migration)
-  - `GraphPickerSheet.swift` (Graph-Auswahl/Manage)
-- `BrainMesh/Mainscreen/`: Home/Detail Screens + Picker/Link Flows.
-  - `EntityDetail/`, `AttributeDetail/`, `NodeDetailShared/` (geteilte Detail-Bausteine)
-- `BrainMesh/GraphCanvas/`: Canvas Screen, View, Loader, Rendering/Physics, Inspector, Expand etc.
-- `BrainMesh/Stats/`: Stats View (Sections), Loader + Service + UI Components.
-- `BrainMesh/Attachments/`: Attachment Model, Cache/Thumbnail Pipeline, Loader, Cleanup/Migration.
-- `BrainMesh/PhotoGallery/`: Detail-Galerie (Attachments als Bilder/Videos), Viewer/Browser.
-- `BrainMesh/Security/`: Graph Lock Coordinator + Crypto + Sheets.
-- `BrainMesh/Onboarding/`: Onboarding Coordinator + UI.
-- `BrainMesh/Settings/`: Settings + About + Display Settings.
-- `BrainMesh/Appearance/`: UI-Presets/DisplaySettings.
-- `BrainMesh/Observability/`: Mini-Logging/Timing (`BMLog`, `BMDuration`).
-- `BrainMesh/Support/`: Support Utilities (z.B. `SystemModalCoordinator`).
+**Security & Coordinators**
+- Graph Lock (Face ID / Passwort): `BrainMesh/Security/*` (z.B. `GraphLockCoordinator.swift`, `GraphUnlockView.swift`)
+- System modal tracking: `BrainMesh/Support/SystemModalCoordinator.swift` (Picker/FaceID Edge Case)
+- Appearance: `BrainMesh/Appearance/*`
 
-## Data Model Map (Entities, Relationships, wichtige Felder)
-### MetaGraph (`BrainMesh/Models.swift`)
-- `id: UUID`
-- `createdAt: Date`
-- `name: String`, `nameFolded: String` (Search)
-- Protection:
-  - `isProtected: Bool`
-  - `lockBiometricsEnabled: Bool`
-  - `lockPasswordEnabled: Bool`
-  - `passwordSaltB64`, `passwordHashB64`, `passwordIterations` (siehe `BrainMesh/Security/GraphLockCrypto.swift`)
+**Observability**
+- `BrainMesh/Observability/BMObservability.swift` (Logger + simple Timing helper)
 
-### MetaEntity (`BrainMesh/Models.swift`)
-- Graph scoping: `graphID: UUID?` (Legacy: kann `nil` sein; Migration siehe `BrainMesh/GraphBootstrap.swift`)
-- Display/Search: `name`, `nameFolded`
-- Media: `imageData: Data?`, `imagePath: String?` (lokal gecached JPEG)
-- UI: `iconSymbolName: String?`
-- Notes: `note: String`
-- Relationship: `attributesList: [MetaAttribute]` (`.cascade` delete)
+## Folder Map
+- `BrainMesh/Appearance/` — UI-Appearance/Theme Models + Store (AppStorage/EnvironmentObject)
+- `BrainMesh/Attachments/` — Anhänge: Modell (MetaAttachment), Cache, Hydration, Thumbnails, Preview/Import
+- `BrainMesh/GraphCanvas/` — Interaktiver Graph (Canvas), Physics/Rendering, DataLoader/Snapshots
+- `BrainMesh/GraphPicker/` — Graph-Auswahl/Management (Rename/Delete/Dedupe Services, Rows)
+- `BrainMesh/Icons/` — Icon Picker (kuratierte SF Symbols, Recents, All Symbols Picker)
+- `BrainMesh/Images/` — Bild-Import/Decode-Pipeline
+- `BrainMesh/ImportProgress/` — UI für Import-Progress/Status (z.B. bei Attachments/Media)
+- `BrainMesh/Mainscreen/` — Home + Detail-Screens (Entities/Attributes), Links, Bulk-Aktionen, NodeDetailShared
+- `BrainMesh/Observability/` — Micro-Logging/Timing Helpers (os.Logger, Duration)
+- `BrainMesh/Onboarding/` — Onboarding Coordinator + Sheet + Steps/Progress
+- `BrainMesh/PhotoGallery/` — Detail-only Galerie (MetaAttachment.contentKind == .galleryImage), Browser/Viewer
+- `BrainMesh/Security/` — Graph Lock (Biometrie/Passwort), Crypto, Unlock/SetPassword Sheets
+- `BrainMesh/Settings/` — Settings UI (Wartung, Appearance, Onboarding Trigger, Cache-Tools)
+- `BrainMesh/Stats/` — Stats Tab: Loader + Service + UI Komponenten (KPI/Charts/Trends)
+- `BrainMesh/Support/` — App-weite kleine Helper/Coordinators (z.B. SystemModalCoordinator)
 
-### MetaAttribute (`BrainMesh/Models.swift`)
-- Graph scoping: `graphID: UUID?`
-- Display/Search: `name`, `nameFolded`, `searchLabel`, `searchLabelFolded`
-- Media/UI/Notes: analog zu Entity
-- Relationship: `owner: MetaEntity?`
+## Data Model Map (SwiftData)
+> Quelle: `BrainMesh/BrainMeshApp.swift`, `BrainMesh/Models.swift`, `BrainMesh/Attachments/MetaAttachment.swift`
 
-### MetaLink (`BrainMesh/Models.swift`)
-- `graphID: UUID?`
-- `createdAt: Date`
-- `note: String?`
-- Source/Target als value-pairs:
-  - `sourceKindRaw: Int`, `sourceID: UUID`
-  - `targetKindRaw: Int`, `targetID: UUID`
-  - `sourceLabel`, `targetLabel` (denormalized labels for UI)
+### `MetaGraph` (`BrainMesh/Models.swift`)
+- Felder: `id`, `createdAt`, `name`, `nameFolded`
+- Security: `lockBiometricsEnabled`, `lockPasswordEnabled`, `passwordSaltB64`, `passwordHashB64`, `passwordIterations`
+- Derived: `isProtected`, `isPasswordConfigured`
 
-### MetaAttachment (`BrainMesh/Attachments/MetaAttachment.swift`)
-- `graphID: UUID?` (Legacy: kann `nil` sein → Migration: `BrainMesh/Attachments/AttachmentGraphIDMigration.swift`)
-- Owner reference: `ownerKindRaw: Int`, `ownerID: UUID` (Entity/Attribute)
-- File metadata: `title`, `originalFilename`, `contentTypeIdentifier`, `fileExtension`, `byteCount`
-- Blob: `fileData: Data?` marked `.externalStorage`
-- Local cache: `localPath: String?` (Application Support cache filename)
+### `MetaEntity` (`BrainMesh/Models.swift`)
+- Felder: `id`, `graphID` (optional, Migration), `name`, `nameFolded`, `notes`, `iconSymbolName`, `imageData`, `imagePath`
+- Relationship: `attributes: [MetaAttribute]?` mit `@Relationship(deleteRule: .cascade, inverse: \MetaAttribute.owner)` (Inverse wird nur hier angegeben)
+- Convenience: `attributesList` (de-dupe nach `id`), `addAttribute/removeAttribute`
+- **Hinweis:** `lock*`-Felder existieren auch auf `MetaEntity`, scheinen aber aktuell **nicht** im UI verwendet zu werden → **UNKNOWN/evtl. geplant** (siehe “Open Questions”).
+
+### `MetaAttribute` (`BrainMesh/Models.swift`)
+- Felder: `id`, `graphID`, `name`, `nameFolded`, `notes`, `iconSymbolName`, `imageData`, `imagePath`, `searchLabelFolded`
+- Owner: `owner: MetaEntity?` **ohne** `@Relationship` Macro (Kommentar: “KEIN inverse hier, sonst Macro-Zirkularität”)
+
+### `MetaLink` (`BrainMesh/Models.swift`)
+- Felder: `id`, `createdAt`, `note`, `graphID`
+- Source/Target: `sourceKindRaw/sourceID/sourceLabel`, `targetKindRaw/targetID/targetLabel`
+- Derived: `sourceKind`, `targetKind` (via `NodeKind`)
+
+### `MetaAttachment` (`BrainMesh/Attachments/MetaAttachment.swift`)
+- Felder: `id`, `createdAt`, `graphID`
+- Owner (ohne Relationship): `ownerKindRaw`, `ownerID`
+- Inhalt: `contentKindRaw` (`file` / `video` / `galleryImage`)
+- Metadaten: `title`, `originalFilename`, `contentTypeIdentifier` (UTType), `fileExtension`, `byteCount`
+- Bytes: `fileData` mit `@Attribute(.externalStorage)` (SwiftData external storage; CloudKit “asset style”)
+- Lokaler Cache: `localPath` (Application Support)
 
 ## Sync/Storage
-### SwiftData + CloudKit
-- Persistent Store: SwiftData `ModelContainer` mit CloudKit `.automatic`. `BrainMesh/BrainMeshApp.swift`.
-- CloudKit Container: `iCloud.de.marcfechner.BrainMesh` (Entitlement: `BrainMesh/BrainMesh.entitlements`).
-- Offline-Verhalten:
-  - SwiftData persistiert lokal; CloudKit Sync läuft opportunistisch im Hintergrund (kein custom Sync-Code im Repo sichtbar).
-  - Conflict/Merge Policy: **UNKNOWN** (keine explizite Merge-Policy im Code gefunden; SwiftData defaults).
+> Fakten aus `BrainMesh/BrainMeshApp.swift`, `BrainMesh/BrainMesh.entitlements`, `BrainMesh/Info.plist`
 
-### Local Caches / Hydration
-- Images:
-  - Cache folder + size metrics: `BrainMesh/ImageStore.swift`
-  - Progressive hydration (off-main) setzt `imagePath` + schreibt JPEG: `BrainMesh/ImageHydrator.swift`
-- Attachments:
-  - Cache folder: `BrainMesh/Attachments/AttachmentStore.swift` (Application Support/BrainMeshAttachments)
-  - On-demand file materialization for preview: `AttachmentStore.ensurePreviewURL(for:)`
-  - Background hydrator (throttled, deduped): `BrainMesh/Attachments/AttachmentHydrator.swift`
-  - Thumbnail pipeline (memory + disk + throttled generation): `BrainMesh/Attachments/AttachmentThumbnailStore.swift`
+- Persistenz: SwiftData `ModelContainer` mit Schema (siehe oben).
+- Cloud Sync: `ModelConfiguration(schema: ..., cloudKitDatabase: .automatic)` in `BrainMesh/BrainMeshApp.swift`.
+- Fallback: In **Release** wird bei CloudKit-Init-Fehler auf lokale Konfiguration ohne CloudKit zurückgefallen (siehe `#if DEBUG`-Block in `BrainMesh/BrainMeshApp.swift`).
+- iCloud Container: `iCloud.de.marcfechner.BrainMesh` (siehe `BrainMesh/BrainMesh.entitlements`).
+- Background Mode: `remote-notification` (siehe `BrainMesh/Info.plist`) → typischerweise für CloudKit-Push/SwiftData Sync, **keine** eigene Push-Implementierung im Code gefunden.
+- Attachments: `MetaAttachment.fileData` ist external storage; lokale Cache-Files werden über `AttachmentHydrator` & `AttachmentStore` erzeugt/verwaltet.
+- Images: Hauptbilder werden als `imageData` im Model gehalten und über `ImageHydrator` in Disk-Cache (`ImageStore`) “hydratisiert”.
 
 ### Migration / Legacy
-- GraphID Legacy:
-  - Startup migration: `BrainMesh/GraphBootstrap.swift` (`migrateLegacyRecordsIfNeeded`)
-- Attachment Graph scoping:
-  - `BrainMesh/Attachments/AttachmentGraphIDMigration.swift` (vermeidet OR-Predicates mit `graphID == nil`)
+- Graph scoping migration für alte Records ohne `graphID`:
+  - `BrainMesh/GraphBootstrap.swift` (Entities/Attributes/Links → Default-Graph)
+  - `BrainMesh/Attachments/AttachmentGraphIDMigration.swift` (Attachments: owner-scoped Migration ohne OR-Predicate)
+- App-Startup ruft `GraphBootstrap` auf: `BrainMesh/AppRootView.swift` (`bootstrapGraphing()`).
 
-## UI Map (Hauptscreens + Navigation + wichtige Sheets/Flows)
-### Root
-- `BrainMesh/AppRootView.swift`
-  - Root gating: Graph Lock Sheet via `GraphLockCoordinator.activeRequest`
-  - ScenePhase handling + debounce bei System-Modals (`SystemModalCoordinator`) um PhotoPicker/Hidden-Album nicht zu resetten.
+## UI Map (Screens, Navigation, wichtige Sheets)
+### Root Navigation
+- TabView: `BrainMesh/ContentView.swift`
+  - **Entitäten**: `BrainMesh/Mainscreen/EntitiesHomeView.swift`
+  - **Graph**: `BrainMesh/GraphCanvas/GraphCanvasScreen.swift`
+  - **Stats**: `BrainMesh/Stats/GraphStatsView/GraphStatsView.swift`
+  - **Einstellungen**: `BrainMesh/Settings/SettingsView.swift` (in `NavigationStack`)
 
-### Tabs
-- `BrainMesh/ContentView.swift`
-  - Tab 1: **Entities (Home)** → `BrainMesh/Mainscreen/EntitiesHomeView.swift`
-  - Tab 2: **Graph** → `BrainMesh/GraphCanvas/GraphCanvasScreen.swift`
-  - Tab 3: **Stats** → `BrainMesh/Stats/GraphStatsView/GraphStatsView.swift`
+### Wichtige Flows (Auswahl)
+- Graph wechseln / verwalten: `BrainMesh/GraphPickerSheet.swift` (+ UI in `BrainMesh/GraphPicker/*`)
+- Entität hinzufügen: Sheet `AddEntityView` (öffnet aus `EntitiesHomeView`)
+- Detailansichten:
+  - Entität: `BrainMesh/Mainscreen/EntityDetail/EntityDetailView.swift`
+  - Attribut: `BrainMesh/Mainscreen/AttributeDetail/AttributeDetailView.swift`
+  - Shared Komponenten: `BrainMesh/Mainscreen/NodeDetailShared/*`
+- Links:
+  - Link hinzufügen: `BrainMesh/Mainscreen/AddLinkView.swift`
+  - Bulk-Link: `BrainMesh/Mainscreen/BulkLinkView.swift`
+  - Query-Building: `BrainMesh/Mainscreen/NodeLinksQueryBuilder.swift`
+- Anhänge / Medien:
+  - Attachments Section: `BrainMesh/Attachments/AttachmentsSection*.swift`
+  - Thumbnail/Preview: `BrainMesh/Attachments/AttachmentThumbnailStore.swift`, `AttachmentPreviewSheet.swift`
+  - Photo gallery (detail-only): `BrainMesh/PhotoGallery/*`
 
-### Home / Detail
-- Home list + search + Add Entity + Settings + Graph picker:
-  - `BrainMesh/Mainscreen/EntitiesHomeView.swift`
-  - Navigation: `EntityDetailRouteView` (resolves by ID via `@Query`).
-- Entity/Attribute Details:
-  - `BrainMesh/Mainscreen/EntityDetail/EntityDetailView.swift`
-  - `BrainMesh/Mainscreen/AttributeDetail/AttributeDetailView.swift`
-  - Shared sections/sheets:
-    - Connections: `BrainMesh/Mainscreen/NodeDetailShared/NodeDetailShared+Connections.swift`
-    - Media sections: `.../NodeDetailShared+Media*.swift`
-    - “Anhänge verwalten” sheet: `.../NodeDetailShared+Sheets.Attachments.swift`
-    - Links sheet etc: `.../NodeDetailShared+Sheets.Links.swift`
-
-### Graph Canvas
-- Screen host + sheets:
-  - `BrainMesh/GraphCanvas/GraphCanvasScreen.swift` (+ extension files in same folder)
-  - Graph picker sheet: `BrainMesh/GraphPickerSheet.swift`
-  - Inspector sheet: `GraphCanvasScreen` (see `GraphCanvasScreen+Inspector.swift` etc)
-- Loading off-main:
-  - `BrainMesh/GraphCanvas/GraphCanvasDataLoader.swift`
-- Rendering/Physics:
-  - `BrainMesh/GraphCanvas/GraphCanvasView+Rendering.swift`
-  - `BrainMesh/GraphCanvas/GraphCanvasView+Physics.swift`
-
-### Stats
-- Host: `BrainMesh/Stats/GraphStatsView/GraphStatsView.swift`
-- Off-main snapshot:
-  - `BrainMesh/Stats/GraphStatsLoader.swift`
-  - Services: `BrainMesh/Stats/GraphStatsService/*`
-- Settings entry:
-  - `BrainMesh/Settings/SettingsView.swift`
+### Security UX
+- Graph unlock / set password / security sheet: `BrainMesh/Security/*`
+- AppRoot scenePhase + auto-lock debounce: `BrainMesh/AppRootView.swift`
+- System picker edge-case handling: `BrainMesh/Support/SystemModalCoordinator.swift`
 
 ## Build & Configuration
 - Xcode project: `BrainMesh/BrainMesh.xcodeproj`
-- Targets (from `project.pbxproj`):
-  - App: `BrainMesh` (bundle id: `de.marcfechner.BrainMesh`)
-  - Unit tests: `BrainMeshTests`
-  - UI tests: `BrainMeshUITests`
-- Deployment target: iOS 26.0 (`IPHONEOS_DEPLOYMENT_TARGET` in `project.pbxproj`)
-- Entitlements: `BrainMesh/BrainMesh.entitlements`
-  - CloudKit container + aps-environment=development
-- Info.plist: `BrainMesh/Info.plist`
-  - Background modes: `remote-notification`
-  - `NSFaceIDUsageDescription`
+- Targets (pbxproj): App + Unit Tests + UI Tests (`BrainMesh`, `BrainMeshTests`, `BrainMeshUITests`)
+- Minimum iOS: **iOS 26.0** (Build Setting `IPHONEOS_DEPLOYMENT_TARGET = 26.0` in `BrainMesh.xcodeproj/project.pbxproj`)
+- Bundle ID: **de.marcfechner.BrainMesh** (pbxproj)
+- Entitlements: `BrainMesh/BrainMesh.entitlements` (iCloud container + CloudKit + APS env)
+- Info.plist: `BrainMesh/Info.plist` (FaceID usage + background remote-notification)
+- SPM Dependencies: **keine** `Package.resolved` gefunden; pbxproj enthält keine `repositoryURL` → vermutlich keine externen Packages.
 
-SPM:
-- **No `Package.resolved` found** in the repo snapshot → likely no Swift Package dependencies. **UNKNOWN** if local packages exist outside the zip.
+## Conventions (Naming, Patterns, Do/Don't)
+### SwiftData / Queries
+- **Do:** Store-translatable Predicates bevorzugen, OR vermeiden (siehe `BrainMesh/Mainscreen/NodeLinksQueryBuilder.swift`, `BrainMesh/Attachments/AttachmentGraphIDMigration.swift`).
+- **Do:** Graph-scope konsequent als `graphID == gid` ausdrücken, statt `(graphID == nil || graphID == gid)`, wo Migration existiert.
+- **Don't:** `@Model` Instanzen über Concurrency-Grenzen schicken. Stattdessen DTO/Snapshots (siehe `EntitiesHomeLoader.swift` Kommentar).
 
-## Conventions (Naming, Patterns, Do/Don’t)
-### Patterns that are “the house style”
-- **Off-main loading via actor + detached `ModelContext`** returning DTO snapshots:
-  - Examples: `GraphCanvasDataLoader`, `GraphStatsLoader`, `EntitiesHomeLoader`, `NodePickerLoader`, `NodeConnectionsLoader`.
-- **No SwiftData `@Model` across concurrency boundaries** (use DTOs + `id`).
-- **Graph scoping**: prefer predicates like `x.graphID == gid` (no `(== gid || == nil)`), because OR can trigger in-memory filtering.
-  - See rationale in `BrainMesh/Attachments/AttachmentGraphIDMigration.swift`.
+### Concurrency / Loader Pattern
+- **Do:** actor-Loader mit `configure(container:)` in `BrainMesh/BrainMeshApp.swift` (detached, priority `.utility`), dann in Views `.task { await loader.load... }`.
+- **Do:** Throttling bei teurer I/O-Arbeit (`AsyncLimiter` in `BrainMesh/Attachments/AttachmentThumbnailStore.swift`).
 
-### Do
-- Use `BMSearch.fold(...)` and `nameFolded`/`searchLabelFolded` for case/diacritic-insensitive search (`BrainMesh/Models.swift`).
-- Cancel long-running tasks when inputs change (pattern: keep `@State var loadTask` and cancel on `onDisappear` / `onChange`).
-  - Example: `BrainMesh/GraphCanvas/GraphCanvasScreen.swift`, `BrainMesh/Stats/GraphStatsView/GraphStatsView.swift`.
+### UI Files
+- Große Views werden in `+*.swift` Partial-Files gesplittet (z.B. `GraphCanvasScreen+*.swift`, `GraphStatsView+*.swift`, `AttachmentsSection+*.swift`).
 
-### Don’t
-- Don’t do `modelContext.fetch(...)` in SwiftUI render paths (`body`, `computed var` used by body).
-- Don’t use unbounded concurrent thumbnail generation (use `AttachmentThumbnailStore` throttle).
-- Don’t keep `graphID == nil` fallback logic in hot queries after bootstrap/migrations.
-
-## How to work on this project (Setup + wo anfangen)
+## How to work on this project (Setup + Einstieg)
 ### Setup Checklist
-- [ ] Open `BrainMesh/BrainMesh.xcodeproj`
-- [ ] Select target `BrainMesh`, choose a device/simulator with iOS ≥ 26.0
-- [ ] For CloudKit sync tests: run on a real device logged into iCloud and with proper signing:
-  - Capabilities must include iCloud/CloudKit using container `iCloud.de.marcfechner.BrainMesh` (`BrainMesh/BrainMesh.entitlements`).
-  - **UNKNOWN**: which Apple Developer Team ID is required (not extracted here).
-- [ ] For Graph Lock / Face ID: real device recommended (simulator behavior differs).
-- [ ] First launch: verify bootstrap created a default graph (`BrainMesh/GraphBootstrap.swift`).
+- [ ] `BrainMesh/BrainMesh.xcodeproj` öffnen
+- [ ] iOS Simulator/Device mit **iOS 26.0+** auswählen
+- [ ] (Für Cloud Sync) iCloud in Xcode Signing & Capabilities aktiv, Container `iCloud.de.marcfechner.BrainMesh` muss existieren
+- [ ] Build & Run
+- [ ] Erster Start: AppRoot führt Graph-Bootstrap + Migration aus (`BrainMesh/AppRootView.swift`)
 
-### “Wo anfangen” for new devs
-- Read `BrainMesh/BrainMeshApp.swift` first (container + bootstrap + configure).
-- Then `BrainMesh/AppRootView.swift` (scene phase + lock) and `BrainMesh/ContentView.swift` (tabs).
-- For data model: `BrainMesh/Models.swift` + `BrainMesh/Attachments/MetaAttachment.swift`.
-- For hot paths: `BrainMesh/GraphCanvas/*`, `BrainMesh/Mainscreen/NodeDetailShared/*`, `BrainMesh/Attachments/*`.
-
-### Adding a feature (typical workflow)
-- [ ] Decide scope: per-graph or global. If per-graph, make sure new records carry `graphID`.
-- [ ] If you add a SwiftData model:
-  - Add `@Model` type and include it in schema in `BrainMesh/BrainMeshApp.swift`.
-  - Add folded/search fields if needed (follow pattern in `Models.swift`).
-- [ ] If UI needs “big” data: add an actor loader returning DTOs (follow `EntitiesHomeLoader`).
-- [ ] Hook loader/hydrator config in `BrainMesh/BrainMeshApp.swift` (configure with `AnyModelContainer`).
-- [ ] Add logging in hot path via `BMLog` + `BMDuration` (`BrainMesh/Observability/BMObservability.swift`).
+### Wo anfangen (für neue Devs)
+- Datenmodell verstehen: `BrainMesh/Models.swift`, `BrainMesh/Attachments/MetaAttachment.swift`
+- Root Navigation: `BrainMesh/ContentView.swift`, `BrainMesh/AppRootView.swift`
+- Hot UI: `BrainMesh/Mainscreen/EntitiesHomeView.swift`, `BrainMesh/GraphCanvas/GraphCanvasScreen.swift`
+- Loader Pattern anschauen: `BrainMesh/Mainscreen/EntitiesHomeLoader.swift`, `BrainMesh/GraphCanvas/GraphCanvasDataLoader.swift`
 
 ## Quick Wins (max. 10, konkret)
-1. Split `BrainMesh/Mainscreen/NodeDetailShared/NodeDetailShared+Sheets.Attachments.swift` into smaller files (Loading / Import / Row UI). (Compile-time + readability)
-2. Add a “hard” graphID normalization task that runs once per launch in background for remaining `graphID == nil` records (entities/attrs/links), then delete legacy OR predicates everywhere. (`BrainMesh/GraphBootstrap.swift`)
-3. Add cancellation to any `.task Ellipsis` that can overlap (use stored `Task` like in Stats/Canvas) in the remaining heavy sheets (e.g. attachments manage sheet).
-4. Centralize `AnyModelContainer` into a single file (currently defined inside `BrainMesh/Attachments/AttachmentHydrator.swift`) to avoid “where is this type?” friction.
-5. Add a tiny “FetchDescriptor helpers” module for graph-scoped predicates (reduces copy/paste and OR mistakes).
-6. Move heavy sorting (e.g. large sets in pickers) into loaders; keep UI-level sorting only for small arrays.
-7. Add a debug-only “SwiftData fetch timing” wrapper (log slow fetches > X ms) to identify accidental main-thread queries.
-8. Add unit tests for `GraphLockCrypto` password hashing/verification (`BrainMesh/Security/GraphLockCrypto.swift`).
-9. Add a maintenance action to purge orphaned cache files (image + attachment thumbnails) not referenced in DB.
-10. Add a small “Data Integrity” check page in Settings (counts mismatches, missing local cache file ratios).
+1. **AsyncLimiter aus `AttachmentThumbnailStore.swift` extrahieren** nach `BrainMesh/Support/AsyncLimiter.swift` und überall importieren (nutzen: `ImageHydrator.swift`, `AttachmentHydrator.swift`, `AttachmentThumbnailStore.swift`). Vorteil: weniger “Utility in Random File”.
+2. **Unbenutzten Code markieren/entfernen:** `BrainMesh/GraphSession.swift` scheint aktuell unreferenziert → entweder nutzen (z.B. als reactive activeGraph source) oder löschen.
+3. **Lock-Felder auf Entity/Attribute evaluieren:** `MetaEntity.lock*` / `MetaAttribute.lock*` existieren, UI nutzt aber Graph-Lock (`BrainMesh/Security/*`). Entscheiden: implementieren oder entfernen (sonst Migrations-/Sync-Ballast).
+4. **GraphBootstrap @MainActor Entlastung**: `GraphBootstrap.migrateLegacyRecordsIfNeeded` kann bei vielen Legacy-Records dauern. Option: in Hintergrund-Kontext (actor) + progress, UI nur “once” triggern.
+5. **Konsequente DTO-Grenzen**: prüfen, ob irgendwo noch `@Model` aus Loader-Actor in UI gelangt (z.B. neue Features). Regel: nur IDs/DTOs.
+6. **Thumbnail Disk Cache Cleanup Policy**: ergänzen: `AttachmentThumbnailStore` Disk-Cache (Settings) getrennt von AttachmentCache löschen.
+7. **`imageData` Größenbudget enforce**: sicherstellen, dass alle Importpfade über `Images/ImageImportPipeline.swift` laufen (CloudKit pressure).
+8. **Centralize file-system folder names**: `ImageStore.folderName`, `AttachmentStore.folderName` als Konstanten in `Support/StoragePaths.swift` (reduziert Drift).
+9. **Logging Gate**: `BMLog` Kategorien erweitern (z.B. `thumb`, `hydrator`) und Debug/Release Policy vereinheitlichen.
+10. **Tests für Migration**: 1–2 Unit Tests für `GraphBootstrap` / `AttachmentGraphIDMigration` (Target `BrainMeshTests`).
 
+## Open Questions (UNKNOWNs)
+- **Entity/Attribute Locking:** Lock-Felder auf `MetaEntity`/`MetaAttribute` wirken aktuell ungenutzt im UI (**UNKNOWN** ob geplant).
+- **Collaboration/Sharing:** Keine direkte CloudKit Share/Collab-Implementierung im Code gefunden; Sync läuft über SwiftData CloudKit private DB (**UNKNOWN** ob später geplant).
+- **Secrets Handling:** Keine `.xcconfig`/Secrets-Datei gefunden (**UNKNOWN**, ob es versteckt/extern gelöst ist).

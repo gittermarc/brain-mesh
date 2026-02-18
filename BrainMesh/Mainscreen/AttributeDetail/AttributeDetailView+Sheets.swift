@@ -32,9 +32,24 @@ extension AttributeDetailView {
             }
             .navigationTitle(attribute.name.isEmpty ? "Attribut" : attribute.name)
             .navigationBarTitleDisplayMode(.inline)
+            .sheet(isPresented: $showRenameSheet) {
+                NodeRenameSheet(
+                    kindTitle: "Attribut",
+                    originalName: attribute.name,
+                    onSave: { newName in
+                        try await renameAttribute(to: newName)
+                    }
+                )
+            }
             .toolbar {
                 ToolbarItem(placement: .primaryAction) {
                     Menu {
+                        Button {
+                            showRenameSheet = true
+                        } label: {
+                            Label("Umbenennen…", systemImage: "pencil")
+                        }
+
                         Button(role: .destructive) {
                             confirmDelete = true
                         } label: {
@@ -180,6 +195,25 @@ extension AttributeDetailView {
                     )
                 }
             }
+    }
+
+    // MARK: - Rename
+
+    @MainActor
+    fileprivate func renameAttribute(to newName: String) async throws {
+        let cleaned = newName.trimmingCharacters(in: .whitespacesAndNewlines)
+        if cleaned.isEmpty { return }
+
+        let current = attribute.name.trimmingCharacters(in: .whitespacesAndNewlines)
+        if cleaned == current { return }
+
+        attribute.name = cleaned
+        try modelContext.save()
+
+        await NodeRenameService.shared.relabelLinksAfterAttributeRename(
+            attributeID: attribute.id,
+            graphID: attribute.graphID
+        )
     }
 
     func deleteAttribute() {

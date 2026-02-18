@@ -36,6 +36,12 @@ extension EntityDetailView {
             .toolbar {
                 ToolbarItem(placement: .primaryAction) {
                     Menu {
+                        Button {
+                            showRenameSheet = true
+                        } label: {
+                            Label("Umbenennen…", systemImage: "pencil")
+                        }
+
                         Button(role: .destructive) {
                             confirmDelete = true
                         } label: {
@@ -93,6 +99,15 @@ extension EntityDetailView {
             }
             .sheet(isPresented: $showAddAttribute) {
                 AddAttributeView(entity: entity)
+            }
+            .sheet(isPresented: $showRenameSheet) {
+                NodeRenameSheet(
+                    kindTitle: "Entität",
+                    originalName: entity.name,
+                    onSave: { newName in
+                        try await renameEntity(to: newName)
+                    }
+                )
             }
             .sheet(isPresented: $showGalleryBrowser) {
                 NavigationStack {
@@ -184,6 +199,25 @@ extension EntityDetailView {
                     )
                 }
             }
+    }
+
+    // MARK: - Rename
+
+    @MainActor
+    fileprivate func renameEntity(to newName: String) async throws {
+        let cleaned = newName.trimmingCharacters(in: .whitespacesAndNewlines)
+        if cleaned.isEmpty { return }
+
+        let current = entity.name.trimmingCharacters(in: .whitespacesAndNewlines)
+        if cleaned == current { return }
+
+        entity.name = cleaned
+        try modelContext.save()
+
+        await NodeRenameService.shared.relabelLinksAfterEntityRename(
+            entityID: entity.id,
+            graphID: entity.graphID
+        )
     }
 
     // MARK: - Delete
