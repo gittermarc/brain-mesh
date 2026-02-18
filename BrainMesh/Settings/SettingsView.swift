@@ -52,7 +52,7 @@ struct SettingsView: View {
                         Task { @MainActor in
                             guard isRebuildingImageCache == false else { return }
                             isRebuildingImageCache = true
-                            await ImageHydrator.forceRebuild(using: modelContext)
+                            await ImageHydrator.shared.forceRebuild()
                             isRebuildingImageCache = false
                             refreshCacheSizes()
                             alertState = AlertState(

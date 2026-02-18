@@ -169,7 +169,7 @@ struct AppRootView: View {
         guard (now - imageHydratorLastAutoRun) >= minInterval else { return }
 
         // Only update the timestamp if a pass actually executed (run-once guard might skip).
-        let didRun = await ImageHydrator.hydrateIncremental(using: modelContext, runOncePerLaunch: true)
+        let didRun = await ImageHydrator.shared.hydrateIncremental(runOncePerLaunch: true)
         if didRun {
             imageHydratorLastAutoRun = now
         }

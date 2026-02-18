@@ -54,6 +54,13 @@ struct BrainMeshApp: App {
             await AttachmentHydrator.shared.configure(container: AnyModelContainer(containerForHydrator))
         }
 
+        // P0.1: Provide the container to the image hydrator.
+        // ImageHydrator performs SwiftData fetches + cache file writes; do it off-main.
+        let containerForImageHydrator = sharedModelContainer
+        Task.detached(priority: .utility) {
+            await ImageHydrator.shared.configure(container: AnyModelContainer(containerForImageHydrator))
+        }
+
         // Also provide the container to the media loader used by the "Alle" media screen.
         // This avoids blocking the main thread with SwiftData fetches during navigation.
         let containerForMediaLoader = sharedModelContainer

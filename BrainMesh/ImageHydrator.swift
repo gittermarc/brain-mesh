@@ -7,33 +7,74 @@
 
 import Foundation
 import SwiftData
+import os
 
-@MainActor
-enum ImageHydrator {
+/// Progressive hydration for the local image cache.
+///
+/// Why this exists:
+/// - Records can sync to a device with `imageData` / `imagePath`, while the deterministic JPEG
+///   file is not yet cached locally.
+/// - Creating those cache files (and setting `imagePath`) must not block the UI.
+///
+/// Design:
+/// - Uses a background `ModelContext` created from a configured `ModelContainer`.
+/// - Runs hydration passes serialized via a tiny async semaphore.
+/// - Keeps a run-once-per-launch guard for the incremental pass.
+actor ImageHydrator {
 
-    private static var didRunIncrementalThisLaunch: Bool = false
+    static let shared = ImageHydrator()
+
+    private var container: AnyModelContainer? = nil
+    private var didRunIncrementalThisLaunch: Bool = false
+
+    /// Serialize passes so we don't compete on disk work.
+    private let passLimiter = AsyncLimiter(maxConcurrent: 1)
+
+    private let log = Logger(subsystem: "BrainMesh", category: "ImageHydrator")
+
+    func configure(container: AnyModelContainer) {
+        self.container = container
+        #if DEBUG
+        log.debug("✅ configured")
+        #endif
+    }
 
     /// Incremental hydration (cheap): only scans records where `imageData != nil`.
     /// Additionally, this method is guarded to run at most once per app launch by default.
     /// - Returns: `true` if a hydration pass was executed (i.e. not skipped by the run-once guard).
-    static func hydrateIncremental(using modelContext: ModelContext, runOncePerLaunch: Bool = true) async -> Bool {
+    func hydrateIncremental(runOncePerLaunch: Bool = true) async -> Bool {
+        guard container != nil else {
+            #if DEBUG
+            log.debug("⚠️ skipped incremental hydration (not configured)")
+            #endif
+            return false
+        }
+
         if runOncePerLaunch {
             guard didRunIncrementalThisLaunch == false else { return false }
             didRunIncrementalThisLaunch = true
         }
 
-        await hydrate(using: modelContext, mode: .incremental)
+        await hydrate(mode: .incremental)
         return true
     }
 
     /// Manual repair/rebuild: rewrites cached JPEGs for all records with `imageData != nil`.
     /// Intended to be triggered from Settings.
-    static func forceRebuild(using modelContext: ModelContext) async {
-        await hydrate(using: modelContext, mode: .forceRebuild)
+    func forceRebuild() async {
+        guard container != nil else {
+            #if DEBUG
+            log.debug("⚠️ skipped rebuild (not configured)")
+            #endif
+            return
+        }
+        await hydrate(mode: .forceRebuild)
     }
 
     /// On-demand hydration (Selection): ensures the deterministic cached JPEG exists locally.
     /// Returns the deterministic filename if the cache file exists (after the operation).
+    ///
+    /// This does not touch SwiftData and is safe to call from any context.
     static func ensureCachedJPEGExists(stableID: UUID, jpegData: Data?) async -> String? {
         guard let d = jpegData, !d.isEmpty else { return nil }
 
@@ -57,86 +98,95 @@ enum ImageHydrator {
         case forceRebuild
     }
 
-    private static func hydrate(using modelContext: ModelContext, mode: HydrationMode) async {
-        var changed = false
-        let forceWrite = (mode == .forceRebuild)
+    private func hydrate(mode: HydrationMode) async {
+        // IMPORTANT:
+        // The closure passed to `passLimiter.withPermit { ... }` executes in the limiter actor's isolation.
+        // It must NOT access `ImageHydrator` actor-isolated state (like `self.container`).
+        // So we copy what we need *here* and use only the copy inside the limiter.
+        let configuredContainer = self.container
+        let limiter = self.passLimiter
 
-        // Entities (only those with imageData)
-        do {
-            let fd = FetchDescriptor<MetaEntity>(predicate: #Predicate<MetaEntity> { e in
-                e.imageData != nil
-            })
-            let ents = try modelContext.fetch(fd)
-            for e in ents {
-                let did = await hydrateEntity(e, forceWrite: forceWrite)
-                if did { changed = true }
-            }
-        } catch {
-            // ignore
-        }
+        guard let configuredContainer else { return }
 
-        // Attributes (only those with imageData)
-        do {
-            let fd = FetchDescriptor<MetaAttribute>(predicate: #Predicate<MetaAttribute> { a in
-                a.imageData != nil
-            })
-            let attrs = try modelContext.fetch(fd)
-            for a in attrs {
-                let did = await hydrateAttribute(a, forceWrite: forceWrite)
-                if did { changed = true }
-            }
-        } catch {
-            // ignore
-        }
+        await limiter.withPermit {
+            await Task.detached(priority: .utility) {
+                let forceWrite = (mode == .forceRebuild)
 
-        if changed {
-            try? modelContext.save()
+                let context = ModelContext(configuredContainer.container)
+                context.autosaveEnabled = false
+
+                // Entities (only those with imageData)
+                do {
+                    let fd = FetchDescriptor<MetaEntity>(predicate: #Predicate<MetaEntity> { e in
+                        e.imageData != nil
+                    })
+                    let ents = try context.fetch(fd)
+                    for e in ents {
+                        await ImageHydrator.hydrateEntity(e, forceWrite: forceWrite)
+                    }
+                } catch {
+                    // ignore
+                }
+
+                // Attributes (only those with imageData)
+                do {
+                    let fd = FetchDescriptor<MetaAttribute>(predicate: #Predicate<MetaAttribute> { a in
+                        a.imageData != nil
+                    })
+                    let attrs = try context.fetch(fd)
+                    for a in attrs {
+                        await ImageHydrator.hydrateAttribute(a, forceWrite: forceWrite)
+                    }
+                } catch {
+                    // ignore
+                }
+
+                // Only save if we actually changed SwiftData records.
+                // Writing cache files does not require a save.
+                if context.hasChanges {
+                    try? context.save()
+                }
+            }.value
         }
     }
 
-    private static func hydrateEntity(_ e: MetaEntity, forceWrite: Bool) async -> Bool {
-        guard let d = e.imageData, !d.isEmpty else { return false }
+    private static func hydrateEntity(_ e: MetaEntity, forceWrite: Bool) async {
+        guard let d = e.imageData, !d.isEmpty else { return }
 
         let filename = "\(e.id.uuidString).jpg"
-        var didChange = false
 
         if e.imagePath != filename {
             e.imagePath = filename
-            didChange = true
         }
 
         if !forceWrite, ImageStore.fileExists(path: filename) {
-            return didChange
+            return
         }
 
         do {
             _ = try await ImageStore.saveJPEGAsync(d, preferredName: filename)
-            return true
         } catch {
-            return didChange
+            return
         }
     }
 
-    private static func hydrateAttribute(_ a: MetaAttribute, forceWrite: Bool) async -> Bool {
-        guard let d = a.imageData, !d.isEmpty else { return false }
+    private static func hydrateAttribute(_ a: MetaAttribute, forceWrite: Bool) async {
+        guard let d = a.imageData, !d.isEmpty else { return }
 
         let filename = "\(a.id.uuidString).jpg"
-        var didChange = false
 
         if a.imagePath != filename {
             a.imagePath = filename
-            didChange = true
         }
 
         if !forceWrite, ImageStore.fileExists(path: filename) {
-            return didChange
+            return
         }
 
         do {
             _ = try await ImageStore.saveJPEGAsync(d, preferredName: filename)
-            return true
         } catch {
-            return didChange
+            return
         }
     }
 }
