@@ -43,6 +43,8 @@ struct IconPickerView: View {
                             noResultsSection
                         }
                     } else {
+                        allSymbolsNavigationRow
+
                         if !recentSymbols.isEmpty {
                             symbolGridSection(title: "Zuletzt verwendet", symbols: recentSymbols)
                         }
@@ -106,6 +108,45 @@ struct IconPickerView: View {
 
     private var recentSymbols: [String] {
         RecentSymbolStore.decode(recentRaw)
+    }
+
+    private var allSymbolsNavigationRow: some View {
+        NavigationLink {
+            AllSFSymbolsPickerView(selectedSymbol: selection) { picked in
+                select(picked)
+            }
+        } label: {
+            HStack(spacing: 12) {
+                ZStack {
+                    RoundedRectangle(cornerRadius: 12)
+                        .fill(.ultraThinMaterial)
+                        .overlay(
+                            RoundedRectangle(cornerRadius: 12)
+                                .stroke(AnyShapeStyle(Color.secondary.opacity(0.35)), lineWidth: 1)
+                        )
+                    Image(systemName: "square.grid.2x2")
+                        .font(.system(size: 16, weight: .semibold))
+                        .foregroundStyle(.primary)
+                }
+                .frame(width: 56, height: 44)
+
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("Alle SF Symbols …")
+                        .font(.body)
+                    Text("Systemkatalog durchsuchen")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+
+                Spacer()
+
+                Image(systemName: "chevron.right")
+                    .foregroundStyle(.secondary)
+            }
+            .padding(.vertical, 6)
+        }
+        .buttonStyle(.plain)
+        .padding(.top, 2)
     }
 
     private var directSymbolCandidate: String? {
