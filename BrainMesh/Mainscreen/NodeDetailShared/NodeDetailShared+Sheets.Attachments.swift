@@ -194,7 +194,11 @@ struct NodeAttachmentsManageView: View {
                 Label("Video hinzufügen", systemImage: "video.badge.plus")
             }
         } label: {
-            Image(systemName: "paperclip.badge.plus")
+            Image(systemName: "plus.circle")
+                .imageScale(.large)
+                .padding(.vertical, 6)
+                .padding(.horizontal, 8)
+                .contentShape(Rectangle())
         }
         .accessibilityLabel("Anhang hinzufügen")
     }
@@ -205,10 +209,14 @@ struct NodeAttachmentsManageView: View {
                 await handlePickedVideo(result)
             }
         }
+        .frame(width: 0, height: 0)
+
     }
 
     private var videoPlaybackBackground: some View {
         VideoPlaybackPresenter(request: $videoPlayback)
+        .frame(width: 0, height: 0)
+
     }
 
     private var infoAlertPresented: Binding<Bool> {

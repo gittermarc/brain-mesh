@@ -101,7 +101,7 @@ struct AttachmentsSection: View {
                     Label("Video aus Fotos", systemImage: "video")
                 }
             } label: {
-                Label("Anhang hinzufügen", systemImage: "paperclip.badge.plus")
+                Label("Anhang hinzufügen", systemImage: "paperclip")
             }
         } header: {
             DetailSectionHeader(
