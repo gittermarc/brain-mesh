@@ -142,7 +142,7 @@ struct EntityDetailView: View {
                             attachments: mediaPreview.attachmentPreview,
                             galleryCount: mediaPreview.galleryCount,
                             attachmentCount: mediaPreview.attachmentCount,
-                            onOpenAll: {},
+                            onOpenAll: { showGalleryBrowser = true },
                             onManage: { showMediaManageChooser = true },
                             onManageGallery: { showGalleryBrowser = true },
                             onTapGallery: { id in

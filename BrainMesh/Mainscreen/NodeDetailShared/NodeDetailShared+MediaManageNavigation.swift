@@ -45,22 +45,28 @@ struct NodeMediaCard: View {
             } else {
                 if galleryCount > 0 {
                     VStack(alignment: .leading, spacing: 8) {
-                        Text("Fotos")
-                            .font(.caption.weight(.semibold))
-                            .foregroundStyle(.secondary)
+                        sectionSubtitle("Fotos", count: galleryCount)
 
                         NodeGalleryThumbGrid(
                             attachments: Array(galleryImages.prefix(6)),
                             onTap: onTapGallery
                         )
+
+                        if galleryCount > 6 {
+                            Button(action: onOpenAll) {
+                                Label("Alle Fotos anzeigen", systemImage: "photo.stack")
+                                    .font(.callout.weight(.semibold))
+                                    .frame(maxWidth: .infinity)
+                            }
+                            .buttonStyle(.bordered)
+                            .controlSize(.small)
+                        }
                     }
                 }
 
                 if attachmentCount > 0 {
                     VStack(alignment: .leading, spacing: 8) {
-                        Text("Anhänge")
-                            .font(.caption.weight(.semibold))
-                            .foregroundStyle(.secondary)
+                        sectionSubtitle("Anhänge", count: attachmentCount)
 
                         if attachments.isEmpty {
                             Text("Anhänge werden geladen …")
@@ -107,5 +113,21 @@ struct NodeMediaCard: View {
             RoundedRectangle(cornerRadius: 24, style: .continuous)
                 .stroke(Color.secondary.opacity(0.12))
         )
+    }
+
+    @ViewBuilder
+    private func sectionSubtitle(_ title: String, count: Int) -> some View {
+        HStack(alignment: .firstTextBaseline, spacing: 6) {
+            Text(title)
+                .font(.caption.weight(.semibold))
+                .foregroundStyle(.secondary)
+
+            Text("\(count)")
+                .font(.caption2.weight(.semibold))
+                .foregroundStyle(.secondary)
+                .padding(.horizontal, 6)
+                .padding(.vertical, 2)
+                .background(.quaternary, in: Capsule())
+        }
     }
 }
