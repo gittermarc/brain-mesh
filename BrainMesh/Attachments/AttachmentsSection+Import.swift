@@ -27,9 +27,25 @@ extension AttachmentsSection {
             do {
                 let attachmentID = UUID()
 
-                importProgress.updateSubtitle("Vorbereiten…")
+                // UX polish: show "Komprimiere…" early if we can see the file is a large video.
+                let compressionEnabled = VideoImportPreferences.isCompressionEnabled()
+                var willCompressVideo: Bool = false
+                if compressionEnabled {
+                    let scoped = url.startAccessingSecurityScopedResource()
+                    defer { if scoped { url.stopAccessingSecurityScopedResource() } }
+
+                    let fileSize = (try? url.resourceValues(forKeys: [.fileSizeKey]).fileSize) ?? 0
+                    if fileSize > maxBytes {
+                        let contentType = (try? url.resourceValues(forKeys: [.contentTypeKey]).contentType)?.identifier ?? ""
+                        let kind = AttachmentImportPipeline.inferKind(contentTypeIdentifier: contentType, fileExtension: url.pathExtension)
+                        willCompressVideo = (kind == .video)
+                    }
+                }
+
+                importProgress.updateSubtitle(willCompressVideo ? "Komprimiere…" : "Vorbereiten…")
+
                 let prepared = try await Task.detached(priority: .userInitiated) {
-                    try AttachmentImportPipeline.prepareFileImport(
+                    try await AttachmentImportPipeline.prepareFileImport(
                         from: url,
                         attachmentID: attachmentID,
                         maxBytes: maxBytes
@@ -108,9 +124,14 @@ extension AttachmentsSection {
         do {
             let attachmentID = UUID()
 
-            importProgress.updateSubtitle("Vorbereiten…")
+            // UX polish: show "Komprimiere…" early if the picked video is above the limit.
+            let compressionEnabled = VideoImportPreferences.isCompressionEnabled()
+            let fileSize = (try? url.resourceValues(forKeys: [.fileSizeKey]).fileSize) ?? 0
+            let willCompress = compressionEnabled && fileSize > maxBytes
+            importProgress.updateSubtitle(willCompress ? "Komprimiere…" : "Vorbereiten…")
+
             let prepared = try await Task.detached(priority: .userInitiated) {
-                try AttachmentImportPipeline.prepareVideoImport(
+                try await AttachmentImportPipeline.prepareVideoImport(
                     from: url,
                     attachmentID: attachmentID,
                     suggestedFilename: suggestedFilename,

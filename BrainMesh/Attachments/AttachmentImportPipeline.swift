@@ -31,7 +31,7 @@ enum AttachmentImportPipeline {
         from url: URL,
         attachmentID: UUID,
         maxBytes: Int
-    ) throws -> PreparedAttachmentImport {
+    ) async throws -> PreparedAttachmentImport {
 
         let scoped = url.startAccessingSecurityScopedResource()
         defer {
@@ -44,7 +44,43 @@ enum AttachmentImportPipeline {
         let contentType = (try? url.resourceValues(forKeys: [.contentTypeKey]).contentType)?.identifier ?? ""
         let fileSize = (try? url.resourceValues(forKeys: [.fileSizeKey]).fileSize) ?? 0
 
+        let inferredKind = inferKind(contentTypeIdentifier: contentType, fileExtension: ext)
+
+        let compressionEnabled = VideoImportPreferences.isCompressionEnabled()
+        let compressionQuality = VideoImportPreferences.compressionQuality()
+
+        // If a video is larger than our max, try to compress it instead of rejecting.
         if fileSize > maxBytes {
+            if inferredKind == .video, compressionEnabled {
+                let compressed = try await VideoCompression.compressToCache(
+                    sourceURL: url,
+                    attachmentID: attachmentID,
+                    maxBytes: maxBytes,
+                    quality: compressionQuality
+                )
+
+                let data = try Data(contentsOf: compressed.outputURL, options: [.mappedIfSafe])
+                if data.count > maxBytes {
+                    AttachmentStore.delete(localPath: compressed.localFilename)
+                    throw VideoCompressionError.tooLargeAfterCompression(bytes: data.count, maxBytes: maxBytes)
+                }
+
+                let baseTitle = url.deletingPathExtension().lastPathComponent
+                let normalizedOriginal = baseTitle.isEmpty ? "Video.\(compressed.fileExtension)" : "\(baseTitle).\(compressed.fileExtension)"
+
+                return PreparedAttachmentImport(
+                    id: attachmentID,
+                    title: baseTitle.isEmpty ? "Video" : baseTitle,
+                    originalFilename: normalizedOriginal,
+                    contentTypeIdentifier: compressed.contentTypeIdentifier,
+                    fileExtension: compressed.fileExtension,
+                    byteCount: data.count,
+                    inferredKind: .video,
+                    localPath: compressed.localFilename,
+                    fileData: data
+                )
+            }
+
             throw AttachmentImportPipelineError.tooLarge(bytes: fileSize, maxBytes: maxBytes)
         }
 
@@ -62,19 +98,6 @@ enum AttachmentImportPipeline {
 
         let title = url.deletingPathExtension().lastPathComponent
 
-        let inferredKind: AttachmentContentKind
-        if let t = UTType(contentType) {
-            if t.conforms(to: .image) {
-                inferredKind = .galleryImage
-            } else if t.conforms(to: .movie) || t.conforms(to: .video) {
-                inferredKind = .video
-            } else {
-                inferredKind = .file
-            }
-        } else {
-            inferredKind = .file
-        }
-
         return PreparedAttachmentImport(
             id: attachmentID,
             title: title,
@@ -89,7 +112,7 @@ enum AttachmentImportPipeline {
     }
 
     /// Prepares a video import from a temp URL produced by the photo picker.
-    /// - Important: performs file I/O; call from a background task.
+    /// - Important: performs AVFoundation export + file I/O; call from a background task.
     static func prepareVideoImport(
         from url: URL,
         attachmentID: UUID,
@@ -97,16 +120,59 @@ enum AttachmentImportPipeline {
         contentTypeIdentifier: String,
         fileExtension: String,
         maxBytes: Int
-    ) throws -> PreparedAttachmentImport {
+    ) async throws -> PreparedAttachmentImport {
 
         let fileSize = (try? url.resourceValues(forKeys: [.fileSizeKey]).fileSize) ?? 0
+        let trimmed = fileExtension.trimmingCharacters(in: CharacterSet(charactersIn: "."))
+        let inputExt = trimmed.isEmpty ? "mov" : trimmed
+
+        let titleBase = URL(fileURLWithPath: suggestedFilename).deletingPathExtension().lastPathComponent
+        let fallbackName = suggestedFilename.isEmpty ? "Video.\(inputExt)" : suggestedFilename
+
+        let compressionEnabled = VideoImportPreferences.isCompressionEnabled()
+        let compressionQuality = VideoImportPreferences.compressionQuality()
+
+        // If the picked video is larger than our max, compress it into cache.
         if fileSize > maxBytes {
+            if compressionEnabled {
+                let compressed = try await VideoCompression.compressToCache(
+                    sourceURL: url,
+                    attachmentID: attachmentID,
+                    maxBytes: maxBytes,
+                    quality: compressionQuality
+                )
+
+                // The picker hands us a temp URL; we don't need it after exporting.
+                try? FileManager.default.removeItem(at: url)
+
+                let data = try Data(contentsOf: compressed.outputURL, options: [.mappedIfSafe])
+                if data.count > maxBytes {
+                    AttachmentStore.delete(localPath: compressed.localFilename)
+                    throw VideoCompressionError.tooLargeAfterCompression(bytes: data.count, maxBytes: maxBytes)
+                }
+
+                let normalizedTitle = titleBase.isEmpty ? "Video" : titleBase
+                let normalizedOriginal = URL(fileURLWithPath: fallbackName).deletingPathExtension().lastPathComponent
+                let originalName = normalizedOriginal.isEmpty ? "Video.\(compressed.fileExtension)" : "\(normalizedOriginal).\(compressed.fileExtension)"
+
+                return PreparedAttachmentImport(
+                    id: attachmentID,
+                    title: normalizedTitle,
+                    originalFilename: originalName,
+                    contentTypeIdentifier: compressed.contentTypeIdentifier,
+                    fileExtension: compressed.fileExtension,
+                    byteCount: data.count,
+                    inferredKind: .video,
+                    localPath: compressed.localFilename,
+                    fileData: data
+                )
+            }
+
             throw AttachmentImportPipelineError.tooLarge(bytes: fileSize, maxBytes: maxBytes)
         }
 
-        let ext = fileExtension.trimmingCharacters(in: CharacterSet(charactersIn: ".")).isEmpty ? "mov" : fileExtension
-
-        let cachedFilename = try AttachmentStore.copyIntoCache(from: url, attachmentID: attachmentID, fileExtension: ext)
+        // Otherwise: copy the temp file into cache as-is.
+        let cachedFilename = try AttachmentStore.copyIntoCache(from: url, attachmentID: attachmentID, fileExtension: inputExt)
         guard let cachedURL = AttachmentStore.url(forLocalPath: cachedFilename) else {
             throw AttachmentImportPipelineError.cacheWriteFailed
         }
@@ -120,29 +186,52 @@ enum AttachmentImportPipeline {
             throw AttachmentImportPipelineError.tooLarge(bytes: data.count, maxBytes: maxBytes)
         }
 
-        let title = URL(fileURLWithPath: suggestedFilename).deletingPathExtension().lastPathComponent
-        let originalName = suggestedFilename.isEmpty ? "Video.\(ext)" : suggestedFilename
-
         let typeID: String
         if !contentTypeIdentifier.isEmpty {
             typeID = contentTypeIdentifier
-        } else if let t = UTType(filenameExtension: ext)?.identifier {
+        } else if let t = UTType(filenameExtension: inputExt)?.identifier {
             typeID = t
         } else {
             typeID = UTType.movie.identifier
         }
+
+        let title = titleBase
+        let originalName = fallbackName
 
         return PreparedAttachmentImport(
             id: attachmentID,
             title: title.isEmpty ? "Video" : title,
             originalFilename: originalName,
             contentTypeIdentifier: typeID,
-            fileExtension: ext,
+            fileExtension: inputExt,
             byteCount: data.count,
             inferredKind: .video,
             localPath: cachedFilename,
             fileData: data
         )
+    }
+
+    static func inferKind(contentTypeIdentifier: String, fileExtension: String) -> AttachmentContentKind {
+        if let t = UTType(contentTypeIdentifier) {
+            if t.conforms(to: .image) {
+                return .galleryImage
+            }
+            if t.conforms(to: .movie) || t.conforms(to: .video) {
+                return .video
+            }
+            return .file
+        }
+
+        if let t = UTType(filenameExtension: fileExtension) {
+            if t.conforms(to: .image) {
+                return .galleryImage
+            }
+            if t.conforms(to: .movie) || t.conforms(to: .video) {
+                return .video
+            }
+        }
+
+        return .file
     }
 }
 

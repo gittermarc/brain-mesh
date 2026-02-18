@@ -20,6 +20,12 @@ struct SettingsView: View {
     @Environment(\.modelContext) private var modelContext
     @EnvironmentObject private var onboarding: OnboardingCoordinator
 
+    @AppStorage(VideoImportPreferences.compressVideosOnImportKey)
+    private var compressVideosOnImport: Bool = VideoImportPreferences.defaultCompressVideosOnImport
+
+    @AppStorage(VideoImportPreferences.videoCompressionQualityKey)
+    private var videoCompressionQualityRaw: String = VideoImportPreferences.defaultQuality.rawValue
+
     @State private var isRebuildingImageCache: Bool = false
     @State private var isClearingAttachmentCache: Bool = false
 
@@ -40,6 +46,17 @@ struct SettingsView: View {
 
     private var buildNumber: String {
         Bundle.main.object(forInfoDictionaryKey: "CFBundleVersion") as? String ?? "–"
+    }
+
+    private var qualityBinding: Binding<VideoCompression.Quality> {
+        Binding(
+            get: {
+                VideoCompression.Quality(rawValue: videoCompressionQualityRaw) ?? VideoImportPreferences.defaultQuality
+            },
+            set: { newValue in
+                videoCompressionQualityRaw = newValue.rawValue
+            }
+        )
     }
 
     var body: some View {
@@ -120,6 +137,21 @@ struct SettingsView: View {
                         .foregroundStyle(.secondary)
                         .padding(.leading, 30)
                 }
+            }
+
+            Section {
+                Toggle("Videos beim Import komprimieren", isOn: $compressVideosOnImport)
+
+                Picker("Qualität", selection: qualityBinding) {
+                    ForEach(VideoCompression.Quality.allCases) { q in
+                        Text(q.title).tag(q)
+                    }
+                }
+                .disabled(!compressVideosOnImport)
+            } header: {
+                Text("Import")
+            } footer: {
+                Text("Wenn aktiv, werden Videos nur dann komprimiert, wenn sie größer als 25 MB sind. Kleinere Videos bleiben unverändert. \n\nTipp: \"Hoch\" behält mehr Qualität (kann aber eher scheitern, wenn das Video selbst nach Komprimierung nicht unter 25 MB passt). \"Klein\" ist am sparsamsten.")
             }
 
             Section("Darstellung") {
