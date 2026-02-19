@@ -50,68 +50,6 @@ struct NodeNotesEditorView: View {
                 .accessibilityLabel(isPreview ? "Bearbeiten" : "Vorschau")
             }
         }
-        .toolbar {
-            if !isPreview {
-                ToolbarItemGroup(placement: .keyboard) {
-                    Button {
-                        MarkdownCommands.bold(text: &notes, selection: &selection)
-                    } label: {
-                        Image(systemName: "bold")
-                    }
-
-                    Button {
-                        MarkdownCommands.italic(text: &notes, selection: &selection)
-                    } label: {
-                        Image(systemName: "italic")
-                    }
-
-                    Button {
-                        MarkdownCommands.inlineCode(text: &notes, selection: &selection)
-                    } label: {
-                        Image(systemName: "chevron.left.slash.chevron.right")
-                    }
-
-                    Button {
-                        MarkdownCommands.heading1(text: &notes, selection: &selection)
-                    } label: {
-                        Text("H1")
-                            .font(.system(size: 14, weight: .semibold))
-                    }
-
-                    Button {
-                        MarkdownCommands.bulletList(text: &notes, selection: &selection)
-                    } label: {
-                        Image(systemName: "list.bullet")
-                    }
-
-                    Button {
-                        MarkdownCommands.numberedList(text: &notes, selection: &selection)
-                    } label: {
-                        Image(systemName: "list.number")
-                    }
-
-                    Button {
-                        MarkdownCommands.quote(text: &notes, selection: &selection)
-                    } label: {
-                        Image(systemName: "text.quote")
-                    }
-
-                    Button {
-                        MarkdownCommands.link(text: &notes, selection: &selection)
-                    } label: {
-                        Image(systemName: "link")
-                    }
-
-                    Spacer()
-
-                    Button {
-                        isFirstResponder = false
-                    } label: {
-                        Image(systemName: "keyboard.chevron.compact.down")
-                    }
-                }
-            }
-        }
         .background(Color(uiColor: .systemGroupedBackground).ignoresSafeArea())
         .onAppear {
             isFirstResponder = true
