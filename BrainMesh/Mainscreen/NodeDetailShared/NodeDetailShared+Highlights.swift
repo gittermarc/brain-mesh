@@ -6,6 +6,7 @@
 //
 
 import SwiftUI
+import Foundation
 import UIKit
 
 struct NodeHighlightsRow<Content: View>: View {
@@ -197,10 +198,7 @@ struct NodeNotesCard: View {
                     ctaAction: onEdit
                 )
             } else {
-                Text(trimmed)
-                    .font(.body)
-                    .foregroundStyle(.primary)
-                    .lineLimit(6)
+                MarkdownRenderedText(markdown: trimmed, lineLimit: 6)
                     .frame(maxWidth: .infinity, alignment: .leading)
             }
         }
@@ -213,27 +211,23 @@ struct NodeNotesCard: View {
     }
 }
 
-struct NodeNotesEditorView: View {
-    @Environment(\.dismiss) private var dismiss
 
-    let title: String
-    @Binding var notes: String
+struct MarkdownRenderedText: View {
+    let markdown: String
+    var lineLimit: Int? = nil
 
     var body: some View {
-        VStack(spacing: 0) {
-            TextEditor(text: $notes)
-                .padding(12)
-                .scrollContentBackground(.hidden)
-                .background(Color(uiColor: .secondarySystemBackground))
+        if let attributed = try? AttributedString(markdown: markdown) {
+            Text(attributed)
+                .font(.body)
+                .foregroundStyle(.primary)
+                .lineLimit(lineLimit)
+        } else {
+            Text(markdown)
+                .font(.body)
+                .foregroundStyle(.primary)
+                .lineLimit(lineLimit)
         }
-        .navigationTitle(title)
-        .navigationBarTitleDisplayMode(.inline)
-        .toolbar {
-            ToolbarItem(placement: .topBarLeading) {
-                Button("Fertig") { dismiss() }
-            }
-        }
-        .background(Color(uiColor: .systemGroupedBackground).ignoresSafeArea())
     }
 }
 
