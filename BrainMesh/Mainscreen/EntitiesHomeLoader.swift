@@ -19,7 +19,14 @@ struct EntitiesHomeRow: Identifiable, Hashable, Sendable {
     let id: UUID
     let name: String
     let iconSymbolName: String?
+
     let attributeCount: Int
+    let linkCount: Int?
+
+    let notesPreview: String?
+
+    let imagePath: String?
+    let hasImageData: Bool
 }
 
 /// Snapshot DTO returned to the UI.
@@ -46,9 +53,15 @@ actor EntitiesHomeLoader {
         let countsByEntityID: [UUID: Int]
     }
 
-    private var countsCache: [GraphScopeKey: CountsCacheEntry] = [:]
+    private struct LinkCountsCacheEntry: Sendable {
+        let fetchedAt: Date
+        let countsByEntityID: [UUID: Int]
+    }
 
-    /// Small TTL so counts don't stay stale for long, but typing/search doesn't repeatedly load all attributes.
+    private var countsCache: [GraphScopeKey: CountsCacheEntry] = [:]
+    private var linkCountsCache: [GraphScopeKey: LinkCountsCacheEntry] = [:]
+
+    /// Small TTL so counts don't stay stale for long, but typing/search doesn't repeatedly load everything.
     private let countsCacheTTLSeconds: TimeInterval = 8
 
     func configure(container: AnyModelContainer) {
@@ -59,10 +72,16 @@ actor EntitiesHomeLoader {
     }
 
     func invalidateCache(for graphID: UUID?) {
-        countsCache.removeValue(forKey: GraphScopeKey(graphID: graphID))
+        let key = GraphScopeKey(graphID: graphID)
+        countsCache.removeValue(forKey: key)
+        linkCountsCache.removeValue(forKey: key)
     }
 
-    func loadSnapshot(activeGraphID: UUID?, foldedSearch: String) async throws -> EntitiesHomeSnapshot {
+    func loadSnapshot(
+        activeGraphID: UUID?,
+        foldedSearch: String,
+        includeLinkCounts: Bool
+    ) async throws -> EntitiesHomeSnapshot {
         let configuredContainer = self.container
         guard let configuredContainer else {
             throw NSError(
@@ -74,8 +93,9 @@ actor EntitiesHomeLoader {
 
         let gid = activeGraphID
         let term = foldedSearch
+        let includeLinks = includeLinkCounts
 
-        return try await Task.detached(priority: .utility) { [configuredContainer, gid, term] in
+        return try await Task.detached(priority: .utility) { [configuredContainer, gid, term, includeLinks] in
             let context = ModelContext(configuredContainer.container)
             context.autosaveEnabled = false
 
@@ -89,28 +109,57 @@ actor EntitiesHomeLoader {
 
             let now = Date()
             let shouldUseCache = !term.isEmpty
-            let cachedCounts: [UUID: Int]? = shouldUseCache
+
+            let cachedAttrCounts: [UUID: Int]? = shouldUseCache
                 ? await EntitiesHomeLoader.shared.cachedCounts(for: gid, now: now)
                 : nil
 
-            let counts: [UUID: Int]
-            if let cachedCounts {
-                counts = cachedCounts
+            let attrCounts: [UUID: Int]
+            if let cachedAttrCounts {
+                attrCounts = cachedAttrCounts
             } else {
-                counts = try EntitiesHomeLoader.computeAttributeCounts(
+                attrCounts = try EntitiesHomeLoader.computeAttributeCounts(
                     context: context,
                     graphID: gid,
                     relevantEntityIDs: entityIDs
                 )
-                await EntitiesHomeLoader.shared.storeCounts(counts, for: gid, now: now)
+                await EntitiesHomeLoader.shared.storeCounts(attrCounts, for: gid, now: now)
+            }
+
+            let linkCountsByEntityID: [UUID: Int]?
+            if includeLinks {
+                let cachedLinkCounts: [UUID: Int]? = shouldUseCache
+                    ? await EntitiesHomeLoader.shared.cachedLinkCounts(for: gid, now: now)
+                    : nil
+
+                if let cachedLinkCounts {
+                    linkCountsByEntityID = cachedLinkCounts
+                } else {
+                    let computed = try EntitiesHomeLoader.computeLinkCounts(
+                        context: context,
+                        graphID: gid,
+                        relevantEntityIDs: entityIDs
+                    )
+                    await EntitiesHomeLoader.shared.storeLinkCounts(computed, for: gid, now: now)
+                    linkCountsByEntityID = computed
+                }
+            } else {
+                linkCountsByEntityID = nil
             }
 
             let rows: [EntitiesHomeRow] = entities.map { e in
-                EntitiesHomeRow(
+                let preview = EntitiesHomeLoader.makeNotesPreview(e.notes)
+                let hasData = (e.imageData?.isEmpty == false)
+
+                return EntitiesHomeRow(
                     id: e.id,
                     name: e.name,
                     iconSymbolName: e.iconSymbolName,
-                    attributeCount: counts[e.id] ?? 0
+                    attributeCount: attrCounts[e.id] ?? 0,
+                    linkCount: includeLinks ? (linkCountsByEntityID?[e.id] ?? 0) : nil,
+                    notesPreview: preview,
+                    imagePath: e.imagePath,
+                    hasImageData: hasData
                 )
             }
 
@@ -130,6 +179,20 @@ actor EntitiesHomeLoader {
     private func storeCounts(_ counts: [UUID: Int], for graphID: UUID?, now: Date) {
         let key = GraphScopeKey(graphID: graphID)
         countsCache[key] = CountsCacheEntry(fetchedAt: now, countsByEntityID: counts)
+    }
+
+    private func cachedLinkCounts(for graphID: UUID?, now: Date) -> [UUID: Int]? {
+        let key = GraphScopeKey(graphID: graphID)
+        guard let entry = linkCountsCache[key] else { return nil }
+        if now.timeIntervalSince(entry.fetchedAt) > countsCacheTTLSeconds {
+            return nil
+        }
+        return entry.countsByEntityID
+    }
+
+    private func storeLinkCounts(_ counts: [UUID: Int], for graphID: UUID?, now: Date) {
+        let key = GraphScopeKey(graphID: graphID)
+        linkCountsCache[key] = LinkCountsCacheEntry(fetchedAt: now, countsByEntityID: counts)
     }
 
     private static func fetchEntities(
@@ -246,5 +309,57 @@ actor EntitiesHomeLoader {
         }
 
         return counts
+    }
+
+    private static func computeLinkCounts(
+        context: ModelContext,
+        graphID: UUID?,
+        relevantEntityIDs: Set<UUID>
+    ) throws -> [UUID: Int] {
+        if relevantEntityIDs.isEmpty { return [:] }
+
+        let gid = graphID
+        let links: [MetaLink]
+        if let gid {
+            let fd = FetchDescriptor<MetaLink>(
+                predicate: #Predicate<MetaLink> { l in
+                    l.graphID == gid
+                }
+            )
+            links = try context.fetch(fd)
+        } else {
+            let fd = FetchDescriptor<MetaLink>()
+            links = try context.fetch(fd)
+        }
+
+        let entityKindRaw = NodeKind.entity.rawValue
+        var counts: [UUID: Int] = [:]
+        counts.reserveCapacity(min(relevantEntityIDs.count, 512))
+
+        for l in links {
+            if l.sourceKindRaw == entityKindRaw {
+                let sid = l.sourceID
+                if relevantEntityIDs.contains(sid) {
+                    counts[sid, default: 0] += 1
+                }
+            }
+            if l.targetKindRaw == entityKindRaw {
+                let tid = l.targetID
+                if relevantEntityIDs.contains(tid) {
+                    counts[tid, default: 0] += 1
+                }
+            }
+        }
+
+        return counts
+    }
+
+    private static func makeNotesPreview(_ notes: String) -> String? {
+        let trimmed = notes.trimmingCharacters(in: .whitespacesAndNewlines)
+        if trimmed.isEmpty { return nil }
+        let firstLine = trimmed.split(whereSeparator: { $0.isNewline }).first
+        guard let firstLine else { return nil }
+        let s = String(firstLine).trimmingCharacters(in: .whitespacesAndNewlines)
+        return s.isEmpty ? nil : s
     }
 }

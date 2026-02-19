@@ -11,6 +11,7 @@ import SwiftData
 struct EntitiesHomeView: View {
     @Environment(\.modelContext) private var modelContext
     @EnvironmentObject private var onboarding: OnboardingCoordinator
+    @EnvironmentObject private var appearance: AppearanceStore
 
     @AppStorage("BMActiveGraphID") private var activeGraphIDString: String = ""
     private var activeGraphID: UUID? { UUID(uuidString: activeGraphIDString) }
@@ -31,14 +32,16 @@ struct EntitiesHomeView: View {
     @State private var loadError: String?
 
     private let debounceNanos: UInt64 = 250_000_000
+
     private var activeGraphName: String {
         if let id = activeGraphID, let g = graphs.first(where: { $0.id == id }) { return g.name }
         return graphs.first?.name ?? "Graph"
     }
 
     private var taskToken: String {
-        // triggers reload when either the active graph or the search term changes
-        "\(activeGraphIDString)|\(searchText)"
+        // triggers reload when either the active graph, the search term or relevant computed-data flags change
+        let includeLinks = appearance.settings.entitiesHome.showLinkCount ? "1" : "0"
+        return "\(activeGraphIDString)|\(searchText)|\(includeLinks)"
     }
 
     var body: some View {
@@ -110,34 +113,33 @@ struct EntitiesHomeView: View {
                         }
                     }
                 } else {
-                    List {
-                        if isLoading {
-                            HStack {
-                                ProgressView()
-                                Text("Suche…").foregroundStyle(.secondary)
+                    if appearance.settings.entitiesHome.layout == .grid {
+                        EntitiesHomeGrid(
+                            rows: rows,
+                            isLoading: isLoading,
+                            settings: appearance.settings.entitiesHome,
+                            onDelete: { id in
+                                deleteEntityIDs([id])
                             }
-                        }
-
-                        ForEach(rows) { row in
-                            NavigationLink {
-                                EntityDetailRouteView(entityID: row.id)
-                            } label: {
-                                HStack(alignment: .top, spacing: 12) {
-                                    Image(systemName: row.iconSymbolName ?? "cube")
-                                        .font(.system(size: 18, weight: .semibold))
-                                        .frame(width: 24, height: 24, alignment: .top)
-                                        .foregroundStyle(.tint)
-
-                                    VStack(alignment: .leading, spacing: 4) {
-                                        Text(row.name).font(.headline)
-                                        Text("\(row.attributeCount) Attribute")
-                                            .font(.subheadline)
-                                            .foregroundStyle(.secondary)
-                                    }
+                        )
+                    } else {
+                        List {
+                            if isLoading {
+                                HStack {
+                                    ProgressView()
+                                    Text("Suche…").foregroundStyle(.secondary)
                                 }
                             }
+
+                            ForEach(rows) { row in
+                                NavigationLink {
+                                    EntityDetailRouteView(entityID: row.id)
+                                } label: {
+                                    EntitiesHomeListRow(row: row, settings: appearance.settings.entitiesHome)
+                                }
+                            }
+                            .onDelete(perform: deleteEntities)
                         }
-                        .onDelete(perform: deleteEntities)
                     }
                 }
             }
@@ -187,7 +189,8 @@ struct EntitiesHomeView: View {
         do {
             let snapshot = try await EntitiesHomeLoader.shared.loadSnapshot(
                 activeGraphID: activeGraphID,
-                foldedSearch: folded
+                foldedSearch: folded,
+                includeLinkCounts: appearance.settings.entitiesHome.showLinkCount
             )
             rows = snapshot.rows
             isLoading = false
@@ -213,8 +216,14 @@ struct EntitiesHomeView: View {
             guard rows.indices.contains(idx) else { return nil }
             return rows[idx].id
         }
+        deleteEntityIDs(idsToDelete)
+    }
 
-        let entitiesToDelete: [MetaEntity] = idsToDelete.compactMap { fetchEntity(by: $0) }
+    private func deleteEntityIDs(_ ids: [UUID]) {
+        guard !ids.isEmpty else { return }
+
+        let entitiesToDelete: [MetaEntity] = ids.compactMap { fetchEntity(by: $0) }
+        if entitiesToDelete.isEmpty { return }
 
         for entity in entitiesToDelete {
             // Attachments are not part of the graph rendering; they live only on detail level.
@@ -229,13 +238,236 @@ struct EntitiesHomeView: View {
         }
 
         // Update local list immediately and then re-fetch to stay in sync with SwiftData.
-        rows.removeAll { r in entitiesToDelete.contains(where: { $0.id == r.id }) }
+        rows.removeAll { r in ids.contains(r.id) }
         Task {
             await EntitiesHomeLoader.shared.invalidateCache(for: activeGraphID)
             await reload(forFolded: BMSearch.fold(searchText))
         }
     }
+}
 
+private struct EntitiesHomeListRow: View {
+    let row: EntitiesHomeRow
+    let settings: EntitiesHomeAppearanceSettings
+
+    var body: some View {
+        HStack(alignment: .top, spacing: 12) {
+            EntitiesHomeLeadingVisual(row: row, settings: settings)
+
+            VStack(alignment: .leading, spacing: settings.density.secondaryTextSpacing) {
+                Text(row.name)
+                    .font(.headline)
+
+                if let counts = countsLine {
+                    Text(counts)
+                        .font(.subheadline)
+                        .foregroundStyle(.secondary)
+                }
+
+                if settings.showNotesPreview, let preview = row.notesPreview {
+                    Text(preview)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
+                }
+            }
+        }
+        .padding(.vertical, settings.density.listRowVerticalPadding)
+    }
+
+    private var countsLine: String? {
+        var parts: [String] = []
+
+        if settings.showAttributeCount {
+            let n = row.attributeCount
+            parts.append("\(n) \(n == 1 ? "Attribut" : "Attribute")")
+        }
+
+        if settings.showLinkCount, let lc = row.linkCount {
+            parts.append("\(lc) Links")
+        }
+
+        if parts.isEmpty { return nil }
+        return parts.joined(separator: " · ")
+    }
+}
+
+private struct EntitiesHomeLeadingVisual: View {
+    let row: EntitiesHomeRow
+    let settings: EntitiesHomeAppearanceSettings
+
+    var body: some View {
+        let side = settings.iconSize.listFrame
+        let corner: CGFloat = max(6, min(10, side * 0.35))
+
+        Group {
+            if settings.preferThumbnailOverIcon, let path = row.imagePath, !path.isEmpty {
+                NodeAsyncPreviewImageView(imagePath: path, imageData: nil) { ui in
+                    Image(uiImage: ui)
+                        .resizable()
+                        .scaledToFill()
+                } placeholder: {
+                    iconView
+                }
+            } else {
+                iconView
+            }
+        }
+        .frame(width: side, height: side, alignment: .top)
+        .clipShape(RoundedRectangle(cornerRadius: corner, style: .continuous))
+    }
+
+    private var iconView: some View {
+        Image(systemName: row.iconSymbolName ?? "cube")
+            .font(.system(size: settings.iconSize.listPointSize, weight: .semibold))
+            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .center)
+            .foregroundStyle(.tint)
+            .background(
+                RoundedRectangle(cornerRadius: 10, style: .continuous)
+                    .fill(Color(uiColor: .tertiarySystemGroupedBackground))
+            )
+    }
+}
+
+private struct EntitiesHomeGrid: View {
+    let rows: [EntitiesHomeRow]
+    let isLoading: Bool
+    let settings: EntitiesHomeAppearanceSettings
+    let onDelete: (UUID) -> Void
+
+    @Environment(\.horizontalSizeClass) private var hSizeClass
+
+    private var columns: [GridItem] {
+        let count = (hSizeClass == .regular) ? 3 : 2
+        return Array(repeating: GridItem(.flexible(), spacing: settings.density.gridSpacing), count: count)
+    }
+
+    var body: some View {
+        ScrollView {
+            VStack(spacing: 12) {
+                if isLoading {
+                    HStack(spacing: 10) {
+                        ProgressView()
+                        Text("Suche…")
+                            .foregroundStyle(.secondary)
+                        Spacer(minLength: 0)
+                    }
+                    .padding(.horizontal, 16)
+                    .padding(.top, 8)
+                }
+
+                LazyVGrid(columns: columns, spacing: settings.density.gridSpacing) {
+                    ForEach(rows) { row in
+                        NavigationLink {
+                            EntityDetailRouteView(entityID: row.id)
+                        } label: {
+                            EntitiesHomeGridCell(row: row, settings: settings)
+                        }
+                        .buttonStyle(.plain)
+                        .contextMenu {
+                            Button(role: .destructive) {
+                                onDelete(row.id)
+                            } label: {
+                                Label("Löschen", systemImage: "trash")
+                            }
+                        }
+                    }
+                }
+                .padding(.horizontal, 16)
+                .padding(.vertical, 12)
+            }
+        }
+    }
+}
+
+private struct EntitiesHomeGridCell: View {
+    let row: EntitiesHomeRow
+    let settings: EntitiesHomeAppearanceSettings
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: settings.density.secondaryTextSpacing) {
+            HStack {
+                EntitiesHomeGridThumbnail(row: row, settings: settings)
+                Spacer(minLength: 0)
+            }
+
+            Text(row.name)
+                .font(.headline)
+                .lineLimit(2)
+
+            if let counts = countsLine {
+                Text(counts)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+            }
+
+            if settings.showNotesPreview, let preview = row.notesPreview {
+                Text(preview)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .lineLimit(2)
+            }
+        }
+        .padding(settings.density.gridCellPadding)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(
+            RoundedRectangle(cornerRadius: 18, style: .continuous)
+                .fill(Color(uiColor: .secondarySystemGroupedBackground))
+        )
+    }
+
+    private var countsLine: String? {
+        var parts: [String] = []
+
+        if settings.showAttributeCount {
+            let n = row.attributeCount
+            parts.append("\(n) \(n == 1 ? "Attribut" : "Attribute")")
+        }
+
+        if settings.showLinkCount, let lc = row.linkCount {
+            parts.append("\(lc) Links")
+        }
+
+        if parts.isEmpty { return nil }
+        return parts.joined(separator: " · ")
+    }
+}
+
+private struct EntitiesHomeGridThumbnail: View {
+    let row: EntitiesHomeRow
+    let settings: EntitiesHomeAppearanceSettings
+
+    private var side: CGFloat { settings.iconSize.gridThumbnailSize }
+
+    var body: some View {
+        Group {
+            if settings.preferThumbnailOverIcon, let path = row.imagePath, !path.isEmpty {
+                NodeAsyncPreviewImageView(imagePath: path, imageData: nil) { ui in
+                    Image(uiImage: ui)
+                        .resizable()
+                        .scaledToFill()
+                } placeholder: {
+                    iconView
+                }
+            } else {
+                iconView
+            }
+        }
+        .frame(width: side, height: side)
+        .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
+    }
+
+    private var iconView: some View {
+        Image(systemName: row.iconSymbolName ?? "cube")
+            .font(.system(size: max(18, side * 0.38), weight: .semibold))
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+            .foregroundStyle(.tint)
+            .background(
+                RoundedRectangle(cornerRadius: 16, style: .continuous)
+                    .fill(Color(uiColor: .tertiarySystemGroupedBackground))
+            )
+    }
 }
 
 private struct EntityDetailRouteView: View {

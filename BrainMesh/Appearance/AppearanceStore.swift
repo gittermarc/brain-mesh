@@ -88,8 +88,48 @@ final class AppearanceStore: ObservableObject {
         persist()
     }
 
+
+    // MARK: - Entities Home
+
+    func setEntitiesHomeLayout(_ layout: EntitiesHomeLayoutStyle) {
+        settings.entitiesHome.layout = layout
+        persist()
+    }
+
+    func setEntitiesHomeDensity(_ density: EntitiesHomeDensity) {
+        settings.entitiesHome.density = density
+        persist()
+    }
+
+    func setEntitiesHomeIconSize(_ size: EntitiesHomeIconSize) {
+        settings.entitiesHome.iconSize = size
+        persist()
+    }
+
+    func setShowEntityAttributeCount(_ enabled: Bool) {
+        settings.entitiesHome.showAttributeCount = enabled
+        persist()
+    }
+
+    func setShowEntityLinkCount(_ enabled: Bool) {
+        settings.entitiesHome.showLinkCount = enabled
+        persist()
+    }
+
+    func setShowEntityNotesPreview(_ enabled: Bool) {
+        settings.entitiesHome.showNotesPreview = enabled
+        persist()
+    }
+
+    func setPreferEntityThumbnailOverIcon(_ enabled: Bool) {
+        settings.entitiesHome.preferThumbnailOverIcon = enabled
+        persist()
+    }
+
     func applyPreset(_ preset: AppearancePreset) {
+        let currentEntitiesHome = settings.entitiesHome
         settings = preset.makeSettings()
+        settings.entitiesHome = currentEntitiesHome
         persist()
     }
 

@@ -30,6 +30,35 @@ struct DisplaySettingsView: View {
                 }
             }
 
+            Section {
+                Picker("Darstellung", selection: entitiesLayoutBinding) {
+                    ForEach(EntitiesHomeLayoutStyle.allCases) { style in
+                        Text(style.title).tag(style)
+                    }
+                }
+
+                Picker("Dichte", selection: entitiesDensityBinding) {
+                    ForEach(EntitiesHomeDensity.allCases) { item in
+                        Text(item.title).tag(item)
+                    }
+                }
+
+                Picker("Icon-Größe", selection: entitiesIconSizeBinding) {
+                    ForEach(EntitiesHomeIconSize.allCases) { item in
+                        Text(item.title).tag(item)
+                    }
+                }
+
+                Toggle("Attribut-Count anzeigen", isOn: showEntityAttributeCountBinding)
+                Toggle("Link-Count anzeigen", isOn: showEntityLinkCountBinding)
+                Toggle("Notiz-Preview anzeigen", isOn: showEntityNotesPreviewBinding)
+                Toggle("Bild-Thumbnail statt Icon", isOn: preferEntityThumbnailBinding)
+            } header: {
+                Text("Entitäten")
+            } footer: {
+                Text("Diese Einstellungen beeinflussen die Darstellung im Entitäten-Tab. Link-Counts können bei sehr großen Graphen minimal teurer sein.")
+            }
+
             Section("Graph") {
                 Picker("Hintergrund", selection: backgroundStyleBinding) {
                     ForEach(GraphBackgroundStyle.allCases) { style in
@@ -44,18 +73,15 @@ struct DisplaySettingsView: View {
                     ColorPicker("Hintergrund (Sekundär)", selection: backgroundSecondaryBinding)
                 }
 
-                Divider()
-
+                SettingsInlineHeaderRow(title: "Knotenfarben")
                 ColorPicker("Entitäten", selection: entityColorBinding)
                 ColorPicker("Attribute", selection: attributeColorBinding)
 
-                Divider()
-
+                SettingsInlineHeaderRow(title: "Kantenfarben")
                 ColorPicker("Links", selection: linkColorBinding)
                 ColorPicker("Containment", selection: containmentColorBinding)
 
-                Divider()
-
+                SettingsInlineHeaderRow(title: "Interaktion")
                 ColorPicker("Highlight / Auswahl", selection: highlightColorBinding)
                 Toggle("Label-Halo", isOn: labelHaloBinding)
             }
@@ -106,6 +132,55 @@ struct DisplaySettingsView: View {
         Binding(
             get: { appearance.settings.app.colorScheme },
             set: { appearance.setColorScheme($0) }
+        )
+    }
+
+    private var entitiesLayoutBinding: Binding<EntitiesHomeLayoutStyle> {
+        Binding(
+            get: { appearance.settings.entitiesHome.layout },
+            set: { appearance.setEntitiesHomeLayout($0) }
+        )
+    }
+
+    private var entitiesDensityBinding: Binding<EntitiesHomeDensity> {
+        Binding(
+            get: { appearance.settings.entitiesHome.density },
+            set: { appearance.setEntitiesHomeDensity($0) }
+        )
+    }
+
+    private var entitiesIconSizeBinding: Binding<EntitiesHomeIconSize> {
+        Binding(
+            get: { appearance.settings.entitiesHome.iconSize },
+            set: { appearance.setEntitiesHomeIconSize($0) }
+        )
+    }
+
+    private var showEntityAttributeCountBinding: Binding<Bool> {
+        Binding(
+            get: { appearance.settings.entitiesHome.showAttributeCount },
+            set: { appearance.setShowEntityAttributeCount($0) }
+        )
+    }
+
+    private var showEntityLinkCountBinding: Binding<Bool> {
+        Binding(
+            get: { appearance.settings.entitiesHome.showLinkCount },
+            set: { appearance.setShowEntityLinkCount($0) }
+        )
+    }
+
+    private var showEntityNotesPreviewBinding: Binding<Bool> {
+        Binding(
+            get: { appearance.settings.entitiesHome.showNotesPreview },
+            set: { appearance.setShowEntityNotesPreview($0) }
+        )
+    }
+
+    private var preferEntityThumbnailBinding: Binding<Bool> {
+        Binding(
+            get: { appearance.settings.entitiesHome.preferThumbnailOverIcon },
+            set: { appearance.setPreferEntityThumbnailOverIcon($0) }
         )
     }
 
@@ -170,6 +245,20 @@ struct DisplaySettingsView: View {
             get: { appearance.settings.graph.labelHaloEnabled },
             set: { appearance.setLabelHaloEnabled($0) }
         )
+    }
+}
+
+private struct SettingsInlineHeaderRow: View {
+    let title: String
+
+    var body: some View {
+        Text(title.uppercased())
+            .font(.caption.weight(.semibold))
+            .foregroundStyle(.secondary)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(.top, 10)
+            .padding(.bottom, 4)
+            .accessibilityAddTraits(.isHeader)
     }
 }
 
