@@ -24,6 +24,10 @@ struct AttributeDetailView: View {
 
     @State var showNotesEditor: Bool = false
 
+    // Phase 1: Details
+    @State var detailsSchemaBuilderEntity: MetaEntity? = nil
+    @State var detailsValueEditorField: MetaDetailFieldDefinition? = nil
+
     @State var showAddLink: Bool = false
     @State var showBulkLink: Bool = false
     @State var showLinkChooser: Bool = false
@@ -107,6 +111,19 @@ struct AttributeDetailView: View {
                         .id(NodeDetailAnchor.notes.rawValue)
 
                         if let owner = attribute.owner {
+                            NodeDetailsValuesCard(
+                                attribute: attribute,
+                                owner: owner,
+                                onConfigureSchema: {
+                                    detailsSchemaBuilderEntity = owner
+                                },
+                                onEditValue: { field in
+                                    detailsValueEditorField = field
+                                }
+                            )
+                        }
+
+                        if let owner = attribute.owner {
                             NodeOwnerCard(owner: owner)
                         }
 
@@ -175,6 +192,20 @@ struct AttributeDetailView: View {
         let mediaCount = mediaPreview.totalCount
 
         var pills: [NodeStatPill] = []
+
+        if let owner = attribute.owner {
+            let pinned = owner.detailFieldsList
+                .filter { $0.isPinned }
+                .sorted(by: { $0.sortIndex < $1.sortIndex })
+                .prefix(3)
+
+            for field in pinned {
+                if let value = DetailsFormatting.shortPillValue(for: field, on: attribute) {
+                    pills.append(NodeStatPill(title: value, systemImage: DetailsFormatting.systemImage(for: field)))
+                }
+            }
+        }
+
         pills.append(NodeStatPill(title: "\(linkCount)", systemImage: "link"))
         pills.append(NodeStatPill(title: "\(mediaCount)", systemImage: "photo.on.rectangle"))
         return pills

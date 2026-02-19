@@ -195,6 +195,14 @@ extension AttributeDetailView {
                     )
                 }
             }
+            .sheet(item: $detailsSchemaBuilderEntity) { entity in
+                NavigationStack {
+                    DetailsSchemaBuilderView(entity: entity)
+                }
+            }
+            .sheet(item: $detailsValueEditorField) { field in
+                DetailsValueEditorSheet(attribute: attribute, field: field)
+            }
     }
 
     // MARK: - Rename

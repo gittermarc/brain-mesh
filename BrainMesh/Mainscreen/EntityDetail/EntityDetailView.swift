@@ -154,6 +154,8 @@ struct EntityDetailView: View {
                         )
                         .id(NodeDetailAnchor.media.rawValue)
 
+                        NodeDetailsSchemaCard(entity: entity)
+
                         NodeEntityAttributesCard(entity: entity)
                             .id(NodeDetailAnchor.attributes.rawValue)
 
