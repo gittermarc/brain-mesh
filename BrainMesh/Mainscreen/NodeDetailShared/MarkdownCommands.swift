@@ -45,6 +45,23 @@ enum MarkdownCommands {
         text = ns as String
     }
 
+    /// Inserts a Markdown link at the current selection.
+    /// If a selection exists it will be replaced; otherwise inserted at the cursor.
+    /// Cursor ends up after the closing parenthesis.
+    static func insertLink(text: inout String, selection: inout NSRange, linkText: String, url: String) {
+        let ns = NSMutableString(string: text)
+        let safeSel = clamped(selection, maxLength: ns.length)
+
+        let display = linkText.isEmpty ? url : linkText
+        let inserted = "[" + display + "](" + url + ")"
+        ns.replaceCharacters(in: safeSel, with: inserted)
+
+        let cursor = safeSel.location + (inserted as NSString).length
+        selection = NSRange(location: cursor, length: 0)
+
+        text = ns as String
+    }
+
     private static func wrap(text: inout String, selection: inout NSRange, prefix: String, suffix: String) {
         let ns = NSMutableString(string: text)
         let safeSel = clamped(selection, maxLength: ns.length)
@@ -188,11 +205,68 @@ enum MarkdownCommands {
         selection = NSRange(location: affectedRange.location, length: (newBlock as NSString).length)
     }
 
+    // MARK: - Preview helpers
+
+    /// Best-effort conversion of Markdown-ish content to a plain string for short previews.
+    /// This intentionally does not aim to be a full Markdown parser.
+    static func plainText(from markdown: String) -> String {
+        var s = markdown
+        s = s.replacingOccurrences(of: "\r\n", with: "\n")
+
+        // Drop fenced code markers but keep their content.
+        s = s.replacingOccurrences(of: "```", with: "")
+
+        // Images: ![alt](url) -> alt
+        s = s.replacingRegex(pattern: "!\\[([^\\]]*)\\]\\(([^)]*)\\)", with: "$1")
+        // Links: [text](url) -> text
+        s = s.replacingRegex(pattern: "\\[([^\\]]+)\\]\\(([^)]*)\\)", with: "$1")
+
+        // Line prefixes
+        s = s.replacingRegex(pattern: "(?m)^\\s{0,3}#{1,6}\\s+", with: "")
+        s = s.replacingRegex(pattern: "(?m)^\\s{0,3}>\\s?", with: "")
+        s = s.replacingRegex(pattern: "(?m)^\\s{0,3}[-*+]\\s+", with: "")
+        s = s.replacingRegex(pattern: "(?m)^\\s{0,3}\\d+\\.\\s+", with: "")
+
+        // Inline markers
+        s = s.replacingOccurrences(of: "**", with: "")
+        s = s.replacingOccurrences(of: "__", with: "")
+        s = s.replacingOccurrences(of: "`", with: "")
+        s = s.replacingOccurrences(of: "*", with: "")
+        s = s.replacingOccurrences(of: "_", with: "")
+
+        // Collapse whitespace
+        s = s.replacingRegex(pattern: "[\\t ]+", with: " ")
+        s = s.replacingRegex(pattern: "\\n{2,}", with: "\n")
+
+        return s.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    /// Returns a clean first-line preview for a notes field.
+    static func notesPreviewLine(_ notes: String) -> String? {
+        let trimmed = notes.trimmingCharacters(in: .whitespacesAndNewlines)
+        if trimmed.isEmpty { return nil }
+
+        let firstLine = trimmed.split(whereSeparator: { $0.isNewline }).first
+        guard let firstLine else { return nil }
+
+        let cleaned = plainText(from: String(firstLine))
+        let out = cleaned.trimmingCharacters(in: .whitespacesAndNewlines)
+        return out.isEmpty ? nil : out
+    }
+
     // MARK: - Helpers
 
     private static func clamped(_ range: NSRange, maxLength: Int) -> NSRange {
         let safeLocation = Swift.max(0, Swift.min(range.location, maxLength))
         let safeLength = Swift.max(0, Swift.min(range.length, maxLength - safeLocation))
         return NSRange(location: safeLocation, length: safeLength)
+    }
+}
+
+private extension String {
+    func replacingRegex(pattern: String, with replacement: String) -> String {
+        guard let regex = try? NSRegularExpression(pattern: pattern, options: []) else { return self }
+        let range = NSRange(location: 0, length: (self as NSString).length)
+        return regex.stringByReplacingMatches(in: self, options: [], range: range, withTemplate: replacement)
     }
 }

@@ -223,7 +223,7 @@ struct MarkdownRenderedText: View {
                 .foregroundStyle(.primary)
                 .lineLimit(lineLimit)
         } else {
-            Text(markdown)
+            Text(MarkdownCommands.plainText(from: markdown))
                 .font(.body)
                 .foregroundStyle(.primary)
                 .lineLimit(lineLimit)

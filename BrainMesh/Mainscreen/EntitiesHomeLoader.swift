@@ -355,11 +355,6 @@ actor EntitiesHomeLoader {
     }
 
     private static func makeNotesPreview(_ notes: String) -> String? {
-        let trimmed = notes.trimmingCharacters(in: .whitespacesAndNewlines)
-        if trimmed.isEmpty { return nil }
-        let firstLine = trimmed.split(whereSeparator: { $0.isNewline }).first
-        guard let firstLine else { return nil }
-        let s = String(firstLine).trimmingCharacters(in: .whitespacesAndNewlines)
-        return s.isEmpty ? nil : s
+        MarkdownCommands.notesPreviewLine(notes)
     }
 }

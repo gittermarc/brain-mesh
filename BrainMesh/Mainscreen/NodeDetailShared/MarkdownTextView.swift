@@ -112,6 +112,8 @@ struct MarkdownTextView: UIViewRepresentable {
             }
             parent.selection = textView.selectedRange
 
+            updateUndoRedoButtons()
+
             // Ensure accessory is visible even after SwiftUI updates.
             textView.reloadInputViews()
         }
@@ -126,6 +128,8 @@ struct MarkdownTextView: UIViewRepresentable {
         func textViewDidChange(_ textView: UITextView) {
             parent.text = textView.text ?? ""
             parent.selection = textView.selectedRange
+
+            updateUndoRedoButtons()
         }
 
         func textViewDidChangeSelection(_ textView: UITextView) {
@@ -141,38 +145,183 @@ struct MarkdownTextView: UIViewRepresentable {
                 return
             }
 
-            var currentText = parent.text
-            var currentSelection = tv.selectedRange
+            if action == .undo {
+                tv.undoManager?.undo()
+                syncFromTextView(tv)
+                tv.reloadInputViews()
+                return
+            }
+
+            if action == .redo {
+                tv.undoManager?.redo()
+                syncFromTextView(tv)
+                tv.reloadInputViews()
+                return
+            }
+
+            if action == .link {
+                presentLinkPrompt(from: tv)
+                return
+            }
+
+            applyMutation(action, on: tv)
+        }
+
+        private func applyMutation(_ action: MarkdownAccessoryView.Action, on tv: UITextView) {
+            let beforeText = tv.text ?? ""
+            var newText = beforeText
+            var newSelection = tv.selectedRange
 
             switch action {
             case .bold:
-                MarkdownCommands.bold(text: &currentText, selection: &currentSelection)
+                MarkdownCommands.bold(text: &newText, selection: &newSelection)
+                setText(newText, selection: newSelection, actionName: "Fett")
             case .italic:
-                MarkdownCommands.italic(text: &currentText, selection: &currentSelection)
+                MarkdownCommands.italic(text: &newText, selection: &newSelection)
+                setText(newText, selection: newSelection, actionName: "Kursiv")
             case .inlineCode:
-                MarkdownCommands.inlineCode(text: &currentText, selection: &currentSelection)
+                MarkdownCommands.inlineCode(text: &newText, selection: &newSelection)
+                setText(newText, selection: newSelection, actionName: "Code")
             case .heading1:
-                MarkdownCommands.heading1(text: &currentText, selection: &currentSelection)
+                MarkdownCommands.heading1(text: &newText, selection: &newSelection)
+                setText(newText, selection: newSelection, actionName: "Überschrift")
             case .bulletList:
-                MarkdownCommands.bulletList(text: &currentText, selection: &currentSelection)
+                MarkdownCommands.bulletList(text: &newText, selection: &newSelection)
+                setText(newText, selection: newSelection, actionName: "Liste")
             case .numberedList:
-                MarkdownCommands.numberedList(text: &currentText, selection: &currentSelection)
+                MarkdownCommands.numberedList(text: &newText, selection: &newSelection)
+                setText(newText, selection: newSelection, actionName: "Nummerierte Liste")
             case .quote:
-                MarkdownCommands.quote(text: &currentText, selection: &currentSelection)
-            case .link:
-                MarkdownCommands.link(text: &currentText, selection: &currentSelection)
-            case .dismissKeyboard:
+                MarkdownCommands.quote(text: &newText, selection: &newSelection)
+                setText(newText, selection: newSelection, actionName: "Zitat")
+            case .undo, .redo, .link, .dismissKeyboard:
                 break
             }
-
-            parent.text = currentText
-            parent.selection = currentSelection
-            tv.text = currentText
-            tv.selectedRange = currentSelection
 
             // Keep editing session alive.
             tv.becomeFirstResponder()
             tv.reloadInputViews()
+        }
+
+        private func syncFromTextView(_ tv: UITextView) {
+            parent.text = tv.text ?? ""
+            parent.selection = tv.selectedRange
+            updateUndoRedoButtons()
+        }
+
+        private func updateUndoRedoButtons() {
+            guard let tv = textView else { return }
+            let canUndo = tv.undoManager?.canUndo ?? false
+            let canRedo = tv.undoManager?.canRedo ?? false
+            accessoryView?.setUndoRedo(canUndo: canUndo, canRedo: canRedo)
+        }
+
+        private func setText(_ newText: String, selection newSelection: NSRange, actionName: String?) {
+            guard let tv = textView else { return }
+            let oldText = tv.text ?? ""
+            let oldSelection = tv.selectedRange
+
+            // Avoid polluting the undo stack if nothing changed.
+            if newText == oldText && NSEqualRanges(newSelection, oldSelection) {
+                return
+            }
+
+            if let um = tv.undoManager {
+                um.registerUndo(withTarget: self) { coordinator in
+                    coordinator.setText(oldText, selection: oldSelection, actionName: actionName)
+                }
+                if let actionName {
+                    um.setActionName(actionName)
+                }
+            }
+
+            tv.text = newText
+            tv.selectedRange = newSelection
+            parent.text = newText
+            parent.selection = newSelection
+            updateUndoRedoButtons()
+        }
+
+        private func presentLinkPrompt(from tv: UITextView) {
+            guard let presenter = nearestViewController(from: tv) else {
+                // Fallback: insert empty link markers.
+                var t = tv.text ?? ""
+                var sel = tv.selectedRange
+                MarkdownCommands.link(text: &t, selection: &sel)
+                setText(t, selection: sel, actionName: "Link")
+                tv.becomeFirstResponder()
+                tv.reloadInputViews()
+                return
+            }
+
+            let ns = (tv.text ?? "") as NSString
+            let safeSel = NSRange(location: Swift.max(0, Swift.min(tv.selectedRange.location, ns.length)), length: Swift.max(0, Swift.min(tv.selectedRange.length, ns.length - Swift.max(0, Swift.min(tv.selectedRange.location, ns.length)))))
+            let selectedText = safeSel.length > 0 ? ns.substring(with: safeSel) : ""
+
+            let alert = UIAlertController(title: "Link einfügen", message: nil, preferredStyle: .alert)
+            alert.addTextField { field in
+                field.placeholder = "Text"
+                field.text = selectedText
+                field.autocorrectionType = .yes
+                field.autocapitalizationType = .sentences
+            }
+            alert.addTextField { field in
+                field.placeholder = "URL"
+                field.keyboardType = .URL
+                field.textContentType = .URL
+                field.autocorrectionType = .no
+                field.autocapitalizationType = .none
+            }
+            alert.addAction(UIAlertAction(title: "Abbrechen", style: .cancel))
+            alert.addAction(UIAlertAction(title: "Einfügen", style: .default) { [weak self] _ in
+                guard let self else { return }
+                let textField = alert.textFields?[0]
+                let urlField = alert.textFields?[1]
+
+                let rawText = (textField?.text ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+                let rawURL = (urlField?.text ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+
+                guard let normalizedURL = self.normalizeURL(rawURL) else {
+                    tv.becomeFirstResponder()
+                    tv.reloadInputViews()
+                    return
+                }
+
+                let linkText = rawText.isEmpty ? (selectedText.isEmpty ? normalizedURL : selectedText) : rawText
+
+                var t = tv.text ?? ""
+                var sel = tv.selectedRange
+                MarkdownCommands.insertLink(text: &t, selection: &sel, linkText: linkText, url: normalizedURL)
+                self.setText(t, selection: sel, actionName: "Link")
+
+                tv.becomeFirstResponder()
+                tv.reloadInputViews()
+            })
+
+            presenter.present(alert, animated: true)
+        }
+
+        private func normalizeURL(_ raw: String) -> String? {
+            let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+            if trimmed.isEmpty { return nil }
+
+            let lower = trimmed.lowercased()
+            if lower.hasPrefix("mailto:") { return trimmed }
+            if lower.hasPrefix("http://") || lower.hasPrefix("https://") { return trimmed }
+
+            // Common case: user pasted/typed without scheme.
+            return "https://" + trimmed
+        }
+
+        private func nearestViewController(from responder: UIResponder) -> UIViewController? {
+            var r: UIResponder? = responder
+            while let current = r {
+                if let vc = current as? UIViewController {
+                    return vc
+                }
+                r = current.next
+            }
+            return nil
         }
     }
 }
@@ -202,6 +351,9 @@ final class MarkdownAccessoryView: UIView, UIScrollViewDelegate {
         case quote = 7
         case link = 8
         case dismissKeyboard = 9
+
+        case undo = 10
+        case redo = 11
     }
 
     var onAction: ((Action) -> Void)?
@@ -213,6 +365,8 @@ final class MarkdownAccessoryView: UIView, UIScrollViewDelegate {
     private let leftFade = EdgeFadeView(edge: .left)
     private let rightFade = EdgeFadeView(edge: .right)
 
+    private let undoButton = UIButton(type: .system)
+    private let redoButton = UIButton(type: .system)
     private let boldButton = UIButton(type: .system)
     private let italicButton = UIButton(type: .system)
     private let codeButton = UIButton(type: .system)
@@ -320,6 +474,9 @@ final class MarkdownAccessoryView: UIView, UIScrollViewDelegate {
     }
 
     private func configureButtons() {
+        configureSymbolButton(undoButton, systemName: "arrow.uturn.backward", action: .undo, label: "Rückgängig")
+        configureSymbolButton(redoButton, systemName: "arrow.uturn.forward", action: .redo, label: "Wiederholen")
+
         configureSymbolButton(boldButton, systemName: "bold", action: .bold, label: "Fett")
         configureSymbolButton(italicButton, systemName: "italic", action: .italic, label: "Kursiv")
         configureSymbolButton(codeButton, systemName: "chevron.left.slash.chevron.right", action: .inlineCode, label: "Code")
@@ -343,6 +500,8 @@ final class MarkdownAccessoryView: UIView, UIScrollViewDelegate {
         dismissButton.contentEdgeInsets = UIEdgeInsets(top: 7, left: 10, bottom: 7, right: 10)
         dismissButton.setContentHuggingPriority(.required, for: .horizontal)
         dismissButton.setContentCompressionResistancePriority(.required, for: .horizontal)
+
+        setUndoRedo(canUndo: false, canRedo: false)
     }
 
     private func layoutButtons() {
@@ -351,6 +510,8 @@ final class MarkdownAccessoryView: UIView, UIScrollViewDelegate {
             v.removeFromSuperview()
         }
 
+        stack.addArrangedSubview(undoButton)
+        stack.addArrangedSubview(redoButton)
         stack.addArrangedSubview(boldButton)
         stack.addArrangedSubview(italicButton)
         stack.addArrangedSubview(codeButton)
@@ -359,6 +520,14 @@ final class MarkdownAccessoryView: UIView, UIScrollViewDelegate {
         stack.addArrangedSubview(bulletButton)
         stack.addArrangedSubview(numberButton)
         stack.addArrangedSubview(quoteButton)
+    }
+
+    func setUndoRedo(canUndo: Bool, canRedo: Bool) {
+        undoButton.isEnabled = canUndo
+        redoButton.isEnabled = canRedo
+
+        undoButton.alpha = canUndo ? 1.0 : 0.35
+        redoButton.alpha = canRedo ? 1.0 : 0.35
     }
 
     private func configureSymbolButton(_ button: UIButton, systemName: String, action: Action, label: String) {
