@@ -14,16 +14,16 @@ struct EntityAttributesSectionView: View {
     @Bindable var entity: MetaEntity
     @Binding var showAddAttribute: Bool
 
-    @AppStorage("BMEntityAttributeSortMode") private var sortModeRaw: String = AttributeSortMode.nameAZ.rawValue
+    @AppStorage("BMEntityAttributeSortMode") private var sortModeRaw: String = EntityAttributeSortMode.nameAZ.rawValue
     @State private var filterText: String = ""
 
-    private var currentSortMode: AttributeSortMode {
-        AttributeSortMode(rawValue: sortModeRaw) ?? .nameAZ
+    private var currentSortMode: EntityAttributeSortMode {
+        EntityAttributeSortMode(rawValue: sortModeRaw) ?? .nameAZ
     }
 
-    private var sortModeBinding: Binding<AttributeSortMode> {
+    private var sortModeBinding: Binding<EntityAttributeSortMode> {
         Binding(
-            get: { AttributeSortMode(rawValue: sortModeRaw) ?? .nameAZ },
+            get: { EntityAttributeSortMode(rawValue: sortModeRaw) ?? .nameAZ },
             set: { sortModeRaw = $0.rawValue }
         )
     }
@@ -91,7 +91,7 @@ struct EntityAttributesSectionView: View {
             ) {
                 Menu {
                     Picker("Sortieren", selection: sortModeBinding) {
-                        ForEach(AttributeSortMode.allCases) { mode in
+                        ForEach(EntityAttributeSortMode.allCases) { mode in
                             Label(mode.title, systemImage: mode.systemImage)
                                 .tag(mode)
                         }
@@ -153,7 +153,7 @@ struct EntityAttributesSectionView: View {
     }
 }
 
-private enum AttributeSortMode: String, CaseIterable, Identifiable {
+enum EntityAttributeSortMode: String, CaseIterable, Identifiable {
     case nameAZ
     case nameZA
     case notesFirst
@@ -202,3 +202,4 @@ private enum AttributeSortMode: String, CaseIterable, Identifiable {
         }
     }
 }
+

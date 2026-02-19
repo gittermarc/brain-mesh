@@ -74,18 +74,41 @@ struct EntityAttributesAllView: View {
 
     @State private var searchText: String = ""
 
+    @AppStorage("BMEntityAttributeSortMode") private var sortModeRaw: String = EntityAttributeSortMode.nameAZ.rawValue
+
+    private var currentSortMode: EntityAttributeSortMode {
+        EntityAttributeSortMode(rawValue: sortModeRaw) ?? .nameAZ
+    }
+
+    private var sortModeBinding: Binding<EntityAttributeSortMode> {
+        Binding(
+            get: { EntityAttributeSortMode(rawValue: sortModeRaw) ?? .nameAZ },
+            set: { sortModeRaw = $0.rawValue }
+        )
+    }
+
     var body: some View {
+        let visible = visibleAttributes
+
         List {
-            if !searchText.isEmpty {
+            if !searchText.isEmpty || currentSortMode != .nameAZ {
                 Section {
-                    Text("Suche: \(searchText)")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
+                    if !searchText.isEmpty {
+                        Text("Suche: \(searchText)")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
+
+                    if currentSortMode != .nameAZ {
+                        Text("Sortierung: \(currentSortMode.title)")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
                 }
             }
 
             Section {
-                ForEach(filteredAttributes) { attr in
+                ForEach(visible) { attr in
                     NavigationLink {
                         AttributeDetailView(attribute: attr)
                     } label: {
@@ -107,7 +130,9 @@ struct EntityAttributesAllView: View {
                         }
                     }
                 }
-                .onDelete(perform: deleteAttributes)
+                .onDelete { offsets in
+                    deleteAttributes(at: offsets, visible: visible)
+                }
             } header: {
                 Text("Alle Attribute")
             }
@@ -115,28 +140,56 @@ struct EntityAttributesAllView: View {
         .searchable(text: $searchText, placement: .navigationBarDrawer(displayMode: .always), prompt: "Attribut suchen…")
         .navigationTitle("Attribute")
         .navigationBarTitleDisplayMode(.inline)
+        .toolbar {
+            ToolbarItem(placement: .topBarTrailing) {
+                Menu {
+                    Picker("Sortieren", selection: sortModeBinding) {
+                        ForEach(EntityAttributeSortMode.allCases) { mode in
+                            Label(mode.title, systemImage: mode.systemImage)
+                                .tag(mode)
+                        }
+                    }
+
+                    if !searchText.isEmpty {
+                        Divider()
+                        Button(role: .destructive) {
+                            searchText = ""
+                        } label: {
+                            Label("Suche zurücksetzen", systemImage: "xmark.circle")
+                        }
+                    }
+                } label: {
+                    Image(systemName: "arrow.up.arrow.down")
+                        .font(.system(size: 14, weight: .semibold))
+                        .foregroundStyle(.secondary)
+                }
+                .accessibilityLabel("Sortieren")
+            }
+        }
     }
 
-    private var filteredAttributes: [MetaAttribute] {
+    private var visibleAttributes: [MetaAttribute] {
         let base = entity.attributesList
         let needle = BMSearch.fold(searchText)
-        guard !needle.isEmpty else {
-            return base.sorted { $0.nameFolded < $1.nameFolded }
-        }
-        return base.filter { a in
-            if a.nameFolded.contains(needle) { return true }
-            if !a.notes.isEmpty {
-                return BMSearch.fold(a.notes).contains(needle)
+        let filtered: [MetaAttribute]
+
+        if needle.isEmpty {
+            filtered = base
+        } else {
+            filtered = base.filter { a in
+                if a.nameFolded.contains(needle) { return true }
+                if !a.notes.isEmpty { return BMSearch.fold(a.notes).contains(needle) }
+                return false
             }
-            return false
         }
-        .sorted { $0.nameFolded < $1.nameFolded }
+
+        return currentSortMode.sort(filtered)
     }
 
-    private func deleteAttributes(at offsets: IndexSet) {
+    private func deleteAttributes(at offsets: IndexSet, visible: [MetaAttribute]) {
         for index in offsets {
-            guard filteredAttributes.indices.contains(index) else { continue }
-            let attr = filteredAttributes[index]
+            guard visible.indices.contains(index) else { continue }
+            let attr = visible[index]
 
             AttachmentCleanup.deleteAttachments(ownerKind: .attribute, ownerID: attr.id, in: modelContext)
             LinkCleanup.deleteLinks(referencing: .attribute, id: attr.id, graphID: entity.graphID, in: modelContext)
@@ -147,4 +200,5 @@ struct EntityAttributesAllView: View {
         try? modelContext.save()
     }
 }
+
 
