@@ -18,6 +18,7 @@ import os
 struct EntitiesHomeRow: Identifiable, Hashable, Sendable {
     let id: UUID
     let name: String
+    let createdAt: Date
     let iconSymbolName: String?
 
     let attributeCount: Int
@@ -154,6 +155,7 @@ actor EntitiesHomeLoader {
                 return EntitiesHomeRow(
                     id: e.id,
                     name: e.name,
+                    createdAt: e.createdAt,
                     iconSymbolName: e.iconSymbolName,
                     attributeCount: attrCounts[e.id] ?? 0,
                     linkCount: includeLinks ? (linkCountsByEntityID?[e.id] ?? 0) : nil,

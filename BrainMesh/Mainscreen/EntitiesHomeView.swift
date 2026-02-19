@@ -23,6 +23,8 @@ struct EntitiesHomeView: View {
     @State private var showAddEntity = false
     @State private var showGraphPicker = false
 
+    @AppStorage("BMEntitiesHomeSort") private var entitiesHomeSortRaw: String = EntitiesHomeSortOption.nameAZ.rawValue
+
     @AppStorage("BMOnboardingHidden") private var onboardingHidden: Bool = false
     @AppStorage("BMOnboardingCompleted") private var onboardingCompleted: Bool = false
 
@@ -40,7 +42,7 @@ struct EntitiesHomeView: View {
 
     private var taskToken: String {
         // triggers reload when either the active graph, the search term or relevant computed-data flags change
-        let includeLinks = appearance.settings.entitiesHome.showLinkCount ? "1" : "0"
+        let includeLinks = (appearance.settings.entitiesHome.showLinkCount || sortOption.needsLinkCounts) ? "1" : "0"
         return "\(activeGraphIDString)|\(searchText)|\(includeLinks)"
     }
 
@@ -153,6 +155,19 @@ struct EntitiesHomeView: View {
                     }
                 }
                 ToolbarItemGroup(placement: .topBarTrailing) {
+                    Menu {
+                        Picker("Sortieren", selection: sortBinding) {
+                            ForEach(EntitiesHomeSortOption.allCases) { opt in
+                                Label(opt.title, systemImage: opt.systemImage)
+                                    .tag(opt)
+                            }
+                        }
+                        .pickerStyle(.inline)
+                    } label: {
+                        Image(systemName: "arrow.up.arrow.down")
+                    }
+                    .accessibilityLabel("Sortieren")
+
                     Button { showAddEntity = true } label: { Image(systemName: "plus") }
                 }
             }
@@ -173,6 +188,10 @@ struct EntitiesHomeView: View {
 
                 await reload(forFolded: folded)
             }
+            .onChange(of: entitiesHomeSortRaw) { _, _ in
+                // Apply sorting instantly without waiting for a reload.
+                rows = sortOption.apply(to: rows)
+            }
             .onChange(of: showAddEntity) { _, newValue in
                 // Ensure newly created entities show up even without @Query driving this list.
                 if newValue == false {
@@ -190,15 +209,26 @@ struct EntitiesHomeView: View {
             let snapshot = try await EntitiesHomeLoader.shared.loadSnapshot(
                 activeGraphID: activeGraphID,
                 foldedSearch: folded,
-                includeLinkCounts: appearance.settings.entitiesHome.showLinkCount
+                includeLinkCounts: (appearance.settings.entitiesHome.showLinkCount || sortOption.needsLinkCounts)
             )
-            rows = snapshot.rows
+            rows = sortOption.apply(to: snapshot.rows)
             isLoading = false
             loadError = nil
         } catch {
             isLoading = false
             loadError = error.localizedDescription
         }
+    }
+
+    private var sortOption: EntitiesHomeSortOption {
+        EntitiesHomeSortOption(rawValue: entitiesHomeSortRaw) ?? .nameAZ
+    }
+
+    private var sortBinding: Binding<EntitiesHomeSortOption> {
+        Binding(
+            get: { EntitiesHomeSortOption(rawValue: entitiesHomeSortRaw) ?? .nameAZ },
+            set: { entitiesHomeSortRaw = $0.rawValue }
+        )
     }
 
     private func fetchEntity(by id: UUID) -> MetaEntity? {
@@ -490,6 +520,106 @@ private struct EntityDetailRouteView: View {
             } description: {
                 Text("Diese Entität existiert nicht mehr oder wurde auf einem anderen Gerät gelöscht.")
             }
+        }
+    }
+}
+
+enum EntitiesHomeSortOption: String, CaseIterable, Identifiable {
+    case nameAZ
+    case nameZA
+    case createdNewest
+    case createdOldest
+    case attributesMost
+    case attributesLeast
+    case linksMost
+    case linksLeast
+
+    var id: String { rawValue }
+
+    var title: String {
+        switch self {
+        case .nameAZ: return "Name (A–Z)"
+        case .nameZA: return "Name (Z–A)"
+        case .createdNewest: return "Erstellt (neu → alt)"
+        case .createdOldest: return "Erstellt (alt → neu)"
+        case .attributesMost: return "Attribute (viel → wenig)"
+        case .attributesLeast: return "Attribute (wenig → viel)"
+        case .linksMost: return "Links (viel → wenig)"
+        case .linksLeast: return "Links (wenig → viel)"
+        }
+    }
+
+    var systemImage: String {
+        switch self {
+        case .nameAZ, .nameZA:
+            return "textformat"
+        case .createdNewest, .createdOldest:
+            return "calendar"
+        case .attributesMost, .attributesLeast:
+            return "list.bullet.rectangle"
+        case .linksMost, .linksLeast:
+            return "link"
+        }
+    }
+
+    var needsLinkCounts: Bool {
+        switch self {
+        case .linksMost, .linksLeast:
+            return true
+        default:
+            return false
+        }
+    }
+
+    func apply(to rows: [EntitiesHomeRow]) -> [EntitiesHomeRow] {
+        rows.sorted { lhs, rhs in
+            switch self {
+            case .nameAZ:
+                return EntitiesHomeSortOption.compareName(lhs, rhs, ascending: true)
+
+            case .nameZA:
+                return EntitiesHomeSortOption.compareName(lhs, rhs, ascending: false)
+
+            case .createdNewest:
+                if lhs.createdAt != rhs.createdAt { return lhs.createdAt > rhs.createdAt }
+                return EntitiesHomeSortOption.compareName(lhs, rhs, ascending: true)
+
+            case .createdOldest:
+                if lhs.createdAt != rhs.createdAt { return lhs.createdAt < rhs.createdAt }
+                return EntitiesHomeSortOption.compareName(lhs, rhs, ascending: true)
+
+            case .attributesMost:
+                if lhs.attributeCount != rhs.attributeCount { return lhs.attributeCount > rhs.attributeCount }
+                return EntitiesHomeSortOption.compareName(lhs, rhs, ascending: true)
+
+            case .attributesLeast:
+                if lhs.attributeCount != rhs.attributeCount { return lhs.attributeCount < rhs.attributeCount }
+                return EntitiesHomeSortOption.compareName(lhs, rhs, ascending: true)
+
+            case .linksMost:
+                let la = lhs.linkCount ?? 0
+                let ra = rhs.linkCount ?? 0
+                if la != ra { return la > ra }
+                return EntitiesHomeSortOption.compareName(lhs, rhs, ascending: true)
+
+            case .linksLeast:
+                let la = lhs.linkCount ?? 0
+                let ra = rhs.linkCount ?? 0
+                if la != ra { return la < ra }
+                return EntitiesHomeSortOption.compareName(lhs, rhs, ascending: true)
+            }
+        }
+    }
+
+    private static func compareName(_ lhs: EntitiesHomeRow, _ rhs: EntitiesHomeRow, ascending: Bool) -> Bool {
+        let cmp = lhs.name.localizedStandardCompare(rhs.name)
+        if cmp == .orderedSame {
+            return lhs.id.uuidString < rhs.id.uuidString
+        }
+        if ascending {
+            return cmp == .orderedAscending
+        } else {
+            return cmp == .orderedDescending
         }
     }
 }

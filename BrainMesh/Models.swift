@@ -27,7 +27,9 @@ enum BMSearch {
 @Model
 final class MetaGraph {
     var id: UUID = UUID()
-    var createdAt: Date = Date()
+    // When this field was introduced, we intentionally defaulted to `.distantPast`
+    // so existing records don't suddenly look "new" after automatic migration.
+    var createdAt: Date = Date.distantPast
 
     var name: String = "" {
         didSet { nameFolded = BMSearch.fold(name) }
@@ -66,6 +68,8 @@ final class MetaGraph {
 final class MetaEntity {
 
     var id: UUID = UUID()
+
+    var createdAt: Date = Date.distantPast
 
     // ✅ Graph scope (Multi-DB). Optional für sanfte Migration alter Daten.
     var graphID: UUID? = nil
@@ -118,6 +122,7 @@ final class MetaEntity {
     init(name: String, graphID: UUID? = nil, iconSymbolName: String? = nil) {
         self.name = name
         self.nameFolded = BMSearch.fold(name)
+        self.createdAt = Date()
         self.graphID = graphID
         self.iconSymbolName = iconSymbolName
         self.attributes = []
