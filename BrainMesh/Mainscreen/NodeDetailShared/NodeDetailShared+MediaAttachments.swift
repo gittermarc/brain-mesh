@@ -152,7 +152,7 @@ extension NodeMediaAllView {
                 return
             }
 
-            attachmentPreviewSheet = AttachmentPreviewSheetState(
+            attachmentPreviewSheet = NodeAttachmentPreviewSheetState(
                 url: url,
                 title: attachment.displayTitle,
                 contentTypeIdentifier: attachment.contentTypeIdentifier,

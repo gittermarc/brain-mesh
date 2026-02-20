@@ -135,7 +135,7 @@ struct NodeMediaAllView: View {
     let attachmentPageSize: Int = 20
 
     @State var viewerRequest: PhotoGalleryViewerRequest? = nil
-    @State var attachmentPreviewSheet: AttachmentPreviewSheetState? = nil
+    @State var attachmentPreviewSheet: NodeAttachmentPreviewSheetState? = nil
     @State var videoPlayback: VideoPlaybackRequest? = nil
 
     @State var errorMessage: String? = nil

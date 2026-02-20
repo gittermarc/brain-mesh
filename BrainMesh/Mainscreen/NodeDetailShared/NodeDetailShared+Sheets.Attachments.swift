@@ -33,7 +33,7 @@ struct NodeAttachmentsManageView: View {
     @State var isPickingVideo: Bool = false
 
     @State var videoPlayback: VideoPlaybackRequest? = nil
-    @State var attachmentPreviewSheet: AttachmentPreviewSheetState? = nil
+    @State var attachmentPreviewSheet: NodeAttachmentPreviewSheetState? = nil
 
     @State var infoMessage: String? = nil
     @State var errorMessage: String? = nil

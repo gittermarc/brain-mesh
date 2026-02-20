@@ -41,9 +41,20 @@ extension AttributeDetailView {
                     }
                 )
             }
+            .sheet(isPresented: $showCustomizeSheet) {
+                AttributeDetailCustomizeSheet()
+            }
             .toolbar {
                 ToolbarItem(placement: .primaryAction) {
                     Menu {
+                        Button {
+                            showCustomizeSheet = true
+                        } label: {
+                            Label("Anpassen…", systemImage: "slider.horizontal.3")
+                        }
+
+                        Divider()
+
                         Button {
                             showRenameSheet = true
                         } label: {

@@ -31,7 +31,7 @@ extension NodeAttachmentsManageView {
             return
         }
 
-        attachmentPreviewSheet = AttachmentPreviewSheetState(
+        attachmentPreviewSheet = NodeAttachmentPreviewSheetState(
             url: url,
             title: item.title,
             contentTypeIdentifier: item.contentTypeIdentifier,

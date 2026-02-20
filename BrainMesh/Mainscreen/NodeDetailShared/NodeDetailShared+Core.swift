@@ -46,6 +46,16 @@ struct NodeHeroCard: View {
 
     let isTitleEditable: Bool
 
+    /// Controls the image area height (when `showsImage` is true).
+    var imageHeight: CGFloat = 210
+
+    /// Optional fixed height for the entire card.
+    /// Set to `nil` to let the card size itself based on content.
+    var cardHeight: CGFloat? = 210
+
+    /// Whether to render the image/placeholder area at all.
+    var showsImage: Bool = true
+
     @State private var resolvedImage: UIImage? = nil
 
     private var hasResolvedImage: Bool {
@@ -61,37 +71,39 @@ struct NodeHeroCard: View {
                         .stroke(Color.secondary.opacity(0.12))
                 )
 
-            NodeAsyncPreviewImageView(
-                imagePath: imagePath,
-                imageData: imageData,
-                resolvedImage: $resolvedImage
-            ) { ui in
-                Image(uiImage: ui)
-                    .resizable()
-                    .scaledToFill()
-                    .frame(maxWidth: .infinity)
-                    .frame(height: 210)
-                    .clipped()
-                    .clipShape(RoundedRectangle(cornerRadius: 24, style: .continuous))
-                    .overlay(
-                        LinearGradient(
-                            colors: [Color.black.opacity(0.55), Color.black.opacity(0.15), Color.clear],
-                            startPoint: .bottom,
-                            endPoint: .top
-                        )
+            if showsImage {
+                NodeAsyncPreviewImageView(
+                    imagePath: imagePath,
+                    imageData: imageData,
+                    resolvedImage: $resolvedImage
+                ) { ui in
+                    Image(uiImage: ui)
+                        .resizable()
+                        .scaledToFill()
+                        .frame(maxWidth: .infinity)
+                        .frame(height: imageHeight)
+                        .clipped()
                         .clipShape(RoundedRectangle(cornerRadius: 24, style: .continuous))
-                    )
-            } placeholder: {
-                VStack(spacing: 8) {
-                    Image(systemName: placeholderIcon)
-                        .font(.system(size: 34, weight: .semibold))
-                        .foregroundStyle(.tint)
-                    Text(kindTitle)
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
+                        .overlay(
+                            LinearGradient(
+                                colors: [Color.black.opacity(0.55), Color.black.opacity(0.15), Color.clear],
+                                startPoint: .bottom,
+                                endPoint: .top
+                            )
+                            .clipShape(RoundedRectangle(cornerRadius: 24, style: .continuous))
+                        )
+                } placeholder: {
+                    VStack(spacing: 8) {
+                        Image(systemName: placeholderIcon)
+                            .font(.system(size: 34, weight: .semibold))
+                            .foregroundStyle(.tint)
+                        Text(kindTitle)
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
+                    .frame(maxWidth: .infinity)
+                    .frame(height: imageHeight)
                 }
-                .frame(maxWidth: .infinity)
-                .frame(height: 210)
             }
 
             VStack(alignment: .leading, spacing: 10) {
@@ -141,7 +153,7 @@ struct NodeHeroCard: View {
             }
             .padding(16)
         }
-        .frame(height: 210)
+        .frame(height: cardHeight)
         .accessibilityElement(children: .contain)
     }
 }
@@ -372,7 +384,7 @@ struct NodeAppearanceCard: View {
 
 /// Minimal, focused rename UI used from the detail screens.
 ///
-/// We keep renaming explicit (via the `…` menu) and update link labels after saving,
+/// We keep renaming explicit (via the context menu) and update link labels after saving,
 /// so the Connections UI stays consistent.
 
 

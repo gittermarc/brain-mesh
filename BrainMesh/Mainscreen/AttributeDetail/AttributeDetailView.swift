@@ -11,6 +11,7 @@ import SwiftData
 struct AttributeDetailView: View {
     @Environment(\.modelContext) var modelContext
     @Environment(\.dismiss) var dismiss
+    @EnvironmentObject private var display: DisplaySettingsStore
 
     @Bindable var attribute: MetaAttribute
 
@@ -39,17 +40,23 @@ struct AttributeDetailView: View {
     @State var showMediaManageChooser: Bool = false
 
     @State var galleryViewerRequest: PhotoGalleryViewerRequest? = nil
-    @State var attachmentPreviewSheet: AttachmentPreviewSheetState? = nil
+    @State var attachmentPreviewSheet: NodeAttachmentPreviewSheetState? = nil
     @State var videoPlayback: VideoPlaybackRequest? = nil
 
     @State var confirmDelete: Bool = false
 
     @State var showRenameSheet: Bool = false
 
+    // PR 02: Quick "Anpassen…" sheet (DisplaySettings).
+    @State var showCustomizeSheet: Bool = false
+
     @State var isImportingFile: Bool = false
     @State var isPickingVideo: Bool = false
 
     @State var errorMessage: String? = nil
+
+    // PR 01: runtime-expand state for sections that start collapsed (non-persistent).
+    @State private var expandedSectionIDs: Set<String> = []
 
     let maxBytes: Int = 25_000_000
 
@@ -101,71 +108,9 @@ struct AttributeDetailView: View {
                             }
                         )
 
-                        NodeNotesCard(
-                            notes: Binding(
-                                get: { attribute.notes },
-                                set: { attribute.notes = $0 }
-                            ),
-                            onEdit: { showNotesEditor = true }
-                        )
-                        .id(NodeDetailAnchor.notes.rawValue)
-
-                        if let owner = attribute.owner {
-                            NodeDetailsValuesCard(
-                                attribute: attribute,
-                                owner: owner,
-                                onConfigureSchema: {
-                                    detailsSchemaBuilderEntity = owner
-                                },
-                                onEditValue: { field in
-                                    detailsValueEditorField = field
-                                }
-                            )
+                        ForEach(display.attributeDetail.sectionOrder, id: \.rawValue) { section in
+                            attributeSection(section)
                         }
-
-                        if let owner = attribute.owner {
-                            NodeOwnerCard(owner: owner)
-                        }
-
-                        NodeConnectionsCard(
-                            ownerKind: .attribute,
-                            ownerID: attribute.id,
-                            graphID: attribute.graphID,
-                            outgoing: outgoingLinks,
-                            incoming: incomingLinks,
-                            segment: $segment,
-                            previewLimit: 4
-                        )
-                        .id(NodeDetailAnchor.connections.rawValue)
-
-                        NodeMediaCard(
-                            ownerKind: .attribute,
-                            ownerID: attribute.id,
-                            graphID: attribute.graphID,
-                            mainImageData: Binding(
-                                get: { attribute.imageData },
-                                set: { attribute.imageData = $0 }
-                            ),
-                            mainImagePath: Binding(
-                                get: { attribute.imagePath },
-                                set: { attribute.imagePath = $0 }
-                            ),
-                            mainStableID: attribute.id,
-                            galleryImages: mediaPreview.galleryPreview,
-                            attachments: mediaPreview.attachmentPreview,
-                            galleryCount: mediaPreview.galleryCount,
-                            attachmentCount: mediaPreview.attachmentCount,
-                            onOpenAll: { showGalleryBrowser = true },
-                            onManage: { showMediaManageChooser = true },
-                            onManageGallery: { showGalleryBrowser = true },
-                            onTapGallery: { id in
-                                galleryViewerRequest = PhotoGalleryViewerRequest(startAttachmentID: id)
-                            },
-                            onTapAttachment: { att in
-                                openAttachment(att)
-                            }
-                        )
-                        .id(NodeDetailAnchor.media.rawValue)
 
                         NodeAppearanceCard(
                             iconSymbolName: Binding(
@@ -209,5 +154,161 @@ struct AttributeDetailView: View {
         pills.append(NodeStatPill(title: "\(linkCount)", systemImage: "link"))
         pills.append(NodeStatPill(title: "\(mediaCount)", systemImage: "photo.on.rectangle"))
         return pills
+    }
+
+    // MARK: - Sections (order / hidden / collapsed)
+
+    @ViewBuilder
+    private func attributeSection(_ section: AttributeDetailSection) -> some View {
+        let settings = display.attributeDetail
+
+        if settings.hiddenSections.contains(section) {
+            EmptyView()
+        } else if settings.collapsedSections.contains(section) && !expandedSectionIDs.contains(section.rawValue) {
+            let card = NodeCollapsedSectionCard(
+                title: attributeSectionTitle(section),
+                systemImage: attributeSectionSystemImage(section),
+                subtitle: attributeSectionSubtitle(section),
+                actionTitle: "Anzeigen"
+            ) {
+                withAnimation(.snappy) {
+                    _ = expandedSectionIDs.insert(section.rawValue)
+                }
+            }
+
+            if let anchor = attributeSectionAnchor(section) {
+                card.id(anchor)
+            } else {
+                card
+            }
+        } else {
+            attributeSectionContent(section)
+        }
+    }
+
+    private func attributeSectionTitle(_ section: AttributeDetailSection) -> String {
+        switch section {
+        case .detailsFields: return "Details"
+        case .notes: return "Notizen"
+        case .media: return "Medien"
+        case .connections: return "Verbindungen"
+        }
+    }
+
+    private func attributeSectionSystemImage(_ section: AttributeDetailSection) -> String {
+        switch section {
+        case .detailsFields: return "list.bullet.rectangle"
+        case .notes: return "note.text"
+        case .media: return "photo.on.rectangle"
+        case .connections: return "link"
+        }
+    }
+
+    private func attributeSectionAnchor(_ section: AttributeDetailSection) -> String? {
+        switch section {
+        case .notes: return NodeDetailAnchor.notes.rawValue
+        case .media: return NodeDetailAnchor.media.rawValue
+        case .connections: return NodeDetailAnchor.connections.rawValue
+        case .detailsFields: return nil
+        }
+    }
+
+    private func attributeSectionSubtitle(_ section: AttributeDetailSection) -> String? {
+        switch section {
+        case .detailsFields:
+            guard let owner = attribute.owner else { return nil }
+            let n = owner.detailFieldsList.count
+            return "\(n) \(n == 1 ? "Feld" : "Felder")"
+
+        case .notes:
+            let trimmed = attribute.notes.trimmingCharacters(in: .whitespacesAndNewlines)
+            if trimmed.isEmpty { return nil }
+            return trimmed.count > 40 ? String(trimmed.prefix(40)) + " (gekürzt)" : trimmed
+
+        case .media:
+            let g = mediaPreview.galleryCount
+            let a = mediaPreview.attachmentCount
+            if g == 0 && a == 0 { return nil }
+            return "\(g) Fotos · \(a) Dateien"
+
+        case .connections:
+            let out = outgoingLinks.count
+            let inc = incomingLinks.count
+            if out == 0 && inc == 0 { return nil }
+            return "\(out) ausgehend · \(inc) eingehend"
+        }
+    }
+
+    @ViewBuilder
+    private func attributeSectionContent(_ section: AttributeDetailSection) -> some View {
+        switch section {
+        case .notes:
+            NodeNotesCard(
+                notes: Binding(
+                    get: { attribute.notes },
+                    set: { attribute.notes = $0 }
+                ),
+                onEdit: { showNotesEditor = true }
+            )
+            .id(NodeDetailAnchor.notes.rawValue)
+
+        case .detailsFields:
+            if let owner = attribute.owner {
+                NodeDetailsValuesCard(
+                    attribute: attribute,
+                    owner: owner,
+                    onConfigureSchema: {
+                        detailsSchemaBuilderEntity = owner
+                    },
+                    onEditValue: { field in
+                        detailsValueEditorField = field
+                    }
+                )
+
+                NodeOwnerCard(owner: owner)
+            }
+
+        case .connections:
+            NodeConnectionsCard(
+                ownerKind: .attribute,
+                ownerID: attribute.id,
+                graphID: attribute.graphID,
+                outgoing: outgoingLinks,
+                incoming: incomingLinks,
+                segment: $segment,
+                previewLimit: 4
+            )
+            .id(NodeDetailAnchor.connections.rawValue)
+
+        case .media:
+            NodeMediaCard(
+                ownerKind: .attribute,
+                ownerID: attribute.id,
+                graphID: attribute.graphID,
+                mainImageData: Binding(
+                    get: { attribute.imageData },
+                    set: { attribute.imageData = $0 }
+                ),
+                mainImagePath: Binding(
+                    get: { attribute.imagePath },
+                    set: { attribute.imagePath = $0 }
+                ),
+                mainStableID: attribute.id,
+                galleryImages: mediaPreview.galleryPreview,
+                attachments: mediaPreview.attachmentPreview,
+                galleryCount: mediaPreview.galleryCount,
+                attachmentCount: mediaPreview.attachmentCount,
+                onOpenAll: { showGalleryBrowser = true },
+                onManage: { showMediaManageChooser = true },
+                onManageGallery: { showGalleryBrowser = true },
+                onTapGallery: { id in
+                    galleryViewerRequest = PhotoGalleryViewerRequest(startAttachmentID: id)
+                },
+                onTapAttachment: { att in
+                    openAttachment(att)
+                }
+            )
+            .id(NodeDetailAnchor.media.rawValue)
+        }
     }
 }

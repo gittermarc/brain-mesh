@@ -48,7 +48,7 @@ extension AttributeDetailView {
         }
 
         try? modelContext.save()
-        attachmentPreviewSheet = AttachmentPreviewSheetState(
+        attachmentPreviewSheet = NodeAttachmentPreviewSheetState(
             url: url,
             title: attachment.title.isEmpty ? attachment.originalFilename : attachment.title,
             contentTypeIdentifier: attachment.contentTypeIdentifier,

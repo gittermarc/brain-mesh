@@ -37,6 +37,14 @@ extension EntityDetailView {
                 ToolbarItem(placement: .primaryAction) {
                     Menu {
                         Button {
+                            showCustomizeSheet = true
+                        } label: {
+                            Label("Anpassen…", systemImage: "slider.horizontal.3")
+                        }
+
+                        Divider()
+
+                        Button {
                             showRenameSheet = true
                         } label: {
                             Label("Umbenennen…", systemImage: "pencil")
@@ -108,6 +116,9 @@ extension EntityDetailView {
                         try await renameEntity(to: newName)
                     }
                 )
+            }
+            .sheet(isPresented: $showCustomizeSheet) {
+                EntityDetailCustomizeSheet()
             }
             .sheet(isPresented: $showGalleryBrowser) {
                 NavigationStack {

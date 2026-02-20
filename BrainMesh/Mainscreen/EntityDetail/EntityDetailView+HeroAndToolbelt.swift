@@ -13,6 +13,8 @@ struct EntityDetailHeroAndToolbelt: View {
     let imageData: Data?
     let imagePath: String?
 
+    let heroImageStyle: EntityDetailHeroImageStyle
+
     @Binding var title: String
     let pills: [NodeStatPill]
 
@@ -20,6 +22,17 @@ struct EntityDetailHeroAndToolbelt: View {
     let onAddAttribute: () -> Void
     let onAddPhoto: () -> Void
     let onAddFile: () -> Void
+
+    private var heroCardConfig: (showsImage: Bool, imageHeight: CGFloat, cardHeight: CGFloat?) {
+        switch heroImageStyle {
+        case .large:
+            return (showsImage: true, imageHeight: 210, cardHeight: 210)
+        case .compact:
+            return (showsImage: true, imageHeight: 150, cardHeight: 150)
+        case .hidden:
+            return (showsImage: false, imageHeight: 0, cardHeight: nil)
+        }
+    }
 
     var body: some View {
         VStack(spacing: 14) {
@@ -31,7 +44,10 @@ struct EntityDetailHeroAndToolbelt: View {
                 title: $title,
                 subtitle: nil,
                 pills: pills,
-                isTitleEditable: false
+                isTitleEditable: false,
+                imageHeight: heroCardConfig.imageHeight,
+                cardHeight: heroCardConfig.cardHeight,
+                showsImage: heroCardConfig.showsImage
             )
 
             NodeToolbelt {

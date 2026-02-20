@@ -7,7 +7,7 @@
 
 import Foundation
 
-struct AttachmentPreviewSheetState: Identifiable {
+struct NodeAttachmentPreviewSheetState: Identifiable {
     let url: URL
     let title: String
     let contentTypeIdentifier: String
