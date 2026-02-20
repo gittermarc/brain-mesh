@@ -7,9 +7,9 @@
 
 import Foundation
 
-struct IconSearchIndex: Sendable {
+nonisolated struct IconSearchIndex: Sendable {
 
-    struct Entry: Sendable {
+    nonisolated struct Entry: Sendable {
         let symbol: String
         let key: String
     }

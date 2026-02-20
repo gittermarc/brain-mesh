@@ -161,7 +161,7 @@ nonisolated struct GraphEdge: Hashable, Sendable {
     }
 }
 
-extension Array where Element == GraphEdge {
+nonisolated extension Array where Element == GraphEdge {
     func unique() -> [GraphEdge] { Array(Set(self)) }
 }
 

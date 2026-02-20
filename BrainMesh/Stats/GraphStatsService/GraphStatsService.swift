@@ -16,7 +16,7 @@ import Foundation
 import SwiftData
 
 /// Aggregated counters for a graph (or totals / legacy).
-struct GraphCounts: Equatable, Sendable {
+nonisolated struct GraphCounts: Equatable, Sendable {
     let entities: Int
     let attributes: Int
     let links: Int
@@ -49,13 +49,13 @@ struct GraphCounts: Equatable, Sendable {
 // MARK: - P0 Stats Extensions (Dashboard + Media + Structure)
 
 /// Small label/value pair for rankings (e.g. top file extensions).
-struct GraphTopItem: Equatable, Sendable {
+nonisolated struct GraphTopItem: Equatable, Sendable {
     let label: String
     let count: Int
 }
 
 /// Lightweight view model for the largest attachments list.
-struct GraphLargestAttachment: Equatable, Sendable {
+nonisolated struct GraphLargestAttachment: Equatable, Sendable {
     let id: UUID
     let title: String
     let byteCount: Int
@@ -66,7 +66,7 @@ struct GraphLargestAttachment: Equatable, Sendable {
 /// Ranking item for "Top nodes with media".
 ///
 /// Media count is computed as: attachments + headerImage(0/1)
-struct GraphMediaNodeItem: Equatable, Sendable {
+nonisolated struct GraphMediaNodeItem: Equatable, Sendable {
     let id: UUID
     let label: String
     let kind: NodeKind
@@ -79,7 +79,7 @@ struct GraphMediaNodeItem: Equatable, Sendable {
 }
 
 /// Media breakdown (attachments) + rankings for a given graph.
-struct GraphMediaSnapshot: Equatable, Sendable {
+nonisolated struct GraphMediaSnapshot: Equatable, Sendable {
     let headerImages: Int
 
     let attachmentsTotal: Int
@@ -95,12 +95,12 @@ struct GraphMediaSnapshot: Equatable, Sendable {
 
 // MARK: - P1: Trends (7 days)
 
-struct GraphTrendDelta: Equatable, Sendable {
+nonisolated struct GraphTrendDelta: Equatable, Sendable {
     let current: Int
     let previous: Int
 }
 
-struct GraphTrendsSnapshot: Equatable, Sendable {
+nonisolated struct GraphTrendsSnapshot: Equatable, Sendable {
     /// Labels for the last N days (oldest -> newest).
     let dayLabels: [String]
 
@@ -117,7 +117,7 @@ struct GraphTrendsSnapshot: Equatable, Sendable {
 }
 
 /// Top hub node (highest degree) derived from links.
-struct GraphHubItem: Equatable, Sendable {
+nonisolated struct GraphHubItem: Equatable, Sendable {
     let id: UUID
     let label: String
     let kind: NodeKind
@@ -125,7 +125,7 @@ struct GraphHubItem: Equatable, Sendable {
 }
 
 /// Graph structure snapshot derived from nodes + links.
-struct GraphStructureSnapshot: Equatable, Sendable {
+nonisolated struct GraphStructureSnapshot: Equatable, Sendable {
     let nodeCount: Int
     let linkCount: Int
     let isolatedNodeCount: Int

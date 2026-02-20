@@ -8,7 +8,7 @@
 import Foundation
 import OSLog
 
-enum SFSymbolsCatalog {
+nonisolated enum SFSymbolsCatalog {
 
     private static let log = Logger(subsystem: "BrainMesh", category: "SFSymbolsCatalog")
 

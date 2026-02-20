@@ -10,7 +10,7 @@ import SwiftData
 import os
 
 /// Shared cleanup helpers for MetaLink records.
-enum LinkCleanup {
+nonisolated enum LinkCleanup {
 
     /// Deletes all links referencing the given node (as source OR target), scoped to a graph if provided.
     @MainActor

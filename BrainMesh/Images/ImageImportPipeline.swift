@@ -13,7 +13,7 @@ import ImageIO
 ///
 /// We use a robust decode path (thumbnail-at-index) to avoid corrupt/edge-case images
 /// that decode into "0 height" slots on iOS.
-enum ImageImportPipeline {
+nonisolated enum ImageImportPipeline {
 
     /// Decodes image data in a memory-friendly way by creating a thumbnail at index 0.
     ///

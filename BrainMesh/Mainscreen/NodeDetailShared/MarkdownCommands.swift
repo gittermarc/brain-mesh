@@ -8,7 +8,7 @@
 
 import Foundation
 
-enum MarkdownCommands {
+nonisolated enum MarkdownCommands {
 
     // MARK: - Inline wrappers
 
@@ -120,7 +120,7 @@ enum MarkdownCommands {
         let hasTrailingNewline = block.hasSuffix("\n")
 
         // Note: components(separatedBy:) preserves empty lines in the middle.
-        var lines = block.components(separatedBy: "\n")
+        let lines = block.components(separatedBy: "\n")
         if hasTrailingNewline {
             // components() will add an extra empty string at end; keep it so we can restore trailing newline via join.
         } else {
