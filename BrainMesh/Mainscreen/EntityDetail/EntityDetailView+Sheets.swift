@@ -17,14 +17,14 @@ extension EntityDetailView {
         content
             .background(Color(uiColor: .systemGroupedBackground).ignoresSafeArea())
             .scrollDismissesKeyboard(.interactively)
-            .onChange(of: showGalleryBrowser) { isPresented in
+            .onChange(of: showGalleryBrowser) { _, isPresented in
                 if !isPresented {
                     Task { @MainActor in
                         await reloadMediaPreview()
                     }
                 }
             }
-            .onChange(of: showAttachmentsManager) { isPresented in
+            .onChange(of: showAttachmentsManager) { _, isPresented in
                 if !isPresented {
                     Task { @MainActor in
                         await reloadMediaPreview()

@@ -40,7 +40,7 @@ struct AttachmentCardRow: View {
         .padding(.vertical, 6)
         .contentShape(Rectangle())
         .task(id: attachment.id) {
-            await resetStateForNewAttachment()
+            resetStateForNewAttachment()
             await loadThumbnailIfPossible()
             await loadVideoDurationIfNeeded()
         }

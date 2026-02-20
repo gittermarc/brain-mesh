@@ -71,6 +71,7 @@ final class SyncRuntime: ObservableObject {
         case .noAccount: return "Kein iCloud-Account"
         case .restricted: return "Eingeschränkt"
         case .couldNotDetermine: return "Unklar"
+        case .temporarilyUnavailable: return "Vorübergehend nicht verfügbar"
         @unknown default: return "Unbekannt"
         }
     }

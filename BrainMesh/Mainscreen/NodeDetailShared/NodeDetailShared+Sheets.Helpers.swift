@@ -71,7 +71,7 @@ struct AttachmentManageRow: View {
             }
         }
         .task(id: item.id) {
-            await resetStateForNewItem()
+            resetStateForNewItem()
             await loadThumbnailIfPossible()
         }
     }

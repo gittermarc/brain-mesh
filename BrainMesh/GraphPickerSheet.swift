@@ -130,12 +130,12 @@ struct GraphPickerSheet: View {
             }
             rebuildDisplayed()
         }
-        .onChange(of: graphsSignature) { _ in
+        .onChange(of: graphsSignature) { _, _ in
             if !isDeleting {
                 rebuildDisplayed()
             }
         }
-        .onChange(of: isDeleting) { deleting in
+        .onChange(of: isDeleting) { _, deleting in
             if !deleting {
                 rebuildDisplayed()
             }
