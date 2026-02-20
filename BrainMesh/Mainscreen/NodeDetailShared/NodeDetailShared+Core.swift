@@ -11,6 +11,7 @@ import UIKit
 // MARK: - Anchors
 
 enum NodeDetailAnchor: String {
+    case details
     case notes
     case connections
     case media

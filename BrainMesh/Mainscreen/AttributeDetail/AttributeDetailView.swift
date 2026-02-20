@@ -58,6 +58,9 @@ struct AttributeDetailView: View {
     // PR 01: runtime-expand state for sections that start collapsed (non-persistent).
     @State private var expandedSectionIDs: Set<String> = []
 
+    // PR 03: focus-mode temporary collapse (non-persistent, does not touch DisplaySettingsStore).
+    @State private var focusCollapsedSections: Set<AttributeDetailSection> = []
+
     let maxBytes: Int = 25_000_000
 
     init(attribute: MetaAttribute) {
@@ -127,9 +130,16 @@ struct AttributeDetailView: View {
                     .task(id: attribute.id) {
                         await reloadMediaPreview()
                     }
+                    .task(id: focusTaskKey) {
+                        await applyFocusModeIfNeeded(proxy)
+                    }
                 }
             )
         }
+    }
+
+    private var focusTaskKey: String {
+        attribute.id.uuidString + "|" + display.attributeDetail.focusMode.rawValue
     }
 
     private var heroPills: [NodeStatPill] {
@@ -162,9 +172,13 @@ struct AttributeDetailView: View {
     private func attributeSection(_ section: AttributeDetailSection) -> some View {
         let settings = display.attributeDetail
 
+        let isCollapsedBySettings = settings.collapsedSections.contains(section)
+        let isCollapsedByFocus = focusCollapsedSections.contains(section)
+        let isExpandedAtRuntime = expandedSectionIDs.contains(section.rawValue)
+
         if settings.hiddenSections.contains(section) {
             EmptyView()
-        } else if settings.collapsedSections.contains(section) && !expandedSectionIDs.contains(section.rawValue) {
+        } else if (isCollapsedBySettings || isCollapsedByFocus) && !isExpandedAtRuntime {
             let card = NodeCollapsedSectionCard(
                 title: attributeSectionTitle(section),
                 systemImage: attributeSectionSystemImage(section),
@@ -173,6 +187,7 @@ struct AttributeDetailView: View {
             ) {
                 withAnimation(.snappy) {
                     _ = expandedSectionIDs.insert(section.rawValue)
+                    focusCollapsedSections.remove(section)
                 }
             }
 
@@ -206,10 +221,10 @@ struct AttributeDetailView: View {
 
     private func attributeSectionAnchor(_ section: AttributeDetailSection) -> String? {
         switch section {
+        case .detailsFields: return NodeDetailAnchor.details.rawValue
         case .notes: return NodeDetailAnchor.notes.rawValue
         case .media: return NodeDetailAnchor.media.rawValue
         case .connections: return NodeDetailAnchor.connections.rawValue
-        case .detailsFields: return nil
         }
     }
 
@@ -257,6 +272,8 @@ struct AttributeDetailView: View {
                 NodeDetailsValuesCard(
                     attribute: attribute,
                     owner: owner,
+                    layout: display.attributeDetail.detailsLayout,
+                    hideEmpty: display.attributeDetail.hideEmptyDetails,
                     onConfigureSchema: {
                         detailsSchemaBuilderEntity = owner
                     },
@@ -264,6 +281,7 @@ struct AttributeDetailView: View {
                         detailsValueEditorField = field
                     }
                 )
+                .id(NodeDetailAnchor.details.rawValue)
 
                 NodeOwnerCard(owner: owner)
             }
@@ -309,6 +327,60 @@ struct AttributeDetailView: View {
                 }
             )
             .id(NodeDetailAnchor.media.rawValue)
+        }
+    }
+
+    // MARK: - Focus Mode
+
+    private func focusTargetSection(for mode: AttributeDetailFocusMode) -> AttributeDetailSection? {
+        switch mode {
+        case .auto:
+            return nil
+        case .writing:
+            return .notes
+        case .data:
+            return .detailsFields
+        case .linking:
+            return .connections
+        case .media:
+            return .media
+        }
+    }
+
+    private func applyFocusModeIfNeeded(_ proxy: ScrollViewProxy) async {
+        let mode = display.attributeDetail.focusMode
+
+        guard let target = focusTargetSection(for: mode) else {
+            await MainActor.run {
+                focusCollapsedSections = []
+            }
+            return
+        }
+
+        let settings = display.attributeDetail
+
+        if settings.hiddenSections.contains(target) {
+            await MainActor.run {
+                focusCollapsedSections = []
+            }
+            return
+        }
+
+        await MainActor.run {
+            let ordered = settings.sectionOrder.filter { !settings.hiddenSections.contains($0) }
+            focusCollapsedSections = Set(ordered.filter { $0 != target })
+            _ = expandedSectionIDs.insert(target.rawValue)
+        }
+
+        // Give SwiftUI a beat to lay out the collapsed cards / anchors before scrolling.
+        try? await Task.sleep(nanoseconds: 120_000_000)
+
+        guard let anchor = attributeSectionAnchor(target) else { return }
+
+        await MainActor.run {
+            withAnimation(.snappy) {
+                proxy.scrollTo(anchor, anchor: .top)
+            }
         }
     }
 }
