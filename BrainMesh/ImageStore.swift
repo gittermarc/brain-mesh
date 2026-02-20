@@ -17,7 +17,7 @@ import UIKit
 /// Notes:
 /// - `loadUIImage(path:)` is synchronous and should not be called from SwiftUI `body`.
 /// - Prefer `loadUIImageAsync(path:)` for UI, which de-duplicates concurrent loads and performs disk I/O off-main.
-enum ImageStore {
+nonisolated enum ImageStore {
     private static let folderName = "BrainMeshImages"
 
     // MARK: - Memory cache
