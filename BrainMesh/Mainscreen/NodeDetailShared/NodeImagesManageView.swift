@@ -301,6 +301,8 @@ private struct GalleryManageRow: View {
     let onSetAsMain: () -> Void
     let onDelete: () -> Void
 
+
+    @Environment(\.displayScale) private var displayScale
     @State private var thumbnail: UIImage? = nil
 
     var body: some View {
@@ -390,7 +392,7 @@ private struct GalleryManageRow: View {
             return
         }
 
-        let scale = UIScreen.main.scale
+        let scale = displayScale
         let requestSize = CGSize(width: thumbRequestSide, height: thumbRequestSide)
 
         let img = await AttachmentThumbnailStore.shared.thumbnail(

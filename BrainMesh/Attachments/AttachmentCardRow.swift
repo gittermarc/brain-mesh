@@ -16,6 +16,8 @@ struct AttachmentCardRow: View {
     private let defaultThumbSide: CGFloat = 54
     private let videoThumbHeight: CGFloat = 54
 
+
+    @Environment(\.displayScale) private var displayScale
     @State private var thumbnail: UIImage? = nil
     @State private var videoDurationText: String? = nil
 
@@ -127,7 +129,7 @@ struct AttachmentCardRow: View {
             return
         }
 
-        let scale = UIScreen.main.scale
+        let scale = displayScale
         let requestSize: CGSize = isVideo ? CGSize(width: 320, height: 180) : CGSize(width: 220, height: 220)
 
         let image = await AttachmentThumbnailStore.shared.thumbnail(

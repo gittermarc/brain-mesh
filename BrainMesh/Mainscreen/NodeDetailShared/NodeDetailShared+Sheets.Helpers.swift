@@ -15,6 +15,8 @@ struct AttachmentManageRow: View {
     let onOpen: () -> Void
     let onDelete: () -> Void
 
+
+    @Environment(\.displayScale) private var displayScale
     @State private var thumbnail: UIImage? = nil
 
     var body: some View {
@@ -136,7 +138,7 @@ struct AttachmentManageRow: View {
             return
         }
 
-        let scale = UIScreen.main.scale
+        let scale = displayScale
         let requestSize: CGSize = isVideo ? CGSize(width: 320, height: 180) : CGSize(width: 220, height: 220)
 
         let image = await AttachmentThumbnailStore.shared.thumbnail(

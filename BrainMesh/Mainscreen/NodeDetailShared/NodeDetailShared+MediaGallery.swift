@@ -56,6 +56,8 @@ struct NodeGalleryThumbTile: View {
     let localPath: String?
     let onTap: () -> Void
 
+
+    @Environment(\.displayScale) private var displayScale
     @State private var thumbnail: UIImage? = nil
 
     var body: some View {
@@ -84,7 +86,7 @@ struct NodeGalleryThumbTile: View {
             return
         }
 
-        let scale = UIScreen.main.scale
+        let scale = displayScale
         let requestSize = CGSize(width: 420, height: 420)
 
         let img = await AttachmentThumbnailStore.shared.thumbnail(

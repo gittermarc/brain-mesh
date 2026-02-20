@@ -119,6 +119,8 @@ struct NodeMiniThumbStrip: View {
 private struct NodeThumbMiniTile: View {
     let attachment: MetaAttachment
 
+
+    @Environment(\.displayScale) private var displayScale
     @State private var thumbnail: UIImage? = nil
 
     var body: some View {
@@ -155,7 +157,7 @@ private struct NodeThumbMiniTile: View {
             return
         }
 
-        let scale = UIScreen.main.scale
+        let scale = displayScale
         let requestSize = CGSize(width: 140, height: 140)
 
         let img = await AttachmentThumbnailStore.shared.thumbnail(

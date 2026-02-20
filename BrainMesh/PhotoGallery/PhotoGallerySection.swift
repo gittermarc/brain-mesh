@@ -276,6 +276,8 @@ private struct PhotoGalleryThumbnailTile: View {
     let side: CGFloat
     let onTap: () -> Void
 
+
+    @Environment(\.displayScale) private var displayScale
     @State private var thumbnail: UIImage? = nil
 
     /// One disk-cached thumbnail per attachment id.
@@ -324,7 +326,7 @@ private struct PhotoGalleryThumbnailTile: View {
             return
         }
 
-        let scale = UIScreen.main.scale
+        let scale = displayScale
         let requestSize = CGSize(width: thumbRequestSide, height: thumbRequestSide)
 
         let img = await AttachmentThumbnailStore.shared.thumbnail(
