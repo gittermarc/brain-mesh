@@ -6,7 +6,7 @@
 import Foundation
 import SwiftData
 
-extension GraphStatsService {
+nonisolated extension GraphStatsService {
     /// Total counts across all graphs (including legacy / graphID == nil).
     func totalCounts() throws -> GraphCounts {
         let entities = try context.fetchCount(FetchDescriptor<MetaEntity>())
@@ -95,7 +95,7 @@ extension GraphStatsService {
 
 // MARK: - Attachment bytes
 
-private extension GraphStatsService {
+private nonisolated extension GraphStatsService {
     func totalAttachmentBytes() throws -> Int64 {
         let items = try context.fetch(FetchDescriptor<MetaAttachment>())
         var total: Int64 = 0

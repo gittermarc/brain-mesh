@@ -132,7 +132,11 @@ struct GraphStructureSnapshot: Equatable, Sendable {
     let topHubs: [GraphHubItem]
 }
 
-final class GraphStatsService {
+// NOTE:
+// The project uses "Default Actor Isolation = MainActor".
+// This service is pure SwiftData/compute work and is intentionally NOT MainActor-isolated,
+// so it can be used from background loaders (e.g. GraphStatsLoader's detached task).
+nonisolated final class GraphStatsService {
     let context: ModelContext
 
     init(context: ModelContext) {
@@ -142,7 +146,7 @@ final class GraphStatsService {
 
 // MARK: - Shared Helpers (used across split extensions)
 
-extension GraphStatsService {
+nonisolated extension GraphStatsService {
     func shortID(_ id: UUID) -> String {
         let s = id.uuidString
         return String(s.prefix(8))
@@ -151,7 +155,7 @@ extension GraphStatsService {
 
 // MARK: - Graph predicates
 
-extension GraphStatsService {
+nonisolated extension GraphStatsService {
     func entityGraphPredicate(for graphID: UUID?) -> Predicate<MetaEntity> {
         if let graphID {
             return #Predicate<MetaEntity> { $0.graphID == graphID }
@@ -183,7 +187,7 @@ extension GraphStatsService {
 
 // MARK: - Notes predicates
 
-extension GraphStatsService {
+nonisolated extension GraphStatsService {
     func entityNotesPredicate(for graphID: UUID?) -> Predicate<MetaEntity> {
         if let graphID {
             return #Predicate<MetaEntity> { $0.graphID == graphID && $0.notes != "" }
@@ -208,7 +212,7 @@ extension GraphStatsService {
 
 // MARK: - Image predicates (imageData only)
 
-extension GraphStatsService {
+nonisolated extension GraphStatsService {
     func entityImageDataPredicate(for graphID: UUID?) -> Predicate<MetaEntity> {
         if let graphID {
             return #Predicate<MetaEntity> { $0.graphID == graphID && $0.imageData != nil }

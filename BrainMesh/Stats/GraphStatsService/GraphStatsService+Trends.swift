@@ -6,7 +6,7 @@
 import Foundation
 import SwiftData
 
-extension GraphStatsService {
+nonisolated extension GraphStatsService {
     /// Trends for the last N days:
     /// - Links created per day
     /// - Attachments created per day
@@ -69,7 +69,7 @@ extension GraphStatsService {
     }
 }
 
-private extension GraphStatsService {
+private nonisolated extension GraphStatsService {
     func nodeCount(for graphID: UUID?) throws -> Int {
         let entities = try context.fetchCount(
             FetchDescriptor<MetaEntity>(predicate: entityGraphPredicate(for: graphID))

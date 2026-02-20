@@ -6,7 +6,7 @@
 import Foundation
 import SwiftData
 
-extension GraphStatsService {
+nonisolated extension GraphStatsService {
     /// Structure snapshot for a graph:
     /// - nodeCount = entities + attributes
     /// - isolated nodes = nodes that do not appear as source/target in any link
@@ -73,7 +73,7 @@ extension GraphStatsService {
     }
 }
 
-private extension GraphStatsService {
+private nonisolated extension GraphStatsService {
     func fallbackLabel(for id: UUID, links: [MetaLink]) -> String {
         for l in links {
             if l.sourceID == id {

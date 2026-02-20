@@ -6,7 +6,7 @@
 import Foundation
 import SwiftData
 
-extension GraphStatsService {
+nonisolated extension GraphStatsService {
     /// Media breakdown for a single graph.
     /// Notes:
     /// - "Header images" are counted via `imageData` (entities + attributes).
@@ -74,7 +74,7 @@ extension GraphStatsService {
     }
 }
 
-private extension GraphStatsService {
+private nonisolated extension GraphStatsService {
     func headerImagesCount(for graphID: UUID?) throws -> Int {
         let entityImages = try context.fetchCount(
             FetchDescriptor<MetaEntity>(predicate: entityImageDataPredicate(for: graphID))
