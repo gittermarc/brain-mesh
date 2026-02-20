@@ -15,6 +15,26 @@ import ImageIO
 /// that decode into "0 height" slots on iOS.
 nonisolated enum ImageImportPipeline {
 
+    private static func resizedToFit(_ image: UIImage, maxDimension: CGFloat) -> UIImage {
+        let w = image.size.width
+        let h = image.size.height
+        let maxSide = max(w, h)
+
+        guard maxSide > maxDimension, maxSide > 0, w > 0, h > 0 else { return image }
+
+        let scale = maxDimension / maxSide
+        let newSize = CGSize(width: max(1, w * scale), height: max(1, h * scale))
+
+        let format = UIGraphicsImageRendererFormat()
+        format.scale = 1.0
+        format.opaque = false
+
+        let renderer = UIGraphicsImageRenderer(size: newSize, format: format)
+        return renderer.image { _ in
+            image.draw(in: CGRect(origin: .zero, size: newSize))
+        }
+    }
+
     /// Decodes image data in a memory-friendly way by creating a thumbnail at index 0.
     ///
     /// - Parameters:
@@ -47,7 +67,7 @@ nonisolated enum ImageImportPipeline {
         let targetBytes = 280_000
 
         var maxDim: CGFloat = 1400
-        var resized = image.resizedToFit(maxDimension: maxDim)
+        var resized = resizedToFit(image, maxDimension: maxDim)
 
         var q: CGFloat = 0.78
         var data = resized.jpegData(compressionQuality: q)
@@ -64,7 +84,7 @@ nonisolated enum ImageImportPipeline {
 
         if tooBig(data) {
             maxDim = 1100
-            resized = resized.resizedToFit(maxDimension: maxDim)
+            resized = resizedToFit(resized, maxDimension: maxDim)
             q = 0.68
             data = resized.jpegData(compressionQuality: q)
 
@@ -85,7 +105,7 @@ nonisolated enum ImageImportPipeline {
         let targetBytes = 2_200_000
 
         var maxDim: CGFloat = 2600
-        var resized = image.resizedToFit(maxDimension: maxDim)
+        var resized = resizedToFit(image, maxDimension: maxDim)
 
         var q: CGFloat = 0.86
         var data = resized.jpegData(compressionQuality: q)
@@ -102,7 +122,7 @@ nonisolated enum ImageImportPipeline {
 
         if tooBig(data) {
             maxDim = 2200
-            resized = resized.resizedToFit(maxDimension: maxDim)
+            resized = resizedToFit(resized, maxDimension: maxDim)
             q = 0.82
             data = resized.jpegData(compressionQuality: q)
 
@@ -114,7 +134,7 @@ nonisolated enum ImageImportPipeline {
 
         if tooBig(data) {
             maxDim = 1900
-            resized = resized.resizedToFit(maxDimension: maxDim)
+            resized = resizedToFit(resized, maxDimension: maxDim)
             q = 0.78
             data = resized.jpegData(compressionQuality: q)
 
@@ -125,27 +145,5 @@ nonisolated enum ImageImportPipeline {
         }
 
         return data
-    }
-}
-
-private extension UIImage {
-    func resizedToFit(maxDimension: CGFloat) -> UIImage {
-        let w = size.width
-        let h = size.height
-        let maxSide = max(w, h)
-
-        guard maxSide > maxDimension, maxSide > 0, w > 0, h > 0 else { return self }
-
-        let scale = maxDimension / maxSide
-        let newSize = CGSize(width: max(1, w * scale), height: max(1, h * scale))
-
-        let format = UIGraphicsImageRendererFormat()
-        format.scale = 1.0
-        format.opaque = false
-
-        let renderer = UIGraphicsImageRenderer(size: newSize, format: format)
-        return renderer.image { _ in
-            self.draw(in: CGRect(origin: .zero, size: newSize))
-        }
     }
 }

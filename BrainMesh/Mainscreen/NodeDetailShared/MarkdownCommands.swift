@@ -217,15 +217,15 @@ nonisolated enum MarkdownCommands {
         s = s.replacingOccurrences(of: "```", with: "")
 
         // Images: ![alt](url) -> alt
-        s = s.replacingRegex(pattern: "!\\[([^\\]]*)\\]\\(([^)]*)\\)", with: "$1")
+        s = replacingRegex(in: s, pattern: "!\\[([^\\]]*)\\]\\(([^)]*)\\)", with: "$1")
         // Links: [text](url) -> text
-        s = s.replacingRegex(pattern: "\\[([^\\]]+)\\]\\(([^)]*)\\)", with: "$1")
+        s = replacingRegex(in: s, pattern: "\\[([^\\]]+)\\]\\(([^)]*)\\)", with: "$1")
 
         // Line prefixes
-        s = s.replacingRegex(pattern: "(?m)^\\s{0,3}#{1,6}\\s+", with: "")
-        s = s.replacingRegex(pattern: "(?m)^\\s{0,3}>\\s?", with: "")
-        s = s.replacingRegex(pattern: "(?m)^\\s{0,3}[-*+]\\s+", with: "")
-        s = s.replacingRegex(pattern: "(?m)^\\s{0,3}\\d+\\.\\s+", with: "")
+        s = replacingRegex(in: s, pattern: "(?m)^\\s{0,3}#{1,6}\\s+", with: "")
+        s = replacingRegex(in: s, pattern: "(?m)^\\s{0,3}>\\s?", with: "")
+        s = replacingRegex(in: s, pattern: "(?m)^\\s{0,3}[-*+]\\s+", with: "")
+        s = replacingRegex(in: s, pattern: "(?m)^\\s{0,3}\\d+\\.\\s+", with: "")
 
         // Inline markers
         s = s.replacingOccurrences(of: "**", with: "")
@@ -235,8 +235,8 @@ nonisolated enum MarkdownCommands {
         s = s.replacingOccurrences(of: "_", with: "")
 
         // Collapse whitespace
-        s = s.replacingRegex(pattern: "[\\t ]+", with: " ")
-        s = s.replacingRegex(pattern: "\\n{2,}", with: "\n")
+        s = replacingRegex(in: s, pattern: "[\\t ]+", with: " ")
+        s = replacingRegex(in: s, pattern: "\\n{2,}", with: "\n")
 
         return s.trimmingCharacters(in: .whitespacesAndNewlines)
     }
@@ -261,12 +261,10 @@ nonisolated enum MarkdownCommands {
         let safeLength = Swift.max(0, Swift.min(range.length, maxLength - safeLocation))
         return NSRange(location: safeLocation, length: safeLength)
     }
-}
 
-private extension String {
-    func replacingRegex(pattern: String, with replacement: String) -> String {
-        guard let regex = try? NSRegularExpression(pattern: pattern, options: []) else { return self }
-        let range = NSRange(location: 0, length: (self as NSString).length)
-        return regex.stringByReplacingMatches(in: self, options: [], range: range, withTemplate: replacement)
+    private static func replacingRegex(in input: String, pattern: String, with replacement: String) -> String {
+        guard let regex = try? NSRegularExpression(pattern: pattern, options: []) else { return input }
+        let range = NSRange(location: 0, length: (input as NSString).length)
+        return regex.stringByReplacingMatches(in: input, options: [], range: range, withTemplate: replacement)
     }
 }

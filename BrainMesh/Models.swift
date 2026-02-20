@@ -14,7 +14,7 @@ nonisolated enum NodeKind: Int, Codable, CaseIterable, Sendable {
 }
 
 // Helper für case-/diacritic-insensitive Suche
-enum BMSearch {
+nonisolated enum BMSearch {
     static func fold(_ s: String) -> String {
         s.folding(options: [.diacriticInsensitive, .caseInsensitive], locale: .current)
             .lowercased()
