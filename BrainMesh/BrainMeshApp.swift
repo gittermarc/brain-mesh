@@ -12,6 +12,7 @@ import SwiftData
 struct BrainMeshApp: App {
 
     @StateObject private var appearanceStore = AppearanceStore()
+    @StateObject private var displaySettingsStore = DisplaySettingsStore()
     @StateObject private var onboardingCoordinator = OnboardingCoordinator()
     @StateObject private var graphLockCoordinator = GraphLockCoordinator()
     @StateObject private var systemModalCoordinator = SystemModalCoordinator()
@@ -129,6 +130,7 @@ struct BrainMeshApp: App {
         WindowGroup {
             AppRootView()
                 .environmentObject(appearanceStore)
+                .environmentObject(displaySettingsStore)
                 .environmentObject(onboardingCoordinator)
                 .environmentObject(graphLockCoordinator)
                 .environmentObject(systemModalCoordinator)

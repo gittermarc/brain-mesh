@@ -39,6 +39,10 @@ enum BMAppStorageKeys {
 
     static let appearanceSettingsV1 = "BMAppearanceSettingsV1"
 
+    // MARK: - Display
+
+    static let displaySettingsV1 = "BMDisplaySettingsV1"
+
     // MARK: - Video import
 
     static let compressVideosOnImport = "BMCompressVideosOnImport"
