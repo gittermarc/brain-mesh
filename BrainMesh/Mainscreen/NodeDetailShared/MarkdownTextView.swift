@@ -51,7 +51,8 @@ struct MarkdownTextView: UIViewRepresentable {
 
         // Give the accessory an explicit height. UIKit can otherwise end up with a 0-height
         // accessory in some SwiftUI sheet/update timing scenarios.
-        accessory.frame = CGRect(x: 0, y: 0, width: UIScreen.main.bounds.width, height: 44)
+        // Width will be resized by UIKit once attached to the text view / keyboard context.
+        accessory.frame = CGRect(x: 0, y: 0, width: 1, height: 44)
         accessory.autoresizingMask = [.flexibleWidth]
 
         context.coordinator.textView = tv
@@ -482,24 +483,19 @@ final class MarkdownAccessoryView: UIView, UIScrollViewDelegate {
         configureSymbolButton(codeButton, systemName: "chevron.left.slash.chevron.right", action: .inlineCode, label: "Code")
         configureSymbolButton(linkButton, systemName: "link", action: .link, label: "Link")
 
-        h1Button.tag = Action.heading1.rawValue
-        h1Button.setTitle("H1", for: .normal)
-        h1Button.titleLabel?.font = UIFont.systemFont(ofSize: 15, weight: .semibold)
-        h1Button.accessibilityLabel = "Überschrift"
-        h1Button.addTarget(self, action: #selector(buttonTapped(_:)), for: .touchUpInside)
-        styleButton(h1Button)
+        configureTextButton(h1Button, title: "H1", titleFont: UIFont.systemFont(ofSize: 15, weight: .semibold), action: .heading1, label: "Überschrift")
 
         configureSymbolButton(bulletButton, systemName: "list.bullet", action: .bulletList, label: "Liste")
         configureSymbolButton(numberButton, systemName: "list.number", action: .numberedList, label: "Nummerierte Liste")
         configureSymbolButton(quoteButton, systemName: "text.quote", action: .quote, label: "Zitat")
 
-        configureSymbolButton(dismissButton, systemName: "keyboard.chevron.compact.down", action: .dismissKeyboard, label: "Tastatur ausblenden")
-        dismissButton.tintColor = UIColor.secondaryLabel
-        dismissButton.backgroundColor = UIColor.tertiarySystemBackground
-        dismissButton.layer.cornerRadius = 10
-        dismissButton.contentEdgeInsets = UIEdgeInsets(top: 7, left: 10, bottom: 7, right: 10)
-        dismissButton.setContentHuggingPriority(.required, for: .horizontal)
-        dismissButton.setContentCompressionResistancePriority(.required, for: .horizontal)
+        configureSymbolButton(
+            dismissButton,
+            systemName: "keyboard.chevron.compact.down",
+            action: .dismissKeyboard,
+            label: "Tastatur ausblenden",
+            foregroundColor: UIColor.secondaryLabel
+        )
 
         setUndoRedo(canUndo: false, canRedo: false)
     }
@@ -530,22 +526,57 @@ final class MarkdownAccessoryView: UIView, UIScrollViewDelegate {
         redoButton.alpha = canRedo ? 1.0 : 0.35
     }
 
-    private func configureSymbolButton(_ button: UIButton, systemName: String, action: Action, label: String) {
-        button.tag = action.rawValue
-        button.setImage(UIImage(systemName: systemName), for: .normal)
-        button.accessibilityLabel = label
-        button.addTarget(self, action: #selector(buttonTapped(_:)), for: .touchUpInside)
-        styleButton(button)
+    private func makeButtonConfiguration(foregroundColor: UIColor, backgroundColor: UIColor = UIColor.tertiarySystemBackground) -> UIButton.Configuration {
+        var config = UIButton.Configuration.plain()
+        config.baseForegroundColor = foregroundColor
+        config.background.backgroundColor = backgroundColor
+        config.background.cornerRadius = 10
+        config.contentInsets = NSDirectionalEdgeInsets(top: 7, leading: 10, bottom: 7, trailing: 10)
+        return config
     }
 
-    private func styleButton(_ button: UIButton) {
+    private func applyCommonPriorities(_ button: UIButton) {
         button.translatesAutoresizingMaskIntoConstraints = false
-        button.contentEdgeInsets = UIEdgeInsets(top: 7, left: 10, bottom: 7, right: 10)
-        button.layer.cornerRadius = 10
-        button.backgroundColor = UIColor.tertiarySystemBackground
-        button.tintColor = UIColor.label
         button.setContentHuggingPriority(.required, for: .horizontal)
         button.setContentCompressionResistancePriority(.required, for: .horizontal)
+    }
+
+    private func configureSymbolButton(
+        _ button: UIButton,
+        systemName: String,
+        action: Action,
+        label: String,
+        foregroundColor: UIColor = UIColor.label
+    ) {
+        button.tag = action.rawValue
+        button.accessibilityLabel = label
+        button.addTarget(self, action: #selector(buttonTapped(_:)), for: .touchUpInside)
+
+        var config = makeButtonConfiguration(foregroundColor: foregroundColor)
+        config.image = UIImage(systemName: systemName)
+        button.configuration = config
+
+        applyCommonPriorities(button)
+    }
+
+    private func configureTextButton(
+        _ button: UIButton,
+        title: String,
+        titleFont: UIFont,
+        action: Action,
+        label: String
+    ) {
+        button.tag = action.rawValue
+        button.accessibilityLabel = label
+        button.addTarget(self, action: #selector(buttonTapped(_:)), for: .touchUpInside)
+
+        var config = makeButtonConfiguration(foregroundColor: UIColor.label)
+        var attr = AttributedString(title)
+        attr.font = titleFont
+        config.attributedTitle = attr
+        button.configuration = config
+
+        applyCommonPriorities(button)
     }
 
     private func updateFadeVisibility() {
@@ -590,6 +621,9 @@ final class EdgeFadeView: UIView {
         isUserInteractionEnabled = false
         layer.addSublayer(gradient)
         updateColors()
+        registerForTraitChanges([UITraitUserInterfaceStyle.self], handler: { (self: EdgeFadeView, previousTraitCollection: UITraitCollection) in
+            self.updateColors()
+        })
     }
 
     required init?(coder: NSCoder) {
@@ -598,6 +632,9 @@ final class EdgeFadeView: UIView {
         isUserInteractionEnabled = false
         layer.addSublayer(gradient)
         updateColors()
+        registerForTraitChanges([UITraitUserInterfaceStyle.self], handler: { (self: EdgeFadeView, previousTraitCollection: UITraitCollection) in
+            self.updateColors()
+        })
     }
 
     override func layoutSubviews() {
@@ -605,11 +642,6 @@ final class EdgeFadeView: UIView {
         gradient.frame = bounds
         gradient.startPoint = CGPoint(x: 0, y: 0.5)
         gradient.endPoint = CGPoint(x: 1, y: 0.5)
-    }
-
-    override func traitCollectionDidChange(_ previousTraitCollection: UITraitCollection?) {
-        super.traitCollectionDidChange(previousTraitCollection)
-        updateColors()
     }
 
     private func updateColors() {
