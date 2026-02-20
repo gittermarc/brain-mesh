@@ -12,9 +12,17 @@ enum DetailsFormatting {
         for field: MetaDetailFieldDefinition,
         on attribute: MetaAttribute
     ) -> String? {
-        guard let value = attribute.detailValuesList.first(where: { $0.fieldID == field.id }) else {
-            return nil
-        }
+        let value = attribute.detailValuesList.first(where: { $0.fieldID == field.id })
+        return displayValue(for: field, value: value)
+    }
+
+    /// Like `displayValue(for:on:)`, but takes a pre-fetched value.
+    /// Useful when building list snapshots to avoid touching relationships in SwiftUI render paths.
+    static func displayValue(
+        for field: MetaDetailFieldDefinition,
+        value: MetaDetailFieldValue?
+    ) -> String? {
+        guard let value else { return nil }
 
         switch field.type {
         case .singleLineText, .multiLineText, .singleChoice:
@@ -43,7 +51,16 @@ enum DetailsFormatting {
         for field: MetaDetailFieldDefinition,
         on attribute: MetaAttribute
     ) -> String? {
-        guard let raw = displayValue(for: field, on: attribute) else { return nil }
+        let value = attribute.detailValuesList.first(where: { $0.fieldID == field.id })
+        return shortPillValue(for: field, value: value)
+    }
+
+    /// Like `shortPillValue(for:on:)`, but takes a pre-fetched value.
+    static func shortPillValue(
+        for field: MetaDetailFieldDefinition,
+        value: MetaDetailFieldValue?
+    ) -> String? {
+        guard let raw = displayValue(for: field, value: value) else { return nil }
 
         let maxLen: Int = 22
 
