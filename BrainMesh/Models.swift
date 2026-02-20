@@ -122,7 +122,7 @@ final class MetaEntity {
     // MARK: - Details (Felder pro Entität)
 
     /// Frei konfigurierbare Felder (Schema) für Attribute dieser Entität.
-    @Relationship(deleteRule: .cascade, inverse: \MetaDetailFieldDefinition.entity)
+    @Relationship(deleteRule: .cascade, inverse: \MetaDetailFieldDefinition.owner)
     var detailFields: [MetaDetailFieldDefinition]? = nil
 
     init(name: String, graphID: UUID? = nil, iconSymbolName: String? = nil) {
@@ -158,13 +158,13 @@ final class MetaEntity {
         detailFields?.append(field)
 
         if field.graphID == nil { field.graphID = self.graphID }
-        field.entity = self
+        field.owner = self
         field.entityID = self.id
     }
 
     func removeDetailField(_ field: MetaDetailFieldDefinition) {
         detailFields?.removeAll { $0.id == field.id }
-        if field.entity?.id == self.id { field.entity = nil }
+        if field.owner?.id == self.id { field.owner = nil }
     }
 
     /// Eine Quelle der Wahrheit: wir setzen owner hier explizit.
@@ -405,9 +405,11 @@ final class MetaDetailFieldDefinition {
     var optionsJSON: String? = nil
 
     // ❗️Inverse comes from MetaEntity.detailFields
-    var entity: MetaEntity? = nil {
+    // ⚠️ NICHT "entity" nennen (Konflikt mit Core Data / CloudKit)
+    @Relationship(deleteRule: .nullify, originalName: "entity")
+    var owner: MetaEntity? = nil {
         didSet {
-            if let e = entity {
+            if let e = owner {
                 entityID = e.id
                 if graphID == nil { graphID = e.graphID }
             }
@@ -415,7 +417,7 @@ final class MetaDetailFieldDefinition {
     }
 
     init(
-        entity: MetaEntity,
+        owner: MetaEntity,
         name: String,
         type: DetailFieldType,
         sortIndex: Int,
@@ -424,9 +426,9 @@ final class MetaDetailFieldDefinition {
         isPinned: Bool = false
     ) {
         self.id = UUID()
-        self.entity = entity
-        self.entityID = entity.id
-        self.graphID = entity.graphID
+        self.owner = owner
+        self.entityID = owner.id
+        self.graphID = owner.graphID
 
         let cleaned = name.trimmingCharacters(in: .whitespacesAndNewlines)
         self.name = cleaned

@@ -35,6 +35,7 @@ struct BrainMeshApp: App {
         do {
             sharedModelContainer = try ModelContainer(for: schema, configurations: [cloudConfig])
             print("✅ SwiftData CloudKit: KONTAINER erstellt (cloudKitDatabase: .automatic)")
+            SyncRuntime.shared.setStorageMode(.cloudKit)
         } catch {
             #if DEBUG
             fatalError("❌ SwiftData CloudKit KONTAINER FEHLER (DEBUG, kein Fallback): \(error)")
@@ -43,10 +44,16 @@ struct BrainMeshApp: App {
             let localConfig = ModelConfiguration(schema: schema)
             do {
                 sharedModelContainer = try ModelContainer(for: schema, configurations: [localConfig])
+                SyncRuntime.shared.setStorageMode(.localOnly)
             } catch {
                 fatalError("❌ Could not create local ModelContainer: \(error)")
             }
             #endif
+        }
+
+        // Refresh iCloud account status once on launch (shows up in Settings → Sync).
+        Task.detached(priority: .utility) {
+            await SyncRuntime.shared.refreshAccountStatus()
         }
 
         // Patch 4: Provide the SwiftData container to the attachment hydrator.

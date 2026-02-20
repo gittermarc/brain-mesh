@@ -20,6 +20,9 @@ struct SettingsView: View {
     @Environment(\.modelContext) private var modelContext
     @EnvironmentObject var onboarding: OnboardingCoordinator
 
+    // Not `private`, so the sync diagnostics section (separate file) can access it.
+    @ObservedObject var syncRuntime = SyncRuntime.shared
+
     @AppStorage(VideoImportPreferences.compressVideosOnImportKey)
     var compressVideosOnImport: Bool = VideoImportPreferences.defaultCompressVideosOnImport
 
@@ -37,6 +40,7 @@ struct SettingsView: View {
     var body: some View {
         List {
             helpSection
+            syncSection
             maintenanceSection
             importSection
             appearanceSection

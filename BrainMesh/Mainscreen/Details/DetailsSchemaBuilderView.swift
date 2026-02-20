@@ -150,7 +150,7 @@ struct DetailsSchemaBuilderView: View {
         let definitions = template.fields
         for (idx, def) in definitions.enumerated() {
             let field = MetaDetailFieldDefinition(
-                entity: entity,
+                owner: entity,
                 name: def.name,
                 type: def.type,
                 sortIndex: idx,
@@ -404,7 +404,7 @@ private struct DetailsAddFieldSheet: View {
         }
 
         let field = MetaDetailFieldDefinition(
-            entity: entity,
+            owner: entity,
             name: cleanedName,
             type: type,
             sortIndex: sortIndex,
