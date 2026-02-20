@@ -49,6 +49,7 @@ struct AttributesAllListDisplaySettings: Codable, Equatable {
     /// 0 = off
     var notesPreviewLines: Int
 
+    var showPinnedDetails: Bool
     var pinnedDetailsStyle: AttributesAllPinnedDetailsStyle
 
     var grouping: AttributesAllGrouping
@@ -61,6 +62,7 @@ struct AttributesAllListDisplaySettings: Codable, Equatable {
                 rowDensity: .standard,
                 iconPolicy: .onlyIfSet,
                 notesPreviewLines: 0,
+                showPinnedDetails: false,
                 pinnedDetailsStyle: .chips,
                 grouping: .none,
                 stickyHeadersEnabled: false
@@ -71,6 +73,7 @@ struct AttributesAllListDisplaySettings: Codable, Equatable {
                 rowDensity: .compact,
                 iconPolicy: .onlyIfSet,
                 notesPreviewLines: 0,
+                showPinnedDetails: false,
                 pinnedDetailsStyle: .inline,
                 grouping: .none,
                 stickyHeadersEnabled: false
@@ -81,6 +84,7 @@ struct AttributesAllListDisplaySettings: Codable, Equatable {
                 rowDensity: .comfortable,
                 iconPolicy: .always,
                 notesPreviewLines: 2,
+                showPinnedDetails: true,
                 pinnedDetailsStyle: .chips,
                 grouping: .none,
                 stickyHeadersEnabled: false
@@ -91,6 +95,7 @@ struct AttributesAllListDisplaySettings: Codable, Equatable {
                 rowDensity: .standard,
                 iconPolicy: .always,
                 notesPreviewLines: 1,
+                showPinnedDetails: true,
                 pinnedDetailsStyle: .twoColumns,
                 grouping: .az,
                 stickyHeadersEnabled: true
@@ -104,6 +109,7 @@ struct AttributesAllListDisplaySettings: Codable, Equatable {
         case rowDensity
         case iconPolicy
         case notesPreviewLines
+        case showPinnedDetails
         case pinnedDetailsStyle
         case grouping
         case stickyHeadersEnabled
@@ -113,6 +119,7 @@ struct AttributesAllListDisplaySettings: Codable, Equatable {
         .rowDensity: DisplayOptionMeta(impact: .none),
         .iconPolicy: DisplayOptionMeta(impact: .none),
         .notesPreviewLines: DisplayOptionMeta(impact: .low, note: "Mehr Text kann das Rendering/Scrolling etwas belasten."),
+        .showPinnedDetails: DisplayOptionMeta(impact: .low, note: "Pinned Details können die Zeilenhöhe erhöhen."),
         .pinnedDetailsStyle: DisplayOptionMeta(impact: .low, note: "Mehr Layout-Arbeit bei Inline/Spalten."),
         .grouping: DisplayOptionMeta(impact: .medium, note: "Gruppieren kann mehr Sort/Group-Arbeit auslösen."),
         .stickyHeadersEnabled: DisplayOptionMeta(impact: .low)
@@ -122,6 +129,7 @@ struct AttributesAllListDisplaySettings: Codable, Equatable {
         case rowDensity
         case iconPolicy
         case notesPreviewLines
+        case showPinnedDetails
         case pinnedDetailsStyle
         case grouping
         case stickyHeadersEnabled
@@ -131,6 +139,7 @@ struct AttributesAllListDisplaySettings: Codable, Equatable {
         rowDensity: AttributesAllRowDensity,
         iconPolicy: AttributesAllIconPolicy,
         notesPreviewLines: Int,
+        showPinnedDetails: Bool,
         pinnedDetailsStyle: AttributesAllPinnedDetailsStyle,
         grouping: AttributesAllGrouping,
         stickyHeadersEnabled: Bool
@@ -138,6 +147,7 @@ struct AttributesAllListDisplaySettings: Codable, Equatable {
         self.rowDensity = rowDensity
         self.iconPolicy = iconPolicy
         self.notesPreviewLines = max(0, min(2, notesPreviewLines))
+        self.showPinnedDetails = showPinnedDetails
         self.pinnedDetailsStyle = pinnedDetailsStyle
         self.grouping = grouping
         self.stickyHeadersEnabled = stickyHeadersEnabled
@@ -153,6 +163,7 @@ struct AttributesAllListDisplaySettings: Codable, Equatable {
         let lines = try container.decodeIfPresent(Int.self, forKey: .notesPreviewLines) ?? fallback.notesPreviewLines
         self.notesPreviewLines = max(0, min(2, lines))
 
+        self.showPinnedDetails = try container.decodeIfPresent(Bool.self, forKey: .showPinnedDetails) ?? fallback.showPinnedDetails
         self.pinnedDetailsStyle = try container.decodeIfPresent(AttributesAllPinnedDetailsStyle.self, forKey: .pinnedDetailsStyle) ?? fallback.pinnedDetailsStyle
         self.grouping = try container.decodeIfPresent(AttributesAllGrouping.self, forKey: .grouping) ?? fallback.grouping
         self.stickyHeadersEnabled = try container.decodeIfPresent(Bool.self, forKey: .stickyHeadersEnabled) ?? fallback.stickyHeadersEnabled

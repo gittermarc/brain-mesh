@@ -94,9 +94,12 @@ final class EntityAttributesAllListModel: ObservableObject {
         let id: UUID
         let attribute: MetaAttribute
         let iconSymbolName: String
+        let isIconSet: Bool
         let title: String
         let notePreview: String?
         let pinnedChips: [PinnedChip]
+        let hasDetails: Bool
+        let hasMedia: Bool
         let searchIndexFolded: String
     }
 
@@ -119,8 +122,9 @@ final class EntityAttributesAllListModel: ObservableObject {
         entity: MetaEntity,
         searchText: String,
         showPinnedDetails: Bool,
-        showNotesPreview: Bool,
+        includeNotesPreview: Bool,
         sortSelection: EntityAttributesAllSortSelection,
+        grouping: AttributesAllGrouping,
         debounce: Bool
     ) {
         rebuildTask?.cancel()
@@ -135,8 +139,9 @@ final class EntityAttributesAllListModel: ObservableObject {
                 entity: entity,
                 searchText: searchText,
                 showPinnedDetails: showPinnedDetails,
-                showNotesPreview: showNotesPreview,
-                sortSelection: sortSelection
+                includeNotesPreview: includeNotesPreview,
+                sortSelection: sortSelection,
+                grouping: grouping
             )
         }
     }
@@ -146,8 +151,9 @@ final class EntityAttributesAllListModel: ObservableObject {
         entity: MetaEntity,
         searchText: String,
         showPinnedDetails: Bool,
-        showNotesPreview: Bool,
-        sortSelection: EntityAttributesAllSortSelection
+        includeNotesPreview: Bool,
+        sortSelection: EntityAttributesAllSortSelection,
+        grouping: AttributesAllGrouping
     ) {
         let attrs = entity.attributesList
         let pinned = EntityAttributesAllListModel.computePinnedFields(for: entity)
@@ -156,6 +162,19 @@ final class EntityAttributesAllListModel: ObservableObject {
         pinnedSortMenuOptions = EntityAttributesAllListModel.makePinnedSortMenuOptions(for: pinnedSortableFields)
 
         let lookup = fetchPinnedValuesLookup(context: context, pinnedFields: pinned)
+
+        let needsMediaFlags: Bool = (grouping == .hasMedia)
+        let attributeIDs = Set(attrs.map { $0.id })
+        let ownersWithMedia: Set<UUID>
+        if needsMediaFlags {
+            ownersWithMedia = fetchAttributeOwnersWithMedia(
+                context: context,
+                attributeIDs: attributeIDs,
+                graphID: entity.graphID
+            )
+        } else {
+            ownersWithMedia = []
+        }
 
         var rowsByID: [UUID: Row] = [:]
         rowsByID.reserveCapacity(min(attrs.count, 512))
@@ -166,7 +185,8 @@ final class EntityAttributesAllListModel: ObservableObject {
                 pinnedFields: pinned,
                 pinnedValuesByAttribute: lookup,
                 showPinnedDetails: showPinnedDetails,
-                showNotesPreview: showNotesPreview
+                includeNotesPreview: includeNotesPreview,
+                ownersWithMedia: ownersWithMedia
             )
             rowsByID[a.id] = row
         }
@@ -199,12 +219,13 @@ final class EntityAttributesAllListModel: ObservableObject {
         pinnedFields: [MetaDetailFieldDefinition],
         pinnedValuesByAttribute: [UUID: [UUID: MetaDetailFieldValue]],
         showPinnedDetails: Bool,
-        showNotesPreview: Bool
+        includeNotesPreview: Bool,
+        ownersWithMedia: Set<UUID>
     ) -> Row {
         let title = attribute.name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? "Attribut" : attribute.name
 
         let notePreview: String?
-        if showNotesPreview {
+        if includeNotesPreview {
             let note = attribute.notes
                 .replacingOccurrences(of: "\n", with: " ")
                 .trimmingCharacters(in: .whitespacesAndNewlines)
@@ -212,6 +233,12 @@ final class EntityAttributesAllListModel: ObservableObject {
         } else {
             notePreview = nil
         }
+
+        let iconRaw = (attribute.iconSymbolName ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+        let isIconSet = !iconRaw.isEmpty
+
+        let hasDetails = EntityAttributesAllListModel.attributeHasAnyDetails(attribute)
+        let hasMedia = ownersWithMedia.contains(attribute.id)
 
         let pinnedChips: [PinnedChip]
         if showPinnedDetails {
@@ -254,12 +281,61 @@ final class EntityAttributesAllListModel: ObservableObject {
         return Row(
             id: attribute.id,
             attribute: attribute,
-            iconSymbolName: attribute.iconSymbolName ?? "tag",
+            iconSymbolName: isIconSet ? iconRaw : "tag",
+            isIconSet: isIconSet,
             title: title,
             notePreview: notePreview,
             pinnedChips: pinnedChips,
+            hasDetails: hasDetails,
+            hasMedia: hasMedia,
             searchIndexFolded: searchIndexFolded
         )
+    }
+
+    private static func attributeHasAnyDetails(_ attribute: MetaAttribute) -> Bool {
+        for v in attribute.detailValuesList {
+            if let s = v.stringValue?.trimmingCharacters(in: .whitespacesAndNewlines), !s.isEmpty {
+                return true
+            }
+            if v.intValue != nil { return true }
+            if v.doubleValue != nil { return true }
+            if v.dateValue != nil { return true }
+            if v.boolValue != nil { return true }
+        }
+        return false
+    }
+
+    private func fetchAttributeOwnersWithMedia(
+        context: ModelContext,
+        attributeIDs: Set<UUID>,
+        graphID: UUID?
+    ) -> Set<UUID> {
+        guard !attributeIDs.isEmpty else { return [] }
+
+        let ownerKindRaw = NodeKind.attribute.rawValue
+
+        let attachments: [MetaAttachment]
+        if let graphID {
+            let gid: UUID? = graphID
+            let fd = FetchDescriptor<MetaAttachment>(predicate: #Predicate<MetaAttachment> { a in
+                a.ownerKindRaw == ownerKindRaw && a.graphID == gid
+            })
+            attachments = (try? context.fetch(fd)) ?? []
+        } else {
+            let fd = FetchDescriptor<MetaAttachment>(predicate: #Predicate<MetaAttachment> { a in
+                a.ownerKindRaw == ownerKindRaw
+            })
+            attachments = (try? context.fetch(fd)) ?? []
+        }
+
+        var owners = Set<UUID>()
+        owners.reserveCapacity(min(attachments.count, 256))
+        for a in attachments {
+            if attributeIDs.contains(a.ownerID) {
+                owners.insert(a.ownerID)
+            }
+        }
+        return owners
     }
 
     // MARK: - Pinned values lookup

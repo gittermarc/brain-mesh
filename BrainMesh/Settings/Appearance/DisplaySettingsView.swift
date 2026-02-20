@@ -219,9 +219,13 @@ struct DisplaySettingsView: View {
                     Text("2 Zeilen").tag(2)
                 }
 
-                Picker("Pinned-Details", selection: display.attributesAllListBinding(\.pinnedDetailsStyle)) {
-                    ForEach(AttributesAllPinnedDetailsStyle.allCases) { item in
-                        Text(item.title).tag(item)
+                Toggle("Pinned Details anzeigen", isOn: display.attributesAllListBinding(\.showPinnedDetails))
+
+                if display.attributesAllList.showPinnedDetails {
+                    Picker("Pinned-Details", selection: display.attributesAllListBinding(\.pinnedDetailsStyle)) {
+                        ForEach(AttributesAllPinnedDetailsStyle.allCases) { item in
+                            Text(item.title).tag(item)
+                        }
                     }
                 }
 

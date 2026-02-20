@@ -43,6 +43,9 @@ enum BMAppStorageKeys {
 
     static let displaySettingsV1 = "BMDisplaySettingsV1"
 
+    /// One-time migration flag: legacy All-Attributes AppStorage → DisplaySettingsStore.
+    static let displaySettingsMigratedAttributesAllV1 = "BMDisplaySettingsMigratedAttributesAllV1"
+
     // MARK: - Video import
 
     static let compressVideosOnImport = "BMCompressVideosOnImport"

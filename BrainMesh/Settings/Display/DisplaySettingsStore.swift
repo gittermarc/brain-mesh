@@ -19,6 +19,8 @@ final class DisplaySettingsStore: ObservableObject {
     init(userDefaults: UserDefaults = .standard) {
         self.userDefaults = userDefaults
         self.state = DisplaySettingsStore.load(from: userDefaults)
+
+        migrateLegacyAttributesAllAppStorageIfNeeded()
     }
 
     // MARK: - Resolved values
@@ -154,6 +156,41 @@ final class DisplaySettingsStore: ObservableObject {
     // MARK: - Private
 
     private let userDefaults: UserDefaults
+
+    private func migrateLegacyAttributesAllAppStorageIfNeeded() {
+        let migratedKey = BMAppStorageKeys.displaySettingsMigratedAttributesAllV1
+        guard userDefaults.bool(forKey: migratedKey) == false else { return }
+
+        // If the user already customized this screen via DisplaySettings, do not override.
+        guard state.attributesAllListOverride == nil else {
+            userDefaults.set(true, forKey: migratedKey)
+            return
+        }
+
+        let legacyPinnedObject = userDefaults.object(forKey: BMAppStorageKeys.entityAttributesAllShowPinnedDetails)
+        let legacyNotesObject = userDefaults.object(forKey: BMAppStorageKeys.entityAttributesAllShowNotesPreview)
+
+        guard legacyPinnedObject != nil || legacyNotesObject != nil else {
+            userDefaults.set(true, forKey: migratedKey)
+            return
+        }
+
+        let legacyShowPinned = userDefaults.bool(forKey: BMAppStorageKeys.entityAttributesAllShowPinnedDetails)
+        let legacyShowNotes = userDefaults.bool(forKey: BMAppStorageKeys.entityAttributesAllShowNotesPreview)
+
+        var next = state.attributesAllList
+        next.showPinnedDetails = legacyShowPinned
+        if legacyShowNotes {
+            // Old setting was boolean. Map to a sensible default.
+            next.notesPreviewLines = max(next.notesPreviewLines, 1)
+        } else {
+            next.notesPreviewLines = 0
+        }
+
+        state.attributesAllListOverride = next
+        persist()
+        userDefaults.set(true, forKey: migratedKey)
+    }
 
     private func persist() {
         do {

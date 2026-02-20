@@ -5,6 +5,7 @@
 //  P0.3 Split: Attributes card + appearance card + attributes all view
 //
 
+import Foundation
 import SwiftUI
 import SwiftData
 
@@ -69,14 +70,13 @@ struct NodeEntityAttributesCard: View {
 
 struct EntityAttributesAllView: View {
     @Environment(\.modelContext) private var modelContext
+    @EnvironmentObject private var display: DisplaySettingsStore
 
     @Bindable var entity: MetaEntity
 
     @State private var searchText: String = ""
 
-    @AppStorage("BMEntityAttributesAllSort") private var sortSelectionRaw: String = EntityAttributesAllSortSelection.default.rawValue
-    @AppStorage("BMEntityAttributesAllShowPinnedDetails") private var showPinnedDetails: Bool = false
-    @AppStorage("BMEntityAttributesAllShowNotesPreview") private var showNotesPreview: Bool = false
+    @AppStorage(BMAppStorageKeys.entityAttributesAllSort) private var sortSelectionRaw: String = EntityAttributesAllSortSelection.default.rawValue
 
     @StateObject private var listModel: EntityAttributesAllListModel = EntityAttributesAllListModel()
 
@@ -86,6 +86,8 @@ struct EntityAttributesAllView: View {
 
     var body: some View {
         let visible = listModel.visibleRows
+        let settings = display.attributesAllList
+        let showPinnedDetails = settings.showPinnedDetails
 
         List {
             if showPinnedDetails {
@@ -118,48 +120,7 @@ struct EntityAttributesAllView: View {
                 }
             }
 
-            Section {
-                ForEach(visible) { attr in
-                    NavigationLink {
-                        AttributeDetailView(attribute: attr.attribute)
-                    } label: {
-                        HStack(spacing: 12) {
-                            Image(systemName: attr.iconSymbolName)
-                                .font(.system(size: 16, weight: .semibold))
-                                .frame(width: 22)
-                                .foregroundStyle(.tint)
-
-                            VStack(alignment: .leading, spacing: 2) {
-                                Text(attr.title)
-
-                                if let note = attr.notePreview {
-                                    Text(note)
-                                        .font(.caption)
-                                        .foregroundStyle(.secondary)
-                                        .lineLimit(1)
-                                }
-
-                                if showPinnedDetails, !attr.pinnedChips.isEmpty {
-                                    FlowLayout(spacing: 6, lineSpacing: 6) {
-                                        ForEach(attr.pinnedChips) { chip in
-                                            EntityAttributesAllPinnedChipView(
-                                                title: chip.title,
-                                                systemImage: chip.systemImage
-                                            )
-                                        }
-                                    }
-                                    .padding(.top, 4)
-                                }
-                            }
-                        }
-                    }
-                }
-                .onDelete { offsets in
-                    deleteAttributes(at: offsets, visible: visible)
-                }
-            } header: {
-                Text("Alle Attribute")
-            }
+            attributesListBody(visible: visible, settings: settings)
         }
         .searchable(text: $searchText, placement: .navigationBarDrawer(displayMode: .always), prompt: "Attribut suchen…")
         .navigationTitle("Attribute")
@@ -168,12 +129,14 @@ struct EntityAttributesAllView: View {
             ToolbarItem(placement: .topBarTrailing) {
                 Menu {
                     Section("Anzeige") {
-                        Toggle(isOn: $showPinnedDetails) {
+                        Toggle(isOn: display.attributesAllListBinding(\.showPinnedDetails)) {
                             Label("Pinned Details anzeigen", systemImage: "pin")
                         }
 
-                        Toggle(isOn: $showNotesPreview) {
-                            Label("Notizen-Vorschau", systemImage: "note.text")
+                        Picker("Notiz-Preview", selection: display.attributesAllListBinding(\.notesPreviewLines)) {
+                            Text("Aus").tag(0)
+                            Text("1 Zeile").tag(1)
+                            Text("2 Zeilen").tag(2)
                         }
                     }
 
@@ -225,10 +188,7 @@ struct EntityAttributesAllView: View {
         .onChange(of: sortSelectionRaw) { _, _ in
             rebuild(debounce: false)
         }
-        .onChange(of: showPinnedDetails) { _, _ in
-            rebuild(debounce: false)
-        }
-        .onChange(of: showNotesPreview) { _, _ in
+        .onChange(of: settings) { _, _ in
             rebuild(debounce: false)
         }
     }
@@ -241,13 +201,15 @@ struct EntityAttributesAllView: View {
     }
 
     private func rebuild(debounce: Bool) {
+        let settings = display.attributesAllList
         listModel.scheduleRebuild(
             context: modelContext,
             entity: entity,
             searchText: searchText,
-            showPinnedDetails: showPinnedDetails,
-            showNotesPreview: showNotesPreview,
+            showPinnedDetails: settings.showPinnedDetails,
+            includeNotesPreview: settings.notesPreviewLines > 0,
             sortSelection: sortSelection,
+            grouping: settings.grouping,
             debounce: debounce
         )
     }
@@ -275,10 +237,10 @@ struct EntityAttributesAllView: View {
         }
     }
 
-    private func deleteAttributes(at offsets: IndexSet, visible: [EntityAttributesAllListModel.Row]) {
+    private func deleteAttributes(at offsets: IndexSet, rows: [EntityAttributesAllListModel.Row]) {
         for index in offsets {
-            guard visible.indices.contains(index) else { continue }
-            let attr = visible[index].attribute
+            guard rows.indices.contains(index) else { continue }
+            let attr = rows[index].attribute
 
             AttachmentCleanup.deleteAttachments(ownerKind: .attribute, ownerID: attr.id, in: modelContext)
             LinkCleanup.deleteLinks(referencing: .attribute, id: attr.id, graphID: entity.graphID, in: modelContext)
@@ -288,6 +250,254 @@ struct EntityAttributesAllView: View {
         }
         try? modelContext.save()
         rebuild(debounce: false)
+    }
+}
+
+private extension EntityAttributesAllView {
+
+    struct AttributeGroup: Identifiable {
+        let id: String
+        let title: String
+        let systemImage: String?
+        let rows: [EntityAttributesAllListModel.Row]
+    }
+
+    func attributesListBody(
+        visible: [EntityAttributesAllListModel.Row],
+        settings: AttributesAllListDisplaySettings
+    ) -> some View {
+        let groups = makeGroups(rows: visible, settings: settings)
+
+        return Group {
+            if groups.count == 1, groups.first?.title == "Alle Attribute" {
+                // No grouping or a single synthetic group.
+                let rows = groups.first?.rows ?? []
+                if settings.stickyHeadersEnabled {
+                    Section(header: Text("Alle Attribute")) {
+                        rowsForEach(rows: rows, settings: settings)
+                    }
+                } else {
+                    inlineHeaderRow(title: "Alle Attribute")
+                    rowsForEach(rows: rows, settings: settings)
+                }
+            } else {
+                ForEach(groups) { group in
+                    if settings.stickyHeadersEnabled {
+                        Section {
+                            rowsForEach(rows: group.rows, settings: settings)
+                        } header: {
+                            groupHeader(title: group.title, systemImage: group.systemImage)
+                        }
+                    } else {
+                        inlineHeaderRow(title: group.title, systemImage: group.systemImage)
+                        rowsForEach(rows: group.rows, settings: settings)
+                    }
+                }
+            }
+        }
+    }
+
+    @ViewBuilder
+    func rowsForEach(
+        rows: [EntityAttributesAllListModel.Row],
+        settings: AttributesAllListDisplaySettings
+    ) -> some View {
+        ForEach(rows) { row in
+            attributeRow(row, settings: settings)
+        }
+        .onDelete { offsets in
+            deleteAttributes(at: offsets, rows: rows)
+        }
+    }
+
+    @ViewBuilder
+    func attributeRow(
+        _ row: EntityAttributesAllListModel.Row,
+        settings: AttributesAllListDisplaySettings
+    ) -> some View {
+        NavigationLink {
+            AttributeDetailView(attribute: row.attribute)
+        } label: {
+            HStack(spacing: 12) {
+                if shouldShowIcon(row: row, settings: settings) {
+                    attributeIconView(row: row)
+                }
+
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(row.title)
+
+                    if settings.notesPreviewLines > 0, let note = row.notePreview {
+                        Text(note)
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                            .lineLimit(settings.notesPreviewLines)
+                    }
+
+                    if settings.showPinnedDetails, !row.pinnedChips.isEmpty {
+                        pinnedDetailsView(row: row, style: settings.pinnedDetailsStyle)
+                            .padding(.top, 4)
+                    }
+                }
+            }
+            .padding(.vertical, rowVerticalPadding(settings.rowDensity))
+        }
+        .listRowInsets(EdgeInsets(top: 0, leading: 16, bottom: 0, trailing: 16))
+    }
+
+    func shouldShowIcon(row: EntityAttributesAllListModel.Row, settings: AttributesAllListDisplaySettings) -> Bool {
+        switch settings.iconPolicy {
+        case .always:
+            return true
+        case .onlyIfSet:
+            return row.isIconSet
+        case .never:
+            return false
+        }
+    }
+
+    func attributeIconView(row: EntityAttributesAllListModel.Row) -> some View {
+        Image(systemName: row.iconSymbolName)
+            .font(.system(size: 16, weight: .semibold))
+            .frame(width: 22)
+            .foregroundStyle(.tint)
+    }
+
+    func rowVerticalPadding(_ density: AttributesAllRowDensity) -> CGFloat {
+        switch density {
+        case .compact: return 6
+        case .standard: return 10
+        case .comfortable: return 14
+        }
+    }
+
+    @ViewBuilder
+    func pinnedDetailsView(
+        row: EntityAttributesAllListModel.Row,
+        style: AttributesAllPinnedDetailsStyle
+    ) -> some View {
+        switch style {
+        case .chips:
+            FlowLayout(spacing: 6, lineSpacing: 6) {
+                ForEach(row.pinnedChips) { chip in
+                    EntityAttributesAllPinnedChipView(title: chip.title, systemImage: chip.systemImage)
+                }
+            }
+
+        case .inline:
+            Text(row.pinnedChips.map { $0.title }.joined(separator: " · "))
+                .font(.caption2)
+                .foregroundStyle(.secondary)
+                .lineLimit(2)
+
+        case .twoColumns:
+            let cols: [GridItem] = [
+                GridItem(.flexible(minimum: 80), spacing: 8),
+                GridItem(.flexible(minimum: 80), spacing: 8)
+            ]
+            LazyVGrid(columns: cols, alignment: .leading, spacing: 6) {
+                ForEach(row.pinnedChips) { chip in
+                    Label(chip.title, systemImage: chip.systemImage)
+                        .font(.caption2.weight(.semibold))
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
+                }
+            }
+        }
+    }
+
+    func makeGroups(
+        rows: [EntityAttributesAllListModel.Row],
+        settings: AttributesAllListDisplaySettings
+    ) -> [AttributeGroup] {
+        switch settings.grouping {
+        case .none:
+            return [AttributeGroup(id: "all", title: "Alle Attribute", systemImage: nil, rows: rows)]
+
+        case .az:
+            var buckets: [String: [EntityAttributesAllListModel.Row]] = [:]
+            var order: [String] = []
+            for row in rows {
+                let trimmed = row.title.trimmingCharacters(in: .whitespacesAndNewlines)
+                let first = trimmed.first.map { String($0).uppercased() } ?? "#"
+                let key = first.range(of: "[A-ZÄÖÜ]", options: .regularExpression) != nil ? first : "#"
+                if buckets[key] == nil { order.append(key) }
+                buckets[key, default: []].append(row)
+            }
+            let sortedOrder = order.sorted { lhs, rhs in
+                if lhs == "#" { return false }
+                if rhs == "#" { return true }
+                return lhs < rhs
+            }
+            return sortedOrder.map { key in
+                AttributeGroup(id: "az:\(key)", title: key, systemImage: nil, rows: buckets[key] ?? [])
+            }
+
+        case .byIcon:
+            var buckets: [String: [EntityAttributesAllListModel.Row]] = [:]
+            var order: [String] = []
+            for row in rows {
+                let key = row.isIconSet ? row.iconSymbolName : "(none)"
+                if buckets[key] == nil { order.append(key) }
+                buckets[key, default: []].append(row)
+            }
+            return order.map { key in
+                if key == "(none)" {
+                    return AttributeGroup(id: "icon:none", title: "Ohne Icon", systemImage: "tag", rows: buckets[key] ?? [])
+                }
+                return AttributeGroup(id: "icon:\(key)", title: key, systemImage: key, rows: buckets[key] ?? [])
+            }
+
+        case .hasDetails:
+            let withDetails = rows.filter { $0.hasDetails }
+            let withoutDetails = rows.filter { !$0.hasDetails }
+            var out: [AttributeGroup] = []
+            if !withDetails.isEmpty {
+                out.append(AttributeGroup(id: "details:yes", title: "Hat Details", systemImage: "square.text.square", rows: withDetails))
+            }
+            if !withoutDetails.isEmpty {
+                out.append(AttributeGroup(id: "details:no", title: "Ohne Details", systemImage: "square", rows: withoutDetails))
+            }
+            return out
+
+        case .hasMedia:
+            let withMedia = rows.filter { $0.hasMedia }
+            let withoutMedia = rows.filter { !$0.hasMedia }
+            var out: [AttributeGroup] = []
+            if !withMedia.isEmpty {
+                out.append(AttributeGroup(id: "media:yes", title: "Hat Medien", systemImage: "photo.on.rectangle", rows: withMedia))
+            }
+            if !withoutMedia.isEmpty {
+                out.append(AttributeGroup(id: "media:no", title: "Ohne Medien", systemImage: "rectangle", rows: withoutMedia))
+            }
+            return out
+        }
+    }
+
+    @ViewBuilder
+    func groupHeader(title: String, systemImage: String?) -> some View {
+        if let systemImage {
+            Label(title, systemImage: systemImage)
+        } else {
+            Text(title)
+        }
+    }
+
+    @ViewBuilder
+    func inlineHeaderRow(title: String, systemImage: String? = nil) -> some View {
+        HStack(spacing: 8) {
+            if let systemImage {
+                Image(systemName: systemImage)
+                    .foregroundStyle(.secondary)
+            }
+            Text(title)
+                .font(.caption.weight(.semibold))
+                .foregroundStyle(.secondary)
+        }
+        .padding(.top, 10)
+        .padding(.bottom, 6)
+        .listRowInsets(EdgeInsets(top: 0, leading: 16, bottom: 0, trailing: 16))
+        .listRowBackground(Color.clear)
+        .accessibilityAddTraits(.isHeader)
     }
 }
 
