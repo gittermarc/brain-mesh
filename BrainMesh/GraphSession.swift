@@ -12,8 +12,8 @@ import Combine
 final class GraphSession: ObservableObject {
     static let shared = GraphSession()
 
-    // Muss identisch sein mit @AppStorage("BMActiveGraphID")
-    private let storageKey = "BMActiveGraphID"
+    // Muss identisch sein mit @AppStorage(BMAppStorageKeys.activeGraphID)
+    private let storageKey = BMAppStorageKeys.activeGraphID
 
     /// Aktiver Graph (später per UI umschaltbar)
     @Published var activeGraphID: UUID

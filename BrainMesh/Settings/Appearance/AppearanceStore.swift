@@ -12,7 +12,7 @@ import SwiftUI
 @MainActor
 final class AppearanceStore: ObservableObject {
 
-    static let sharedKey = "BMAppearanceSettingsV1"
+    static let sharedKey = BMAppStorageKeys.appearanceSettingsV1
 
     @Published private(set) var settings: AppearanceSettings
 
