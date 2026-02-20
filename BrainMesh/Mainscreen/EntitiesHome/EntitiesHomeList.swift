@@ -11,6 +11,7 @@ struct EntitiesHomeList: View {
     let rows: [EntitiesHomeRow]
     let isLoading: Bool
     let settings: EntitiesHomeAppearanceSettings
+    let display: EntitiesHomeDisplaySettings
     let onDelete: (IndexSet) -> Void
 
     var body: some View {
@@ -20,14 +21,16 @@ struct EntitiesHomeList: View {
                     ProgressView()
                     Text("Suche…").foregroundStyle(.secondary)
                 }
+                .listRowSeparator(display.showSeparators ? .visible : .hidden)
             }
 
             ForEach(rows) { row in
                 NavigationLink {
                     EntityDetailRouteView(entityID: row.id)
                 } label: {
-                    EntitiesHomeListRow(row: row, settings: settings)
+                    EntitiesHomeListRow(row: row, settings: settings, display: display)
                 }
+                .listRowSeparator(display.showSeparators ? .visible : .hidden)
             }
             .onDelete(perform: onDelete)
         }
@@ -37,6 +40,7 @@ struct EntitiesHomeList: View {
 private struct EntitiesHomeListRow: View {
     let row: EntitiesHomeRow
     let settings: EntitiesHomeAppearanceSettings
+    let display: EntitiesHomeDisplaySettings
 
     var body: some View {
         HStack(alignment: .top, spacing: 12) {
@@ -46,11 +50,7 @@ private struct EntitiesHomeListRow: View {
                 Text(row.name)
                     .font(.headline)
 
-                if let counts = countsLine {
-                    Text(counts)
-                        .font(.subheadline)
-                        .foregroundStyle(.secondary)
-                }
+                countsView
 
                 if settings.showNotesPreview, let preview = row.notesPreview {
                     Text(preview)
@@ -63,7 +63,42 @@ private struct EntitiesHomeListRow: View {
         .padding(.vertical, settings.density.listRowVerticalPadding)
     }
 
-    private var countsLine: String? {
+    @ViewBuilder private var countsView: some View {
+        let pills = countPills
+
+        switch display.badgeStyle {
+        case .none:
+            EmptyView()
+
+        case .smallCounter:
+            if let counts = countsLine {
+                Text(counts)
+                    .font(.subheadline)
+                    .foregroundStyle(.secondary)
+            }
+
+        case .pills:
+            if !pills.isEmpty {
+                HStack(spacing: 6) {
+                    ForEach(Array(pills.enumerated()), id: \.offset) { _, label in
+                        Text(label)
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                            .padding(.horizontal, 8)
+                            .padding(.vertical, 3)
+                            .background(
+                                Capsule(style: .continuous)
+                                    .fill(Color(uiColor: .tertiarySystemFill))
+                            )
+                    }
+                }
+            }
+        }
+    }
+
+    private var countPills: [String] {
+        if display.badgeStyle == .none { return [] }
+
         var parts: [String] = []
 
         if settings.showAttributeCount {
@@ -76,6 +111,13 @@ private struct EntitiesHomeListRow: View {
             parts.append("\(lc) Links")
         }
 
+        return parts
+    }
+
+    private var countsLine: String? {
+        if display.badgeStyle == .none { return nil }
+
+        let parts = countPills
         if parts.isEmpty { return nil }
         return parts.joined(separator: " · ")
     }

@@ -6,6 +6,15 @@
 //
 
 import Foundation
+extension EntitiesHomeLayoutMode {
+    var title: String {
+        switch self {
+        case .list: return "Liste"
+        case .grid: return "Grid"
+        }
+    }
+}
+
 
 extension EntitiesHomeListStyle {
     var title: String {

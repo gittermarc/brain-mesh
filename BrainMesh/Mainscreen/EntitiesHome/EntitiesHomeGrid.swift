@@ -11,6 +11,7 @@ struct EntitiesHomeGrid: View {
     let rows: [EntitiesHomeRow]
     let isLoading: Bool
     let settings: EntitiesHomeAppearanceSettings
+    let display: EntitiesHomeDisplaySettings
     let onDelete: (UUID) -> Void
 
     @Environment(\.horizontalSizeClass) private var hSizeClass
@@ -39,7 +40,7 @@ struct EntitiesHomeGrid: View {
                         NavigationLink {
                             EntityDetailRouteView(entityID: row.id)
                         } label: {
-                            EntitiesHomeGridCell(row: row, settings: settings)
+                            EntitiesHomeGridCell(row: row, settings: settings, display: display)
                         }
                         .buttonStyle(.plain)
                         .contextMenu {
@@ -61,6 +62,7 @@ struct EntitiesHomeGrid: View {
 private struct EntitiesHomeGridCell: View {
     let row: EntitiesHomeRow
     let settings: EntitiesHomeAppearanceSettings
+    let display: EntitiesHomeDisplaySettings
 
     var body: some View {
         VStack(alignment: .leading, spacing: settings.density.secondaryTextSpacing) {
@@ -73,12 +75,7 @@ private struct EntitiesHomeGridCell: View {
                 .font(.headline)
                 .lineLimit(2)
 
-            if let counts = countsLine {
-                Text(counts)
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-                    .lineLimit(1)
-            }
+            countsView
 
             if settings.showNotesPreview, let preview = row.notesPreview {
                 Text(preview)
@@ -95,7 +92,43 @@ private struct EntitiesHomeGridCell: View {
         )
     }
 
-    private var countsLine: String? {
+    @ViewBuilder private var countsView: some View {
+        let pills = countPills
+
+        switch display.badgeStyle {
+        case .none:
+            EmptyView()
+
+        case .smallCounter:
+            if let counts = countsLine {
+                Text(counts)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+            }
+
+        case .pills:
+            if !pills.isEmpty {
+                HStack(spacing: 6) {
+                    ForEach(Array(pills.enumerated()), id: \.offset) { _, label in
+                        Text(label)
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                            .padding(.horizontal, 8)
+                            .padding(.vertical, 3)
+                            .background(
+                                Capsule(style: .continuous)
+                                    .fill(Color(uiColor: .tertiarySystemFill))
+                            )
+                    }
+                }
+            }
+        }
+    }
+
+    private var countPills: [String] {
+        if display.badgeStyle == .none { return [] }
+
         var parts: [String] = []
 
         if settings.showAttributeCount {
@@ -108,6 +141,13 @@ private struct EntitiesHomeGridCell: View {
             parts.append("\(lc) Links")
         }
 
+        return parts
+    }
+
+    private var countsLine: String? {
+        if display.badgeStyle == .none { return nil }
+
+        let parts = countPills
         if parts.isEmpty { return nil }
         return parts.joined(separator: " · ")
     }

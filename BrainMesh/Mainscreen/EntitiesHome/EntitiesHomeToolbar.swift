@@ -10,6 +10,7 @@ import SwiftUI
 struct EntitiesHomeToolbar: ToolbarContent {
     let activeGraphName: String
     @Binding var showGraphPicker: Bool
+    @Binding var showViewOptions: Bool
     @Binding var sortSelection: EntitiesHomeSortOption
     @Binding var showAddEntity: Bool
 
@@ -22,6 +23,11 @@ struct EntitiesHomeToolbar: ToolbarContent {
         }
 
         ToolbarItemGroup(placement: .topBarTrailing) {
+            Button { showViewOptions = true } label: {
+                Image(systemName: "eye")
+            }
+            .accessibilityLabel("Ansicht")
+
             Menu {
                 Picker("Sortieren", selection: $sortSelection) {
                     ForEach(EntitiesHomeSortOption.allCases) { opt in

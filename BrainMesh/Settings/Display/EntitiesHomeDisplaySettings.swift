@@ -3,9 +3,17 @@
 //  BrainMesh
 //
 //  PR 02: Display settings for Entities Home.
+//  PR 04: Add layout mode (list/grid) for quick in-screen view settings.
 //
 
 import Foundation
+
+enum EntitiesHomeLayoutMode: String, Codable, CaseIterable, Identifiable {
+    case list
+    case grid
+
+    var id: String { rawValue }
+}
 
 enum EntitiesHomeListStyle: String, Codable, CaseIterable, Identifiable {
     case plain
@@ -51,6 +59,7 @@ struct EntitiesHomeDisplaySettings: Codable, Equatable {
 
     // MARK: - New visual knobs (PRs 04/05 will start using these)
 
+    var layout: EntitiesHomeLayoutMode
     var listStyle: EntitiesHomeListStyle
     var rowStyle: EntitiesHomeRowStyle
     var density: EntitiesHomeRowDensity
@@ -71,6 +80,7 @@ struct EntitiesHomeDisplaySettings: Codable, Equatable {
         switch preset {
         case .clean:
             return EntitiesHomeDisplaySettings(
+                layout: .list,
                 listStyle: .plain,
                 rowStyle: .titleOnly,
                 density: .standard,
@@ -84,6 +94,7 @@ struct EntitiesHomeDisplaySettings: Codable, Equatable {
             )
         case .dense:
             return EntitiesHomeDisplaySettings(
+                layout: .list,
                 listStyle: .plain,
                 rowStyle: .titleWithBadges,
                 density: .compact,
@@ -97,6 +108,7 @@ struct EntitiesHomeDisplaySettings: Codable, Equatable {
             )
         case .visual:
             return EntitiesHomeDisplaySettings(
+                layout: .grid,
                 listStyle: .cards,
                 rowStyle: .titleWithSubtitle,
                 density: .comfortable,
@@ -110,6 +122,7 @@ struct EntitiesHomeDisplaySettings: Codable, Equatable {
             )
         case .pro:
             return EntitiesHomeDisplaySettings(
+                layout: .list,
                 listStyle: .insetGrouped,
                 rowStyle: .titleWithSubtitle,
                 density: .standard,
@@ -129,6 +142,7 @@ struct EntitiesHomeDisplaySettings: Codable, Equatable {
     // MARK: - Performance metadata (labeling only; UI comes later)
 
     enum OptionKey: String, CaseIterable {
+        case layout
         case listStyle
         case rowStyle
         case density
@@ -142,6 +156,7 @@ struct EntitiesHomeDisplaySettings: Codable, Equatable {
     }
 
     static let optionMeta: [OptionKey: DisplayOptionMeta] = [
+        .layout: DisplayOptionMeta(impact: .none),
         .listStyle: DisplayOptionMeta(impact: .none),
         .rowStyle: DisplayOptionMeta(impact: .none),
         .density: DisplayOptionMeta(impact: .none),
@@ -157,6 +172,7 @@ struct EntitiesHomeDisplaySettings: Codable, Equatable {
     // MARK: - Codable (forward compatible)
 
     private enum CodingKeys: String, CodingKey {
+        case layout
         case listStyle
         case rowStyle
         case density
@@ -170,6 +186,7 @@ struct EntitiesHomeDisplaySettings: Codable, Equatable {
     }
 
     init(
+        layout: EntitiesHomeLayoutMode,
         listStyle: EntitiesHomeListStyle,
         rowStyle: EntitiesHomeRowStyle,
         density: EntitiesHomeRowDensity,
@@ -181,6 +198,7 @@ struct EntitiesHomeDisplaySettings: Codable, Equatable {
         showNotesPreview: Bool,
         preferThumbnailOverIcon: Bool
     ) {
+        self.layout = layout
         self.listStyle = listStyle
         self.rowStyle = rowStyle
         self.density = density
@@ -198,6 +216,7 @@ struct EntitiesHomeDisplaySettings: Codable, Equatable {
 
         let fallback = EntitiesHomeDisplaySettings.default
 
+        self.layout = try container.decodeIfPresent(EntitiesHomeLayoutMode.self, forKey: .layout) ?? fallback.layout
         self.listStyle = try container.decodeIfPresent(EntitiesHomeListStyle.self, forKey: .listStyle) ?? fallback.listStyle
         self.rowStyle = try container.decodeIfPresent(EntitiesHomeRowStyle.self, forKey: .rowStyle) ?? fallback.rowStyle
         self.density = try container.decodeIfPresent(EntitiesHomeRowDensity.self, forKey: .density) ?? fallback.density

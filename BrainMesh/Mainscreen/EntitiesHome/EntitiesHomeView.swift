@@ -12,6 +12,7 @@ struct EntitiesHomeView: View {
     @Environment(\.modelContext) var modelContext
     @EnvironmentObject var onboarding: OnboardingCoordinator
     @EnvironmentObject var appearance: AppearanceStore
+    @EnvironmentObject var displaySettings: DisplaySettingsStore
 
     @AppStorage("BMActiveGraphID") private var activeGraphIDString: String = ""
     var activeGraphID: UUID? { UUID(uuidString: activeGraphIDString) }
@@ -22,6 +23,7 @@ struct EntitiesHomeView: View {
     @State var searchText = ""
     @State var showAddEntity = false
     @State var showGraphPicker = false
+    @State var showViewOptions = false
 
     @AppStorage("BMEntitiesHomeSort") private var entitiesHomeSortRaw: String = EntitiesHomeSortOption.nameAZ.rawValue
 
@@ -40,9 +42,35 @@ struct EntitiesHomeView: View {
         return graphs.first?.name ?? "Graph"
     }
 
+    private var resolvedEntitiesHomeAppearance: EntitiesHomeAppearanceSettings {
+        var base = appearance.settings.entitiesHome
+        let ds = displaySettings.entitiesHome
+
+        base.layout = (ds.layout == .grid) ? .grid : .list
+        base.density = mapDensity(ds.density)
+
+        base.showAttributeCount = ds.showAttributeCount
+        base.showLinkCount = ds.showLinkCount
+        base.showNotesPreview = ds.showNotesPreview
+        base.preferThumbnailOverIcon = ds.preferThumbnailOverIcon
+
+        return base
+    }
+
+    private func mapDensity(_ density: EntitiesHomeRowDensity) -> EntitiesHomeDensity {
+        switch density {
+        case .compact:
+            return .compact
+        case .standard:
+            return .normal
+        case .comfortable:
+            return .cozy
+        }
+    }
+
     private var taskToken: String {
         // triggers reload when either the active graph, the search term or relevant computed-data flags change
-        let includeLinks = (appearance.settings.entitiesHome.showLinkCount || sortOption.needsLinkCounts) ? "1" : "0"
+        let includeLinks = (resolvedEntitiesHomeAppearance.showLinkCount || sortOption.needsLinkCounts) ? "1" : "0"
         return "\(activeGraphIDString)|\(searchText)|\(includeLinks)"
     }
 
@@ -115,11 +143,12 @@ struct EntitiesHomeView: View {
                         }
                     }
                 } else {
-                    if appearance.settings.entitiesHome.layout == .grid {
+                    if resolvedEntitiesHomeAppearance.layout == .grid {
                         EntitiesHomeGrid(
                             rows: rows,
                             isLoading: isLoading,
-                            settings: appearance.settings.entitiesHome,
+                            settings: resolvedEntitiesHomeAppearance,
+                            display: displaySettings.entitiesHome,
                             onDelete: { id in
                                 deleteEntityIDs([id])
                             }
@@ -128,7 +157,8 @@ struct EntitiesHomeView: View {
                         EntitiesHomeList(
                             rows: rows,
                             isLoading: isLoading,
-                            settings: appearance.settings.entitiesHome,
+                            settings: resolvedEntitiesHomeAppearance,
+                            display: displaySettings.entitiesHome,
                             onDelete: deleteEntities
                         )
                     }
@@ -140,9 +170,13 @@ struct EntitiesHomeView: View {
                 EntitiesHomeToolbar(
                     activeGraphName: activeGraphName,
                     showGraphPicker: $showGraphPicker,
+                    showViewOptions: $showViewOptions,
                     sortSelection: sortBinding,
                     showAddEntity: $showAddEntity
                 )
+            }
+            .sheet(isPresented: $showViewOptions) {
+                EntitiesHomeViewOptionsSheet()
             }
             .sheet(isPresented: $showAddEntity) {
                 AddEntityView()
@@ -179,10 +213,12 @@ struct EntitiesHomeView: View {
 
     @MainActor func reload(forFolded folded: String) async {
         do {
+            let includeLinkCounts = (resolvedEntitiesHomeAppearance.showLinkCount || sortOption.needsLinkCounts)
+
             let snapshot = try await EntitiesHomeLoader.shared.loadSnapshot(
                 activeGraphID: activeGraphID,
                 foldedSearch: folded,
-                includeLinkCounts: (appearance.settings.entitiesHome.showLinkCount || sortOption.needsLinkCounts)
+                includeLinkCounts: includeLinkCounts
             )
             rows = sortOption.apply(to: snapshot.rows)
             isLoading = false
