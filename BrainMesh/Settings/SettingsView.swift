@@ -37,6 +37,8 @@ struct SettingsView: View {
 
     @State var alertState: AlertState? = nil
 
+    @State var showDetailsIntro: Bool = false
+
     var body: some View {
         List {
             helpSection
@@ -65,6 +67,9 @@ struct SettingsView: View {
                     Button("Fertig") { dismiss() }
                 }
             }
+        }
+        .sheet(isPresented: $showDetailsIntro) {
+            DetailsOnboardingSheetView()
         }
     }
 

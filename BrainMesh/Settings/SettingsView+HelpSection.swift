@@ -15,6 +15,12 @@ extension SettingsView {
             } label: {
                 Label("Onboarding anzeigen", systemImage: "questionmark.circle")
             }
+
+            Button {
+                showDetailsIntro = true
+            } label: {
+                Label("Neu: Details-Felder", systemImage: "sparkles")
+            }
         }
     }
 }

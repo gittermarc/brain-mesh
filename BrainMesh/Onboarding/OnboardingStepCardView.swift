@@ -6,13 +6,15 @@
 import SwiftUI
 
 struct OnboardingStepCardView: View {
-    let number: Int
+    let number: Int?
     let title: String
     let subtitle: String
     let systemImage: String
     let isDone: Bool
     let actionTitle: String
     let actionEnabled: Bool
+    let disabledHint: String
+    let isOptional: Bool
     let action: () -> Void
 
     var body: some View {
@@ -29,8 +31,23 @@ struct OnboardingStepCardView: View {
                 }
 
                 VStack(alignment: .leading, spacing: 4) {
-                    Text("\(number). \(title)")
-                        .font(.headline)
+                    HStack(alignment: .firstTextBaseline, spacing: 8) {
+                        Text(numberTitle)
+                            .font(.headline)
+
+                        if isOptional {
+                            Text("Optional")
+                                .font(.caption.weight(.semibold))
+                                .foregroundStyle(.secondary)
+                                .padding(.horizontal, 8)
+                                .padding(.vertical, 3)
+                                .background(.thinMaterial, in: Capsule())
+                                .overlay {
+                                    Capsule().strokeBorder(.quaternary)
+                                }
+                        }
+                    }
+
                     Text(subtitle)
                         .font(.subheadline)
                         .foregroundStyle(.secondary)
@@ -51,7 +68,7 @@ struct OnboardingStepCardView: View {
                 .disabled(!actionEnabled)
 
                 if !actionEnabled {
-                    Text("Dafür brauchst du mindestens eine Entität.")
+                    Text(disabledHint)
                         .font(.footnote)
                         .foregroundStyle(.secondary)
                 }
@@ -63,5 +80,12 @@ struct OnboardingStepCardView: View {
             RoundedRectangle(cornerRadius: 22, style: .continuous)
                 .strokeBorder(.quaternary)
         }
+    }
+
+    private var numberTitle: String {
+        if let number {
+            return "\(number). \(title)"
+        }
+        return title
     }
 }

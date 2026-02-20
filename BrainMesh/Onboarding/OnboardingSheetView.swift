@@ -18,6 +18,8 @@ struct OnboardingSheetView: View {
     @AppStorage("BMOnboardingCompleted") private var onboardingCompleted: Bool = false
 
     @State private var progress: OnboardingProgress = OnboardingProgress(hasEntity: false, hasAttribute: false, hasLink: false)
+    @State private var hasAnyDetailFields: Bool = false
+    @State private var hasAnyDetailValues: Bool = false
 
     @State private var showAddEntity: Bool = false
 
@@ -29,6 +31,15 @@ struct OnboardingSheetView: View {
     @State private var pendingLinkSource: NodeRef?
     @State private var linkSource: NodeRef?
 
+    // Turbo: Details
+    @State private var showEntityPickerForDetailsSchema: Bool = false
+    @State private var pendingDetailsSchemaEntityID: UUID?
+    @State private var detailsSchemaRoute: DetailsSchemaRoute? = nil
+
+    @State private var showAttributePickerForDetailsValue: Bool = false
+    @State private var pendingDetailsValueAttributeID: UUID?
+    @State private var detailsValueRoute: DetailsValueRoute? = nil
+
     var body: some View {
         NavigationStack {
             ScrollView {
@@ -36,6 +47,7 @@ struct OnboardingSheetView: View {
                     header
                     progressCard
                     steps
+                    detailsTurbo
                     examples
                     footer
                 }
@@ -74,6 +86,29 @@ struct OnboardingSheetView: View {
                     linkSource = src
                 }
             }
+            .onChange(of: showEntityPickerForDetailsSchema) { _, isShowing in
+                guard !isShowing else { return }
+                if let id = pendingDetailsSchemaEntityID {
+                    pendingDetailsSchemaEntityID = nil
+                    if let entity = fetchEntity(id: id) {
+                        detailsSchemaRoute = DetailsSchemaRoute(entity: entity)
+                    }
+                }
+            }
+            .onChange(of: showAttributePickerForDetailsValue) { _, isShowing in
+                guard !isShowing else { return }
+                if let id = pendingDetailsValueAttributeID {
+                    pendingDetailsValueAttributeID = nil
+                    if let attr = fetchAttribute(id: id), let owner = attr.owner {
+                        let fields = owner.detailFieldsList
+                        if let field = fields.first(where: { $0.isPinned }) ?? fields.first {
+                            detailsValueRoute = DetailsValueRoute(attribute: attr, field: field)
+                        } else {
+                            detailsSchemaRoute = DetailsSchemaRoute(entity: owner)
+                        }
+                    }
+                }
+            }
             .sheet(isPresented: $showAddEntity) {
                 AddEntityView()
                     .onDisappear { Task { await refreshProgress() } }
@@ -96,6 +131,28 @@ struct OnboardingSheetView: View {
             }
             .sheet(item: $linkSource) { source in
                 AddLinkView(source: source, graphID: activeGraphID)
+                    .onDisappear { Task { await refreshProgress() } }
+            }
+            .sheet(isPresented: $showEntityPickerForDetailsSchema) {
+                NodePickerView(kind: .entity) { picked in
+                    pendingDetailsSchemaEntityID = picked.id
+                    showEntityPickerForDetailsSchema = false
+                }
+            }
+            .sheet(item: $detailsSchemaRoute) { route in
+                NavigationStack {
+                    DetailsSchemaBuilderView(entity: route.entity)
+                }
+                .onDisappear { Task { await refreshProgress() } }
+            }
+            .sheet(isPresented: $showAttributePickerForDetailsValue) {
+                NodePickerView(kind: .attribute) { picked in
+                    pendingDetailsValueAttributeID = picked.id
+                    showAttributePickerForDetailsValue = false
+                }
+            }
+            .sheet(item: $detailsValueRoute) { route in
+                DetailsValueEditorSheet(attribute: route.attribute, field: route.field)
                     .onDisappear { Task { await refreshProgress() } }
             }
         }
@@ -162,33 +219,39 @@ struct OnboardingSheetView: View {
             OnboardingStepCardView(
                 number: 1,
                 title: "Erste Entität anlegen",
-                subtitle: "Zum Beispiel: \"Projekt Apollo\" oder \"Claudia\"",
+                subtitle: "Zum Beispiel: \"Bücher\", \"Projekte\" oder \"Personen\"",
                 systemImage: "plus.circle",
                 isDone: progress.hasEntity,
                 actionTitle: "Entität anlegen",
                 actionEnabled: true,
+                disabledHint: "",
+                isOptional: false,
                 action: { showAddEntity = true }
             )
 
             OnboardingStepCardView(
                 number: 2,
-                title: "Attribut hinzufügen",
-                subtitle: "Zum Beispiel: Status, Jahr, Rolle oder Tag",
+                title: "Ersten Eintrag hinzufügen",
+                subtitle: "Zum Beispiel: \"Dune\", \"Apollo 11\" oder \"Claudia\"",
                 systemImage: "tag.circle",
                 isDone: progress.hasAttribute,
-                actionTitle: "Attribut hinzufügen",
+                actionTitle: "Eintrag hinzufügen",
                 actionEnabled: progress.hasEntity,
+                disabledHint: "Dafür brauchst du mindestens eine Entität.",
+                isOptional: false,
                 action: { showEntityPickerForAttribute = true }
             )
 
             OnboardingStepCardView(
                 number: 3,
                 title: "Link erstellen",
-                subtitle: "Verbinde zwei Nodes (mit optionaler Notiz)",
+                subtitle: "Verbinde zwei Nodes (optional mit Notiz)",
                 systemImage: "arrow.triangle.branch.circle",
                 isDone: progress.hasLink,
                 actionTitle: "Link erstellen",
                 actionEnabled: progress.hasEntity,
+                disabledHint: "Dafür brauchst du mindestens eine Entität.",
+                isOptional: false,
                 action: { showEntityPickerForLink = true }
             )
 
@@ -200,42 +263,67 @@ struct OnboardingSheetView: View {
         }
     }
 
-    private var examples: some View {
+    private var detailsTurbo: some View {
         VStack(alignment: .leading, spacing: 12) {
-            Text("Ideen, um loszulegen")
+            Text("Turbo: Details")
                 .font(.headline)
 
-            VStack(alignment: .leading, spacing: 10) {
-                Text("**Entitäten**")
-                    .font(.subheadline.weight(.semibold))
-                FlowChipsView(chips: [
-                    ("person", "Person"),
-                    ("briefcase", "Projekt"),
-                    ("book", "Buch"),
-                    ("mappin.and.ellipse", "Ort"),
-                    ("lightbulb", "Begriff"),
-                    ("film", "Film")
-                ])
+            Text("Details sind frei definierbare Felder pro Entität (z.B. Jahr, Status). Du kannst sie später für Sortierung, Filter und Überblick nutzen.")
+                .font(.callout)
+                .foregroundStyle(.secondary)
 
-                Divider()
+            OnboardingStepCardView(
+                number: nil,
+                title: "Details-Felder definieren",
+                subtitle: "Pro Entität, z.B. Jahr, Status, Rolle",
+                systemImage: "list.bullet.rectangle",
+                isDone: hasAnyDetailFields,
+                actionTitle: "Felder konfigurieren",
+                actionEnabled: progress.hasEntity,
+                disabledHint: "Dafür brauchst du mindestens eine Entität.",
+                isOptional: true,
+                action: { showEntityPickerForDetailsSchema = true }
+            )
 
-                Text("**Attribute**")
-                    .font(.subheadline.weight(.semibold))
-                FlowChipsView(chips: [
-                    ("calendar", "Jahr"),
-                    ("flag", "Status"),
-                    ("tag", "Tag"),
-                    ("person.badge.key", "Rolle"),
-                    ("link", "URL"),
-                    ("note.text", "Notiz")
-                ])
-            }
-            .padding(16)
-            .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 22, style: .continuous))
-            .overlay {
-                RoundedRectangle(cornerRadius: 22, style: .continuous)
-                    .strokeBorder(.quaternary)
-            }
+            OnboardingStepCardView(
+                number: nil,
+                title: "Ersten Wert setzen",
+                subtitle: "Zum Beispiel: Jahr=1965 bei \"Dune\"",
+                systemImage: "pencil.and.list.clipboard",
+                isDone: hasAnyDetailValues,
+                actionTitle: "Wert setzen",
+                actionEnabled: progress.hasAttribute && hasAnyDetailFields,
+                disabledHint: progress.hasAttribute ? "Lege zuerst Details-Felder an." : "Dafür brauchst du zuerst einen Eintrag (Attribut).",
+                isOptional: true,
+                action: { showAttributePickerForDetailsValue = true }
+            )
+        }
+    }
+
+    private var examples: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Text("Rezepte")
+                .font(.headline)
+
+            OnboardingRecipeCard(
+                title: "Rezept: Bücher",
+                lines: [
+                    "Entität: **Bücher**",
+                    "Eintrag: **Dune**",
+                    "Details: Jahr=1965, Status=Gelesen (optional)",
+                    "Link: Dune —(Autor)—> Frank Herbert"
+                ]
+            )
+
+            OnboardingRecipeCard(
+                title: "Rezept: Projekte",
+                lines: [
+                    "Entität: **Projekte**",
+                    "Eintrag: **BrainMesh Onboarding**",
+                    "Details: Status=In Arbeit, Deadline=… (optional)",
+                    "Link: BrainMesh Onboarding —(gehört zu)—> BrainMesh"
+                ]
+            )
         }
     }
 
@@ -263,6 +351,8 @@ struct OnboardingSheetView: View {
     @MainActor
     private func refreshProgress() async {
         progress = OnboardingProgress.compute(using: modelContext, activeGraphID: activeGraphID)
+        hasAnyDetailFields = existsDetailFieldDefinition(using: modelContext, activeGraphID: activeGraphID)
+        hasAnyDetailValues = existsDetailFieldValue(using: modelContext, activeGraphID: activeGraphID)
         if progress.isComplete {
             onboardingCompleted = true
         }
@@ -289,6 +379,101 @@ struct OnboardingSheetView: View {
         }
         fd.fetchLimit = 1
         return (try? modelContext.fetch(fd))?.first
+    }
+
+    private func fetchAttribute(id: UUID) -> MetaAttribute? {
+        let nID = id
+        let gid = activeGraphID
+
+        var fd: FetchDescriptor<MetaAttribute>
+        if let gid {
+            fd = FetchDescriptor(
+                predicate: #Predicate<MetaAttribute> { a in
+                    a.id == nID && (a.graphID == gid || a.graphID == nil)
+                }
+            )
+        } else {
+            fd = FetchDescriptor(predicate: #Predicate<MetaAttribute> { a in a.id == nID })
+        }
+        fd.fetchLimit = 1
+        return (try? modelContext.fetch(fd))?.first
+    }
+
+    @MainActor
+    private func existsDetailFieldDefinition(using modelContext: ModelContext, activeGraphID: UUID?) -> Bool {
+        var fd: FetchDescriptor<MetaDetailFieldDefinition>
+        if let gid = activeGraphID {
+            fd = FetchDescriptor(
+                predicate: #Predicate<MetaDetailFieldDefinition> { f in
+                    f.graphID == gid || f.graphID == nil
+                }
+            )
+        } else {
+            fd = FetchDescriptor()
+        }
+        fd.fetchLimit = 1
+        let result = (try? modelContext.fetch(fd)) ?? []
+        return !result.isEmpty
+    }
+
+    @MainActor
+    private func existsDetailFieldValue(using modelContext: ModelContext, activeGraphID: UUID?) -> Bool {
+        var fd: FetchDescriptor<MetaDetailFieldValue>
+        if let gid = activeGraphID {
+            fd = FetchDescriptor(
+                predicate: #Predicate<MetaDetailFieldValue> { v in
+                    v.graphID == gid || v.graphID == nil
+                }
+            )
+        } else {
+            fd = FetchDescriptor()
+        }
+        fd.fetchLimit = 1
+        let result = (try? modelContext.fetch(fd)) ?? []
+        return !result.isEmpty
+    }
+}
+
+private struct DetailsSchemaRoute: Identifiable {
+    let id: UUID = UUID()
+    let entity: MetaEntity
+}
+
+private struct DetailsValueRoute: Identifiable {
+    let id: UUID = UUID()
+    let attribute: MetaAttribute
+    let field: MetaDetailFieldDefinition
+}
+
+private struct OnboardingRecipeCard: View {
+    let title: String
+    let lines: [String]
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Text(title)
+                .font(.subheadline.weight(.semibold))
+
+            VStack(alignment: .leading, spacing: 8) {
+                ForEach(Array(lines.enumerated()), id: \.offset) { _, line in
+                    HStack(alignment: .top, spacing: 10) {
+                        Image(systemName: "checkmark.circle")
+                            .font(.system(size: 14, weight: .semibold))
+                            .foregroundStyle(.tint)
+                            .padding(.top, 1)
+                        Text(.init(line))
+                            .font(.subheadline)
+                            .foregroundStyle(.secondary)
+                    }
+                }
+            }
+        }
+        .padding(16)
+        .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 22, style: .continuous))
+        .overlay {
+            RoundedRectangle(cornerRadius: 22, style: .continuous)
+                .strokeBorder(.quaternary)
+        }
     }
 }
 

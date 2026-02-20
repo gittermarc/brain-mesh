@@ -17,14 +17,21 @@ struct OnboardingMiniExplainerView: View {
                     Image(systemName: "cube")
                         .foregroundStyle(.tint)
                         .frame(width: 20)
-                    Text("**Entität** = ein Ding in deinem Wissen: Person, Projekt, Begriff, Ort, Buch …")
+                    Text("**Entität** = Kategorie/Sammlung: Bücher, Projekte, Personen …")
                 }
 
                 HStack(alignment: .top, spacing: 8) {
                     Image(systemName: "tag")
                         .foregroundStyle(.tint)
                         .frame(width: 20)
-                    Text("**Attribut** = ein Detail dazu: Rolle, Status, Datum, Tag, Kategorie …")
+                    Text("**Attribut (Eintrag)** = ein konkretes Ding in der Entität: Dune, Claudia, Apollo 11 …")
+                }
+
+                HStack(alignment: .top, spacing: 8) {
+                    Image(systemName: "list.bullet.rectangle")
+                        .foregroundStyle(.tint)
+                        .frame(width: 20)
+                    Text("**Details** = frei definierbare Felder pro Entität (z.B. Jahr, Status) + Werte pro Eintrag")
                 }
 
                 HStack(alignment: .top, spacing: 8) {
