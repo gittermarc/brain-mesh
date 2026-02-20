@@ -8,7 +8,7 @@
 import Foundation
 import SwiftData
 
-enum NodeKind: Int, Codable, CaseIterable {
+nonisolated enum NodeKind: Int, Codable, CaseIterable, Sendable {
     case entity = 0
     case attribute = 1
 }

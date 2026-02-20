@@ -8,7 +8,7 @@
 import Foundation
 import UniformTypeIdentifiers
 
-enum AttachmentStore {
+nonisolated enum AttachmentStore {
 
     private static let folderName = "BrainMeshAttachments"
 
@@ -87,6 +87,7 @@ enum AttachmentStore {
     }
 
     /// Returns an existing local file URL if present on disk (localPath or deterministic filename).
+    @MainActor
     static func existingCachedFileURL(for attachment: MetaAttachment) -> URL? {
         existingCachedFileURL(
             localPath: attachment.localPath,
@@ -117,6 +118,7 @@ enum AttachmentStore {
 
     /// Ensures a local file exists on disk for thumbnailing.
     /// Important: does NOT mutate the SwiftData model (no localPath writes).
+    @MainActor
     static func materializeFileURLForThumbnailIfNeeded(for attachment: MetaAttachment) -> URL? {
         if let existing = existingCachedFileURL(for: attachment) {
             return existing
@@ -136,6 +138,7 @@ enum AttachmentStore {
     /// - If `localPath` exists, returns that.
     /// - Else, tries the deterministic filename (id + extension) if it exists on disk.
     /// - Else, writes `fileData` to cache for preview and persists `localPath`.
+    @MainActor
     static func ensurePreviewURL(for attachment: MetaAttachment) -> URL? {
         if let existing = existingCachedFileURL(for: attachment) {
             // If we found it via deterministic fallback and localPath is nil/stale, normalize it.

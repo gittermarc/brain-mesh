@@ -129,24 +129,24 @@ struct LensContext: Equatable {
 
 // MARK: - Graph Types
 
-struct NodeKey: Hashable {
+nonisolated struct NodeKey: Hashable, Sendable {
     let kind: NodeKind
     let uuid: UUID
     var identifier: String { "\(kind.rawValue)-\(uuid.uuidString)" }
 }
 
-struct GraphNode: Identifiable, Hashable {
+nonisolated struct GraphNode: Identifiable, Hashable, Sendable {
     let key: NodeKey
     let label: String
     var id: String { key.identifier }
 }
 
-enum GraphEdgeType: Int, Hashable {
+nonisolated enum GraphEdgeType: Int, Hashable, Sendable {
     case link = 0
     case containment = 1
 }
 
-struct GraphEdge: Hashable {
+nonisolated struct GraphEdge: Hashable, Sendable {
     let a: NodeKey
     let b: NodeKey
     let type: GraphEdgeType
@@ -166,7 +166,7 @@ extension Array where Element == GraphEdge {
 }
 
 /// Directed notes key: source -> target
-struct DirectedEdgeKey: Hashable {
+nonisolated struct DirectedEdgeKey: Hashable, Sendable {
     let sourceID: String
     let targetID: String
     let type: Int
