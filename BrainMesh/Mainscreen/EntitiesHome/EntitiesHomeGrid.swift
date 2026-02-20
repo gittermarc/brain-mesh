@@ -75,9 +75,18 @@ private struct EntitiesHomeGridCell: View {
                 .font(.headline)
                 .lineLimit(2)
 
-            countsView
+            switch display.rowStyle {
+            case .titleOnly:
+                EmptyView()
 
-            if settings.showNotesPreview, let preview = row.notesPreview {
+            case .titleWithSubtitle:
+                subtitleView
+
+            case .titleWithBadges:
+                badgesView
+            }
+
+            if shouldShowExtraNotesPreview, let preview = row.notesPreview {
                 Text(preview)
                     .font(.caption)
                     .foregroundStyle(.secondary)
@@ -92,7 +101,36 @@ private struct EntitiesHomeGridCell: View {
         )
     }
 
-    @ViewBuilder private var countsView: some View {
+    private var shouldShowExtraNotesPreview: Bool {
+        if !display.showNotesPreview { return false }
+        if display.rowStyle == .titleWithSubtitle && display.metaLine == .notesPreview { return false }
+        return true
+    }
+
+    @ViewBuilder private var subtitleView: some View {
+        switch display.metaLine {
+        case .none:
+            EmptyView()
+
+        case .notesPreview:
+            if let preview = row.notesPreview {
+                Text(preview)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .lineLimit(2)
+            }
+
+        case .counts:
+            if let counts = countsLine {
+                Text(counts)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+            }
+        }
+    }
+
+    @ViewBuilder private var badgesView: some View {
         let pills = countPills
 
         switch display.badgeStyle {
@@ -125,19 +163,17 @@ private struct EntitiesHomeGridCell: View {
             }
         }
     }
-
     private var countPills: [String] {
-        if display.badgeStyle == .none { return [] }
 
         var parts: [String] = []
 
-        if settings.showAttributeCount {
+        if display.showAttributeCount {
             let n = row.attributeCount
             let label = (n == 1) ? "Attribut" : "Attribute"
             parts.append("\(n) \(label)")
         }
 
-        if settings.showLinkCount, let lc = row.linkCount {
+        if display.showLinkCount, let lc = row.linkCount {
             parts.append("\(lc) Links")
         }
 
@@ -145,8 +181,6 @@ private struct EntitiesHomeGridCell: View {
     }
 
     private var countsLine: String? {
-        if display.badgeStyle == .none { return nil }
-
         let parts = countPills
         if parts.isEmpty { return nil }
         return parts.joined(separator: " · ")

@@ -69,9 +69,11 @@ struct EntitiesHomeView: View {
     }
 
     private var taskToken: String {
-        // triggers reload when either the active graph, the search term or relevant computed-data flags change
+        // Triggers reload when either the active graph, the search term or relevant computed-data flags change.
+        let includeAttrs = (resolvedEntitiesHomeAppearance.showAttributeCount || sortOption.needsAttributeCounts) ? "1" : "0"
         let includeLinks = (resolvedEntitiesHomeAppearance.showLinkCount || sortOption.needsLinkCounts) ? "1" : "0"
-        return "\(activeGraphIDString)|\(searchText)|\(includeLinks)"
+        let includeNotes = (resolvedEntitiesHomeAppearance.showNotesPreview || displaySettings.entitiesHome.metaLine == .notesPreview) ? "1" : "0"
+        return "\(activeGraphIDString)|\(searchText)|\(includeAttrs)|\(includeLinks)|\(includeNotes)"
     }
 
     var body: some View {
@@ -159,7 +161,10 @@ struct EntitiesHomeView: View {
                             isLoading: isLoading,
                             settings: resolvedEntitiesHomeAppearance,
                             display: displaySettings.entitiesHome,
-                            onDelete: deleteEntities
+                            onDelete: deleteEntities,
+                            onDeleteID: { id in
+                                deleteEntityIDs([id])
+                            }
                         )
                     }
                 }
@@ -176,7 +181,7 @@ struct EntitiesHomeView: View {
                 )
             }
             .sheet(isPresented: $showViewOptions) {
-                EntitiesHomeViewOptionsSheet()
+                EntitiesHomeDisplaySheet(isPresented: $showViewOptions)
             }
             .sheet(isPresented: $showAddEntity) {
                 AddEntityView()
@@ -213,12 +218,16 @@ struct EntitiesHomeView: View {
 
     @MainActor func reload(forFolded folded: String) async {
         do {
+            let includeAttributeCounts = (resolvedEntitiesHomeAppearance.showAttributeCount || sortOption.needsAttributeCounts)
             let includeLinkCounts = (resolvedEntitiesHomeAppearance.showLinkCount || sortOption.needsLinkCounts)
+            let includeNotesPreview = (resolvedEntitiesHomeAppearance.showNotesPreview || displaySettings.entitiesHome.metaLine == .notesPreview)
 
             let snapshot = try await EntitiesHomeLoader.shared.loadSnapshot(
                 activeGraphID: activeGraphID,
                 foldedSearch: folded,
-                includeLinkCounts: includeLinkCounts
+                includeAttributeCounts: includeAttributeCounts,
+                includeLinkCounts: includeLinkCounts,
+                includeNotesPreview: includeNotesPreview
             )
             rows = sortOption.apply(to: snapshot.rows)
             isLoading = false
@@ -300,6 +309,15 @@ enum EntitiesHomeSortOption: String, CaseIterable, Identifiable {
             return "list.bullet.rectangle"
         case .linksMost, .linksLeast:
             return "link"
+        }
+    }
+
+    var needsAttributeCounts: Bool {
+        switch self {
+        case .attributesMost, .attributesLeast:
+            return true
+        default:
+            return false
         }
     }
 

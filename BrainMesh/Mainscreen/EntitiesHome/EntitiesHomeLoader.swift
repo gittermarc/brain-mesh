@@ -4,7 +4,7 @@
 //
 //  P0.1: Load Entities Home data off the UI thread.
 //  Goal: Avoid blocking the main thread with SwiftData fetches when typing/searching
-//  or switching graphs in the Home tab.
+//  or switching graphs in the Home tab
 //
 
 import Foundation
@@ -81,7 +81,9 @@ actor EntitiesHomeLoader {
     func loadSnapshot(
         activeGraphID: UUID?,
         foldedSearch: String,
-        includeLinkCounts: Bool
+        includeAttributeCounts: Bool,
+        includeLinkCounts: Bool,
+        includeNotesPreview: Bool
     ) async throws -> EntitiesHomeSnapshot {
         let configuredContainer = self.container
         guard let configuredContainer else {
@@ -94,9 +96,11 @@ actor EntitiesHomeLoader {
 
         let gid = activeGraphID
         let term = foldedSearch
+        let includeAttrs = includeAttributeCounts
         let includeLinks = includeLinkCounts
+        let includeNotes = includeNotesPreview
 
-        return try await Task.detached(priority: .utility) { [configuredContainer, gid, term, includeLinks] in
+        return try await Task.detached(priority: .utility) { [configuredContainer, gid, term, includeAttrs, includeLinks, includeNotes] in
             let context = ModelContext(configuredContainer.container)
             context.autosaveEnabled = false
 
@@ -111,20 +115,25 @@ actor EntitiesHomeLoader {
             let now = Date()
             let shouldUseCache = !term.isEmpty
 
-            let cachedAttrCounts: [UUID: Int]? = shouldUseCache
-                ? await EntitiesHomeLoader.shared.cachedCounts(for: gid, now: now)
-                : nil
-
             let attrCounts: [UUID: Int]
-            if let cachedAttrCounts {
-                attrCounts = cachedAttrCounts
+            if includeAttrs {
+                let cachedAttrCounts: [UUID: Int]? = shouldUseCache
+                    ? await EntitiesHomeLoader.shared.cachedCounts(for: gid, now: now)
+                    : nil
+
+                if let cachedAttrCounts {
+                    attrCounts = cachedAttrCounts
+                } else {
+                    let computed = try EntitiesHomeLoader.computeAttributeCounts(
+                        context: context,
+                        graphID: gid,
+                        relevantEntityIDs: entityIDs
+                    )
+                    await EntitiesHomeLoader.shared.storeCounts(computed, for: gid, now: now)
+                    attrCounts = computed
+                }
             } else {
-                attrCounts = try EntitiesHomeLoader.computeAttributeCounts(
-                    context: context,
-                    graphID: gid,
-                    relevantEntityIDs: entityIDs
-                )
-                await EntitiesHomeLoader.shared.storeCounts(attrCounts, for: gid, now: now)
+                attrCounts = [:]
             }
 
             let linkCountsByEntityID: [UUID: Int]?
@@ -149,7 +158,7 @@ actor EntitiesHomeLoader {
             }
 
             let rows: [EntitiesHomeRow] = entities.map { e in
-                let preview = EntitiesHomeLoader.makeNotesPreview(e.notes)
+                let preview: String? = includeNotes ? EntitiesHomeLoader.makeNotesPreview(e.notes) : nil
                 let hasData = (e.imageData?.isEmpty == false)
 
                 return EntitiesHomeRow(
@@ -157,7 +166,7 @@ actor EntitiesHomeLoader {
                     name: e.name,
                     createdAt: e.createdAt,
                     iconSymbolName: e.iconSymbolName,
-                    attributeCount: attrCounts[e.id] ?? 0,
+                    attributeCount: includeAttrs ? (attrCounts[e.id] ?? 0) : 0,
                     linkCount: includeLinks ? (linkCountsByEntityID?[e.id] ?? 0) : nil,
                     notesPreview: preview,
                     imagePath: e.imagePath,
