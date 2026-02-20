@@ -188,18 +188,31 @@ actor AttachmentThumbnailStore {
 
     private static func generateVideoFrameThumbnail(fileURL: URL, maxPixelSize: Int, scale: CGFloat) async -> UIImage? {
         await Task.detached(priority: .utility) {
-            let asset = AVAsset(url: fileURL)
+			let asset = AVURLAsset(url: fileURL)
             let generator = AVAssetImageGenerator(asset: asset)
             generator.appliesPreferredTrackTransform = true
             generator.maximumSize = CGSize(width: CGFloat(maxPixelSize), height: CGFloat(maxPixelSize))
 
-            let time = CMTime(seconds: 0.0, preferredTimescale: 600)
-            do {
-                let cg = try generator.copyCGImage(at: time, actualTime: nil)
-                return UIImage(cgImage: cg, scale: scale, orientation: .up)
-            } catch {
-                return nil
-            }
+			let time = CMTime(seconds: 0.0, preferredTimescale: 600)
+			let cg: CGImage? = await withCheckedContinuation { cont in
+				var didResume = false
+				func resumeOnce(_ image: CGImage?) {
+					guard !didResume else { return }
+					didResume = true
+					cont.resume(returning: image)
+				}
+
+				generator.generateCGImagesAsynchronously(forTimes: [NSValue(time: time)]) { _, cgImage, _, result, _ in
+					guard result == .succeeded, let cgImage else {
+						resumeOnce(nil)
+						return
+					}
+					resumeOnce(cgImage)
+				}
+			}
+
+			guard let cg else { return nil }
+			return UIImage(cgImage: cg, scale: scale, orientation: .up)
         }.value
     }
 
