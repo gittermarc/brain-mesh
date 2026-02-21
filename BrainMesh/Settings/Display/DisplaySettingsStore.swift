@@ -21,6 +21,7 @@ final class DisplaySettingsStore: ObservableObject {
         self.state = DisplaySettingsStore.load(from: userDefaults)
 
         migrateLegacyAttributesAllAppStorageIfNeeded()
+        migrateLegacyEntitiesHomeAppearanceIfNeeded()
     }
 
     // MARK: - Resolved values
@@ -190,6 +191,70 @@ final class DisplaySettingsStore: ObservableObject {
         state.attributesAllListOverride = next
         persist()
         userDefaults.set(true, forKey: migratedKey)
+    }
+
+
+    private func migrateLegacyEntitiesHomeAppearanceIfNeeded() {
+        let migratedKey = BMAppStorageKeys.displaySettingsMigratedEntitiesHomeFromAppearanceV1
+        guard userDefaults.bool(forKey: migratedKey) == false else { return }
+
+        // If the user already customized this screen via DisplaySettings, do not override.
+        guard state.entitiesHomeOverride == nil else {
+            userDefaults.set(true, forKey: migratedKey)
+            return
+        }
+
+        guard let data = userDefaults.data(forKey: BMAppStorageKeys.appearanceSettingsV1) else {
+            userDefaults.set(true, forKey: migratedKey)
+            return
+        }
+
+        let appearance: AppearanceSettings
+        do {
+            appearance = try JSONDecoder().decode(AppearanceSettings.self, from: data)
+        } catch {
+            userDefaults.set(true, forKey: migratedKey)
+            return
+        }
+
+        let legacy = appearance.entitiesHome
+        let def = EntitiesHomeAppearanceSettings.default
+
+        let hasAnyCustomizations =
+            legacy.layout != def.layout ||
+            legacy.density != def.density ||
+            legacy.showAttributeCount != def.showAttributeCount ||
+            legacy.showLinkCount != def.showLinkCount ||
+            legacy.showNotesPreview != def.showNotesPreview ||
+            legacy.preferThumbnailOverIcon != def.preferThumbnailOverIcon
+
+        guard hasAnyCustomizations else {
+            userDefaults.set(true, forKey: migratedKey)
+            return
+        }
+
+        var next = state.entitiesHome
+        next.layout = (legacy.layout == .grid) ? .grid : .list
+        next.density = mapLegacyEntitiesHomeDensity(legacy.density)
+        next.showAttributeCount = legacy.showAttributeCount
+        next.showLinkCount = legacy.showLinkCount
+        next.showNotesPreview = legacy.showNotesPreview
+        next.preferThumbnailOverIcon = legacy.preferThumbnailOverIcon
+
+        state.entitiesHomeOverride = next
+        persist()
+        userDefaults.set(true, forKey: migratedKey)
+    }
+
+    private func mapLegacyEntitiesHomeDensity(_ density: EntitiesHomeDensity) -> EntitiesHomeRowDensity {
+        switch density {
+        case .compact:
+            return .compact
+        case .normal:
+            return .standard
+        case .cozy:
+            return .comfortable
+        }
     }
 
     private func persist() {
