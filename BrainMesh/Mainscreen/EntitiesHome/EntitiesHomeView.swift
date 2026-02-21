@@ -232,6 +232,10 @@ struct EntitiesHomeView: View {
             rows = sortOption.apply(to: snapshot.rows)
             isLoading = false
             loadError = nil
+        } catch is CancellationError {
+            // When typing quickly or switching graphs, the previous task gets cancelled.
+            // We deliberately don't touch UI state here to avoid flicker or transient error screens.
+            return
         } catch {
             isLoading = false
             loadError = error.localizedDescription

@@ -94,74 +94,85 @@ actor EntitiesHomeLoader {
             )
         }
 
+        try Task.checkCancellation()
+
+        let context = ModelContext(configuredContainer.container)
+        context.autosaveEnabled = false
+
         let gid = activeGraphID
         let term = foldedSearch
         let includeAttrs = includeAttributeCounts
         let includeLinks = includeLinkCounts
         let includeNotes = includeNotesPreview
 
-        return try await Task.detached(priority: .utility) { [configuredContainer, gid, term, includeAttrs, includeLinks, includeNotes] in
-            let context = ModelContext(configuredContainer.container)
-            context.autosaveEnabled = false
+        try Task.checkCancellation()
 
-            let entities = try EntitiesHomeLoader.fetchEntities(
-                context: context,
-                graphID: gid,
-                foldedSearch: term
-            )
+        let entities = try EntitiesHomeLoader.fetchEntities(
+            context: context,
+            graphID: gid,
+            foldedSearch: term
+        )
 
-            let entityIDs = Set(entities.map { $0.id })
+        try Task.checkCancellation()
 
-            let now = Date()
-            let shouldUseCache = !term.isEmpty
+        let entityIDs = Set(entities.map { $0.id })
 
-            let attrCounts: [UUID: Int]
-            if includeAttrs {
-                let cachedAttrCounts: [UUID: Int]? = shouldUseCache
-                    ? await EntitiesHomeLoader.shared.cachedCounts(for: gid, now: now)
-                    : nil
+        let now = Date()
+        let shouldUseCache = !term.isEmpty
 
-                if let cachedAttrCounts {
-                    attrCounts = cachedAttrCounts
-                } else {
-                    let computed = try EntitiesHomeLoader.computeAttributeCounts(
-                        context: context,
-                        graphID: gid,
-                        relevantEntityIDs: entityIDs
-                    )
-                    await EntitiesHomeLoader.shared.storeCounts(computed, for: gid, now: now)
-                    attrCounts = computed
-                }
+        let attrCounts: [UUID: Int]
+        if includeAttrs {
+            let cachedAttrCounts: [UUID: Int]? = shouldUseCache ? cachedCounts(for: gid, now: now) : nil
+
+            if let cachedAttrCounts {
+                attrCounts = cachedAttrCounts
             } else {
-                attrCounts = [:]
+                let computed = try EntitiesHomeLoader.computeAttributeCounts(
+                    context: context,
+                    graphID: gid,
+                    relevantEntityIDs: entityIDs
+                )
+                try Task.checkCancellation()
+                storeCounts(computed, for: gid, now: now)
+                attrCounts = computed
+            }
+        } else {
+            attrCounts = [:]
+        }
+
+        let linkCountsByEntityID: [UUID: Int]?
+        if includeLinks {
+            let cachedLinkCounts: [UUID: Int]? = shouldUseCache ? cachedLinkCounts(for: gid, now: now) : nil
+
+            if let cachedLinkCounts {
+                linkCountsByEntityID = cachedLinkCounts
+            } else {
+                let computed = try EntitiesHomeLoader.computeLinkCounts(
+                    context: context,
+                    graphID: gid,
+                    relevantEntityIDs: entityIDs
+                )
+                try Task.checkCancellation()
+                storeLinkCounts(computed, for: gid, now: now)
+                linkCountsByEntityID = computed
+            }
+        } else {
+            linkCountsByEntityID = nil
+        }
+
+        var rows: [EntitiesHomeRow] = []
+        rows.reserveCapacity(entities.count)
+
+        for (idx, e) in entities.enumerated() {
+            if idx % 128 == 0 {
+                try Task.checkCancellation()
             }
 
-            let linkCountsByEntityID: [UUID: Int]?
-            if includeLinks {
-                let cachedLinkCounts: [UUID: Int]? = shouldUseCache
-                    ? await EntitiesHomeLoader.shared.cachedLinkCounts(for: gid, now: now)
-                    : nil
+            let preview: String? = includeNotes ? EntitiesHomeLoader.makeNotesPreview(e.notes) : nil
+            let hasData = (e.imageData?.isEmpty == false)
 
-                if let cachedLinkCounts {
-                    linkCountsByEntityID = cachedLinkCounts
-                } else {
-                    let computed = try EntitiesHomeLoader.computeLinkCounts(
-                        context: context,
-                        graphID: gid,
-                        relevantEntityIDs: entityIDs
-                    )
-                    await EntitiesHomeLoader.shared.storeLinkCounts(computed, for: gid, now: now)
-                    linkCountsByEntityID = computed
-                }
-            } else {
-                linkCountsByEntityID = nil
-            }
-
-            let rows: [EntitiesHomeRow] = entities.map { e in
-                let preview: String? = includeNotes ? EntitiesHomeLoader.makeNotesPreview(e.notes) : nil
-                let hasData = (e.imageData?.isEmpty == false)
-
-                return EntitiesHomeRow(
+            rows.append(
+                EntitiesHomeRow(
                     id: e.id,
                     name: e.name,
                     createdAt: e.createdAt,
@@ -172,10 +183,10 @@ actor EntitiesHomeLoader {
                     imagePath: e.imagePath,
                     hasImageData: hasData
                 )
-            }
+            )
+        }
 
-            return EntitiesHomeSnapshot(rows: rows)
-        }.value
+        return EntitiesHomeSnapshot(rows: rows)
     }
 
     private func cachedCounts(for graphID: UUID?, now: Date) -> [UUID: Int]? {
@@ -232,6 +243,8 @@ actor EntitiesHomeLoader {
         let term = foldedSearch
         var unique: [UUID: MetaEntity] = [:]
 
+        try Task.checkCancellation()
+
         // 1) Entity name match
         let fdEntities: FetchDescriptor<MetaEntity>
         if let gid {
@@ -274,7 +287,10 @@ actor EntitiesHomeLoader {
 
         // Note: `#Predicate` doesn't reliably support `ids.contains(e.id)` for UUID arrays.
         // We therefore resolve owners directly from the matching attributes.
-        for a in attrs {
+        for (idx, a) in attrs.enumerated() {
+            if idx % 256 == 0 {
+                try Task.checkCancellation()
+            }
             guard let owner = a.owner else { continue }
             if let gid {
                 if owner.graphID == gid { unique[owner.id] = owner }
@@ -296,6 +312,8 @@ actor EntitiesHomeLoader {
     ) throws -> [UUID: Int] {
         if relevantEntityIDs.isEmpty { return [:] }
 
+        try Task.checkCancellation()
+
         let gid = graphID
         let attrs: [MetaAttribute]
         if let gid {
@@ -312,7 +330,10 @@ actor EntitiesHomeLoader {
         var counts: [UUID: Int] = [:]
         counts.reserveCapacity(min(relevantEntityIDs.count, 512))
 
-        for a in attrs {
+        for (idx, a) in attrs.enumerated() {
+            if idx % 512 == 0 {
+                try Task.checkCancellation()
+            }
             guard let owner = a.owner else { continue }
             let ownerID = owner.id
             guard relevantEntityIDs.contains(ownerID) else { continue }
@@ -328,6 +349,8 @@ actor EntitiesHomeLoader {
         relevantEntityIDs: Set<UUID>
     ) throws -> [UUID: Int] {
         if relevantEntityIDs.isEmpty { return [:] }
+
+        try Task.checkCancellation()
 
         let gid = graphID
         let links: [MetaLink]
@@ -347,7 +370,10 @@ actor EntitiesHomeLoader {
         var counts: [UUID: Int] = [:]
         counts.reserveCapacity(min(relevantEntityIDs.count, 512))
 
-        for l in links {
+        for (idx, l) in links.enumerated() {
+            if idx % 512 == 0 {
+                try Task.checkCancellation()
+            }
             if l.sourceKindRaw == entityKindRaw {
                 let sid = l.sourceID
                 if relevantEntityIDs.contains(sid) {
