@@ -11,11 +11,11 @@ struct OnboardingSheetView: View {
     @Environment(\.modelContext) private var modelContext
     @EnvironmentObject private var onboarding: OnboardingCoordinator
 
-    @AppStorage("BMActiveGraphID") private var activeGraphIDString: String = ""
+    @AppStorage(BMAppStorageKeys.activeGraphID) private var activeGraphIDString: String = ""
     private var activeGraphID: UUID? { UUID(uuidString: activeGraphIDString) }
 
-    @AppStorage("BMOnboardingHidden") private var onboardingHidden: Bool = false
-    @AppStorage("BMOnboardingCompleted") private var onboardingCompleted: Bool = false
+    @AppStorage(BMAppStorageKeys.onboardingHidden) private var onboardingHidden: Bool = false
+    @AppStorage(BMAppStorageKeys.onboardingCompleted) private var onboardingCompleted: Bool = false
 
     @State private var progress: OnboardingProgress = OnboardingProgress(hasEntity: false, hasAttribute: false, hasLink: false)
     @State private var hasAnyDetailFields: Bool = false

@@ -14,7 +14,7 @@ struct EntitiesHomeView: View {
     @EnvironmentObject var appearance: AppearanceStore
     @EnvironmentObject var displaySettings: DisplaySettingsStore
 
-    @AppStorage("BMActiveGraphID") private var activeGraphIDString: String = ""
+    @AppStorage(BMAppStorageKeys.activeGraphID) private var activeGraphIDString: String = ""
     var activeGraphID: UUID? { UUID(uuidString: activeGraphIDString) }
 
     @Query(sort: [SortDescriptor(\MetaGraph.createdAt, order: .forward)])
@@ -25,10 +25,10 @@ struct EntitiesHomeView: View {
     @State var showGraphPicker = false
     @State var showViewOptions = false
 
-    @AppStorage("BMEntitiesHomeSort") private var entitiesHomeSortRaw: String = EntitiesHomeSortOption.nameAZ.rawValue
+    @AppStorage(BMAppStorageKeys.entitiesHomeSort) private var entitiesHomeSortRaw: String = EntitiesHomeSortOption.nameAZ.rawValue
 
-    @AppStorage("BMOnboardingHidden") private var onboardingHidden: Bool = false
-    @AppStorage("BMOnboardingCompleted") private var onboardingCompleted: Bool = false
+    @AppStorage(BMAppStorageKeys.onboardingHidden) private var onboardingHidden: Bool = false
+    @AppStorage(BMAppStorageKeys.onboardingCompleted) private var onboardingCompleted: Bool = false
 
     // MARK: - Fetch-based list state (graph-scoped + debounced)
     @State var rows: [EntitiesHomeRow] = []

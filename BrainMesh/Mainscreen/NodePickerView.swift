@@ -11,7 +11,7 @@ import SwiftUI
 struct NodePickerView: View {
     @Environment(\.dismiss) private var dismiss
 
-    @AppStorage("BMActiveGraphID") private var activeGraphIDString: String = ""
+    @AppStorage(BMAppStorageKeys.activeGraphID) private var activeGraphIDString: String = ""
     private var activeGraphID: UUID? { UUID(uuidString: activeGraphIDString) }
 
     let kind: NodeKind

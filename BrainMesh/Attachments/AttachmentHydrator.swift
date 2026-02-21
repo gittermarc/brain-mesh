@@ -12,17 +12,6 @@ import Foundation
 import SwiftData
 import os
 
-/// Wrapper to pass SwiftData's `ModelContainer` across concurrency boundaries.
-///
-/// We keep actual usage constrained (read-only fetch + Data extraction) and perform
-/// the heavy work in a detached utility task.
-struct AnyModelContainer: @unchecked Sendable {
-    let container: ModelContainer
-    init(_ container: ModelContainer) {
-        self.container = container
-    }
-}
-
 actor AttachmentHydrator {
 
     static let shared = AttachmentHydrator()

@@ -18,7 +18,7 @@ struct GraphPickerSheet: View {
 
     @EnvironmentObject private var graphLock: GraphLockCoordinator
 
-    @AppStorage("BMActiveGraphID") private var activeGraphIDString: String = ""
+    @AppStorage(BMAppStorageKeys.activeGraphID) private var activeGraphIDString: String = ""
 
     @Query(sort: [SortDescriptor(\MetaGraph.createdAt, order: .forward)])
     private var graphs: [MetaGraph]

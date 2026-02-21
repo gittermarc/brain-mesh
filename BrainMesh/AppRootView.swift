@@ -18,15 +18,15 @@ struct AppRootView: View {
     @EnvironmentObject private var graphLock: GraphLockCoordinator
     @EnvironmentObject private var systemModals: SystemModalCoordinator
 
-    @AppStorage("BMActiveGraphID") private var activeGraphIDString: String = ""
+    @AppStorage(BMAppStorageKeys.activeGraphID) private var activeGraphIDString: String = ""
 
-    @AppStorage("BMOnboardingHidden") private var onboardingHidden: Bool = false
-    @AppStorage("BMOnboardingCompleted") private var onboardingCompleted: Bool = false
-    @AppStorage("BMOnboardingAutoShown") private var onboardingAutoShown: Bool = false
+    @AppStorage(BMAppStorageKeys.onboardingHidden) private var onboardingHidden: Bool = false
+    @AppStorage(BMAppStorageKeys.onboardingCompleted) private var onboardingCompleted: Bool = false
+    @AppStorage(BMAppStorageKeys.onboardingAutoShown) private var onboardingAutoShown: Bool = false
 
     /// Throttle auto image hydration to avoid doing full-ish scans on every foreground.
     /// Stored as UNIX time (seconds).
-    @AppStorage("BMImageHydratorLastAutoRun") private var imageHydratorLastAutoRun: Double = 0
+    @AppStorage(BMAppStorageKeys.imageHydratorLastAutoRun) private var imageHydratorLastAutoRun: Double = 0
 
     @State private var didRunStartupOnce: Bool = false
 

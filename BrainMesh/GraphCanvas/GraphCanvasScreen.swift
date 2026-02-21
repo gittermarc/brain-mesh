@@ -14,7 +14,7 @@ struct GraphCanvasScreen: View {
     @EnvironmentObject var onboarding: OnboardingCoordinator
 
     // ✅ Active Graph (Multi-Graph)
-    @AppStorage("BMActiveGraphID") var activeGraphIDString: String = ""
+    @AppStorage(BMAppStorageKeys.activeGraphID) var activeGraphIDString: String = ""
     var activeGraphID: UUID? { UUID(uuidString: activeGraphIDString) }
 
     @Query(sort: [SortDescriptor(\MetaGraph.createdAt, order: .forward)])
@@ -23,8 +23,8 @@ struct GraphCanvasScreen: View {
     @State var showGraphPicker = false
 
     // NOTE: Must not be `private` because GraphCanvasScreen is split into multiple files via extensions.
-    @AppStorage("BMOnboardingHidden") var onboardingHidden: Bool = false
-    @AppStorage("BMOnboardingCompleted") var onboardingCompleted: Bool = false
+    @AppStorage(BMAppStorageKeys.onboardingHidden) var onboardingHidden: Bool = false
+    @AppStorage(BMAppStorageKeys.onboardingCompleted) var onboardingCompleted: Bool = false
 
     var activeGraphName: String {
         if let id = activeGraphID, let g = graphs.first(where: { $0.id == id }) { return g.name }

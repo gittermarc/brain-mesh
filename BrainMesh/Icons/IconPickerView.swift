@@ -11,7 +11,7 @@ import UIKit
 struct IconPickerView: View {
     @Environment(\.dismiss) private var dismiss
 
-    @AppStorage("BMRecentSymbolNames") private var recentRaw: String = ""
+    @AppStorage(BMAppStorageKeys.recentSymbolNames) private var recentRaw: String = ""
 
     @Binding var selection: String?
     @State private var searchText: String = ""

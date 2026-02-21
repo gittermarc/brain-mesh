@@ -15,7 +15,7 @@ import SwiftData
 /// UI sections are split into separate files (GraphStatsView+*.swift) to keep compile
 /// times stable and responsibilities small.
 struct GraphStatsView: View {
-    @AppStorage("BMActiveGraphID") private var activeGraphIDString: String = ""
+    @AppStorage(BMAppStorageKeys.activeGraphID) private var activeGraphIDString: String = ""
     var activeGraphID: UUID? { UUID(uuidString: activeGraphIDString) }
 
     @Query(sort: [SortDescriptor(\MetaGraph.createdAt, order: .forward)])

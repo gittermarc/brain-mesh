@@ -15,7 +15,7 @@ final class GraphLockCoordinator: ObservableObject {
 
     @Published var activeRequest: GraphLockRequest?
 
-    @AppStorage("BMActiveGraphID") private var activeGraphIDString: String = ""
+    @AppStorage(BMAppStorageKeys.activeGraphID) private var activeGraphIDString: String = ""
 
     private var unlockedGraphIDs: Set<UUID> = []
 

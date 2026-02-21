@@ -14,7 +14,7 @@ struct EntityAttributesSectionView: View {
     @Bindable var entity: MetaEntity
     @Binding var showAddAttribute: Bool
 
-    @AppStorage("BMEntityAttributeSortMode") private var sortModeRaw: String = EntityAttributeSortMode.nameAZ.rawValue
+    @AppStorage(BMAppStorageKeys.entityAttributeSortMode) private var sortModeRaw: String = EntityAttributeSortMode.nameAZ.rawValue
     @State private var filterText: String = ""
 
     private var currentSortMode: EntityAttributeSortMode {
