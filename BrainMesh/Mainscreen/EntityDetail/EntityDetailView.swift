@@ -175,7 +175,18 @@ struct EntityDetailView: View {
                 card
             }
         } else {
+            let isCollapsedBySettings = settings.collapsedSections.contains(section)
+            let isExpandedAtRuntime = expandedSectionIDs.contains(section.rawValue)
+
             entitySectionContent(section, scrollProxy: scrollProxy)
+                .nodeCollapseOverlay(
+                    isVisible: isCollapsedBySettings && isExpandedAtRuntime,
+                    onCollapse: {
+                        withAnimation(.snappy) {
+	                            _ = expandedSectionIDs.remove(section.rawValue)
+                        }
+                    }
+                )
         }
     }
 

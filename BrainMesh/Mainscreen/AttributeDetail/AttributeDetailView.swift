@@ -176,6 +176,10 @@ struct AttributeDetailView: View {
         let isCollapsedByFocus = focusCollapsedSections.contains(section)
         let isExpandedAtRuntime = expandedSectionIDs.contains(section.rawValue)
 
+        let focusTarget = focusTargetSection(for: settings.focusMode)
+        let focusWouldCollapse = (focusTarget != nil) && (section != focusTarget!)
+        let isCollapsibleAtRuntime = isCollapsedBySettings || focusWouldCollapse
+
         if settings.hiddenSections.contains(section) {
             EmptyView()
         } else if (isCollapsedBySettings || isCollapsedByFocus) && !isExpandedAtRuntime {
@@ -187,7 +191,7 @@ struct AttributeDetailView: View {
             ) {
                 withAnimation(.snappy) {
                     _ = expandedSectionIDs.insert(section.rawValue)
-                    focusCollapsedSections.remove(section)
+	                    _ = focusCollapsedSections.remove(section)
                 }
             }
 
@@ -198,6 +202,17 @@ struct AttributeDetailView: View {
             }
         } else {
             attributeSectionContent(section)
+                .nodeCollapseOverlay(
+                    isVisible: isExpandedAtRuntime && isCollapsibleAtRuntime,
+                    onCollapse: {
+                        withAnimation(.snappy) {
+	                            _ = expandedSectionIDs.remove(section.rawValue)
+                            if focusWouldCollapse {
+                                focusCollapsedSections.insert(section)
+                            }
+                        }
+                    }
+                )
         }
     }
 
