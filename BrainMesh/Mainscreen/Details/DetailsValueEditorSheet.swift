@@ -7,6 +7,7 @@
 
 import SwiftUI
 import SwiftData
+import Foundation
 
 struct DetailsValueEditorSheet: View {
     @Environment(\.modelContext) private var modelContext
@@ -25,7 +26,7 @@ struct DetailsValueEditorSheet: View {
     @State private var hasExistingValue: Bool = false
     @State private var error: String? = nil
 
-    // MARK: - Completion (PR 3: singleLineText only)
+    // MARK: - Completion (singleLineText only)
 
     @FocusState private var isSingleLineTextFocused: Bool
     @State private var didWarmUpCompletionIndex: Bool = false
@@ -75,14 +76,31 @@ struct DetailsValueEditorSheet: View {
                     }
                     .font(.headline)
                 }
+
+                if field.type == .singleLineText {
+                    DetailsCompletionKeyboardToolbar(isEnabled: isSingleLineTextFocused && topCompletion != nil) {
+                        acceptTopCompletionIfPossible()
+                    }
+                }
             }
             .onAppear {
                 loadExistingValue()
                 warmUpCompletionIndexIfNeeded()
             }
+            .onDisappear {
+                completionTask?.cancel()
+                completionTask = nil
+                topCompletion = nil
+            }
             .onChange(of: isSingleLineTextFocused) { _, newValue in
                 if newValue {
                     warmUpCompletionIndexIfNeeded()
+                    refreshTopCompletionIfPossible()
+                } else {
+                    // Hide ghost and disable toolbar when leaving the field.
+                    completionTask?.cancel()
+                    completionTask = nil
+                    topCompletion = nil
                 }
             }
         }
@@ -97,14 +115,9 @@ struct DetailsValueEditorSheet: View {
                 .focused($isSingleLineTextFocused)
                 .detailsCompletionGhost(
                     currentText: stringInput,
-                    suggestionText: topCompletion?.text,
+                    suggestionText: isSingleLineTextFocused ? topCompletion?.text : nil,
                     inset: .init(top: 0, leading: 4, bottom: 0, trailing: 0)
                 )
-                .toolbar {
-                    DetailsCompletionKeyboardToolbar(isEnabled: topCompletion != nil) {
-                        acceptTopCompletionIfPossible()
-                    }
-                }
                 .onChange(of: stringInput) { _, _ in
                     refreshTopCompletionIfPossible()
                 }
@@ -180,7 +193,20 @@ struct DetailsValueEditorSheet: View {
             topCompletion = nil
             return
         }
+
+        // Only show completions while actively editing the field.
+        guard isSingleLineTextFocused else {
+            topCompletion = nil
+            return
+        }
+
         guard let gid = resolvedGraphID else {
+            topCompletion = nil
+            return
+        }
+
+        // If the user typed a trailing whitespace, stop suggesting.
+        if let last = stringInput.last, last.isWhitespace {
             topCompletion = nil
             return
         }
@@ -200,10 +226,22 @@ struct DetailsValueEditorSheet: View {
     @MainActor
     private func acceptTopCompletionIfPossible() {
         guard field.type == .singleLineText else { return }
+        guard isSingleLineTextFocused else { return }
         guard let suggestion = topCompletion else { return }
 
-        stringInput = suggestion.text
-        refreshTopCompletionIfPossible()
+        // Workaround for occasional SwiftUI TextField state races while editing:
+        // apply on the next runloop tick so the active editing session doesn't overwrite us.
+        let accepted = suggestion.text
+
+        completionTask?.cancel()
+        completionTask = nil
+        topCompletion = nil
+
+        DispatchQueue.main.async {
+            self.stringInput = accepted
+            self.isSingleLineTextFocused = true
+            self.refreshTopCompletionIfPossible()
+        }
     }
 
     private func loadExistingValue() {
@@ -242,9 +280,6 @@ struct DetailsValueEditorSheet: View {
         case .singleChoice:
             selectedChoice = value.stringValue
         }
-
-        // Keep completion state consistent when reopening an existing value.
-        refreshTopCompletionIfPossible()
     }
 
     @MainActor

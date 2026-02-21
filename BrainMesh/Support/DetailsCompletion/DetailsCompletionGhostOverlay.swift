@@ -34,22 +34,26 @@ struct DetailsCompletionGhostText: View {
     }
 
     private static func makeParts(currentText: String, suggestionText: String) -> Parts? {
-        let trimmedCurrent = currentText
-        let trimmedSuggestion = suggestionText
+        let rawCurrent = currentText
+        let rawSuggestion = suggestionText
 
-        if trimmedCurrent.isEmpty { return nil }
-        if trimmedSuggestion.isEmpty { return nil }
+        if rawCurrent.isEmpty { return nil }
+        if rawSuggestion.isEmpty { return nil }
 
-        let foldedCurrent = BMSearch.fold(trimmedCurrent)
-        let foldedSuggestion = BMSearch.fold(trimmedSuggestion)
+        // Trailing whitespace tends to make ghost completions confusing and can
+        // visually misalign (space vs. letter widths). Keep it simple: no ghost.
+        if let last = rawCurrent.last, last.isWhitespace { return nil }
+
+        let foldedCurrent = BMSearch.fold(rawCurrent)
+        let foldedSuggestion = BMSearch.fold(rawSuggestion)
 
         guard !foldedCurrent.isEmpty else { return nil }
         guard foldedSuggestion.hasPrefix(foldedCurrent) else { return nil }
         guard foldedSuggestion != foldedCurrent else { return nil }
 
-        let prefixCount = min(trimmedCurrent.count, trimmedSuggestion.count)
-        let hiddenPrefix = String(trimmedSuggestion.prefix(prefixCount))
-        let visibleSuffix = String(trimmedSuggestion.dropFirst(prefixCount))
+        let prefixCount = min(rawCurrent.count, rawSuggestion.count)
+        let hiddenPrefix = String(rawSuggestion.prefix(prefixCount))
+        let visibleSuffix = String(rawSuggestion.dropFirst(prefixCount))
 
         if visibleSuffix.isEmpty { return nil }
         return Parts(hiddenPrefix: hiddenPrefix, visibleSuffix: visibleSuffix)
