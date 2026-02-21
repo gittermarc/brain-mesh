@@ -57,73 +57,8 @@ struct BrainMeshApp: App {
             await SyncRuntime.shared.refreshAccountStatus()
         }
 
-        // Patch 4: Provide the SwiftData container to the attachment hydrator.
-        // This allows cache hydration (fileData fetch + disk write) to happen off the UI thread.
-        let containerForHydrator = sharedModelContainer
-        Task.detached(priority: .utility) {
-            await AttachmentHydrator.shared.configure(container: AnyModelContainer(containerForHydrator))
-        }
-
-        // P0.1: Provide the container to the image hydrator.
-        // ImageHydrator performs SwiftData fetches + cache file writes; do it off-main.
-        let containerForImageHydrator = sharedModelContainer
-        Task.detached(priority: .utility) {
-            await ImageHydrator.shared.configure(container: AnyModelContainer(containerForImageHydrator))
-        }
-
-        // Also provide the container to the media loader used by the "Alle" media screen.
-        // This avoids blocking the main thread with SwiftData fetches during navigation.
-        let containerForMediaLoader = sharedModelContainer
-        Task.detached(priority: .utility) {
-            await MediaAllLoader.shared.configure(container: AnyModelContainer(containerForMediaLoader))
-        }
-
-        // P0.1: Provide the container to the GraphCanvas loader.
-        // GraphCanvas performs heavy SwiftData fetches (nodes/links + neighborhood BFS).
-        // Running that work off the UI thread avoids main-thread stalls when switching graphs.
-        let containerForGraphCanvasLoader = sharedModelContainer
-        Task.detached(priority: .utility) {
-            await GraphCanvasDataLoader.shared.configure(container: AnyModelContainer(containerForGraphCanvasLoader))
-        }
-
-        // P0.1: Provide the container to the GraphStats loader.
-        // Stats performs multiple SwiftData counts and summary fetches.
-        // Running that work off the UI thread keeps the Stats tab snappy.
-        let containerForGraphStatsLoader = sharedModelContainer
-        Task.detached(priority: .utility) {
-            await GraphStatsLoader.shared.configure(container: AnyModelContainer(containerForGraphStatsLoader))
-        }
-
-        // P0.1: Provide the container to the EntitiesHome loader.
-        // EntitiesHome performs SwiftData fetches for entity + attribute search.
-        // Running that work off the UI thread avoids main-thread stalls while typing.
-        let containerForEntitiesHomeLoader = sharedModelContainer
-        Task.detached(priority: .utility) {
-            await EntitiesHomeLoader.shared.configure(container: AnyModelContainer(containerForEntitiesHomeLoader))
-        }
-
-        // P0.2: Provide the container to the NodeConnections loader.
-        // The "Alle" connections screen can include hundreds of links; loading off-main avoids UI stalls.
-        let containerForNodeConnectionsLoader = sharedModelContainer
-        Task.detached(priority: .utility) {
-            await NodeConnectionsLoader.shared.configure(container: AnyModelContainer(containerForNodeConnectionsLoader))
-        }
-
-        // P0.1: Provide the container to the NodePicker loader.
-        // Node pickers are used across many flows (link creation, bulk actions). Loading off-main avoids
-        // main-thread stalls when opening the picker or typing search terms.
-        let containerForNodePickerLoader = sharedModelContainer
-        Task.detached(priority: .utility) {
-            await NodePickerLoader.shared.configure(container: AnyModelContainer(containerForNodePickerLoader))
-        }
-
-
-        // P0.X: Provide the container to the NodeRenameService.
-        // Renaming entities/attributes must also update denormalized link labels off-main.
-        let containerForNodeRenameService = sharedModelContainer
-        Task.detached(priority: .utility) {
-            await NodeRenameService.shared.configure(container: AnyModelContainer(containerForNodeRenameService))
-        }
+        // App-level loader/hydrator configuration (off-main).
+        AppLoadersConfigurator.configureAllLoaders(with: sharedModelContainer)
     }
 
     var body: some Scene {
