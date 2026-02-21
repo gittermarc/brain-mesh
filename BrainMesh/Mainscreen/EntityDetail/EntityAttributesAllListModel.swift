@@ -117,6 +117,26 @@ final class EntityAttributesAllListModel: ObservableObject {
 
     private var rebuildTask: Task<Void, Never>? = nil
 
+    private struct Cache {
+        var entityID: UUID? = nil
+        var graphID: UUID? = nil
+        var attributeIDs: [UUID] = []
+
+        var pinnedFieldIDs: [UUID] = []
+        var pinnedValuesByAttribute: [UUID: [UUID: MetaDetailFieldValue]] = [:]
+        var pinnedValueCountsByField: [UUID: Int] = [:]
+
+        var ownersWithMedia: Set<UUID> = []
+        var attributeAttachmentsCount: Int? = nil
+        var rowsByID: [UUID: Row] = [:]
+
+        var lastShowPinnedDetails: Bool = false
+        var lastIncludeNotesPreview: Bool = false
+        var lastGrouping: AttributesAllGrouping = .none
+    }
+
+    private var cache = Cache()
+
     func scheduleRebuild(
         context: ModelContext,
         entity: MetaEntity,
@@ -134,14 +154,15 @@ final class EntityAttributesAllListModel: ObservableObject {
                 // 150ms feels responsive but keeps typing smooth.
                 try? await Task.sleep(nanoseconds: 150_000_000)
             }
-            rebuild(
+            rebuildInternal(
                 context: context,
                 entity: entity,
                 searchText: searchText,
                 showPinnedDetails: showPinnedDetails,
                 includeNotesPreview: includeNotesPreview,
                 sortSelection: sortSelection,
-                grouping: grouping
+                grouping: grouping,
+                allowCachedRows: debounce
             )
         }
     }
@@ -155,47 +176,137 @@ final class EntityAttributesAllListModel: ObservableObject {
         sortSelection: EntityAttributesAllSortSelection,
         grouping: AttributesAllGrouping
     ) {
+        rebuildInternal(
+            context: context,
+            entity: entity,
+            searchText: searchText,
+            showPinnedDetails: showPinnedDetails,
+            includeNotesPreview: includeNotesPreview,
+            sortSelection: sortSelection,
+            grouping: grouping,
+            allowCachedRows: true
+        )
+    }
+
+    private func rebuildInternal(
+        context: ModelContext,
+        entity: MetaEntity,
+        searchText: String,
+        showPinnedDetails: Bool,
+        includeNotesPreview: Bool,
+        sortSelection: EntityAttributesAllSortSelection,
+        grouping: AttributesAllGrouping,
+        allowCachedRows: Bool
+    ) {
         let attrs = entity.attributesList
+
+        // Always keep these published properties fresh (cheap).
         let pinned = EntityAttributesAllListModel.computePinnedFields(for: entity)
         pinnedFields = pinned
         pinnedSortableFields = pinned.filter { EntityAttributesAllListModel.isSortablePinnedType($0.type) }
         pinnedSortMenuOptions = EntityAttributesAllListModel.makePinnedSortMenuOptions(for: pinnedSortableFields)
 
-        let lookup = fetchPinnedValuesLookup(context: context, pinnedFields: pinned)
+        let currentPinnedIDs = pinned.map { $0.id }
+        let currentAttributeIDs = attrs.map { $0.id }
+
+        let entityChanged = (cache.entityID != entity.id) || (cache.graphID != entity.graphID)
+        let pinnedChanged = (cache.pinnedFieldIDs != currentPinnedIDs)
+        let attributesChanged = (cache.attributeIDs != currentAttributeIDs)
+        let groupingChanged = (cache.lastGrouping != grouping)
+        let showPinnedChanged = (cache.lastShowPinnedDetails != showPinnedDetails)
+        let notesPreviewChanged = (cache.lastIncludeNotesPreview != includeNotesPreview)
+
+        var pinnedCountsChanged = false
+        var currentPinnedCountsByField: [UUID: Int] = [:]
+        currentPinnedCountsByField.reserveCapacity(pinned.count)
+
+        if !pinned.isEmpty {
+            for field in pinned {
+                let fieldID: UUID = field.id
+                let fd = FetchDescriptor<MetaDetailFieldValue>(predicate: #Predicate<MetaDetailFieldValue> { v in
+                    v.fieldID == fieldID
+                })
+                let count = (try? context.fetchCount(fd)) ?? 0
+                currentPinnedCountsByField[fieldID] = count
+                if cache.pinnedValueCountsByField[fieldID] != count {
+                    pinnedCountsChanged = true
+                }
+            }
+        }
+
+        let needsPinnedValuesRefetch = entityChanged || pinnedChanged || attributesChanged || pinnedCountsChanged
+        if needsPinnedValuesRefetch {
+            cache.pinnedValuesByAttribute = fetchPinnedValuesLookup(context: context, pinnedFields: pinned)
+            cache.pinnedValueCountsByField = currentPinnedCountsByField
+        }
 
         let needsMediaFlags: Bool = (grouping == .hasMedia)
-        let attributeIDs = Set(attrs.map { $0.id })
-        let ownersWithMedia: Set<UUID>
         if needsMediaFlags {
-            ownersWithMedia = fetchAttributeOwnersWithMedia(
-                context: context,
-                attributeIDs: attributeIDs,
-                graphID: entity.graphID
-            )
-        } else {
-            ownersWithMedia = []
+            let ownerKindRaw = NodeKind.attribute.rawValue
+            let attachmentCount: Int
+            if let graphID = entity.graphID {
+                let gid: UUID? = graphID
+                let fd = FetchDescriptor<MetaAttachment>(predicate: #Predicate<MetaAttachment> { a in
+                    a.ownerKindRaw == ownerKindRaw && a.graphID == gid
+                })
+                attachmentCount = (try? context.fetchCount(fd)) ?? 0
+            } else {
+                let fd = FetchDescriptor<MetaAttachment>(predicate: #Predicate<MetaAttachment> { a in
+                    a.ownerKindRaw == ownerKindRaw
+                })
+                attachmentCount = (try? context.fetchCount(fd)) ?? 0
+            }
+
+            let attachmentCountChanged = (cache.attributeAttachmentsCount != attachmentCount)
+            let needsOwnersRefetch = entityChanged || groupingChanged || attributesChanged || attachmentCountChanged
+            if needsOwnersRefetch {
+                let attributeIDs = Set(currentAttributeIDs)
+                cache.ownersWithMedia = fetchAttributeOwnersWithMedia(
+                    context: context,
+                    attributeIDs: attributeIDs,
+                    graphID: entity.graphID
+                )
+                cache.attributeAttachmentsCount = attachmentCount
+            }
         }
 
-        var rowsByID: [UUID: Row] = [:]
-        rowsByID.reserveCapacity(min(attrs.count, 512))
+        // Rebuild row models only when a structural input changed.
+        let needsRowRebuild = !allowCachedRows || entityChanged || pinnedChanged || attributesChanged || groupingChanged || showPinnedChanged || notesPreviewChanged
+        if needsRowRebuild {
+            let ownersWithMedia: Set<UUID> = needsMediaFlags ? cache.ownersWithMedia : []
 
-        for a in attrs {
-            let row = makeRow(
-                attribute: a,
-                pinnedFields: pinned,
-                pinnedValuesByAttribute: lookup,
-                showPinnedDetails: showPinnedDetails,
-                includeNotesPreview: includeNotesPreview,
-                ownersWithMedia: ownersWithMedia
-            )
-            rowsByID[a.id] = row
+            var rowsByID: [UUID: Row] = [:]
+            rowsByID.reserveCapacity(min(attrs.count, 512))
+
+            for a in attrs {
+                let row = makeRow(
+                    attribute: a,
+                    pinnedFields: pinned,
+                    pinnedValuesByAttribute: cache.pinnedValuesByAttribute,
+                    showPinnedDetails: showPinnedDetails,
+                    includeNotesPreview: includeNotesPreview,
+                    ownersWithMedia: ownersWithMedia
+                )
+                rowsByID[a.id] = row
+            }
+
+            cache.rowsByID = rowsByID
+            cache.entityID = entity.id
+            cache.graphID = entity.graphID
+            cache.attributeIDs = currentAttributeIDs
+            cache.pinnedFieldIDs = currentPinnedIDs
+            cache.lastShowPinnedDetails = showPinnedDetails
+            cache.lastIncludeNotesPreview = includeNotesPreview
+            cache.lastGrouping = grouping
         }
 
+        // Fast path for typing/search and sort changes: filter + sort based on cached rows.
         let needle = BMSearch.fold(searchText)
         let filteredAttrs: [MetaAttribute]
         if needle.isEmpty {
             filteredAttrs = attrs
         } else {
+            let rowsByID = cache.rowsByID
             filteredAttrs = attrs.filter { a in
                 guard let row = rowsByID[a.id] else { return false }
                 return row.searchIndexFolded.contains(needle)
@@ -206,9 +317,10 @@ final class EntityAttributesAllListModel: ObservableObject {
             filteredAttrs,
             sortSelection: sortSelection,
             pinnedFields: pinned,
-            pinnedValuesByAttribute: lookup
+            pinnedValuesByAttribute: cache.pinnedValuesByAttribute
         )
 
+        let rowsByID = cache.rowsByID
         visibleRows = sortedAttrs.compactMap { rowsByID[$0.id] }
     }
 
