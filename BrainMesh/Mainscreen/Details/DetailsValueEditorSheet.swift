@@ -26,12 +26,16 @@ struct DetailsValueEditorSheet: View {
     @State private var hasExistingValue: Bool = false
     @State private var error: String? = nil
 
-    // MARK: - Completion (singleLineText only)
+    // MARK: - Completion (singleLineText + multiLineText)
 
     @FocusState private var isSingleLineTextFocused: Bool
+    @FocusState private var isMultiLineTextFocused: Bool
     @State private var didWarmUpCompletionIndex: Bool = false
     @State private var topCompletion: DetailsCompletionSuggestion? = nil
     @State private var completionTask: Task<Void, Never>? = nil
+
+    @State private var multiLineSuggestions: [DetailsCompletionSuggestion] = []
+    @State private var multiLineTask: Task<Void, Never>? = nil
 
     var body: some View {
         NavigationStack {
@@ -91,6 +95,10 @@ struct DetailsValueEditorSheet: View {
                 completionTask?.cancel()
                 completionTask = nil
                 topCompletion = nil
+
+                multiLineTask?.cancel()
+                multiLineTask = nil
+                multiLineSuggestions = []
             }
             .onChange(of: isSingleLineTextFocused) { _, newValue in
                 if newValue {
@@ -101,6 +109,16 @@ struct DetailsValueEditorSheet: View {
                     completionTask?.cancel()
                     completionTask = nil
                     topCompletion = nil
+                }
+            }
+            .onChange(of: isMultiLineTextFocused) { _, newValue in
+                if newValue {
+                    warmUpCompletionIndexIfNeeded()
+                    refreshMultiLineSuggestionsIfPossible()
+                } else {
+                    multiLineTask?.cancel()
+                    multiLineTask = nil
+                    multiLineSuggestions = []
                 }
             }
         }
@@ -123,17 +141,32 @@ struct DetailsValueEditorSheet: View {
                 }
 
         case .multiLineText:
-            TextEditor(text: $stringInput)
-                .frame(minHeight: 160)
-                .font(.body)
-                .overlay(alignment: .topLeading) {
-                    if stringInput.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-                        Text("Text")
-                            .foregroundStyle(.tertiary)
-                            .padding(.top, 8)
-                            .padding(.leading, 4)
+            VStack(alignment: .leading, spacing: 10) {
+                TextEditor(text: $stringInput)
+                    .frame(minHeight: 160)
+                    .font(.body)
+                    .focused($isMultiLineTextFocused)
+                    .overlay(alignment: .topLeading) {
+                        if stringInput.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                            Text("Text")
+                                .foregroundStyle(.tertiary)
+                                .padding(.top, 8)
+                                .padding(.leading, 4)
+                        }
                     }
-                }
+                    .onChange(of: stringInput) { _, _ in
+                        refreshMultiLineSuggestionsIfPossible()
+                    }
+
+                DetailsCompletionSuggestionsChipsBar(
+                    suggestions: multiLineSuggestions,
+                    maxVisible: 3,
+                    showsCounts: false,
+                    onSelect: { suggestion in
+                        applyMultiLineSuggestion(suggestion)
+                    }
+                )
+            }
 
         case .numberInt:
             TextField("Zahl", text: $numberInput)
@@ -175,7 +208,7 @@ struct DetailsValueEditorSheet: View {
 
     @MainActor
     private func warmUpCompletionIndexIfNeeded() {
-        guard field.type == .singleLineText else { return }
+        guard field.type == .singleLineText || field.type == .multiLineText else { return }
         guard didWarmUpCompletionIndex == false else { return }
         guard let gid = resolvedGraphID else { return }
 
@@ -184,6 +217,7 @@ struct DetailsValueEditorSheet: View {
         Task { @MainActor in
             await DetailsCompletionIndex.shared.ensureLoaded(graphID: gid, fieldID: field.id, in: modelContext)
             refreshTopCompletionIfPossible()
+            refreshMultiLineSuggestionsIfPossible()
         }
     }
 
@@ -224,6 +258,43 @@ struct DetailsValueEditorSheet: View {
     }
 
     @MainActor
+    private func refreshMultiLineSuggestionsIfPossible() {
+        guard field.type == .multiLineText else {
+            multiLineSuggestions = []
+            return
+        }
+
+        guard isMultiLineTextFocused else {
+            multiLineSuggestions = []
+            return
+        }
+
+        guard let gid = resolvedGraphID else {
+            multiLineSuggestions = []
+            return
+        }
+
+        guard let token = lastTokenAtTextEnd(in: stringInput) else {
+            multiLineSuggestions = []
+            return
+        }
+
+        multiLineTask?.cancel()
+        multiLineTask = Task {
+            let list = await DetailsCompletionIndex.shared.suggestions(
+                graphID: gid,
+                fieldID: field.id,
+                prefix: token,
+                limit: 3
+            )
+            if Task.isCancelled { return }
+            await MainActor.run {
+                self.multiLineSuggestions = list
+            }
+        }
+    }
+
+    @MainActor
     private func acceptTopCompletionIfPossible() {
         guard field.type == .singleLineText else { return }
         guard isSingleLineTextFocused else { return }
@@ -242,6 +313,50 @@ struct DetailsValueEditorSheet: View {
             self.isSingleLineTextFocused = true
             self.refreshTopCompletionIfPossible()
         }
+    }
+
+    @MainActor
+    private func applyMultiLineSuggestion(_ suggestion: DetailsCompletionSuggestion) {
+        guard field.type == .multiLineText else { return }
+
+        // Replace only the last token at the text end (after whitespace/newline separation).
+        if let range = lastTokenRangeAtTextEnd(in: stringInput) {
+            stringInput.replaceSubrange(range, with: suggestion.text)
+        } else {
+            // If empty, insert the suggestion.
+            if stringInput.isEmpty {
+                stringInput = suggestion.text
+            } else {
+                // If the user ended with whitespace, don't guess. Append directly.
+                stringInput += suggestion.text
+            }
+        }
+
+        refreshMultiLineSuggestionsIfPossible()
+    }
+
+    /// Returns the last token at the text end, split by whitespace/newlines.
+    /// If the text ends with whitespace/newline, returns nil (no active token).
+    private func lastTokenAtTextEnd(in text: String) -> String? {
+        guard let range = lastTokenRangeAtTextEnd(in: text) else { return nil }
+        let token = String(text[range])
+        let cleaned = token.trimmingCharacters(in: .whitespacesAndNewlines)
+        return cleaned.isEmpty ? nil : token
+    }
+
+    /// Returns the range of the last token at the text end, split by whitespace/newlines.
+    /// If the text ends with whitespace/newline or is empty, returns nil.
+    private func lastTokenRangeAtTextEnd(in text: String) -> Range<String.Index>? {
+        if text.isEmpty { return nil }
+        guard let last = text.last, !(last.isWhitespace || last.isNewline) else { return nil }
+
+        // Find the last separator (whitespace/newline). The token starts right after it.
+        if let sep = text.lastIndex(where: { $0.isWhitespace || $0.isNewline }) {
+            let start = text.index(after: sep)
+            if start >= text.endIndex { return nil }
+            return start..<text.endIndex
+        }
+        return text.startIndex..<text.endIndex
     }
 
     private func loadExistingValue() {
