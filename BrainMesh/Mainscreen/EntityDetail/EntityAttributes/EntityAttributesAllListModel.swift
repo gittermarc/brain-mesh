@@ -117,24 +117,6 @@ final class EntityAttributesAllListModel: ObservableObject {
 
     private var rebuildTask: Task<Void, Never>? = nil
 
-    private struct Cache {
-        var entityID: UUID? = nil
-        var graphID: UUID? = nil
-        var attributeIDs: [UUID] = []
-
-        var pinnedFieldIDs: [UUID] = []
-        var pinnedValuesByAttribute: [UUID: [UUID: MetaDetailFieldValue]] = [:]
-        var pinnedValueCountsByField: [UUID: Int] = [:]
-
-        var ownersWithMedia: Set<UUID> = []
-        var attributeAttachmentsCount: Int? = nil
-        var rowsByID: [UUID: Row] = [:]
-
-        var lastShowPinnedDetails: Bool = false
-        var lastIncludeNotesPreview: Bool = false
-        var lastGrouping: AttributesAllGrouping = .none
-    }
-
     private var cache = Cache()
 
     func scheduleRebuild(
@@ -216,49 +198,42 @@ final class EntityAttributesAllListModel: ObservableObject {
         let showPinnedChanged = (cache.lastShowPinnedDetails != showPinnedDetails)
         let notesPreviewChanged = (cache.lastIncludeNotesPreview != includeNotesPreview)
 
-        var pinnedCountsChanged = false
-        var currentPinnedCountsByField: [UUID: Int] = [:]
-        currentPinnedCountsByField.reserveCapacity(pinned.count)
-
-        if !pinned.isEmpty {
-            for field in pinned {
-                let fieldID: UUID = field.id
-                let fd = FetchDescriptor<MetaDetailFieldValue>(predicate: #Predicate<MetaDetailFieldValue> { v in
-                    v.fieldID == fieldID
-                })
-                let count = (try? context.fetchCount(fd)) ?? 0
-                currentPinnedCountsByField[fieldID] = count
-                if cache.pinnedValueCountsByField[fieldID] != count {
-                    pinnedCountsChanged = true
-                }
-            }
-        }
-
-        let needsPinnedValuesRefetch = entityChanged || pinnedChanged || attributesChanged || pinnedCountsChanged
-        if needsPinnedValuesRefetch {
-            cache.pinnedValuesByAttribute = fetchPinnedValuesLookup(context: context, pinnedFields: pinned)
-            cache.pinnedValueCountsByField = currentPinnedCountsByField
-        }
-
         let needsMediaFlags: Bool = (grouping == .hasMedia)
-        if needsMediaFlags {
-            let ownerKindRaw = NodeKind.attribute.rawValue
-            let attachmentCount: Int
-            if let graphID = entity.graphID {
-                let gid: UUID? = graphID
-                let fd = FetchDescriptor<MetaAttachment>(predicate: #Predicate<MetaAttachment> { a in
-                    a.ownerKindRaw == ownerKindRaw && a.graphID == gid
-                })
-                attachmentCount = (try? context.fetchCount(fd)) ?? 0
-            } else {
-                let fd = FetchDescriptor<MetaAttachment>(predicate: #Predicate<MetaAttachment> { a in
-                    a.ownerKindRaw == ownerKindRaw
-                })
-                attachmentCount = (try? context.fetchCount(fd)) ?? 0
-            }
 
-            let attachmentCountChanged = (cache.attributeAttachmentsCount != attachmentCount)
-            let needsOwnersRefetch = entityChanged || groupingChanged || attributesChanged || attachmentCountChanged
+        // Fast path: When only searchText/sort changes while typing, we only filter + sort on cached rows.
+        let structuralChanged = entityChanged || pinnedChanged || attributesChanged || groupingChanged || showPinnedChanged || notesPreviewChanged
+        if allowCachedRows && !structuralChanged && !cache.rowsByID.isEmpty {
+            applyFilterSortAndPublish(
+                attrs: attrs,
+                searchText: searchText,
+                sortSelection: sortSelection,
+                pinnedFields: pinned
+            )
+            return
+        }
+
+        // Pinned values: Only refetch when a structural input changed, or when we do a non-cached rebuild.
+        if pinned.isEmpty {
+            cache.pinnedValuesByAttribute = [:]
+        } else {
+            let needsPinnedValuesRefetch = !allowCachedRows
+                || entityChanged
+                || pinnedChanged
+                || attributesChanged
+                || showPinnedChanged
+                || cache.pinnedValuesByAttribute.isEmpty
+
+            if needsPinnedValuesRefetch {
+                cache.pinnedValuesByAttribute = fetchPinnedValuesLookup(context: context, pinnedFields: pinned)
+            }
+        }
+
+        if needsMediaFlags {
+            let needsOwnersRefetch = !allowCachedRows
+                || entityChanged
+                || groupingChanged
+                || attributesChanged
+
             if needsOwnersRefetch {
                 let attributeIDs = Set(currentAttributeIDs)
                 cache.ownersWithMedia = fetchAttributeOwnersWithMedia(
@@ -266,8 +241,9 @@ final class EntityAttributesAllListModel: ObservableObject {
                     attributeIDs: attributeIDs,
                     graphID: entity.graphID
                 )
-                cache.attributeAttachmentsCount = attachmentCount
             }
+        } else {
+            cache.ownersWithMedia = []
         }
 
         // Rebuild row models only when a structural input changed.
@@ -300,13 +276,27 @@ final class EntityAttributesAllListModel: ObservableObject {
             cache.lastGrouping = grouping
         }
 
-        // Fast path for typing/search and sort changes: filter + sort based on cached rows.
+        applyFilterSortAndPublish(
+            attrs: attrs,
+            searchText: searchText,
+            sortSelection: sortSelection,
+            pinnedFields: pinned
+        )
+    }
+
+    private func applyFilterSortAndPublish(
+        attrs: [MetaAttribute],
+        searchText: String,
+        sortSelection: EntityAttributesAllSortSelection,
+        pinnedFields: [MetaDetailFieldDefinition]
+    ) {
         let needle = BMSearch.fold(searchText)
+
+        let rowsByID = cache.rowsByID
         let filteredAttrs: [MetaAttribute]
         if needle.isEmpty {
             filteredAttrs = attrs
         } else {
-            let rowsByID = cache.rowsByID
             filteredAttrs = attrs.filter { a in
                 guard let row = rowsByID[a.id] else { return false }
                 return row.searchIndexFolded.contains(needle)
@@ -316,13 +306,14 @@ final class EntityAttributesAllListModel: ObservableObject {
         let sortedAttrs = EntityAttributesAllListModel.sortAttributes(
             filteredAttrs,
             sortSelection: sortSelection,
-            pinnedFields: pinned,
+            pinnedFields: pinnedFields,
             pinnedValuesByAttribute: cache.pinnedValuesByAttribute
         )
 
-        let rowsByID = cache.rowsByID
-        visibleRows = sortedAttrs.compactMap { rowsByID[$0.id] }
+        let updatedRowsByID = cache.rowsByID
+        visibleRows = sortedAttrs.compactMap { updatedRowsByID[$0.id] }
     }
+
 
     // MARK: - Row building
 
@@ -417,66 +408,7 @@ final class EntityAttributesAllListModel: ObservableObject {
         return false
     }
 
-    private func fetchAttributeOwnersWithMedia(
-        context: ModelContext,
-        attributeIDs: Set<UUID>,
-        graphID: UUID?
-    ) -> Set<UUID> {
-        guard !attributeIDs.isEmpty else { return [] }
 
-        let ownerKindRaw = NodeKind.attribute.rawValue
-
-        let attachments: [MetaAttachment]
-        if let graphID {
-            let gid: UUID? = graphID
-            let fd = FetchDescriptor<MetaAttachment>(predicate: #Predicate<MetaAttachment> { a in
-                a.ownerKindRaw == ownerKindRaw && a.graphID == gid
-            })
-            attachments = (try? context.fetch(fd)) ?? []
-        } else {
-            let fd = FetchDescriptor<MetaAttachment>(predicate: #Predicate<MetaAttachment> { a in
-                a.ownerKindRaw == ownerKindRaw
-            })
-            attachments = (try? context.fetch(fd)) ?? []
-        }
-
-        var owners = Set<UUID>()
-        owners.reserveCapacity(min(attachments.count, 256))
-        for a in attachments {
-            if attributeIDs.contains(a.ownerID) {
-                owners.insert(a.ownerID)
-            }
-        }
-        return owners
-    }
-
-    // MARK: - Pinned values lookup
-
-    private func fetchPinnedValuesLookup(
-        context: ModelContext,
-        pinnedFields: [MetaDetailFieldDefinition]
-    ) -> [UUID: [UUID: MetaDetailFieldValue]] {
-        guard !pinnedFields.isEmpty else { return [:] }
-
-        var result: [UUID: [UUID: MetaDetailFieldValue]] = [:]
-        result.reserveCapacity(256)
-
-        for field in pinnedFields {
-            // SwiftData #Predicate can't reliably compare against a captured model object's property
-            // (e.g. `field.id`). Capture the UUID as a constant instead.
-            let fieldID: UUID = field.id
-            let fd = FetchDescriptor<MetaDetailFieldValue>(predicate: #Predicate<MetaDetailFieldValue> { v in
-                v.fieldID == fieldID
-            })
-            let values = (try? context.fetch(fd)) ?? []
-
-            for v in values {
-                result[v.attributeID, default: [:]][field.id] = v
-            }
-        }
-
-        return result
-    }
 
     // MARK: - Sort
 
