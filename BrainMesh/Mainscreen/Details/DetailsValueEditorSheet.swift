@@ -11,6 +11,7 @@ import SwiftData
 struct DetailsValueEditorSheet: View {
     @Environment(\.modelContext) private var modelContext
     @Environment(\.dismiss) private var dismiss
+    @AppStorage(BMAppStorageKeys.activeGraphID) private var activeGraphIDString: String = ""
 
     @Bindable var attribute: MetaAttribute
     let field: MetaDetailFieldDefinition
@@ -23,6 +24,13 @@ struct DetailsValueEditorSheet: View {
 
     @State private var hasExistingValue: Bool = false
     @State private var error: String? = nil
+
+    // MARK: - Completion (PR 3: singleLineText only)
+
+    @FocusState private var isSingleLineTextFocused: Bool
+    @State private var didWarmUpCompletionIndex: Bool = false
+    @State private var topCompletion: DetailsCompletionSuggestion? = nil
+    @State private var completionTask: Task<Void, Never>? = nil
 
     var body: some View {
         NavigationStack {
@@ -70,6 +78,12 @@ struct DetailsValueEditorSheet: View {
             }
             .onAppear {
                 loadExistingValue()
+                warmUpCompletionIndexIfNeeded()
+            }
+            .onChange(of: isSingleLineTextFocused) { _, newValue in
+                if newValue {
+                    warmUpCompletionIndexIfNeeded()
+                }
             }
         }
     }
@@ -80,6 +94,20 @@ struct DetailsValueEditorSheet: View {
         case .singleLineText:
             TextField("Text", text: $stringInput)
                 .textInputAutocapitalization(.sentences)
+                .focused($isSingleLineTextFocused)
+                .detailsCompletionGhost(
+                    currentText: stringInput,
+                    suggestionText: topCompletion?.text,
+                    inset: .init(top: 0, leading: 4, bottom: 0, trailing: 0)
+                )
+                .toolbar {
+                    DetailsCompletionKeyboardToolbar(isEnabled: topCompletion != nil) {
+                        acceptTopCompletionIfPossible()
+                    }
+                }
+                .onChange(of: stringInput) { _, _ in
+                    refreshTopCompletionIfPossible()
+                }
 
         case .multiLineText:
             TextEditor(text: $stringInput)
@@ -126,6 +154,58 @@ struct DetailsValueEditorSheet: View {
         }
     }
 
+    private var resolvedGraphID: UUID? {
+        if let id = attribute.graphID { return id }
+        if let id = attribute.owner?.graphID { return id }
+        return UUID(uuidString: activeGraphIDString)
+    }
+
+    @MainActor
+    private func warmUpCompletionIndexIfNeeded() {
+        guard field.type == .singleLineText else { return }
+        guard didWarmUpCompletionIndex == false else { return }
+        guard let gid = resolvedGraphID else { return }
+
+        didWarmUpCompletionIndex = true
+
+        Task { @MainActor in
+            await DetailsCompletionIndex.shared.ensureLoaded(graphID: gid, fieldID: field.id, in: modelContext)
+            refreshTopCompletionIfPossible()
+        }
+    }
+
+    @MainActor
+    private func refreshTopCompletionIfPossible() {
+        guard field.type == .singleLineText else {
+            topCompletion = nil
+            return
+        }
+        guard let gid = resolvedGraphID else {
+            topCompletion = nil
+            return
+        }
+
+        let current = stringInput
+
+        completionTask?.cancel()
+        completionTask = Task {
+            let suggestion = await DetailsCompletionIndex.shared.topSuggestion(graphID: gid, fieldID: field.id, prefix: current)
+            if Task.isCancelled { return }
+            await MainActor.run {
+                self.topCompletion = suggestion
+            }
+        }
+    }
+
+    @MainActor
+    private func acceptTopCompletionIfPossible() {
+        guard field.type == .singleLineText else { return }
+        guard let suggestion = topCompletion else { return }
+
+        stringInput = suggestion.text
+        refreshTopCompletionIfPossible()
+    }
+
     private func loadExistingValue() {
         error = nil
 
@@ -162,6 +242,9 @@ struct DetailsValueEditorSheet: View {
         case .singleChoice:
             selectedChoice = value.stringValue
         }
+
+        // Keep completion state consistent when reopening an existing value.
+        refreshTopCompletionIfPossible()
     }
 
     @MainActor
