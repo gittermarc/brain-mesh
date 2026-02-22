@@ -192,9 +192,14 @@ extension GraphCanvasScreen {
                 .buttonStyle(.bordered)
             }
 
-            // ✅ Option A: Details Peek (read-only)
+            // ✅ Option A: Details Peek
             if node.key.kind == .attribute, !detailsPeekChips.isEmpty {
                 detailsPeekBar(chips: detailsPeekChips)
+            }
+
+            // ✅ Option A3: Entity selection summary + “Attribute ansehen”
+            if node.key.kind == .entity, !detailsPeekChips.isEmpty {
+                entityPeekBar(chips: detailsPeekChips, entityKey: node.key)
             }
         }
         .padding(10)
@@ -222,6 +227,49 @@ extension GraphCanvasScreen {
             .padding(.top, 2)
         }
         .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
+    func entityPeekBar(chips: [GraphDetailsPeekChip], entityKey: NodeKey) -> some View {
+        let visible = 5
+        let canExpand = nodes.count < maxNodes && edges.count < maxLinks
+
+        return ScrollView(.horizontal, showsIndicators: false) {
+            HStack(spacing: 8) {
+                ForEach(Array(chips.prefix(visible))) { chip in
+                    detailsPeekChip(chip)
+                }
+
+                Button {
+                    Task { await expandAttributesOnly(from: entityKey) }
+                } label: {
+                    entityPeekActionChip(enabled: canExpand)
+                }
+                .buttonStyle(.plain)
+                .disabled(!canExpand)
+                .help("Attribute dieser Entität im Graph anzeigen")
+
+                Spacer(minLength: 0)
+            }
+            .padding(.top, 2)
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
+    func entityPeekActionChip(enabled: Bool) -> some View {
+        HStack(spacing: 6) {
+            Image(systemName: "rectangle.stack")
+                .foregroundStyle(enabled ? .primary : .secondary)
+            Text("Attribute ansehen")
+                .foregroundStyle(enabled ? .primary : .secondary)
+        }
+        .font(.caption.weight(.semibold))
+        .lineLimit(1)
+        .padding(.horizontal, 10)
+        .padding(.vertical, 6)
+        .background(.thinMaterial, in: Capsule())
+        .overlay(
+            Capsule().stroke(.secondary.opacity(0.18))
+        )
     }
 
     func detailsPeekChip(_ chip: GraphDetailsPeekChip) -> some View {

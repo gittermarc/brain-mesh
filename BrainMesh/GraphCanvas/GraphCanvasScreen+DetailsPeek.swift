@@ -12,6 +12,9 @@ extension GraphCanvasScreen {
 
     // MARK: - Model
 
+    private static var entityPinnedSummaryID: UUID { UUID(uuidString: "00000000-0000-0000-0000-0000000000a1")! }
+    private static var entityTotalSummaryID: UUID { UUID(uuidString: "00000000-0000-0000-0000-0000000000a2")! }
+
     struct GraphDetailsPeekChip: Identifiable, Hashable {
         let fieldID: UUID
         let fieldName: String
@@ -42,17 +45,21 @@ extension GraphCanvasScreen {
             return
         }
 
-        guard selection.kind == .attribute else {
-            detailsPeekChips = []
-            return
-        }
+        switch selection.kind {
+        case .attribute:
+            guard let attr = fetchAttribute(id: selection.uuid) else {
+                detailsPeekChips = []
+                return
+            }
+            detailsPeekChips = buildDetailsPeekChips(for: attr, preparedLimit: 5)
 
-        guard let attr = fetchAttribute(id: selection.uuid) else {
-            detailsPeekChips = []
-            return
+        case .entity:
+            guard let entity = fetchEntity(id: selection.uuid) else {
+                detailsPeekChips = []
+                return
+            }
+            detailsPeekChips = buildEntitySummaryChips(for: entity)
         }
-
-        detailsPeekChips = buildDetailsPeekChips(for: attr, preparedLimit: 5)
     }
 
     // MARK: - Editing
@@ -131,6 +138,27 @@ extension GraphCanvasScreen {
         }
 
         return out
+    }
+
+
+    func buildEntitySummaryChips(for entity: MetaEntity) -> [GraphDetailsPeekChip] {
+        let total = entity.detailFieldsList.count
+        let pinned = entity.detailFieldsList.filter { $0.isPinned }.count
+
+        return [
+            GraphDetailsPeekChip(
+                fieldID: Self.entityPinnedSummaryID,
+                fieldName: "Pinned Felder",
+                valueText: String(pinned),
+                isPlaceholder: false
+            ),
+            GraphDetailsPeekChip(
+                fieldID: Self.entityTotalSummaryID,
+                fieldName: "Felder gesamt",
+                valueText: String(total),
+                isPlaceholder: false
+            )
+        ]
     }
 
 }
