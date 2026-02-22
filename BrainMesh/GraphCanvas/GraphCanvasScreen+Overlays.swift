@@ -231,29 +231,30 @@ extension GraphCanvasScreen {
 
 
     func entityFieldsPeekPanel(summaryChips: [GraphDetailsPeekChip], fields: [GraphEntityFieldPeekItem]) -> some View {
-        VStack(alignment: .leading, spacing: 8) {
-            HStack(spacing: 8) {
-                ForEach(summaryChips) { chip in
-                    detailsPeekChip(chip)
-                }
-                Spacer(minLength: 0)
+        HStack(alignment: .center, spacing: 8) {
+            ForEach(summaryChips) { chip in
+                detailsPeekChip(chip)
             }
 
             if fields.isEmpty {
                 Text("Keine Detail-Felder")
                     .font(.caption)
                     .foregroundStyle(.secondary)
+                    .lineLimit(1)
+                    .frame(maxWidth: .infinity, alignment: .leading)
             } else {
-                ScrollView(.vertical, showsIndicators: true) {
-                    VStack(alignment: .leading, spacing: 6) {
+                ScrollView(.horizontal, showsIndicators: false) {
+                    HStack(spacing: 6) {
                         ForEach(fields) { field in
                             entityFieldRow(field)
                         }
+                        Spacer(minLength: 0)
                     }
                     .padding(.vertical, 2)
+                    .padding(.horizontal, 2)
                 }
-                .frame(maxWidth: .infinity, maxHeight: 120, alignment: .topLeading)
-                .clipShape(RoundedRectangle(cornerRadius: 10))
+                .scrollIndicators(.hidden)
+                .frame(maxWidth: .infinity, alignment: .leading)
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
@@ -269,8 +270,6 @@ extension GraphCanvasScreen {
 
             Text(verbatim: field.fieldName)
                 .foregroundStyle(.primary)
-
-            Spacer(minLength: 0)
         }
         .font(.caption.weight(.semibold))
         .lineLimit(1)
