@@ -18,7 +18,6 @@ struct DisplaySettingsView: View {
         List {
 
             DisplaySettingsPresetSection(showDisplayResetConfirm: $showDisplayResetConfirm)
-            DisplaySettingsPreviewSection()
             DisplaySettingsAppSection()
 
             DisplaySettingsEntitiesHomeSection()
@@ -27,6 +26,8 @@ struct DisplaySettingsView: View {
             DisplaySettingsAttributesAllListSection()
             DisplaySettingsStatsSection()
 
+            // Keep the Graph preview close to the Graph-specific options.
+            DisplaySettingsPreviewSection()
             DisplaySettingsGraphSection()
             DisplaySettingsColorPresetsSection()
             DisplaySettingsColorsResetSection(showResetConfirm: $showResetConfirm)
