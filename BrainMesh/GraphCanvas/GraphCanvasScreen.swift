@@ -286,6 +286,10 @@ struct GraphCanvasScreen: View {
         .onChange(of: scale) { _, _ in pulseMiniMap() }
         .onAppear {
             recomputeDerivedState()
+
+            // ✅ Details Peek: handle state restoration / app relaunch.
+            // `selection` can be restored without triggering `.onChange`, so we recompute once on appear.
+            recomputeDetailsPeek(for: selection)
         }
         .onDisappear {
             // Best-effort: If the screen goes away, stop any in-flight load.

@@ -220,17 +220,22 @@ extension GraphCanvasScreen {
     }
 
     func detailsPeekChip(_ chip: GraphDetailsPeekChip) -> some View {
-        (Text(verbatim: chip.fieldName).foregroundStyle(.secondary)
-         + Text(verbatim: ": ").foregroundStyle(.secondary)
-         + Text(verbatim: chip.valueText).foregroundStyle(chip.isPlaceholder ? .secondary : .primary))
-            .font(.caption.weight(.semibold))
-            .lineLimit(1)
-            .padding(.horizontal, 10)
-            .padding(.vertical, 6)
-            .background(.ultraThinMaterial, in: Capsule())
-            .overlay(
-                Capsule().stroke(.secondary.opacity(0.18))
-            )
+        HStack(spacing: 0) {
+            Text(verbatim: chip.fieldName)
+                .foregroundStyle(.secondary)
+            Text(verbatim: ": ")
+                .foregroundStyle(.secondary)
+            Text(verbatim: chip.valueText)
+                .foregroundStyle(chip.isPlaceholder ? .secondary : .primary)
+        }
+        .font(.caption.weight(.semibold))
+        .lineLimit(1)
+        .padding(.horizontal, 10)
+        .padding(.vertical, 6)
+        .background(.ultraThinMaterial, in: Capsule())
+        .overlay(
+            Capsule().stroke(.secondary.opacity(0.18))
+        )
     }
 
     func nodeLabel(for node: GraphNode) -> String {
