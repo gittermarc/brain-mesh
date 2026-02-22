@@ -197,9 +197,9 @@ extension GraphCanvasScreen {
                 detailsPeekBar(chips: detailsPeekChips)
             }
 
-            // ✅ Option A3: Entity selection summary + “Attribute ansehen”
-            if node.key.kind == .entity, !detailsPeekChips.isEmpty {
-                entityPeekBar(chips: detailsPeekChips, entityKey: node.key)
+            // ✅ Entity selection summary + list of defined detail fields
+            if node.key.kind == .entity {
+                entityFieldsPeekPanel(summaryChips: detailsPeekChips, fields: entityFieldsPeekItems)
             }
         }
         .padding(10)
@@ -229,46 +229,56 @@ extension GraphCanvasScreen {
         .frame(maxWidth: .infinity, alignment: .leading)
     }
 
-    func entityPeekBar(chips: [GraphDetailsPeekChip], entityKey: NodeKey) -> some View {
-        let visible = 5
-        let canExpand = nodes.count < maxNodes && edges.count < maxLinks
 
-        return ScrollView(.horizontal, showsIndicators: false) {
+    func entityFieldsPeekPanel(summaryChips: [GraphDetailsPeekChip], fields: [GraphEntityFieldPeekItem]) -> some View {
+        VStack(alignment: .leading, spacing: 8) {
             HStack(spacing: 8) {
-                ForEach(Array(chips.prefix(visible))) { chip in
+                ForEach(summaryChips) { chip in
                     detailsPeekChip(chip)
                 }
-
-                Button {
-                    Task { await expandAttributesOnly(from: entityKey) }
-                } label: {
-                    entityPeekActionChip(enabled: canExpand)
-                }
-                .buttonStyle(.plain)
-                .disabled(!canExpand)
-                .help("Attribute dieser Entität im Graph anzeigen")
-
                 Spacer(minLength: 0)
             }
-            .padding(.top, 2)
+
+            if fields.isEmpty {
+                Text("Keine Detail-Felder")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            } else {
+                ScrollView(.vertical, showsIndicators: true) {
+                    VStack(alignment: .leading, spacing: 6) {
+                        ForEach(fields) { field in
+                            entityFieldRow(field)
+                        }
+                    }
+                    .padding(.vertical, 2)
+                }
+                .frame(maxWidth: .infinity, maxHeight: 120, alignment: .topLeading)
+                .clipShape(RoundedRectangle(cornerRadius: 10))
+            }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
     }
 
-    func entityPeekActionChip(enabled: Bool) -> some View {
+    func entityFieldRow(_ field: GraphEntityFieldPeekItem) -> some View {
         HStack(spacing: 6) {
-            Image(systemName: "rectangle.stack")
-                .foregroundStyle(enabled ? .primary : .secondary)
-            Text("Attribute ansehen")
-                .foregroundStyle(enabled ? .primary : .secondary)
+            if field.isPinned {
+                Image(systemName: "pin.fill")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+
+            Text(verbatim: field.fieldName)
+                .foregroundStyle(.primary)
+
+            Spacer(minLength: 0)
         }
         .font(.caption.weight(.semibold))
         .lineLimit(1)
         .padding(.horizontal, 10)
         .padding(.vertical, 6)
-        .background(.thinMaterial, in: Capsule())
+        .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 10))
         .overlay(
-            Capsule().stroke(.secondary.opacity(0.18))
+            RoundedRectangle(cornerRadius: 10).stroke(.secondary.opacity(0.18))
         )
     }
 

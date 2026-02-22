@@ -75,6 +75,10 @@ struct GraphCanvasScreen: View {
     // Precomputed on selection change to keep the render path cheap.
     @State var detailsPeekChips: [GraphDetailsPeekChip] = []
 
+    // ✅ Entity selection: list of defined detail fields (names/pinning)
+    // Precomputed on selection change to keep the render path cheap.
+    @State var entityFieldsPeekItems: [GraphEntityFieldPeekItem] = []
+
     // ✅ Details Peek editing (PR A2)
     @State var detailsValueEditRequest: GraphDetailsValueEditRequest? = nil
 

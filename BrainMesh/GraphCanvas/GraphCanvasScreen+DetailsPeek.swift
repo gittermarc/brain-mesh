@@ -24,6 +24,14 @@ extension GraphCanvasScreen {
         var id: UUID { fieldID }
     }
 
+    struct GraphEntityFieldPeekItem: Identifiable, Hashable {
+        let fieldID: UUID
+        let fieldName: String
+        let isPinned: Bool
+
+        var id: UUID { fieldID }
+    }
+
     struct GraphDetailsValueEditRequest: Identifiable {
         let attribute: MetaAttribute
         let field: MetaDetailFieldDefinition
@@ -42,11 +50,14 @@ extension GraphCanvasScreen {
     func recomputeDetailsPeek(for selection: NodeKey?) {
         guard let selection else {
             detailsPeekChips = []
+            entityFieldsPeekItems = []
             return
         }
 
         switch selection.kind {
         case .attribute:
+            entityFieldsPeekItems = []
+
             guard let attr = fetchAttribute(id: selection.uuid) else {
                 detailsPeekChips = []
                 return
@@ -56,11 +67,14 @@ extension GraphCanvasScreen {
         case .entity:
             guard let entity = fetchEntity(id: selection.uuid) else {
                 detailsPeekChips = []
+                entityFieldsPeekItems = []
                 return
             }
             detailsPeekChips = buildEntitySummaryChips(for: entity)
+            entityFieldsPeekItems = buildEntityFieldsPeekItems(for: entity)
         }
     }
+
 
     // MARK: - Editing
 
@@ -140,6 +154,18 @@ extension GraphCanvasScreen {
         return out
     }
 
+
+
+
+    func buildEntityFieldsPeekItems(for entity: MetaEntity) -> [GraphEntityFieldPeekItem] {
+        entity.detailFieldsList.map { field in
+            GraphEntityFieldPeekItem(
+                fieldID: field.id,
+                fieldName: field.name,
+                isPinned: field.isPinned
+            )
+        }
+    }
 
     func buildEntitySummaryChips(for entity: MetaEntity) -> [GraphDetailsPeekChip] {
         let total = entity.detailFieldsList.count
