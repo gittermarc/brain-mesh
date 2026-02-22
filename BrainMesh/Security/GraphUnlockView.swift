@@ -22,98 +22,31 @@ struct GraphUnlockView: View {
     @State private var biometricsAvailable: Bool = false
     @State private var biometricsLabel: String = "Biometrie"
 
+    @State private var errorShakeTrigger: Int = 0
+
     var body: some View {
         NavigationStack {
-            VStack(spacing: 18) {
-                Spacer(minLength: 8)
+            ZStack {
+                GraphUnlockBackgroundView()
 
-                Image(systemName: "lock.fill")
-                    .font(.system(size: 44, weight: .semibold))
-                    .foregroundStyle(.secondary)
+                VStack(spacing: 16) {
+                    Spacer(minLength: 12)
 
-                VStack(spacing: 6) {
-                    Text("Graph gesperrt")
-                        .font(.title2)
-                        .fontWeight(.semibold)
+                    GraphUnlockHeroView(graphName: request.graphName)
 
-                    Text(request.graphName)
-                        .foregroundStyle(.secondary)
-                        .multilineTextAlignment(.center)
-                        .lineLimit(3)
-                }
-                .padding(.horizontal)
-
-                if let errorMessage {
-                    Text(errorMessage)
-                        .font(.footnote)
-                        .foregroundStyle(.red)
-                        .multilineTextAlignment(.center)
-                        .padding(.horizontal)
-                }
-
-                VStack(spacing: 12) {
-                    if request.allowBiometrics, biometricsAvailable {
-                        Button {
-                            Task { await unlockWithBiometrics() }
-                        } label: {
-                            HStack {
-                                Image(systemName: biometricsIcon)
-                                Text("Mit \(biometricsLabel) entsperren")
-                                Spacer()
-                                if isWorking {
-                                    ProgressView()
-                                }
-                            }
-                        }
-                        .buttonStyle(.borderedProminent)
-                        .disabled(isWorking)
+                    if let errorMessage {
+                        GraphUnlockErrorBanner(message: errorMessage, shakeTrigger: errorShakeTrigger)
+                            .transition(.opacity.combined(with: .move(edge: .top)))
                     }
 
-                    if request.allowPassword {
-                        VStack(alignment: .leading, spacing: 8) {
-                            Text("Passwort")
-                                .font(.footnote)
-                                .foregroundStyle(.secondary)
+                    methodsSection
 
-                            SecureField("Passwort eingeben", text: $password)
-                                .textContentType(.password)
-                                .submitLabel(.go)
-                                .onSubmit {
-                                    Task { await unlockWithPassword() }
-                                }
-
-                            Button {
-                                Task { await unlockWithPassword() }
-                            } label: {
-                                HStack {
-                                    Text("Mit Passwort entsperren")
-                                    Spacer()
-                                    if isWorking {
-                                        ProgressView()
-                                    }
-                                }
-                            }
-                            .buttonStyle(.bordered)
-                            .disabled(isWorking || password.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
-                        }
-                        .padding()
-                        .background(.thinMaterial)
-                        .clipShape(RoundedRectangle(cornerRadius: 14))
-                        .padding(.horizontal)
-                    }
-
-                    if !request.allowBiometrics && !request.allowPassword {
-                        Text("Für diesen Graph ist aktuell keine Entsperr-Methode verfügbar.")
-                            .font(.footnote)
-                            .foregroundStyle(.secondary)
-                            .multilineTextAlignment(.center)
-                            .padding(.horizontal)
-                    }
+                    Spacer(minLength: 0)
                 }
-
-                Spacer(minLength: 20)
+                .padding(.horizontal, 16)
+                .frame(maxWidth: 520)
+                .frame(maxWidth: .infinity)
             }
-            .padding(.top, 12)
             .navigationTitle("Entsperren")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
@@ -129,6 +62,13 @@ struct GraphUnlockView: View {
                     }
                 }
             }
+            .safeAreaInset(edge: .bottom) {
+                if showsSecondaryActions {
+                    bottomSecondaryActions
+                        .padding(.horizontal, 16)
+                        .padding(.bottom, 10)
+                }
+            }
             .interactiveDismissDisabled(true)
             .task {
                 let info = graphLock.canUseBiometrics()
@@ -141,12 +81,104 @@ struct GraphUnlockView: View {
         }
     }
 
+    private var methodsSection: some View {
+        VStack(spacing: 12) {
+            if showBiometrics {
+                GraphUnlockBiometricsCard(
+                    biometricsLabel: biometricsLabel,
+                    biometricsIcon: biometricsIcon,
+                    isWorking: isWorking,
+                    action: {
+                        Task { await unlockWithBiometrics() }
+                    }
+                )
+                .disabled(isWorking)
+            }
+
+            if showBiometrics && showPassword {
+                Text("oder")
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(.secondary)
+                    .padding(.horizontal, 12)
+                    .padding(.vertical, 6)
+                    .background(.thinMaterial, in: Capsule(style: .continuous))
+                    .overlay {
+                        Capsule(style: .continuous)
+                            .strokeBorder(.quaternary)
+                    }
+                    .padding(.vertical, 2)
+            }
+
+            if showPassword {
+                GraphUnlockPasswordCard(
+                    password: $password,
+                    isWorking: isWorking,
+                    onSubmit: {
+                        Task { await unlockWithPassword() }
+                    }
+                )
+            }
+
+            if !showBiometrics && !showPassword {
+                Text("Für diesen Graph ist aktuell keine Entsperr-Methode verfügbar.")
+                    .font(.footnote)
+                    .foregroundStyle(.secondary)
+                    .multilineTextAlignment(.center)
+                    .padding(.horizontal)
+            }
+        }
+        .animation(.snappy(duration: 0.22), value: showBiometrics)
+        .animation(.snappy(duration: 0.22), value: errorMessage != nil)
+    }
+
+    private var bottomSecondaryActions: some View {
+        HStack {
+            Spacer(minLength: 0)
+
+            if let _ = request.fallbackGraphID {
+                Button("Graph wechseln") {
+                    graphLock.completeCurrentRequest(success: false)
+                }
+                .buttonStyle(.plain)
+            } else if request.onCancel != nil {
+                Button("Abbrechen") {
+                    graphLock.completeCurrentRequest(success: false)
+                }
+                .buttonStyle(.plain)
+            }
+
+            Spacer(minLength: 0)
+        }
+        .font(.callout)
+        .foregroundStyle(.secondary)
+        .padding(.vertical, 10)
+    }
+
+    private var showsSecondaryActions: Bool {
+        request.fallbackGraphID != nil || request.onCancel != nil
+    }
+
+    private var showBiometrics: Bool {
+        request.allowBiometrics && biometricsAvailable
+    }
+
+    private var showPassword: Bool {
+        request.allowPassword
+    }
+
     private var biometricsIcon: String {
         switch biometricsLabel {
         case "Face ID": return "faceid"
         case "Touch ID": return "touchid"
         default: return "key.fill"
         }
+    }
+
+    private func showError(_ message: String) {
+        withAnimation(.snappy(duration: 0.22)) {
+            errorMessage = message
+        }
+        errorShakeTrigger += 1
     }
 
     private func unlockWithBiometrics() async {
@@ -159,7 +191,7 @@ struct GraphUnlockView: View {
         if ok {
             graphLock.completeCurrentRequest(success: true)
         } else {
-            errorMessage = "Biometrische Entsperrung fehlgeschlagen."
+            showError("Biometrische Entsperrung fehlgeschlagen.")
         }
     }
 
@@ -185,14 +217,14 @@ struct GraphUnlockView: View {
         )
 
         guard let graph = try? modelContext.fetch(fd).first else {
-            errorMessage = "Graph nicht gefunden."
+            showError("Graph nicht gefunden.")
             return
         }
 
         if graphLock.verifyPassword(cleaned, for: graph) {
             graphLock.completeCurrentRequest(success: true)
         } else {
-            errorMessage = "Passwort ist falsch."
+            showError("Passwort ist falsch.")
         }
     }
 }
