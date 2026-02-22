@@ -210,7 +210,12 @@ extension GraphCanvasScreen {
         return ScrollView(.horizontal, showsIndicators: false) {
             HStack(spacing: 8) {
                 ForEach(Array(chips.prefix(visible))) { chip in
-                    detailsPeekChip(chip)
+                    Button {
+                        openDetailsValueEditor(fieldID: chip.fieldID)
+                    } label: {
+                        detailsPeekChip(chip)
+                    }
+                    .buttonStyle(.plain)
                 }
                 Spacer(minLength: 0)
             }

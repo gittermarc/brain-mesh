@@ -75,6 +75,9 @@ struct GraphCanvasScreen: View {
     // Precomputed on selection change to keep the render path cheap.
     @State var detailsPeekChips: [GraphDetailsPeekChip] = []
 
+    // ✅ Details Peek editing (PR A2)
+    @State var detailsValueEditRequest: GraphDetailsValueEditRequest? = nil
+
     // ✅ Derived render state (cached)
     // Previously computed inside `body` on every re-render.
     // During physics ticks, `positions/velocities` change frequently which triggers many re-renders.
@@ -249,13 +252,26 @@ struct GraphCanvasScreen: View {
                 NavigationStack { EntityDetailView(entity: entity) }
                     .onDisappear {
                         refreshNodeCaches(for: NodeKey(kind: .entity, uuid: entity.id))
+
+                        // ✅ If schema/pinning changed, refresh the peek for the current selection.
+                        recomputeDetailsPeek(for: selection)
                     }
             }
             .sheet(item: $selectedAttribute) { attr in
                 NavigationStack { AttributeDetailView(attribute: attr) }
                     .onDisappear {
                         refreshNodeCaches(for: NodeKey(kind: .attribute, uuid: attr.id))
+
+                        // ✅ If details values changed, refresh the peek for the current selection.
+                        recomputeDetailsPeek(for: selection)
                     }
+            }
+
+            // ✅ Tap-to-Edit for Details Peek chips
+            .sheet(item: $detailsValueEditRequest, onDismiss: {
+                recomputeDetailsPeek(for: selection)
+            }) { req in
+                DetailsValueEditorSheet(attribute: req.attribute, field: req.field)
             }
 
             // Initial load (und Safety: ActiveGraphID setzen, falls leer)

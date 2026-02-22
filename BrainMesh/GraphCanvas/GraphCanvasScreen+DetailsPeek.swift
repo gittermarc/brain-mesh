@@ -21,6 +21,15 @@ extension GraphCanvasScreen {
         var id: UUID { fieldID }
     }
 
+    struct GraphDetailsValueEditRequest: Identifiable {
+        let attribute: MetaAttribute
+        let field: MetaDetailFieldDefinition
+
+        var id: String {
+            "\(attribute.id.uuidString)|\(field.id.uuidString)"
+        }
+    }
+
     // MARK: - Recompute
 
     /// Recomputes the Details Peek chips for the current selection.
@@ -44,6 +53,19 @@ extension GraphCanvasScreen {
         }
 
         detailsPeekChips = buildDetailsPeekChips(for: attr, preparedLimit: 5)
+    }
+
+    // MARK: - Editing
+
+    /// Prepares a sheet request to edit a single field value.
+    /// This runs only on user interaction (tap), not during rendering.
+    @MainActor
+    func openDetailsValueEditor(fieldID: UUID) {
+        guard let sel = selection, sel.kind == .attribute else { return }
+        guard let attr = fetchAttribute(id: sel.uuid) else { return }
+        guard let owner = attr.owner else { return }
+        guard let field = owner.detailFieldsList.first(where: { $0.id == fieldID }) else { return }
+        detailsValueEditRequest = GraphDetailsValueEditRequest(attribute: attr, field: field)
     }
 
     // MARK: - Builder
