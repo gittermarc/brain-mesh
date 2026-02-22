@@ -1,0 +1,114 @@
+//
+//  GraphCanvasScreen+DetailsPeek.swift
+//  BrainMesh
+//
+//  Option A (MVP): Details Peek for the Graph selection chip.
+//  Read-only in PR A1.
+//
+
+import SwiftUI
+
+extension GraphCanvasScreen {
+
+    // MARK: - Model
+
+    struct GraphDetailsPeekChip: Identifiable, Hashable {
+        let fieldID: UUID
+        let fieldName: String
+        let valueText: String
+        let isPlaceholder: Bool
+
+        var id: UUID { fieldID }
+    }
+
+    // MARK: - Recompute
+
+    /// Recomputes the Details Peek chips for the current selection.
+    ///
+    /// Important: This must be called only on selection change (not in `body`) to keep the render path cheap.
+    @MainActor
+    func recomputeDetailsPeek(for selection: NodeKey?) {
+        guard let selection else {
+            detailsPeekChips = []
+            return
+        }
+
+        guard selection.kind == .attribute else {
+            detailsPeekChips = []
+            return
+        }
+
+        guard let attr = fetchAttribute(id: selection.uuid) else {
+            detailsPeekChips = []
+            return
+        }
+
+        detailsPeekChips = buildDetailsPeekChips(for: attr, preparedLimit: 5)
+    }
+
+    // MARK: - Builder
+
+    /// Builds up to `preparedLimit` chips.
+    /// UI can decide to display fewer (e.g. 3 on iPhone), while keeping the extra prepared for future iterations.
+    func buildDetailsPeekChips(for attribute: MetaAttribute, preparedLimit: Int) -> [GraphDetailsPeekChip] {
+        guard preparedLimit > 0 else { return [] }
+        guard let owner = attribute.owner else { return [] }
+
+        let pinnedFields = owner.detailFieldsList
+            .filter { $0.isPinned }
+            .sorted(by: { $0.sortIndex < $1.sortIndex })
+
+        guard !pinnedFields.isEmpty else { return [] }
+
+        // Pre-index values to avoid repeatedly searching `detailValuesList`.
+        var valueByFieldID: [UUID: MetaDetailFieldValue] = [:]
+        for v in attribute.detailValuesList {
+            if valueByFieldID[v.fieldID] == nil {
+                valueByFieldID[v.fieldID] = v
+            }
+        }
+
+        var filled: [GraphDetailsPeekChip] = []
+        var empty: [GraphDetailsPeekChip] = []
+
+        for field in pinnedFields {
+            let value = valueByFieldID[field.id]
+            if let short = DetailsFormatting.shortPillValue(for: field, value: value) {
+                filled.append(
+                    GraphDetailsPeekChip(
+                        fieldID: field.id,
+                        fieldName: field.name,
+                        valueText: short,
+                        isPlaceholder: false
+                    )
+                )
+            } else {
+                empty.append(
+                    GraphDetailsPeekChip(
+                        fieldID: field.id,
+                        fieldName: field.name,
+                        valueText: "Hinzufügen",
+                        isPlaceholder: true
+                    )
+                )
+            }
+        }
+
+        var out: [GraphDetailsPeekChip] = []
+        out.reserveCapacity(min(preparedLimit, pinnedFields.count))
+
+        out.append(contentsOf: filled.prefix(preparedLimit))
+
+        if out.count < preparedLimit {
+            let remaining = preparedLimit - out.count
+            out.append(contentsOf: empty.prefix(remaining))
+        }
+
+        if out.count > preparedLimit {
+            out = Array(out.prefix(preparedLimit))
+        }
+
+        return out
+    }
+
+}

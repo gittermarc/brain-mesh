@@ -107,94 +107,130 @@ extension GraphCanvasScreen {
         let isPinned = pinned.contains(node.key)
         let hiddenLinks = hiddenLinkCountForSelection()
 
-        return HStack(spacing: 10) {
-            VStack(alignment: .leading, spacing: 2) {
-                Text(node.key.kind == .entity ? "Entität" : "Attribut")
-                    .font(.caption2)
-                    .foregroundStyle(.secondary)
+        return VStack(alignment: .leading, spacing: 8) {
+            HStack(spacing: 10) {
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(node.key.kind == .entity ? "Entität" : "Attribut")
+                        .font(.caption2)
+                        .foregroundStyle(.secondary)
 
-                Text(verbatim: nodeLabel(for: node))
-                    .font(.subheadline)
-                    .lineLimit(1)
-            }
-
-            Spacer()
-
-            // ✅ Degree cap “more”
-            if hiddenLinks > 0 {
-                Button {
-                    showAllLinksForSelection = true
-                } label: {
-                    Label("Mehr (\(hiddenLinks))", systemImage: "ellipsis.circle")
+                    Text(verbatim: nodeLabel(for: node))
+                        .font(.subheadline)
+                        .lineLimit(1)
                 }
-                .buttonStyle(.bordered)
-                .help("Weitere Links dieser Node anzeigen")
-            } else if showAllLinksForSelection {
-                Button {
-                    showAllLinksForSelection = false
-                } label: {
-                    Label("Weniger", systemImage: "chevron.up.circle")
-                }
-                .buttonStyle(.bordered)
-            }
 
-            // ✅ Expand
-            Button {
-                Task { await expand(from: node.key) }
-            } label: {
-                Image(systemName: "plus.circle")
-            }
-            .buttonStyle(.bordered)
-            .help("Nachbarn aufklappen")
+                Spacer()
 
-            Button {
-                cameraCommand = CameraCommand(kind: .center(node.key))
-            } label: {
-                Image(systemName: "dot.scope")
-            }
-            .buttonStyle(.bordered)
-
-            if node.key.kind == .entity {
-                Button {
-                    if let e = fetchEntity(id: node.key.uuid) {
-                        focusEntity = e
-                        scheduleLoadGraph(resetLayout: true)
-                        cameraCommand = CameraCommand(kind: .center(node.key))
+                // ✅ Degree cap “more”
+                if hiddenLinks > 0 {
+                    Button {
+                        showAllLinksForSelection = true
+                    } label: {
+                        Label("Mehr (\(hiddenLinks))", systemImage: "ellipsis.circle")
                     }
-                } label: {
-                    Image(systemName: "scope")
+                    .buttonStyle(.bordered)
+                    .help("Weitere Links dieser Node anzeigen")
+                } else if showAllLinksForSelection {
+                    Button {
+                        showAllLinksForSelection = false
+                    } label: {
+                        Label("Weniger", systemImage: "chevron.up.circle")
+                    }
+                    .buttonStyle(.bordered)
                 }
-                .buttonStyle(.borderedProminent)
+
+                // ✅ Expand
+                Button {
+                    Task { await expand(from: node.key) }
+                } label: {
+                    Image(systemName: "plus.circle")
+                }
+                .buttonStyle(.bordered)
+                .help("Nachbarn aufklappen")
+
+                Button {
+                    cameraCommand = CameraCommand(kind: .center(node.key))
+                } label: {
+                    Image(systemName: "dot.scope")
+                }
+                .buttonStyle(.bordered)
+
+                if node.key.kind == .entity {
+                    Button {
+                        if let e = fetchEntity(id: node.key.uuid) {
+                            focusEntity = e
+                            scheduleLoadGraph(resetLayout: true)
+                            cameraCommand = CameraCommand(kind: .center(node.key))
+                        }
+                    } label: {
+                        Image(systemName: "scope")
+                    }
+                    .buttonStyle(.borderedProminent)
+                }
+
+                Button {
+                    openDetails(for: node.key)
+                } label: {
+                    Image(systemName: "info.circle")
+                }
+                .buttonStyle(.bordered)
+
+                Button {
+                    if isPinned { pinned.remove(node.key) }
+                    else { pinned.insert(node.key) }
+                    velocities[node.key] = .zero
+                } label: {
+                    Image(systemName: isPinned ? "pin.slash" : "pin")
+                }
+                .buttonStyle(.bordered)
+
+                Button {
+                    selection = nil
+                } label: {
+                    Image(systemName: "xmark")
+                }
+                .buttonStyle(.bordered)
             }
 
-            Button {
-                openDetails(for: node.key)
-            } label: {
-                Image(systemName: "info.circle")
+            // ✅ Option A: Details Peek (read-only)
+            if node.key.kind == .attribute, !detailsPeekChips.isEmpty {
+                detailsPeekBar(chips: detailsPeekChips)
             }
-            .buttonStyle(.bordered)
-
-            Button {
-                if isPinned { pinned.remove(node.key) }
-                else { pinned.insert(node.key) }
-                velocities[node.key] = .zero
-            } label: {
-                Image(systemName: isPinned ? "pin.slash" : "pin")
-            }
-            .buttonStyle(.bordered)
-
-            Button {
-                selection = nil
-            } label: {
-                Image(systemName: "xmark")
-            }
-            .buttonStyle(.bordered)
         }
         .padding(10)
         .background(.thinMaterial)
         .clipShape(RoundedRectangle(cornerRadius: 14))
         .shadow(radius: 6, y: 2)
         .frame(maxWidth: 640)
+    }
+
+    func detailsPeekBar(chips: [GraphDetailsPeekChip]) -> some View {
+        let visible = 3
+
+        return ScrollView(.horizontal, showsIndicators: false) {
+            HStack(spacing: 8) {
+                ForEach(Array(chips.prefix(visible))) { chip in
+                    detailsPeekChip(chip)
+                }
+                Spacer(minLength: 0)
+            }
+            .padding(.top, 2)
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
+    func detailsPeekChip(_ chip: GraphDetailsPeekChip) -> some View {
+        (Text(verbatim: chip.fieldName).foregroundStyle(.secondary)
+         + Text(verbatim: ": ").foregroundStyle(.secondary)
+         + Text(verbatim: chip.valueText).foregroundStyle(chip.isPlaceholder ? .secondary : .primary))
+            .font(.caption.weight(.semibold))
+            .lineLimit(1)
+            .padding(.horizontal, 10)
+            .padding(.vertical, 6)
+            .background(.ultraThinMaterial, in: Capsule())
+            .overlay(
+                Capsule().stroke(.secondary.opacity(0.18))
+            )
     }
 
     func nodeLabel(for node: GraphNode) -> String {

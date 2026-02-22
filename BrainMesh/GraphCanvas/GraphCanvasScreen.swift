@@ -71,6 +71,10 @@ struct GraphCanvasScreen: View {
     @State var pinned: Set<NodeKey> = []
     @State var selection: NodeKey? = nil
 
+    // ✅ Details Peek (Selection chip)
+    // Precomputed on selection change to keep the render path cheap.
+    @State var detailsPeekChips: [GraphDetailsPeekChip] = []
+
     // ✅ Derived render state (cached)
     // Previously computed inside `body` on every re-render.
     // During physics ticks, `positions/velocities` change frequently which triggers many re-renders.
@@ -307,9 +311,12 @@ struct GraphCanvasScreen: View {
                 }
             }
 
+            // ✅ Details Peek (Option A): precompute only when selection changes.
+            recomputeDetailsPeek(for: newSelection)
+
             recomputeDerivedState()
         }
-}
+    }
 
     // MARK: - Cancellable loading
 
