@@ -46,7 +46,7 @@ extension GraphStatsView {
 
                     Spacer()
 
-                    if isLoading {
+                    if isLoading || isRefreshing {
                         ProgressView()
                             .controlSize(.small)
                     }

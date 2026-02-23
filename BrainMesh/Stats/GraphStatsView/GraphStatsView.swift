@@ -31,7 +31,22 @@ struct GraphStatsView: View {
     @State var loadError: String? = nil
     @State var loadTask: Task<Void, Never>? = nil
 
+    /// Soft refresh state: keep the last snapshot on screen while recomputing.
+    @State var isRefreshing: Bool = false
+
+    /// Token to guard against late-arriving tasks updating state after a newer reload was started.
+    @State private var currentLoadToken: UUID = UUID()
+
+    /// Last load input used by `.task(id:)` to compute/dedupe reloads.
+    @State private var lastLoadKey: StatsLoadKey? = nil
+
     @State var showPerGraph = false
+
+    private struct StatsLoadKey: Hashable {
+        let graphIDs: [UUID]
+        let activeGraphID: UUID?
+        let days: Int
+    }
 
     // ✅ Dedupe by UUID (falls Cloud/Bootstrap doppelt geliefert hat)
     var uniqueGraphs: [MetaGraph] {
@@ -100,50 +115,67 @@ struct GraphStatsView: View {
                 .padding(.vertical, 12)
             }
             .navigationTitle("Statistiken")
-            .task {
-                startReload(graphIDs: uniqueGraphs.map(\.id))
-            }
-            .onChange(of: uniqueGraphs.map(\.id)) { _, newValue in
-                startReload(graphIDs: newValue)
-            }
-            .onChange(of: activeGraphIDString) { _, _ in
-                startReload(graphIDs: uniqueGraphs.map(\.id))
+            .task(id: statsLoadKey) {
+                _ = await triggerReload(for: statsLoadKey, force: false)
             }
             .refreshable {
-                startReload(graphIDs: uniqueGraphs.map(\.id))
+                let task = await triggerReload(for: statsLoadKey, force: true)
+                await task?.value
             }
         }
     }
 
     // MARK: - Loading
 
+    private var statsLoadKey: StatsLoadKey {
+        StatsLoadKey(
+            graphIDs: uniqueGraphs.map(\.id),
+            activeGraphID: activeGraphID,
+            days: 7
+        )
+    }
+
     @MainActor
-    private func startReload(graphIDs: [UUID]) {
+    private func triggerReload(for key: StatsLoadKey, force: Bool) -> Task<Void, Never>? {
+        // Dedupe: when the same inputs arrive multiple times in quick succession (e.g. Query jitter),
+        // don't restart a running load unless forced.
+        if !force, lastLoadKey == key, isRefreshing {
+            return loadTask
+        }
+
+        lastLoadKey = key
+
         loadTask?.cancel()
-
-        total = nil
-        perGraph = [:]
-        activeMedia = nil
-        activeStructure = nil
-        activeTrends = nil
         loadError = nil
+        isRefreshing = true
 
-        let pickedGraphID = graphIDs.first(where: { $0 == activeGraphID }) ?? graphIDs.first
-        dashboardGraphID = pickedGraphID
+        let token = UUID()
+        currentLoadToken = token
 
-        loadTask = Task {
+        // If the dashboard graph changes, don't keep old graph-specific details on screen.
+        let pickedGraphID = key.graphIDs.first(where: { $0 == key.activeGraphID }) ?? key.graphIDs.first
+        if pickedGraphID != dashboardGraphID {
+            dashboardGraphID = pickedGraphID
+            activeMedia = nil
+            activeStructure = nil
+            activeTrends = nil
+        }
+
+        let task = Task { @MainActor [key] in
             do {
                 // In case the loader is configured in a detached task during app startup,
                 // yield once before the first attempt to reduce race likelihood.
                 await Task.yield()
 
                 let snapshot = try await GraphStatsLoader.shared.loadSnapshot(
-                    graphIDs: graphIDs,
-                    activeGraphID: activeGraphID,
-                    days: 7
+                    graphIDs: key.graphIDs,
+                    activeGraphID: key.activeGraphID,
+                    days: key.days
                 )
 
                 try Task.checkCancellation()
+
+                guard currentLoadToken == token else { return }
 
                 total = snapshot.total
                 perGraph = snapshot.perGraph
@@ -151,10 +183,21 @@ struct GraphStatsView: View {
                 activeMedia = snapshot.activeMedia
                 activeStructure = snapshot.activeStructure
                 activeTrends = snapshot.activeTrends
+                isRefreshing = false
             } catch {
-                if Task.isCancelled { return }
+                if Task.isCancelled {
+                    if currentLoadToken == token {
+                        isRefreshing = false
+                    }
+                    return
+                }
+                guard currentLoadToken == token else { return }
                 loadError = error.localizedDescription
+                isRefreshing = false
             }
         }
+
+        loadTask = task
+        return task
     }
 }
