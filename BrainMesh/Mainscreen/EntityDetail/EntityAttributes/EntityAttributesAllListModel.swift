@@ -190,6 +190,7 @@ final class EntityAttributesAllListModel: ObservableObject {
 
         let currentPinnedIDs = pinned.map { $0.id }
         let currentAttributeIDs = attrs.map { $0.id }
+        let currentAttributeIDSet = Set(currentAttributeIDs)
 
         let entityChanged = (cache.entityID != entity.id) || (cache.graphID != entity.graphID)
         let pinnedChanged = (cache.pinnedFieldIDs != currentPinnedIDs)
@@ -224,7 +225,12 @@ final class EntityAttributesAllListModel: ObservableObject {
                 || cache.pinnedValuesByAttribute.isEmpty
 
             if needsPinnedValuesRefetch {
-                cache.pinnedValuesByAttribute = fetchPinnedValuesLookup(context: context, pinnedFields: pinned)
+                cache.pinnedValuesByAttribute = fetchPinnedValuesLookup(
+                    context: context,
+                    pinnedFields: pinned,
+                    graphID: entity.graphID,
+                    attributeIDs: currentAttributeIDSet
+                )
             }
         }
 
@@ -235,10 +241,9 @@ final class EntityAttributesAllListModel: ObservableObject {
                 || attributesChanged
 
             if needsOwnersRefetch {
-                let attributeIDs = Set(currentAttributeIDs)
                 cache.ownersWithMedia = fetchAttributeOwnersWithMedia(
                     context: context,
-                    attributeIDs: attributeIDs,
+                    attributeIDs: currentAttributeIDSet,
                     graphID: entity.graphID
                 )
             }

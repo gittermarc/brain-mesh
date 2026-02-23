@@ -44,24 +44,38 @@ extension EntityAttributesAllListModel {
 
     func fetchPinnedValuesLookup(
         context: ModelContext,
-        pinnedFields: [MetaDetailFieldDefinition]
+        pinnedFields: [MetaDetailFieldDefinition],
+        graphID: UUID?,
+        attributeIDs: Set<UUID>
     ) -> [UUID: [UUID: MetaDetailFieldValue]] {
         guard !pinnedFields.isEmpty else { return [:] }
+        guard !attributeIDs.isEmpty else { return [:] }
 
         var result: [UUID: [UUID: MetaDetailFieldValue]] = [:]
         result.reserveCapacity(256)
+
+        let gid: UUID? = graphID
 
         for field in pinnedFields {
             // SwiftData #Predicate can't reliably compare against a captured model object's property
             // (e.g. `field.id`). Capture the UUID as a constant instead.
             let fieldID: UUID = field.id
-            let fd = FetchDescriptor<MetaDetailFieldValue>(predicate: #Predicate<MetaDetailFieldValue> { v in
-                v.fieldID == fieldID
-            })
-            let values = (try? context.fetch(fd)) ?? []
+            let values: [MetaDetailFieldValue]
+            if gid != nil {
+                let fd = FetchDescriptor<MetaDetailFieldValue>(predicate: #Predicate<MetaDetailFieldValue> { v in
+                    v.fieldID == fieldID && v.graphID == gid
+                })
+                values = (try? context.fetch(fd)) ?? []
+            } else {
+                let fd = FetchDescriptor<MetaDetailFieldValue>(predicate: #Predicate<MetaDetailFieldValue> { v in
+                    v.fieldID == fieldID
+                })
+                values = (try? context.fetch(fd)) ?? []
+            }
 
             for v in values {
-                result[v.attributeID, default: [:]][field.id] = v
+                guard attributeIDs.contains(v.attributeID) else { continue }
+                result[v.attributeID, default: [:]][fieldID] = v
             }
         }
 

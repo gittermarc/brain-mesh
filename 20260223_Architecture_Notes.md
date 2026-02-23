@@ -1,318 +1,203 @@
-# BrainMesh — ARCHITECTURE_NOTES
-
-Diese Notizen sind absichtlich „engineering‑first“: Risiken, Hotspots, konkrete Hebel.
-
----
-
-## 0) Architektur‑Schnappschuss
-
-### Persistenz + Sync
-- **SwiftData** ist die einzige Persistenzschicht.
-- **CloudKit‑Sync** ist rein über SwiftData konfiguriert (kein eigener CKRecord‑Code):
-  - `BrainMesh/BrainMeshApp.swift`: `ModelConfiguration(schema: schema, cloudKitDatabase: .automatic)`.
-  - `Settings/SyncRuntime.swift` ist nur Diagnostik (iCloud account status), nicht Sync‑Implementation.
-
-**Tradeoff:**
-- + Weniger eigener Sync‑Code, weniger Fehlerquellen.
-- − Weniger Kontrolle über Konfliktauflösung, Change‑Tracking, Debugging; bei Problemen muss man SwiftData/CloudKit intern „von außen“ diagnostizieren.
-
-### Data Access Pattern (Performance)
-- Starkes Pattern: **Heavy fetches off‑main** über Loader‑Actors + Snapshot DTOs.
-  - Zentral verdrahtet in `Support/AppLoadersConfigurator.swift`.
-  - Loader bauen einen Hintergrund‑`ModelContext` aus `AnyModelContainer`.
-
-**Tradeoff:**
-- + UI bleibt reaktiv, keine SwiftData‑Fetches im Render‑Pfad.
-- − Mehr Komplexität (DTOs, Cache‑Invalidation, Cancellation, dedupe).
-
-### Graph Canvas
-- Graph ist der „Hot Path“:
-  - Rendering über `Canvas` + custom draw pipeline (`GraphCanvasView+Rendering.swift`).
-  - Physics über 30 FPS `Timer` (`GraphCanvasView+Physics.swift`) mit O(n²) pair‑Loop (Repulsion/Collision) → mitigiert durch Spotlight.
-
----
-
-## 1) Big Files List (Top 15 nach Zeilen)
-Quelle: `wc -l` über `BrainMesh/*.swift`.
-
-| Rank | Lines | Pfad | Zweck | Warum riskant |
-|---:|---:|---|---|---|
-| 1 | 630 | `BrainMesh/Mainscreen/EntityDetail/EntityAttributes/EntityAttributesAllListModel.swift` | ViewModel/Model für „Alle Attribute“ inkl. Sort/Grouping/Pins | Hohe Änderungsfrequenz + viele Verantwortlichkeiten (Fetch/Cache/Sort/Grouping/UI‑State). |
-| 2 | 532 | `BrainMesh/GraphCanvas/GraphCanvasView+Rendering.swift` | Canvas‑Rendering (Nodes/Edges/Labels/Notes/Overlays) | Per‑Frame Arbeit; schwer zu profilieren/ändern ohne Regressionen. |
-| 3 | 515 | `BrainMesh/Models.swift` | SwiftData Models (Graph/Entity/Attribute/Link/Details) | „God model file“: Merge‑Konflikte, Compile‑Churn, Migration‑Risiko. |
-| 4 | 510 | `BrainMesh/Mainscreen/Details/DetailsValueEditorSheet.swift` | Details‑Editor (alle Typen) + Completion | Viele UI‑Branches + State + Async Tasks → Bug‑Surface hoch. |
-| 5 | 504 | `BrainMesh/Onboarding/OnboardingSheetView.swift` | Onboarding Flow + UI | Viel UI in einem File; Änderungen können UX regressions verursachen. |
-| 6 | 491 | `BrainMesh/Mainscreen/NodeDetailShared/NodeDetailShared+Core.swift` | Shared Detail‑UI Kern | „Shared“ Files sammeln gern alles → schwer testbar. |
-| 7 | 469 | `BrainMesh/Mainscreen/Details/DetailsSchema/DetailsSchemaFieldsList.swift` | Details‑Schema Editor (Felder definieren, pinning, Typen) | Komplexe UI + Mutationen am Schema (Migration‑Risiko). |
-| 8 | 411 | `BrainMesh/GraphCanvas/GraphCanvasDataLoader.swift` | Graph Snapshot Loader + BFS Neighborhood | Algorithmik + SwiftData Predicates + Limits → Perf + Correctness risk. |
-| 9 | 409 | `BrainMesh/Mainscreen/NodeDetailShared/NodeImagesManageView.swift` | Bilder verwalten (Gallery) | Kombiniert UI + Hydration/Loading; potenziell heavy. |
-|10 | 401 | `BrainMesh/Mainscreen/AttributeDetail/AttributeDetailView.swift` | Attribut Detail Screen | Viele Subsections; invalidations/scroll performance risk. |
-|11 | 397 | `BrainMesh/Mainscreen/EntitiesHome/EntitiesHomeLoader.swift` | Entities Home Loader (Search + Counts Caches) | Performance‑kritisch bei großen Daten; Cache‑Invalidation. |
-|12 | 394 | `BrainMesh/Mainscreen/NodeDetailShared/NodeDetailShared+Connections.swift` | Connections UI + Loading | Potenziell viele Links; Paging/Load risk. |
-|13 | 388 | `BrainMesh/Mainscreen/EntitiesHome/EntitiesHomeView.swift` | Entities Home Screen | Viele UI states + debounce + sheets; regressions bei Navigation. |
-|14 | 388 | `BrainMesh/Mainscreen/Details/NodeDetailsValuesCard.swift` | Anzeige der Detail‑Werte | „Card“ wird häufig gerendert; risk bei Fetch/Format im body. |
-|15 | 362 | `BrainMesh/Mainscreen/NodeDetailShared/NodeDetailShared+MediaGallery.swift` | Media Gallery (Paging + UI) | I/O + Large UI; Cancellation/Memory risk. |
-
-**Meta‑Risiko:** Diese Files sind zugleich „Hotspot + groß“ → wenn du Refactors schneidest, hier anfangen (kleine, behavior‑identische Splits).
-
----
-
-## 2) Hot Path Analyse
-
-### 2.1 Rendering / Scrolling
-
-#### A) Graph Canvas Rendering
-- **Pfad:** `BrainMesh/GraphCanvas/GraphCanvasView.swift` + `GraphCanvasView+Rendering.swift`.
-- **Warum Hot:**
-  - `Canvas { context in renderCanvas(...) }` läuft bei vielen State‑Änderungen (positions/velocities tick). `GraphCanvasView+Physics.swift` mutiert `positions/velocities` bis 30 FPS.
-  - Rendering‑File ist groß (532 LOC), typischerweise viele Draw‑Passes.
-- **Konkrete Risiken:**
-  - **Exzessive View invalidation:** jeder Physics tick invalidiert den Canvas.
-  - **Per‑Frame allocations:** wenn Render‑Pfad Arrays/Strings neu baut (z. B. Labels, layout calculations) → GC/ARC overhead.
-  - **Disk I/O im Render:** wurde bereits aktiv vermieden; Thumbnail cache ist explizit `@State cachedThumb` und `ImageStore.loadUIImageAsync` ist der empfohlene Weg (`ImageStore.swift` Kommentar).
-
-**Was bereits gut ist:**
-- `GraphCanvasScreen.swift` hält Render‑Caches (`labelCache`, `imagePathCache`, `iconSymbolCache`) und precomputet derived state (`drawEdgesCache`, `lensCache`, `physicsRelevantCache`).
-- Selection Thumbnail wird gecached (`GraphCanvasView.swift`: `cachedThumbPath/cachedThumb`).
-
-**Konkrete Hebel:**
-- Render‑Pipeline weiter „data‑driven“ machen:
-  - Precompute `RenderableNode`/`RenderableEdge` structs bei Änderungen von `nodes/edges/labelCache/...` (nicht pro Frame).
-  - Im Physics tick nur positions updaten.
-
-#### B) Graph Canvas Physics
-- **Pfad:** `BrainMesh/GraphCanvas/GraphCanvasView+Physics.swift`.
-- **Warum Hot:**
-  - Pair‑loop für repulsion/collision: `for i in 0..<simNodes.count { for j in i+1..<... }` → **O(n²)**.
-  - Timer 30 FPS: `Timer.scheduledTimer(withTimeInterval: 1.0/30.0, repeats: true)`.
-- **Mitigation im Code:**
-  - **Spotlight Physik:** `physicsRelevant` begrenzt simNodes auf selection+neighbors.
-  - **Idle/Sleep:** stoppt Timer nach ~3s wenn Geschwindigkeit niedrig.
-  - Observability: `BMLog.physics` avg/max (rolling 60 ticks).
-
-**Risiko‑Grenzen:**
-- Bei globaler Ansicht (keine selection) sind `simNodes = nodes` → O(n²) kann CPU‑heavy werden.
-- `maxNodes` default 140 (`GraphCanvasScreen.swift`), aber User kann es im Inspector ändern.
-
-#### C) EntitiesHome Scrolling
-- **Pfad:** `BrainMesh/Mainscreen/EntitiesHome/EntitiesHomeView.swift` + `EntitiesHomeList.swift` / `EntitiesHomeGrid.swift`.
-- **Warum Hot:**
-  - Searchable + debounce + off‑main Loader. Bei schnellem Tippen viele Task‑Abbrüche.
-  - Grid/List Varianten; Cards nutzen `ScrollView + LazyVStack`.
-- **Was bereits gut ist:**
-  - Keine `@Query`‑Liste für Entities; stattdessen `EntitiesHomeLoader.shared.loadSnapshot(...)` (off‑main).
-  - TTL Cache für attribute/link counts (`EntitiesHomeLoader.swift`).
-
-**Risiko:**
-- Cache‑Staleness (TTL 8s) ist ein UX‑Tradeoff. Wenn du mutierst (Add/Delete) musst du invalidieren (wird teilweise gemacht: `EntitiesHomeView` invalidiert Cache beim Schließen von AddEntity).
-
-### 2.2 Sync / Storage
-
-#### A) Container Init & Fallback
-- **Pfad:** `BrainMesh/BrainMeshApp.swift`.
-- **Risk:**
-  - Debug: `fatalError` bei CloudKit Init‑Fehler.
-  - Release: silent fallback local‑only → kann „Sync kaputt“ wirken.
-  - Der Modus wird über `SyncRuntime.storageMode` surfaced.
-
-**Hotspot‑Grund:** nicht CPU‑Hotspot, aber **Produktions‑Risk** (Daten landen lokal ohne Sync).
-
-#### B) External Storage Attachments
-- **Pfad:** `BrainMesh/Attachments/MetaAttachment.swift` (`@Attribute(.externalStorage) var fileData`).
-- **Risk:**
-  - Beim Anzeigen kann das Lesen von `fileData` CloudKit fetch triggern.
-  - Deshalb wird im Loader/Row bewusst nur metadata geladen; fileData wird erst beim Öffnen/hydraten gelesen.
-
-#### C) Local Cache + Hydration
-- **Bilder:** `ImageStore.swift` + `ImageHydrator.swift`.
-- **Anhänge:** `AttachmentStore.swift` + `AttachmentHydrator.swift`.
-
-**Hotspot‑Gründe:**
-- Cache‑miss stampedes (viele Zellen gleichzeitig) → mitigiert durch AsyncLimiter und inFlight dedupe.
-- Disk usage / cleanup flows (Settings Maintenance).
-
-### 2.3 Concurrency
-
-#### Pattern: Actor Loader + Task.detached + ModelContext
-- **Pfadbeispiele:**
-  - `GraphCanvasDataLoader.loadSnapshot(...)` (`GraphCanvas/GraphCanvasDataLoader.swift`).
-  - `GraphStatsLoader` (`Stats/GraphStatsLoader.swift`).
-  - `EntitiesHomeLoader` (`Mainscreen/EntitiesHome/EntitiesHomeLoader.swift`).
-- **Positiv:**
-  - UI bleibt auf MainActor; SwiftData fetches laufen off‑main.
-  - Snapshot DTOs verhindern „@Model über Thread“.
-- **Risiken:**
-  - **Cancellation‑Leaks:** wenn Loops selten `Task.checkCancellation()` machen (GraphCanvasDataLoader macht teils checks, EntitiesHomeLoader macht checks, aber ist nicht überall garantiert).
-  - **Detached tasks lifetime:** `Task.detached` läuft unabhängig von parent task; wenn man nicht checkt/cancelt, arbeitet es weiter.
-  - **MainActor contention:** GraphCanvas Physics Timer + UI state updates laufen auf MainActor.
-
----
-
-## 3) Refactor Map
-
-### 3.1 Konkrete Splits (Datei → neue Dateien)
-
-#### A) `Models.swift` (515 LOC)
-**Ziel:** Compile‑Churn runter, Merge‑Konflikte runter, besseres „findability“.
-
-Vorschlag:
-- `BrainMesh/Models/MetaGraph.swift`
-- `BrainMesh/Models/MetaEntity.swift`
-- `BrainMesh/Models/MetaAttribute.swift`
-- `BrainMesh/Models/MetaLink.swift`
-- `BrainMesh/Models/DetailsModels.swift` (DetailFieldDefinition/Value + DetailFieldType)
-- `BrainMesh/Models/BMSearch.swift` (fold helper) + `NodeKind.swift`
-
-Risiko: **Low** (behavior‑identisch, nur File‑Move/Split).  
-Achtung: `Schema([...])` in `BrainMeshApp` muss weiterhin alle `@Model` Typen importieren.
-
-#### B) `GraphCanvasView+Rendering.swift` (532 LOC)
-**Ziel:** Render‑Pipeline klarer, besser messbar.
-
-Vorschlag (Extensions):
-- `GraphCanvas/Rendering/GraphCanvasRendering+Edges.swift`
-- `GraphCanvas/Rendering/GraphCanvasRendering+Nodes.swift`
-- `GraphCanvas/Rendering/GraphCanvasRendering+Labels.swift`
-- `GraphCanvas/Rendering/GraphCanvasRendering+Notes.swift`
-- `GraphCanvas/Rendering/GraphCanvasRendering+Debug.swift` (falls vorhanden)
-
-Risiko: **Low‑Medium** (Refactor kann visuelle Regressionen bringen, aber behavior bleibt gleich).
-
-#### C) `DetailsValueEditorSheet.swift` (510 LOC)
-**Ziel:** UI‑Branches entknoten; Completion‑Mechanik isolieren.
-
-Vorschlag:
-- `Mainscreen/Details/Editor/DetailsValueEditorSheet.swift` (Routing + Save/Delete)
-- `Mainscreen/Details/Editor/DetailsValueEditor+SingleLine.swift`
-- `Mainscreen/Details/Editor/DetailsValueEditor+MultiLine.swift`
-- `Mainscreen/Details/Editor/DetailsValueEditor+Numbers.swift`
-- `Mainscreen/Details/Editor/DetailsValueEditor+DateToggleChoice.swift`
-- Completion:
-  - `Support/DetailsCompletion/*` ist schon da; ggf. `DetailsValueEditorCompletionCoordinator.swift` ergänzen.
-
-Risiko: **Low** (UI‑Split, kaum Logikänderung).
-
-#### D) `EntityAttributesAllListModel.swift` (630 LOC)
-**Ziel:** Wartbarkeit + gezielte Perf‑Optimierungen ohne große Architektur.
-
-Vorschlag:
-- `.../EntityAttributesAllListModel.swift` (public API + state)
-- `.../EntityAttributesAllListModel+Caching.swift` (pinned lookup, media sets, invalidation)
-- `.../EntityAttributesAllListModel+Grouping.swift` (makeGroups + headers)
-- `.../EntityAttributesAllListModel+Sorting.swift`
-
-Risiko: **Low‑Medium** (viel Code bewegt, aber behavior gleich).
-
-### 3.2 Cache-/Index‑Ideen (konkret)
-
-#### A) GraphCanvas: Precomputed render items
-- **Problem:** Rendering hängt an `positions` (per frame), aber vieles ist „static“: labels, icon paths, notes mapping.
-- **Idee:**
-  - Build `RenderNodeInfo` map: `NodeKey → (label, iconSymbol, imagePath, kind, baseRadius, ...)` wenn `nodes/labelCache/iconSymbolCache/imagePathCache` ändern.
-  - Build `RenderEdgeInfo` array: `[(aKey,bKey,type,isDimmed,isHighlighted,...)]` wenn `drawEdgesCache/lensCache` ändern.
-  - Canvas tick nutzt nur `positions` und liest die precomputed info.
-- **Invalidation keys:**
-  - Nodes/Edges mutation, lens settings, showAllLinksForSelection.
-
-#### B) EntitiesHomeLoader: Cache invalidation hooks
-- TTL Cache ist gut; zusätzlich helfen klare invalidations:
-  - Bei Entity Add/Delete/Rename: `EntitiesHomeLoader.invalidateCache(for:)`.
-  - Bei Link Add/Delete: invalidate linkCountsCache.
-
-#### C) Details Completion Index
-- Der Index wird im Sheet warm geladen (`DetailsValueEditorSheet.warmUpCompletionIndexIfNeeded`).
-- **Hebel:** Index‑Load im Hintergrund, sobald aktive graphID gesetzt wird (z. B. in `AppRootView.bootstrapGraphing()`), um ersten Editor‑Open zu beschleunigen.
-
-### 3.3 Vereinheitlichungen (Patterns, Services, DI)
-
-#### A) „Loader“ Interface
-Viele Loader haben das gleiche Muster:
-- `configure(container:)`
-- `loadSnapshot(...)`
-
-Ein sehr kleiner, optionaler Schritt:
-- Protokoll `ModelContainerConfigurable` + `SnapshotLoader` (nur für Code‑Lesbarkeit).
-
-#### B) Logger
-- Ein Teil nutzt `BMLog.*`, ein Teil erstellt `Logger(subsystem:..., category:...)`.
-- Hebel: konsequent `BMLog` verwenden oder `BMLog.make(category:)` anbieten.
-
----
-
-## 4) Risiken & Edge Cases
-
-### 4.1 Datenverlust / Migration
-- **GraphID optional** (MetaEntity/MetaAttribute/MetaLink/MetaAttachment):
-  - Migration existiert (`GraphBootstrap`, `AttachmentGraphIDMigration`).
-  - Risiko: neue Queries filtern nach `graphID == gid` → legacy records (nil) werden unsichtbar, wenn Migration nicht läuft.
-
-### 4.2 Offline + Multi‑Device
-- Offline wird von SwiftData gehandhabt (**UNKNOWN**: konkrete UX für Konflikte/merge).
-- Risiko: parallel edits → „last write wins“ oder merges? → muss ggf. über UI/Logging sichtbar gemacht werden.
-
-### 4.3 Security / Lock
-- Graph Lock ist implementiert über `GraphLockCoordinator` + `GraphUnlockView`.
-- `AppRootView` debounced background lock, um System‑Picker nicht zu zerlegen.
-- **Model‑Risiko:** `MetaEntity` und `MetaAttribute` enthalten ebenfalls Lock‑Felder (`Models.swift`), die aber nicht sichtbar verwendet werden (siehe grep). → möglicher Ballast.
-
-### 4.4 Attachments/Media
-- `MetaAttachment.fileData` ist external storage → kann on‑demand geladen werden.
-- Hydrator/Store schützen vor stampedes, aber:
-  - Große Dateien können Memory pressure verursachen (Data im RAM beim Schreiben).
-  - Cleanup flows müssen robust sein (Settings maintenance).
-
----
-
-## 5) Observability / Debuggability
-
-### Was existiert
-- `Observability/BMObservability.swift`:
-  - `BMLog.load`, `BMLog.expand`, `BMLog.physics`
-  - `BMDuration` für timing.
-- Physics Logging: `GraphCanvasView+Physics.swift` loggt avg/max ms.
-
-### Konkrete Verbesserungen
-- Loader timing:
-  - In `GraphCanvasDataLoader.loadSnapshot` und `GraphStatsLoader.loadDashboardSnapshot` mit `BMDuration` messen und `BMLog.load` loggen (nicht nur `Logger(category:...)`).
-- Cancellation logging:
-  - Wenn `CancellationError`, bewusst nicht als „Fehler“ loggen, aber counts/metrics sammeln.
-- Repro‑Checklists:
-  - GraphCanvas perf: nodes=140, links=800, selection toggles, zoom/pan stress.
-  - Attachment cache: cache clear, dann gallery scroll.
-
----
-
-## 6) Open Questions (alles UNKNOWN)
-- CloudKit DB/Scope: `cloudKitDatabase: .automatic` — garantiert private DB? (**UNKNOWN**)
-- Release/TestFlight: Entitlements `aps-environment = development` — muss das getrennt werden? (**UNKNOWN**)
-- Konfliktauflösung bei SwiftData CloudKit: sichtbar machen? (**UNKNOWN**)
-- Sind Node‑Locks (Entity/Attribute) geplant oder Altlast? (**UNKNOWN**)
-- Welche maximalen Datenmengen sind Ziel (Nodes/Links/Attachments)? (**UNKNOWN**)
-
----
-
-## 7) First 3 Refactors I would do (P0)
-
-### P0.1 — Models.swift splitten (behavior‑identisch)
-- **Ziel:** Weniger Merge‑Konflikte + klarere Ownership pro Model + schnelleres Arbeiten.
+# ARCHITECTURE_NOTES
+
+Last updated: 2026-02-23
+
+Scope note: This document is derived from the uploaded repo snapshot. Anything not directly evidenced in code is marked as **UNKNOWN** and tracked in *Open Questions*.
+
+## Repo-scale quick facts
+- Swift files: 261
+- Total Swift LOC (raw line count): 34868
+- Deployment target: iOS 26.0 (`BrainMesh.xcodeproj/project.pbxproj`)
+- Persistence: SwiftData + CloudKit `.automatic` (private DB) (BrainMesh/BrainMeshApp.swift)
+- Only file importing `CloudKit`: BrainMesh/Settings/SyncRuntime.swift
+
+## Big files list (Top 15 by line count)
+| Lines | File | Purpose | Why risky |
+|---:|---|---|---|
+| 630 | `BrainMesh/Mainscreen/EntityDetail/EntityAttributes/EntityAttributesAllListModel.swift` | Entity → Attributes snapshot model (row building + caching + sort/filter) | Large stateful list model; correctness/perf regressions affect core navigation |
+| 532 | `BrainMesh/GraphCanvas/GraphCanvasView+Rendering.swift` | Canvas drawing (edges/nodes/labels/notes + per-frame caches) | Hot path: per-frame loops + dict rebuilds; scales with maxLinks |
+| 504 | `BrainMesh/Onboarding/OnboardingSheetView.swift` | Onboarding host sheet (routing + pickers + progress) | Complex routing state; sheet stacking regressions |
+| 491 | `BrainMesh/Mainscreen/NodeDetailShared/NodeDetailShared+Core.swift` | Shared detail UI building blocks (hero/pills/sections) | Shared across entity+attribute; high blast radius |
+| 411 | `BrainMesh/GraphCanvas/GraphCanvasDataLoader.swift` | Off-main graph snapshot loading (SwiftData fetch + BFS neighborhood) | Perf-sensitive: BFS + multi-fetch; detached tasks; snapshot sendability |
+| 410 | `BrainMesh/Mainscreen/NodeDetailShared/NodeImagesManageView.swift` | Node gallery management list (paging, thumb, delete) | Can become scroll hot path (thumbs + cache misses) |
+| 401 | `BrainMesh/Mainscreen/AttributeDetail/AttributeDetailView.swift` | Attribute detail host view (queries + sheets + layout) | Multiple queries/sheets; easy to add fetch-in-render regressions |
+| 394 | `BrainMesh/Mainscreen/NodeDetailShared/NodeDetailShared+Connections.swift` | Shared connections UI + routing (incoming/outgoing segments) | Shared routing; correctness bugs show everywhere |
+| 388 | `BrainMesh/Mainscreen/EntitiesHome/EntitiesHomeView.swift` | Entities tab host view (search, debounce, layout switching) | Task-trigger storms and invalidation risk |
+| 388 | `BrainMesh/Mainscreen/Details/NodeDetailsValuesCard.swift` | Details values rendering (custom fields) | Large per-field render; can become expensive with many fields |
+| 381 | `BrainMesh/Mainscreen/EntitiesHome/EntitiesHomeLoader.swift` | Off-main entities snapshot loader (search + counts caches) | Can scan entire graph for counts; cancellation correctness |
+| 362 | `BrainMesh/Mainscreen/NodeDetailShared/NodeDetailShared+MediaGallery.swift` | Shared media gallery UI (grid/tiles/viewer routing) | Thumbnail/materialization coordination risk |
+| 357 | `BrainMesh/Icons/AllSFSymbolsPickerView.swift` | SF Symbols picker (search/index + grid) | Memory + paging risk (large datasets) |
+| 356 | `BrainMesh/GraphCanvas/GraphCanvasScreen.swift` | Graph tab host view (state machine, sheets, reload triggers) | Many state vars and triggers; reload storms |
+| 346 | `BrainMesh/Mainscreen/BulkLinkView.swift` | Bulk link creation (multi-select + duplicate handling) | Correctness (duplicates/bidirectional links) |
+
+## Hot path analysis
+
+### Rendering / scrolling
+
+#### Graph canvas rendering (Canvas draw loop)
+- File: `BrainMesh/GraphCanvas/GraphCanvasView+Rendering.swift`
+- Concrete reasons:
+  - `renderCanvas(...)` loops over `drawEdges` and `nodes` on every redraw.
+  - `buildFrameCache(...)` rebuilds dictionaries (`screenPoints`, `labelOffsets`) and reconstructs `keyByIdentifier` every frame.
+  - Notes rendering can scan `directedEdgeNotes` via `prepareOutgoingNotes(...)` when `alphas.showNotes` and `selection != nil`.
+- Risk patterns:
+  - **Per-frame dictionary rebuild** → allocations + hashing on the render thread.
+  - **Edge loop scales with maxLinks** (default `maxLinks = 800` in `BrainMesh/GraphCanvas/GraphCanvasScreen.swift`).
+
+#### Graph canvas physics (30 FPS timer + O(n²) repulsion)
+- File: `BrainMesh/GraphCanvas/GraphCanvasView+Physics.swift`
+- Concrete reasons:
+  - Timer: `Timer.scheduledTimer(withTimeInterval: 1.0/30.0, repeats: true)` drives `stepSimulation()`.
+  - `stepSimulation()` performs a pair loop over nodes for repulsion/collision: O(n²).
+  - `positions = pos` / `velocities = vel` updates every tick → frequent SwiftUI invalidations.
+- Existing mitigations (evidence in code):
+  - Spotlight physics: simulate only `physicsRelevant` when selection is active.
+  - Sleep: stops timer after ~3 seconds of low motion (idle tick counter logic).
+
+#### Graph canvas data loading
+- Files: `BrainMesh/GraphCanvas/GraphCanvasScreen+Loading.swift`, `BrainMesh/GraphCanvas/GraphCanvasDataLoader.swift`
+- Concrete reasons:
+  - Loader uses detached `ModelContext` and BFS neighborhood mode.
+  - Predicates include `frontierIDs.contains(...)` and `visibleIDs.contains(...)` (captured arrays inside `#Predicate`).
+  - `GraphCanvasScreen.loadGraph(...)` commits snapshot state “in one go” to avoid partial state overrides.
+- Risk patterns:
+  - **Large captured arrays in predicates** → can degrade fetch performance for large neighborhoods.
+  - **Multiple fetch passes per hop** in neighborhood mode.
+
+#### EntitiesHome search + counts
+- Files: `BrainMesh/Mainscreen/EntitiesHome/EntitiesHomeView.swift`, `BrainMesh/Mainscreen/EntitiesHome/EntitiesHomeLoader.swift`
+- Concrete reasons:
+  - View triggers `.task(id: taskToken)` with debounce (250ms).
+  - Loader may compute counts by fetching *all* `MetaAttribute` and/or *all* `MetaLink` for a graph on cache miss (`computeAttributeCounts`, `computeLinkCounts`).
+  - Counts cache TTL is short (`countsCacheTTLSeconds = 8`).
+- Risk patterns:
+  - **Full table scans** on cache miss.
+  - **Cancellation correctness** is required to avoid UI flicker/stale state.
+
+### Sync / storage
+
+#### SwiftData container init + fallback
+- File: `BrainMesh/BrainMeshApp.swift`
+- Evidence:
+  - Creates CloudKit-enabled container via `cloudKitDatabase: .automatic`.
+  - Debug: CloudKit init failure → `fatalError`.
+  - Release: fallback to local-only ModelConfiguration; updates `SyncRuntime.storageMode`.
+
+#### Disk cache hydration
+- Image hydration: `BrainMesh/ImageHydrator.swift`
+  - Scans `MetaEntity` and `MetaAttribute` where `imageData != nil`.
+  - Writes deterministic JPEG cache files; saves SwiftData only if `context.hasChanges`.
+- Attachment hydration: `BrainMesh/Attachments/AttachmentHydrator.swift`
+  - Called from UI cells; deduped per attachment id.
+  - Fetches record by id in background `ModelContext`, writes bytes to Application Support.
+- Risk patterns:
+  - **Disk pressure** (local caches can grow).
+  - **ExternalStorage blobs** (CloudKit sync payloads) — max sizes enforcement is **UNKNOWN**.
+
+#### Legacy graphID migration
+- File: `BrainMesh/GraphBootstrap.swift`
+- Evidence:
+  - Cheap existence checks use `fetchLimit = 1`.
+  - Bulk backfill of `graphID` for entities/attributes/links, then `modelContext.save()`.
+- Risk:
+  - Runs from `AppRootView.bootstrapGraphing()` (BrainMesh/AppRootView.swift) on MainActor; could stall startup for huge legacy datasets.
+
+### Concurrency
+
+#### Actor loader pattern (general)
+- Central configuration: `BrainMesh/Support/AppLoadersConfigurator.swift`
+- Common structure across loaders:
+  - Store `AnyModelContainer`
+  - Create background `ModelContext` (`autosaveEnabled = false`)
+  - `Task.detached(priority: .utility)` for fetch work
+  - DTO snapshots returned to UI
+
+#### Sharp edges
+- `@unchecked Sendable` snapshots exist (e.g. `GraphCanvasSnapshot`, `GraphStatsSnapshot`):
+  - Contract: value-only; must not include SwiftData models.
+- Detached tasks must not capture SwiftData models or MainActor state:
+  - Code usually copies primitive inputs before detaching, but this is easy to regress.
+
+## Refactor map
+
+### GraphCanvas: reduce per-frame allocations
+- Target files:
+  - `BrainMesh/GraphCanvas/GraphCanvasView+Rendering.swift`
+  - `BrainMesh/GraphCanvas/GraphCanvasView+Physics.swift`
+- Concrete options:
+  - Persist `keyByIdentifier` and rebuild only when node set changes.
+  - Reuse buffers for `screenPoints`/`labelOffsets` (avoid new dictionaries each frame).
+  - (Higher risk) replace O(n²) collision checks with spatial hashing / grid buckets.
+
+### Details pinned values: add graph scoping
+- Evidence: `EntityAttributesAllListModel+Lookups.fetchPinnedValuesLookup` fetches values by `fieldID` (no graph scope).
+- Safer option:
+  - Add `v.graphID == gid` filter when gid is known.
+  - Optionally in-memory filter by attributeIDs of current entity.
+
+### EntitiesHome counts: replace TTL with mutation-driven invalidation
+- Evidence: TTL cache (8s) and full scans on cache miss.
+- Option:
+  - Invalidate cache on create/delete/update of entities/attributes/links.
+  - Requires identifying mutation points (e.g. `AddEntityView`, `AddAttributeView`, `AddLinkView`, `BulkLinkView`).
+
+### Big SwiftUI compile units
+- Candidates:
+  - `NodeDetailShared+Core.swift`
+  - `EntitiesHomeView.swift`
+  - `OnboardingSheetView.swift`
+- Goal:
+  - Reduce blast radius + compile churn by extracting subviews.
+
+## Risks & edge cases
+- Denormalized link labels must be updated on rename:
+  - `NodeRenameService` in `BrainMesh/Mainscreen/LinkCleanup.swift` is the only evidenced mechanism.
+- Debug vs Release diverges for CloudKit init failure:
+  - fatal vs fallback (`BrainMesh/BrainMeshApp.swift`).
+- Attachment size/quota policy is **UNKNOWN**:
+  - No explicit enforcement found in attachment import/hydration paths.
+- Graph lock state is in-memory:
+  - `GraphLockCoordinator.unlockedGraphIDs` is not persisted; background lock clears it (`AppRootView` schedules `graphLock.lockAll()`).
+
+## Observability / Debuggability
+- Central helpers:
+  - `BMLog` categories + `BMDuration` in `BrainMesh/Observability/BMObservability.swift`
+- Graph load logs:
+  - `BMLog.load` in `BrainMesh/GraphCanvas/GraphCanvasScreen+Loading.swift`
+- Physics logs:
+  - `BMLog.physics` in `BrainMesh/GraphCanvas/GraphCanvasView+Physics.swift`
+
+## Open questions (UNKNOWN)
+1. CloudKit conflict behavior and merge policy beyond SwiftData defaults?
+2. Versioned schema migration strategy vs automatic migration only?
+3. Attachment size limits or compression policy?
+4. Collaboration/sharing roadmap (no CKShare evidence today)?
+5. Scale targets (max nodes/links/attachments) to guide algorithm choices?
+6. Cache pruning strategy (manual vs automatic)?
+7. Node-level locking roadmap (lock fields exist on Entity/Attribute but not enforced today)?
+
+## First 3 refactors I would do (P0)
+
+### P0.1 — Scope pinned detail value fetches by graph
+- **Ziel:** DB-Arbeit reduzieren beim Bauen/Sortieren der pinned Chips.
 - **Betroffene Dateien:**
-  - `BrainMesh/Models.swift` → neue Files unter `BrainMesh/Models/*` (siehe Refactor Map 3.1A)
-  - `BrainMesh/BrainMeshApp.swift` (nur Imports/Schema bleibt, aber ggf. keine Änderung nötig)
-- **Risiko:** Low
-- **Erwarteter Nutzen:** High für Wartbarkeit, Medium für Compile‑Zeiten.
+  - `BrainMesh/Mainscreen/EntityDetail/EntityAttributes/EntityAttributesAllListModel+Lookups.swift`
+  - `BrainMesh/Mainscreen/EntityDetail/EntityAttributes/EntityAttributesAllListModel.swift`
+- **Risiko:** niedrig
+- **Erwarteter Nutzen:** schnellere Attribute-Listen bei pinned Feldern; bessere Multi-Graph-Skalierung
 
-### P0.2 — GraphCanvas Rendering in Passes aufteilen
-- **Ziel:** Render‑Pfad besser messbar/änderbar; Regressionen leichter isolieren.
+### P0.2 — Stabilize GraphCanvas per-frame caches
+- **Ziel:** weniger per-frame Allocations/Hashing im Canvas rendern.
 - **Betroffene Dateien:**
   - `BrainMesh/GraphCanvas/GraphCanvasView+Rendering.swift`
-  - ggf. neue Files unter `BrainMesh/GraphCanvas/Rendering/*`
-- **Risiko:** Low‑Medium (visuelle Regressionen möglich)
-- **Erwarteter Nutzen:** High für Wartbarkeit + Perf‑Tuning.
+  - optional: `BrainMesh/GraphCanvas/GraphCanvasView.swift`
+- **Risiko:** mittel
+- **Erwarteter Nutzen:** weniger dropped frames beim Pan/Zoom und bei hohen Link-Zahlen
 
-### P0.3 — DetailsValueEditorSheet modularisieren
-- **Ziel:** Feature‑Entwicklung an Details (Completion/Chips/Typing) ohne „monolithisches Sheet“.
+### P0.3 — Replace TTL-based counts caching
+- **Ziel:** Such-Tippen unabhängig von der Gesamtgröße des Graphen machen.
 - **Betroffene Dateien:**
-  - `BrainMesh/Mainscreen/Details/DetailsValueEditorSheet.swift`
-  - `BrainMesh/Support/DetailsCompletion/*` (ggf. neue kleine Coordinator‑Helper)
-- **Risiko:** Low
-- **Erwarteter Nutzen:** Medium‑High (weniger Bugs, schnellere Iteration).
+  - `BrainMesh/Mainscreen/EntitiesHome/EntitiesHomeLoader.swift`
+  - Mutation-Punkte: `AddEntityView`, `AddAttributeView`, `AddLinkView`, `BulkLinkView`
+- **Risiko:** mittel
+- **Erwarteter Nutzen:** weniger Full-Scans; stabilere UI beim Tippen
