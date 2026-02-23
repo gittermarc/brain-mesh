@@ -31,6 +31,11 @@ struct GraphStatsView: View {
     @State var loadError: String? = nil
     @State var loadTask: Task<Void, Never>? = nil
 
+    /// Lazy per-graph counts state ("Pro Graph").
+    @State var isLoadingPerGraphCounts: Bool = false
+    @State var perGraphLoadError: String? = nil
+    @State var perGraphLoadTask: Task<Void, Never>? = nil
+
     /// Soft refresh state: keep the last snapshot on screen while recomputing.
     @State var isRefreshing: Bool = false
 
@@ -40,12 +45,22 @@ struct GraphStatsView: View {
     /// Last load input used by `.task(id:)` to compute/dedupe reloads.
     @State private var lastLoadKey: StatsLoadKey? = nil
 
+    /// Token to guard against late-arriving per-graph count loads.
+    @State private var currentPerGraphLoadToken: UUID = UUID()
+
+    /// Last per-graph input used to compute/dedupe "Pro Graph" loads.
+    @State private var lastPerGraphKey: PerGraphCountsLoadKey? = nil
+
     @State var showPerGraph = false
 
     private struct StatsLoadKey: Hashable {
         let graphIDs: [UUID]
         let activeGraphID: UUID?
         let days: Int
+    }
+
+    private struct PerGraphCountsLoadKey: Hashable {
+        let graphIDs: [UUID]
     }
 
     // ✅ Dedupe by UUID (falls Cloud/Bootstrap doppelt geliefert hat)
@@ -118,9 +133,18 @@ struct GraphStatsView: View {
             .task(id: statsLoadKey) {
                 _ = await triggerReload(for: statsLoadKey, force: false)
             }
+            .onChange(of: showPerGraph) { _, newValue in
+                if newValue {
+                    _ = triggerPerGraphCountsReload(for: perGraphCountsLoadKey, force: false)
+                }
+            }
             .refreshable {
                 let task = await triggerReload(for: statsLoadKey, force: true)
                 await task?.value
+
+                if showPerGraph {
+                    await perGraphLoadTask?.value
+                }
             }
         }
     }
@@ -132,6 +156,12 @@ struct GraphStatsView: View {
             graphIDs: uniqueGraphs.map(\.id),
             activeGraphID: activeGraphID,
             days: 7
+        )
+    }
+
+    private var perGraphCountsLoadKey: PerGraphCountsLoadKey {
+        PerGraphCountsLoadKey(
+            graphIDs: uniqueGraphs.map(\.id)
         )
     }
 
@@ -161,13 +191,16 @@ struct GraphStatsView: View {
             activeTrends = nil
         }
 
+        // If the graph list changed, prune stale per-graph entries.
+        prunePerGraphCounts(allowedGraphIDs: Set(key.graphIDs))
+
         let task = Task { @MainActor [key] in
             do {
                 // In case the loader is configured in a detached task during app startup,
                 // yield once before the first attempt to reduce race likelihood.
                 await Task.yield()
 
-                let snapshot = try await GraphStatsLoader.shared.loadSnapshot(
+                let snapshot = try await GraphStatsLoader.shared.loadDashboardSnapshot(
                     graphIDs: key.graphIDs,
                     activeGraphID: key.activeGraphID,
                     days: key.days
@@ -178,12 +211,21 @@ struct GraphStatsView: View {
                 guard currentLoadToken == token else { return }
 
                 total = snapshot.total
-                perGraph = snapshot.perGraph
+                // Merge partial dashboard counts into existing map (keep already-lazy-loaded per-graph counts).
+                for (k, v) in snapshot.perGraph {
+                    perGraph[k] = v
+                }
+                prunePerGraphCounts(allowedGraphIDs: Set(key.graphIDs))
                 dashboardGraphID = snapshot.dashboardGraphID
                 activeMedia = snapshot.activeMedia
                 activeStructure = snapshot.activeStructure
                 activeTrends = snapshot.activeTrends
                 isRefreshing = false
+
+                // If "Pro Graph" is currently expanded, ensure per-graph counts exist.
+                if showPerGraph {
+                    _ = triggerPerGraphCountsReload(for: perGraphCountsLoadKey, force: force)
+                }
             } catch {
                 if Task.isCancelled {
                     if currentLoadToken == token {
@@ -199,5 +241,77 @@ struct GraphStatsView: View {
 
         loadTask = task
         return task
+    }
+
+    @MainActor
+    private func triggerPerGraphCountsReload(for key: PerGraphCountsLoadKey, force: Bool) -> Task<Void, Never>? {
+        guard key.graphIDs.isEmpty == false else { return nil }
+
+        let alreadyHaveAllCounts = key.graphIDs.allSatisfy { perGraph[$0] != nil }
+        if !force, alreadyHaveAllCounts {
+            return perGraphLoadTask
+        }
+
+        // Dedupe: don't restart a running per-graph load for the same key unless forced.
+        if !force, lastPerGraphKey == key, isLoadingPerGraphCounts {
+            return perGraphLoadTask
+        }
+
+        lastPerGraphKey = key
+
+        perGraphLoadTask?.cancel()
+        perGraphLoadError = nil
+        isLoadingPerGraphCounts = true
+
+        let token = UUID()
+        currentPerGraphLoadToken = token
+
+        let task = Task { @MainActor [key] in
+            do {
+                await Task.yield()
+
+                let counts = try await GraphStatsLoader.shared.loadPerGraphCounts(graphIDs: key.graphIDs)
+                try Task.checkCancellation()
+
+                guard currentPerGraphLoadToken == token else { return }
+
+                for (k, v) in counts {
+                    perGraph[k] = v
+                }
+                prunePerGraphCounts(allowedGraphIDs: Set(key.graphIDs))
+                isLoadingPerGraphCounts = false
+            } catch {
+                if Task.isCancelled {
+                    if currentPerGraphLoadToken == token {
+                        isLoadingPerGraphCounts = false
+                    }
+                    return
+                }
+                guard currentPerGraphLoadToken == token else { return }
+                perGraphLoadError = error.localizedDescription
+                isLoadingPerGraphCounts = false
+            }
+        }
+
+        perGraphLoadTask = task
+        return task
+    }
+
+    @MainActor
+    private func prunePerGraphCounts(allowedGraphIDs: Set<UUID>) {
+        var pruned: [UUID?: GraphCounts] = [:]
+
+        if let legacy = perGraph[nil] {
+            pruned[nil] = legacy
+        }
+
+        for (k, v) in perGraph {
+            guard let id = k else { continue }
+            if allowedGraphIDs.contains(id) {
+                pruned[id] = v
+            }
+        }
+
+        perGraph = pruned
     }
 }

@@ -42,6 +42,18 @@ extension GraphStatsView {
             VStack(alignment: .leading, spacing: 10) {
                 DisclosureGroup(isExpanded: $showPerGraph) {
                     VStack(spacing: 12) {
+                        if let perGraphLoadError {
+                            HStack(spacing: 10) {
+                                Image(systemName: "exclamationmark.triangle")
+                                    .foregroundStyle(.secondary)
+                                Text(perGraphLoadError)
+                                    .font(.footnote)
+                                    .foregroundStyle(.secondary)
+                                Spacer()
+                            }
+                            .padding(.bottom, 4)
+                        }
+
                         ForEach(uniqueGraphs) { g in
                             GraphStatsCard(
                                 title: g.name,
@@ -56,6 +68,12 @@ extension GraphStatsView {
                         Text("Pro Graph")
                             .font(.headline)
                         Spacer()
+
+                        if showPerGraph && isLoadingPerGraphCounts {
+                            ProgressView()
+                                .controlSize(.small)
+                        }
+
                         Text("\(uniqueGraphs.count)")
                             .font(.subheadline)
                             .foregroundStyle(.secondary)
