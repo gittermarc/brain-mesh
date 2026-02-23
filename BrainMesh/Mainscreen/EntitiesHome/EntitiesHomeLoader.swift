@@ -43,7 +43,7 @@ actor EntitiesHomeLoader {
     private var container: AnyModelContainer? = nil
     private let log = Logger(subsystem: "BrainMesh", category: "EntitiesHomeLoader")
 
-    // MARK: - Attribute count cache (avoid re-fetching all attributes while typing)
+    // MARK: - Counts cache (avoid re-fetching all attributes/links while typing or toggling views)
 
     private struct GraphScopeKey: Hashable, Sendable {
         let graphID: UUID?
@@ -63,6 +63,7 @@ actor EntitiesHomeLoader {
     private var linkCountsCache: [GraphScopeKey: LinkCountsCacheEntry] = [:]
 
     /// Small TTL so counts don't stay stale for long, but typing/search doesn't repeatedly load everything.
+    /// Cache is graph-wide to keep counts correct for any search subset (no partial-cache zeros).
     private let countsCacheTTLSeconds: TimeInterval = 8
 
     func configure(container: AnyModelContainer) {
@@ -115,10 +116,8 @@ actor EntitiesHomeLoader {
 
         try Task.checkCancellation()
 
-        let entityIDs = Set(entities.map { $0.id })
-
         let now = Date()
-        let shouldUseCache = !term.isEmpty
+        let shouldUseCache = true
 
         let attrCounts: [UUID: Int]
         if includeAttrs {
@@ -129,8 +128,7 @@ actor EntitiesHomeLoader {
             } else {
                 let computed = try EntitiesHomeLoader.computeAttributeCounts(
                     context: context,
-                    graphID: gid,
-                    relevantEntityIDs: entityIDs
+                    graphID: gid
                 )
                 try Task.checkCancellation()
                 storeCounts(computed, for: gid, now: now)
@@ -149,8 +147,7 @@ actor EntitiesHomeLoader {
             } else {
                 let computed = try EntitiesHomeLoader.computeLinkCounts(
                     context: context,
-                    graphID: gid,
-                    relevantEntityIDs: entityIDs
+                    graphID: gid
                 )
                 try Task.checkCancellation()
                 storeLinkCounts(computed, for: gid, now: now)
@@ -307,11 +304,8 @@ actor EntitiesHomeLoader {
 
     private static func computeAttributeCounts(
         context: ModelContext,
-        graphID: UUID?,
-        relevantEntityIDs: Set<UUID>
+        graphID: UUID?
     ) throws -> [UUID: Int] {
-        if relevantEntityIDs.isEmpty { return [:] }
-
         try Task.checkCancellation()
 
         let gid = graphID
@@ -327,17 +321,16 @@ actor EntitiesHomeLoader {
             let fd = FetchDescriptor<MetaAttribute>()
             attrs = try context.fetch(fd)
         }
+
         var counts: [UUID: Int] = [:]
-        counts.reserveCapacity(min(relevantEntityIDs.count, 512))
+        counts.reserveCapacity(min(attrs.count / 3, 2048))
 
         for (idx, a) in attrs.enumerated() {
             if idx % 512 == 0 {
                 try Task.checkCancellation()
             }
             guard let owner = a.owner else { continue }
-            let ownerID = owner.id
-            guard relevantEntityIDs.contains(ownerID) else { continue }
-            counts[ownerID, default: 0] += 1
+            counts[owner.id, default: 0] += 1
         }
 
         return counts
@@ -345,11 +338,8 @@ actor EntitiesHomeLoader {
 
     private static func computeLinkCounts(
         context: ModelContext,
-        graphID: UUID?,
-        relevantEntityIDs: Set<UUID>
+        graphID: UUID?
     ) throws -> [UUID: Int] {
-        if relevantEntityIDs.isEmpty { return [:] }
-
         try Task.checkCancellation()
 
         let gid = graphID
@@ -368,23 +358,17 @@ actor EntitiesHomeLoader {
 
         let entityKindRaw = NodeKind.entity.rawValue
         var counts: [UUID: Int] = [:]
-        counts.reserveCapacity(min(relevantEntityIDs.count, 512))
+        counts.reserveCapacity(min(links.count / 2, 4096))
 
         for (idx, l) in links.enumerated() {
             if idx % 512 == 0 {
                 try Task.checkCancellation()
             }
             if l.sourceKindRaw == entityKindRaw {
-                let sid = l.sourceID
-                if relevantEntityIDs.contains(sid) {
-                    counts[sid, default: 0] += 1
-                }
+                counts[l.sourceID, default: 0] += 1
             }
             if l.targetKindRaw == entityKindRaw {
-                let tid = l.targetID
-                if relevantEntityIDs.contains(tid) {
-                    counts[tid, default: 0] += 1
-                }
+                counts[l.targetID, default: 0] += 1
             }
         }
 
