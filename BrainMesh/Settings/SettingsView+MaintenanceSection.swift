@@ -7,7 +7,7 @@
 
 import SwiftUI
 
-extension SettingsView {
+extension SyncMaintenanceView {
     var maintenanceSection: some View {
         Section("Wartung") {
             VStack(alignment: .leading, spacing: 4) {

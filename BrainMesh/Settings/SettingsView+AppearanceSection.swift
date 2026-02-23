@@ -8,13 +8,16 @@
 import SwiftUI
 
 extension SettingsView {
-    var appearanceSection: some View {
-        Section("Darstellung") {
-            NavigationLink {
-                DisplaySettingsView()
-            } label: {
-                Label("Darstellung", systemImage: "paintpalette")
-            }
+    var displayCard: some View {
+        NavigationLink {
+            DisplaySettingsView()
+        } label: {
+            SettingsHubCardRow(
+                systemImage: "paintpalette",
+                title: "Darstellung",
+                subtitle: "Look, Presets & Performance"
+            )
         }
+        .settingsHubCardStyle(showsAccessoryChevron: false)
     }
 }

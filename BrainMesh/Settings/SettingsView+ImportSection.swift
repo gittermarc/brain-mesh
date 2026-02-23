@@ -7,7 +7,7 @@
 
 import SwiftUI
 
-extension SettingsView {
+extension ImportSettingsView {
     var importSection: some View {
         Section {
             Toggle("Videos beim Import komprimieren", isOn: $compressVideosOnImport)

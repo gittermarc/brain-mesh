@@ -7,7 +7,7 @@
 
 import SwiftUI
 
-extension SettingsView {
+extension SyncMaintenanceView {
 
     var syncSection: some View {
         Section {

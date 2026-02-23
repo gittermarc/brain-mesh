@@ -17,53 +17,20 @@ struct SettingsView: View {
     }
 
     @Environment(\.dismiss) private var dismiss
-    @Environment(\.modelContext) private var modelContext
     @EnvironmentObject var onboarding: OnboardingCoordinator
 
-    // Not `private`, so the sync diagnostics section (separate file) can access it.
-    @ObservedObject var syncRuntime = SyncRuntime.shared
-
-    @AppStorage(VideoImportPreferences.compressVideosOnImportKey)
-    var compressVideosOnImport: Bool = VideoImportPreferences.defaultCompressVideosOnImport
-
-    @AppStorage(VideoImportPreferences.videoCompressionQualityKey)
-    var videoCompressionQualityRaw: String = VideoImportPreferences.defaultQuality.rawValue
-
-    @AppStorage(ImageGalleryImportPreferences.galleryImageCompressionPresetKey)
-    var galleryImageCompressionPresetRaw: String = ImageGalleryImportPreferences.defaultPreset.rawValue
-
-    @State var isRebuildingImageCache: Bool = false
-    @State var isClearingAttachmentCache: Bool = false
-
-    @State var imageCacheSizeText: String = "—"
-    @State var attachmentCacheSizeText: String = "—"
-
-    @State var alertState: AlertState? = nil
-
+    @State private var showImportSettings: Bool = false
     @State var showDetailsIntro: Bool = false
 
     var body: some View {
         List {
             helpSection
-            syncSection
-            maintenanceSection
-            importSection
-            appearanceSection
+            hubSection
             infoSection
             SettingsAboutSection()
         }
         .navigationTitle("Einstellungen")
         .navigationBarTitleDisplayMode(.inline)
-        .task {
-            refreshCacheSizes()
-        }
-        .alert(item: $alertState) { state in
-            Alert(
-                title: Text(state.title),
-                message: Text(state.message),
-                dismissButton: .default(Text("OK"))
-            )
-        }
         .toolbar {
             if showDoneButton {
                 ToolbarItem(placement: .topBarTrailing) {
@@ -73,6 +40,42 @@ struct SettingsView: View {
         }
         .sheet(isPresented: $showDetailsIntro) {
             DetailsOnboardingSheetView()
+        }
+        .sheet(isPresented: $showImportSettings) {
+            NavigationStack {
+                ImportSettingsView()
+            }
+        }
+    }
+
+    private var hubSection: some View {
+        Section {
+            displayCard
+
+            Button {
+                showImportSettings = true
+            } label: {
+                SettingsHubCardRow(
+                    systemImage: "square.and.arrow.down",
+                    title: "Import",
+                    subtitle: "Bild- und Video-Kompression"
+                )
+            }
+            .buttonStyle(.plain)
+            .settingsHubCardStyle(showsAccessoryChevron: true)
+
+            NavigationLink {
+                SyncMaintenanceView()
+            } label: {
+                SettingsHubCardRow(
+                    systemImage: "arrow.triangle.2.circlepath",
+                    title: "Sync & Wartung",
+                    subtitle: "iCloud-Status und lokale Caches"
+                )
+            }
+            .settingsHubCardStyle(showsAccessoryChevron: false)
+        } header: {
+            EmptyView()
         }
     }
 
