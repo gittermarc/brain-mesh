@@ -18,6 +18,18 @@ extension SettingsView {
                 }
             }
             .disabled(!compressVideosOnImport)
+
+            Picker("Bilder (Galerie) – Qualität", selection: galleryImageCompressionPresetBinding) {
+                ForEach(ImageGalleryCompressionPreset.allCases) { preset in
+                    Text(preset.title).tag(preset)
+                }
+            }
+
+            if galleryImageCompressionPresetBinding.wrappedValue == .original {
+                Text("Hinweis: \"Original\" kann iCloud-Speicher & Sync-Zeit deutlich erhöhen.")
+                    .font(.footnote)
+                    .foregroundStyle(.secondary)
+            }
         } header: {
             Text("Import")
         } footer: {

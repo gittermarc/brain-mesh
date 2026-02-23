@@ -53,4 +53,8 @@ enum BMAppStorageKeys {
 
     static let compressVideosOnImport = "BMCompressVideosOnImport"
     static let videoCompressionQuality = "BMVideoCompressionQuality"
+
+    // MARK: - Image import (gallery)
+
+    static let galleryImageCompressionPreset = "BMGalleryImageCompressionPreset"
 }

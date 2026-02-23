@@ -29,6 +29,9 @@ struct SettingsView: View {
     @AppStorage(VideoImportPreferences.videoCompressionQualityKey)
     var videoCompressionQualityRaw: String = VideoImportPreferences.defaultQuality.rawValue
 
+    @AppStorage(ImageGalleryImportPreferences.galleryImageCompressionPresetKey)
+    var galleryImageCompressionPresetRaw: String = ImageGalleryImportPreferences.defaultPreset.rawValue
+
     @State var isRebuildingImageCache: Bool = false
     @State var isClearingAttachmentCache: Bool = false
 

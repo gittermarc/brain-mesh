@@ -34,6 +34,18 @@ extension SettingsView {
         )
     }
 
+    var galleryImageCompressionPresetBinding: Binding<ImageGalleryCompressionPreset> {
+        Binding(
+            get: {
+                ImageGalleryCompressionPreset(rawValue: galleryImageCompressionPresetRaw)
+                    ?? ImageGalleryImportPreferences.defaultPreset
+            },
+            set: { newValue in
+                galleryImageCompressionPresetRaw = newValue.rawValue
+            }
+        )
+    }
+
     func refreshCacheSizes() {
         Task.detached(priority: .utility) {
             let formatter = ByteCountFormatter()

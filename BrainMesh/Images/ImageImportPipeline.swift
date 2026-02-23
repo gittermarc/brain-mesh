@@ -102,48 +102,65 @@ nonisolated enum ImageImportPipeline {
     /// Goal: look good in full screen, but avoid huge files.
     /// Target is around ~2.2 MB; if needed we reduce quality and/or scale.
     static func prepareJPEGForGallery(_ image: UIImage) -> Data? {
-        let targetBytes = 2_200_000
+        prepareJPEGForGallery(image, targetBytes: 2_200_000)
+    }
 
-        var maxDim: CGFloat = 2600
-        var resized = resizedToFit(image, maxDimension: maxDim)
-
-        var q: CGFloat = 0.86
-        var data = resized.jpegData(compressionQuality: q)
+    /// Prepares a JPEG for the detail-only gallery with an optional target size.
+    ///
+    /// - Parameters:
+    ///   - image: Decoded image.
+    ///   - targetBytes: Desired maximum size in bytes.
+    ///     Pass nil to avoid enforcing a target size ("Original" preset).
+    static func prepareJPEGForGallery(_ image: UIImage, targetBytes: Int?) -> Data? {
+        guard let targetBytes else {
+            // "Original": keep the decoded pixels (decode safety belt happens before this)
+            // and encode at very high quality without an enforced byte cap.
+            return image.jpegData(compressionQuality: 0.95)
+        }
 
         func tooBig(_ d: Data?) -> Bool {
             guard let d else { return true }
             return d.count > targetBytes
         }
 
-        while tooBig(data) && q > 0.62 {
-            q -= 0.06
-            data = resized.jpegData(compressionQuality: q)
+        struct Stage {
+            let maxDim: CGFloat
+            let startQuality: CGFloat
+            let minQuality: CGFloat
+            let step: CGFloat
         }
 
-        if tooBig(data) {
-            maxDim = 2200
-            resized = resizedToFit(resized, maxDimension: maxDim)
-            q = 0.82
-            data = resized.jpegData(compressionQuality: q)
+        var stages: [Stage] = [
+            Stage(maxDim: 2600, startQuality: 0.86, minQuality: 0.62, step: 0.06),
+            Stage(maxDim: 2200, startQuality: 0.82, minQuality: 0.58, step: 0.06),
+            Stage(maxDim: 1900, startQuality: 0.78, minQuality: 0.54, step: 0.06)
+        ]
 
-            while tooBig(data) && q > 0.58 {
-                q -= 0.06
+        // Smaller targets need a bit more headroom to actually reach the size.
+        if targetBytes <= 1_000_000 {
+            stages.append(Stage(maxDim: 1600, startQuality: 0.74, minQuality: 0.48, step: 0.06))
+        }
+        if targetBytes <= 850_000 {
+            stages.append(Stage(maxDim: 1400, startQuality: 0.70, minQuality: 0.44, step: 0.06))
+        }
+
+        for stage in stages {
+            let resized = resizedToFit(image, maxDimension: stage.maxDim)
+            var q = stage.startQuality
+            var data = resized.jpegData(compressionQuality: q)
+
+            while tooBig(data) && q > stage.minQuality {
+                q -= stage.step
                 data = resized.jpegData(compressionQuality: q)
+            }
+
+            if !tooBig(data) {
+                return data
             }
         }
 
-        if tooBig(data) {
-            maxDim = 1900
-            resized = resizedToFit(resized, maxDimension: maxDim)
-            q = 0.78
-            data = resized.jpegData(compressionQuality: q)
-
-            while tooBig(data) && q > 0.54 {
-                q -= 0.06
-                data = resized.jpegData(compressionQuality: q)
-            }
-        }
-
-        return data
+        // Fallback: return best effort from the last stage even if still above target.
+        let fallback = resizedToFit(image, maxDimension: stages.last?.maxDim ?? 1400)
+        return fallback.jpegData(compressionQuality: 0.44)
     }
 }
