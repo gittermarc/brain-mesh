@@ -8,6 +8,7 @@
 
 import Foundation
 import UniformTypeIdentifiers
+import UIKit
 
 struct PreparedAttachmentImport: Sendable {
     let id: UUID
@@ -48,6 +49,79 @@ enum AttachmentImportPipeline {
 
         let compressionEnabled = VideoImportPreferences.isCompressionEnabled()
         let compressionQuality = VideoImportPreferences.compressionQuality()
+
+        // Gallery images: always normalize through our gallery JPEG pipeline (controlled by IMG1 preset)
+        // so "Datei importieren" can't bypass image size policy.
+        if inferredKind == .galleryImage {
+            let preset = ImageGalleryImportPreferences.compressionPreset()
+
+            // Read bytes directly from the security-scoped URL.
+            // (We avoid copying the original into cache to prevent keeping a large raw file around.)
+            let raw = try Data(contentsOf: url, options: [.mappedIfSafe])
+
+            if let decoded = ImageImportPipeline.decodeImageSafely(from: raw, maxPixelSize: preset.maxDecodePixelSize),
+               let jpeg = ImageImportPipeline.prepareJPEGForGallery(decoded, targetBytes: preset.targetBytes) {
+
+                if jpeg.count > maxBytes {
+                    // Even after recompress we exceed maxBytes -> reject.
+                    throw AttachmentImportPipelineError.tooLarge(bytes: jpeg.count, maxBytes: maxBytes)
+                }
+
+                let baseTitle = url.deletingPathExtension().lastPathComponent
+                let normalizedTitle = baseTitle.isEmpty ? "Foto" : baseTitle
+                let normalizedOriginal = baseTitle.isEmpty ? "Foto.jpg" : "\(baseTitle).jpg"
+
+                let localFilename = try AttachmentStore.writeToCache(
+                    data: jpeg,
+                    attachmentID: attachmentID,
+                    fileExtension: "jpg"
+                )
+
+                return PreparedAttachmentImport(
+                    id: attachmentID,
+                    title: normalizedTitle,
+                    originalFilename: normalizedOriginal,
+                    contentTypeIdentifier: UTType.jpeg.identifier,
+                    fileExtension: "jpg",
+                    byteCount: jpeg.count,
+                    inferredKind: .galleryImage,
+                    localPath: localFilename,
+                    fileData: jpeg
+                )
+            }
+
+            // Recompress failed. Only fall back to importing as-is if the original is within maxBytes.
+            if raw.count <= maxBytes {
+                // Copy to sandbox (security scoped URLs are not stable).
+                let cachedFilename = try AttachmentStore.copyIntoCache(from: url, attachmentID: attachmentID, fileExtension: ext)
+                guard let cachedURL = AttachmentStore.url(forLocalPath: cachedFilename) else {
+                    throw AttachmentImportPipelineError.cacheWriteFailed
+                }
+
+                let data = try Data(contentsOf: cachedURL, options: [.mappedIfSafe])
+                if data.count > maxBytes {
+                    AttachmentStore.delete(localPath: cachedFilename)
+                    throw AttachmentImportPipelineError.tooLarge(bytes: data.count, maxBytes: maxBytes)
+                }
+
+                let title = url.deletingPathExtension().lastPathComponent
+
+                return PreparedAttachmentImport(
+                    id: attachmentID,
+                    title: title.isEmpty ? "Foto" : title,
+                    originalFilename: fileName,
+                    contentTypeIdentifier: contentType,
+                    fileExtension: ext,
+                    byteCount: data.count,
+                    inferredKind: inferredKind,
+                    localPath: cachedFilename,
+                    fileData: data
+                )
+            }
+
+            // Original is too large and we couldn't recompress -> reject.
+            throw AttachmentImportPipelineError.tooLarge(bytes: raw.count, maxBytes: maxBytes)
+        }
 
         // If a video is larger than our max, try to compress it instead of rejecting.
         if fileSize > maxBytes {
