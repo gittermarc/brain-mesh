@@ -27,7 +27,7 @@ enum DetailsSchemaActions {
         }
 
         // Templates sollten das bereits einhalten, aber wir bleiben defensiv.
-        DetailsSchemaValidation.enforcePinnedLimitIfNeeded(on: entity)
+        DetailsSchemaPinning.enforcePinnedLimitIfNeeded(on: entity)
 
         try? modelContext.save()
     }
