@@ -18,7 +18,7 @@ struct TrendMiniMetric: View {
         VStack(alignment: .leading, spacing: 10) {
             HStack {
                 Image(systemName: icon)
-                    .foregroundStyle(.secondary)
+                    .foregroundStyle(.tint)
                 Text(title)
                     .font(.subheadline)
                     .foregroundStyle(.secondary)

@@ -41,6 +41,7 @@ extension GraphStatsView {
                                     .monospacedDigit()
                             }
                             ProgressView(value: Double(connected), total: Double(nodes))
+                                .tint(.accentColor)
                         }
 
                         Divider()

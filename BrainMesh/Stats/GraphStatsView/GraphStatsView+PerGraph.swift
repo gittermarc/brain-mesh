@@ -72,6 +72,7 @@ extension GraphStatsView {
                         if showPerGraph && isLoadingPerGraphCounts {
                             ProgressView()
                                 .controlSize(.small)
+                                .tint(.accentColor)
                         }
 
                         Text("\(uniqueGraphs.count)")

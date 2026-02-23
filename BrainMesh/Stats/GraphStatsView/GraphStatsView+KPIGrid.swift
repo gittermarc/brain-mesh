@@ -20,6 +20,7 @@ extension GraphStatsView {
                     if isLoadingDetails {
                         ProgressView()
                             .controlSize(.small)
+                            .tint(.accentColor)
                     }
                 }
 

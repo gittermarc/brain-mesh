@@ -45,6 +45,7 @@ struct BreakdownRow: View {
                     .monospacedDigit()
             }
             ProgressView(value: Double(count), total: Double(max(1, total)))
+                .tint(.accentColor)
         }
     }
 }

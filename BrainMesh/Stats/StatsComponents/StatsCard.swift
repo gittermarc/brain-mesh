@@ -16,6 +16,10 @@ struct StatsCard<Content: View>: View {
             .background(
                 RoundedRectangle(cornerRadius: 18, style: .continuous)
                     .fill(.thinMaterial)
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 18, style: .continuous)
+                            .strokeBorder(.tint.opacity(0.12), lineWidth: 1)
+                    )
             )
     }
 }
@@ -48,6 +52,7 @@ struct PlaceholderBlock: View {
         HStack(spacing: 10) {
             ProgressView()
                 .controlSize(.small)
+                .tint(.accentColor)
             Text(text)
                 .font(.footnote)
                 .foregroundStyle(.secondary)

@@ -23,10 +23,10 @@ struct MiniBarChart: View {
                 ForEach(Array(values.enumerated()), id: \.offset) { _, v in
                     let ratio = CGFloat(v) / CGFloat(maxVal)
                     RoundedRectangle(cornerRadius: 3, style: .continuous)
-                        .fill(.secondary.opacity(0.35))
+                        .fill(.secondary.opacity(0.18))
                         .overlay(
                             RoundedRectangle(cornerRadius: 3, style: .continuous)
-                                .fill(.primary.opacity(0.65))
+                                .fill(.tint.opacity(0.65))
                                 .frame(height: max(2, height * ratio)),
                             alignment: .bottom
                         )
@@ -49,7 +49,7 @@ struct MiniLineChart: View {
 
             if count <= 1 {
                 RoundedRectangle(cornerRadius: 3, style: .continuous)
-                    .fill(.secondary.opacity(0.25))
+                    .fill(.tint.opacity(0.12))
             } else {
                 let minV = values.min() ?? 0
                 let maxV = values.max() ?? 1
@@ -71,7 +71,7 @@ struct MiniLineChart: View {
                             }
                         }
                     }
-                    .stroke(.primary.opacity(0.65), style: StrokeStyle(lineWidth: 2, lineCap: .round, lineJoin: .round))
+                    .stroke(.tint, style: StrokeStyle(lineWidth: 2, lineCap: .round, lineJoin: .round))
                     .padding(.horizontal, 2)
                     .padding(.vertical, 4)
                 }

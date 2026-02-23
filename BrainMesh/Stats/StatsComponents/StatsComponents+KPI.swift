@@ -19,7 +19,7 @@ struct KPICard: View {
         VStack(alignment: .leading, spacing: 8) {
             HStack {
                 Image(systemName: icon)
-                    .foregroundStyle(.secondary)
+                    .foregroundStyle(.tint)
                 Spacer()
             }
 

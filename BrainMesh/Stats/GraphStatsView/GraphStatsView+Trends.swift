@@ -20,6 +20,7 @@ extension GraphStatsView {
                     if activeTrends == nil && loadError == nil {
                         ProgressView()
                             .controlSize(.small)
+                            .tint(.accentColor)
                     }
                 }
 

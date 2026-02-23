@@ -29,11 +29,12 @@ extension GraphStatsView {
                                     Text("Aktiv")
                                         .font(.caption)
                                         .fontWeight(.semibold)
+                                        .foregroundStyle(.tint)
                                         .padding(.horizontal, 8)
                                         .padding(.vertical, 3)
                                         .background(
                                             Capsule(style: .continuous)
-                                                .fill(.thinMaterial)
+                                                .fill(.tint.opacity(0.18))
                                         )
                                 }
                             }
@@ -49,6 +50,7 @@ extension GraphStatsView {
                     if isLoading || isRefreshing {
                         ProgressView()
                             .controlSize(.small)
+                            .tint(.accentColor)
                     }
                 }
 
