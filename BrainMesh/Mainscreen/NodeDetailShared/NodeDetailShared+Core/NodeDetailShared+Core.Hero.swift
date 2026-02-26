@@ -114,6 +114,8 @@ struct NodeHeroCard: View {
                             Label(pill.title, systemImage: pill.systemImage)
                                 .font(.caption.weight(.semibold))
                                 .labelStyle(.titleAndIcon)
+                                .lineLimit(1)
+                                .truncationMode(.tail)
                                 .padding(.horizontal, 10)
                                 .padding(.vertical, 6)
                                 .background(
