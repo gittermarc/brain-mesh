@@ -1,5 +1,5 @@
 //
-//  OnboardingStepCardView.swift
+//  OnboardingStepCard.swift
 //  BrainMesh
 //
 
