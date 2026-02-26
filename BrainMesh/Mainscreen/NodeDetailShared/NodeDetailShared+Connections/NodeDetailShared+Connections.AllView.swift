@@ -21,6 +21,8 @@ struct NodeConnectionsAllView: View {
     @State private var isLoading: Bool = true
     @State private var loadErrorMessage: String? = nil
 
+    @State private var editNoteRequest: EditLinkNoteRequest? = nil
+
     init(ownerKind: NodeKind, ownerID: UUID, graphID: UUID?, initialSegment: NodeLinkDirectionSegment = .outgoing) {
         self.ownerKind = ownerKind
         self.ownerID = ownerID
@@ -77,6 +79,14 @@ struct NodeConnectionsAllView: View {
                         } label: {
                             NodeLinkListRow(direction: segment, title: row.peerLabel, note: row.note)
                         }
+                        .swipeActions(edge: .leading, allowsFullSwipe: false) {
+                            Button {
+                                editNoteRequest = EditLinkNoteRequest(id: row.id, initialNote: row.note)
+                            } label: {
+                                Label(rowNoteActionTitle(row.note), systemImage: "square.and.pencil")
+                            }
+                            .tint(Color.accentColor)
+                        }
                     }
                     .onDelete(perform: deleteLinks)
                 }
@@ -87,6 +97,11 @@ struct NodeConnectionsAllView: View {
         .listStyle(.insetGrouped)
         .task(id: loadTaskKey) {
             await reload()
+        }
+        .sheet(item: $editNoteRequest) { req in
+            LinkNoteEditorSheet(linkID: req.id, initialNote: req.initialNote) { linkID, newNote in
+                applyNoteUpdate(linkID: linkID, note: newNote)
+            }
         }
     }
 
@@ -163,6 +178,137 @@ struct NodeConnectionsAllView: View {
         let linkID = id
         let fd = FetchDescriptor<MetaLink>(predicate: #Predicate { l in l.id == linkID })
         return (try? modelContext.fetch(fd).first)
+    }
+
+    private func rowNoteActionTitle(_ note: String?) -> String {
+        guard let note, !note.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return "Notiz" }
+        return "Notiz bearbeiten"
+    }
+
+    private func applyNoteUpdate(linkID: UUID, note: String?) {
+        let updatedOutgoing = snapshot.outgoing.map { row in
+            guard row.id == linkID else { return row }
+            return LinkRowDTO(
+                id: row.id,
+                peerKindRaw: row.peerKindRaw,
+                peerID: row.peerID,
+                peerLabel: row.peerLabel,
+                note: note,
+                createdAt: row.createdAt
+            )
+        }
+
+        let updatedIncoming = snapshot.incoming.map { row in
+            guard row.id == linkID else { return row }
+            return LinkRowDTO(
+                id: row.id,
+                peerKindRaw: row.peerKindRaw,
+                peerID: row.peerID,
+                peerLabel: row.peerLabel,
+                note: note,
+                createdAt: row.createdAt
+            )
+        }
+
+        snapshot = NodeConnectionsSnapshot(outgoing: updatedOutgoing, incoming: updatedIncoming)
+    }
+}
+
+private struct EditLinkNoteRequest: Identifiable, Equatable {
+    let id: UUID
+    let initialNote: String?
+}
+
+private struct LinkNoteEditorSheet: View {
+    @Environment(\.dismiss) private var dismiss
+    @Environment(\.modelContext) private var modelContext
+
+    let linkID: UUID
+    let initialNote: String?
+    let onSaved: (UUID, String?) -> Void
+
+    @State private var noteDraft: String
+
+    @State private var showSaveErrorAlert: Bool = false
+    @State private var saveErrorMessage: String = ""
+
+    init(linkID: UUID, initialNote: String?, onSaved: @escaping (UUID, String?) -> Void) {
+        self.linkID = linkID
+        self.initialNote = initialNote
+        self.onSaved = onSaved
+        _noteDraft = State(initialValue: initialNote ?? "")
+    }
+
+    private var trimmed: String {
+        noteDraft.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    private var hasNote: Bool {
+        !trimmed.isEmpty
+    }
+
+    var body: some View {
+        NavigationStack {
+            Form {
+                Section("Notiz") {
+                    TextField("z.B. Kontext", text: $noteDraft, axis: .vertical)
+                }
+
+                if hasNote {
+                    Section {
+                        Button(role: .destructive) {
+                            save(note: nil)
+                        } label: {
+                            Label("Notiz entfernen", systemImage: "trash")
+                        }
+                    }
+                }
+            }
+            .navigationTitle("Link-Notiz")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button("Abbrechen") {
+                        dismiss()
+                    }
+                }
+                ToolbarItem(placement: .confirmationAction) {
+                    Button("Speichern") {
+                        let finalNote = trimmed.isEmpty ? nil : trimmed
+                        save(note: finalNote)
+                    }
+                }
+            }
+            .alert("Speichern fehlgeschlagen", isPresented: $showSaveErrorAlert) {
+                Button("OK", role: .cancel) {
+                    dismiss()
+                }
+            } message: {
+                Text(saveErrorMessage)
+            }
+        }
+    }
+
+    private func save(note: String?) {
+        let lid = linkID
+        let fd = FetchDescriptor<MetaLink>(predicate: #Predicate { l in l.id == lid })
+
+        guard let link = (try? modelContext.fetch(fd).first) else {
+            saveErrorMessage = "Link nicht gefunden."
+            showSaveErrorAlert = true
+            return
+        }
+
+        link.note = note
+
+        do {
+            try modelContext.save()
+            onSaved(linkID, note)
+            dismiss()
+        } catch {
+            saveErrorMessage = error.localizedDescription
+            showSaveErrorAlert = true
+        }
     }
 }
 
