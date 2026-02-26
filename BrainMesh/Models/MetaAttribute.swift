@@ -25,6 +25,14 @@ final class MetaAttribute {
 
     var nameFolded: String = ""
 
+    var notes: String = "" {
+        didSet {
+            notesFolded = BMSearch.fold(notes)
+        }
+    }
+
+    var notesFolded: String = ""
+
     // MARK: - Graph Security (optional)
     // Pro Graph kann der User Zugriffsschutz aktivieren (Biometrie und/oder Passwort).
 
@@ -44,7 +52,6 @@ final class MetaAttribute {
     var isProtected: Bool {
         lockBiometricsEnabled || isPasswordConfigured
     }
-    var notes: String = ""
 
     /// Optional SF Symbol name (e.g. "tag", "calendar.badge.clock").
     /// Stored as a simple String for performance and easy rendering via `Image(systemName:)`.
@@ -82,6 +89,9 @@ final class MetaAttribute {
         self.iconSymbolName = iconSymbolName
         self.searchLabelFolded = BMSearch.fold(self.displayName)
         self.detailValues = []
+
+        // Default values for stored search indices
+        self.notesFolded = BMSearch.fold(self.notes)
     }
 
     func recomputeSearchLabelFolded() {

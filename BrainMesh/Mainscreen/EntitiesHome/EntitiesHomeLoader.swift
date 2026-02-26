@@ -245,14 +245,14 @@ actor EntitiesHomeLoader {
         if let gid {
             fdEntities = FetchDescriptor<MetaEntity>(
                 predicate: #Predicate<MetaEntity> { e in
-                    e.graphID == gid && e.nameFolded.contains(term)
+                    e.graphID == gid && (e.nameFolded.contains(term) || e.notesFolded.contains(term))
                 },
                 sortBy: [SortDescriptor(\MetaEntity.name)]
             )
         } else {
             fdEntities = FetchDescriptor<MetaEntity>(
                 predicate: #Predicate<MetaEntity> { e in
-                    e.nameFolded.contains(term)
+                    e.nameFolded.contains(term) || e.notesFolded.contains(term)
                 },
                 sortBy: [SortDescriptor(\MetaEntity.name)]
             )
@@ -266,14 +266,14 @@ actor EntitiesHomeLoader {
         if let gid {
             fdAttrs = FetchDescriptor<MetaAttribute>(
                 predicate: #Predicate<MetaAttribute> { a in
-                    a.graphID == gid && a.searchLabelFolded.contains(term)
+                    a.graphID == gid && (a.searchLabelFolded.contains(term) || a.notesFolded.contains(term))
                 },
                 sortBy: [SortDescriptor(\MetaAttribute.name)]
             )
         } else {
             fdAttrs = FetchDescriptor<MetaAttribute>(
                 predicate: #Predicate<MetaAttribute> { a in
-                    a.searchLabelFolded.contains(term)
+                    a.searchLabelFolded.contains(term) || a.notesFolded.contains(term)
                 },
                 sortBy: [SortDescriptor(\MetaAttribute.name)]
             )

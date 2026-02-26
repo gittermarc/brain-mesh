@@ -183,6 +183,9 @@ struct AppRootView: View {
 
         // Legacy Records in den Default-Graph schieben
         GraphBootstrap.migrateLegacyRecordsIfNeeded(defaultGraphID: defaultGraph.id, using: modelContext)
+
+        // Backfill stored notes search indices (notesFolded) for existing data
+        GraphBootstrap.backfillFoldedNotesIfNeeded(using: modelContext)
     }
 
     @MainActor

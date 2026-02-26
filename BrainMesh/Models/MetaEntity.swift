@@ -27,6 +27,14 @@ final class MetaEntity {
 
     var nameFolded: String = ""
 
+    var notes: String = "" {
+        didSet {
+            notesFolded = BMSearch.fold(notes)
+        }
+    }
+
+    var notesFolded: String = ""
+
     // MARK: - Graph Security (optional)
     // Pro Graph kann der User Zugriffsschutz aktivieren (Biometrie und/oder Passwort).
 
@@ -46,7 +54,6 @@ final class MetaEntity {
     var isProtected: Bool {
         lockBiometricsEnabled || isPasswordConfigured
     }
-    var notes: String = ""
 
     /// Optional SF Symbol name (e.g. "cube", "tag.fill").
     /// Stored as a simple String for performance and easy rendering via `Image(systemName:)`.
@@ -77,6 +84,9 @@ final class MetaEntity {
         self.iconSymbolName = iconSymbolName
         self.attributes = []
         self.detailFields = []
+
+        // Default values for stored search indices
+        self.notesFolded = BMSearch.fold(self.notes)
     }
 
     // MARK: - Convenience

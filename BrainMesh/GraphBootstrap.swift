@@ -39,6 +39,28 @@ enum GraphBootstrap {
         return false
     }
 
+    /// Returns true if there are any records with non-empty notes but missing the stored `notesFolded` index.
+    /// Uses `fetchLimit = 1` to keep this check very cheap.
+    static func hasFoldedNotesBackfillNeeded(using modelContext: ModelContext) -> Bool {
+        do {
+            var eFD = FetchDescriptor<MetaEntity>(predicate: #Predicate<MetaEntity> { e in
+                e.notes != "" && e.notesFolded == ""
+            })
+            eFD.fetchLimit = 1
+            if try modelContext.fetch(eFD).isEmpty == false { return true }
+
+            var aFD = FetchDescriptor<MetaAttribute>(predicate: #Predicate<MetaAttribute> { a in
+                a.notes != "" && a.notesFolded == ""
+            })
+            aFD.fetchLimit = 1
+            if try modelContext.fetch(aFD).isEmpty == false { return true }
+        } catch {
+            return false
+        }
+
+        return false
+    }
+
     static func ensureAtLeastOneGraph(using modelContext: ModelContext) -> MetaGraph {
         // ältester Graph = "default"
         let fd = FetchDescriptor<MetaGraph>(sortBy: [SortDescriptor(\MetaGraph.createdAt, order: .forward)])
@@ -97,6 +119,44 @@ enum GraphBootstrap {
             let links = try modelContext.fetch(fd)
             for l in links {
                 l.graphID = defaultGraphID
+                changed = true
+            }
+        } catch {
+            // ignore
+        }
+
+        if changed {
+            try? modelContext.save()
+        }
+    }
+
+    static func backfillFoldedNotesIfNeeded(using modelContext: ModelContext) {
+        guard hasFoldedNotesBackfillNeeded(using: modelContext) else { return }
+
+        var changed = false
+
+        // Entities
+        do {
+            let fd = FetchDescriptor<MetaEntity>(predicate: #Predicate<MetaEntity> { e in
+                e.notes != "" && e.notesFolded == ""
+            })
+            let ents = try modelContext.fetch(fd)
+            for e in ents {
+                e.notesFolded = BMSearch.fold(e.notes)
+                changed = true
+            }
+        } catch {
+            // ignore
+        }
+
+        // Attributes
+        do {
+            let fd = FetchDescriptor<MetaAttribute>(predicate: #Predicate<MetaAttribute> { a in
+                a.notes != "" && a.notesFolded == ""
+            })
+            let attrs = try modelContext.fetch(fd)
+            for a in attrs {
+                a.notesFolded = BMSearch.fold(a.notes)
                 changed = true
             }
         } catch {
