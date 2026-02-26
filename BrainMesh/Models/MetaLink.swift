@@ -13,7 +13,16 @@ final class MetaLink {
 
     var id: UUID = UUID()
     var createdAt: Date = Date()
-    var note: String? = nil
+
+    var note: String? = nil {
+        didSet {
+            noteFolded = BMSearch.fold(note ?? "")
+        }
+    }
+
+    /// Stored search index for `note` (folded/normalized).
+    /// Keep this in sync via the `note` didSet.
+    var noteFolded: String = ""
 
     // ✅ Graph scope (Multi-DB). Optional für Migration.
     var graphID: UUID? = nil
@@ -40,6 +49,7 @@ final class MetaLink {
         self.id = UUID()
         self.createdAt = Date()
         self.note = note
+        self.noteFolded = BMSearch.fold(note ?? "")
 
         self.graphID = graphID
 

@@ -170,7 +170,7 @@ struct EntitiesHomeView: View {
                 }
             }
             .navigationTitle("Entitäten")
-            .searchable(text: $searchText, prompt: "Entität oder Attribut suchen…")
+            .searchable(text: $searchText, prompt: "Entität, Attribut, Notiz suchen…")
             .toolbar {
                 EntitiesHomeToolbar(
                     activeGraphName: activeGraphName,

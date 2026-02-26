@@ -54,6 +54,13 @@ enum GraphBootstrap {
             })
             aFD.fetchLimit = 1
             if try modelContext.fetch(aFD).isEmpty == false { return true }
+
+            // Links (optional notes)
+            var lFD = FetchDescriptor<MetaLink>(predicate: #Predicate<MetaLink> { l in
+                l.note != nil && l.noteFolded == ""
+            })
+            lFD.fetchLimit = 1
+            if try modelContext.fetch(lFD).isEmpty == false { return true }
         } catch {
             return false
         }
@@ -158,6 +165,27 @@ enum GraphBootstrap {
             for a in attrs {
                 a.notesFolded = BMSearch.fold(a.notes)
                 changed = true
+            }
+        } catch {
+            // ignore
+        }
+
+        // Links
+        do {
+            let fd = FetchDescriptor<MetaLink>(predicate: #Predicate<MetaLink> { l in
+                l.note != nil && l.noteFolded == ""
+            })
+            let links = try modelContext.fetch(fd)
+            for l in links {
+                let note = l.note ?? ""
+                if note.isEmpty {
+                    // Normalize "empty string" to nil to avoid re-triggering the backfill forever.
+                    l.note = nil
+                    changed = true
+                } else {
+                    l.noteFolded = BMSearch.fold(note)
+                    changed = true
+                }
             }
         } catch {
             // ignore

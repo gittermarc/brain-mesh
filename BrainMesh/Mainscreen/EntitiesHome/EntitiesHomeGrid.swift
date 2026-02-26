@@ -75,6 +75,18 @@ private struct EntitiesHomeGridCell: View {
                 .font(.headline)
                 .lineLimit(2)
 
+            if row.isNotesOnlyHit {
+                Text("Notiztreffer")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .padding(.horizontal, 8)
+                    .padding(.vertical, 3)
+                    .background(
+                        Capsule(style: .continuous)
+                            .fill(Color(uiColor: .tertiarySystemFill))
+                    )
+            }
+
             switch display.rowStyle {
             case .titleOnly:
                 EmptyView()
