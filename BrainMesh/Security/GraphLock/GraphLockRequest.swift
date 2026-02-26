@@ -22,6 +22,12 @@ final class GraphLockRequest: Identifiable {
     let allowBiometrics: Bool
     let allowPassword: Bool
 
+    /// Value-only data required for unlock flows.
+    ///
+    /// Rationale: Avoid SwiftData fetches from within views/actions.
+    /// `MetaGraph` is a SwiftData model and should not be held by the lock UI.
+    let snapshot: GraphUnlockSnapshot
+
     /// Optional: When the user cancels while the active graph is locked,
     /// we can switch to a safe fallback graph (unprotected or already unlocked).
     let fallbackGraphID: UUID?
@@ -35,6 +41,7 @@ final class GraphLockRequest: Identifiable {
         purpose: GraphLockPurpose,
         allowBiometrics: Bool,
         allowPassword: Bool,
+        snapshot: GraphUnlockSnapshot,
         fallbackGraphID: UUID?,
         onSuccess: (@MainActor () -> Void)?,
         onCancel: (@MainActor () -> Void)?
@@ -44,6 +51,7 @@ final class GraphLockRequest: Identifiable {
         self.purpose = purpose
         self.allowBiometrics = allowBiometrics
         self.allowPassword = allowPassword
+        self.snapshot = snapshot
         self.fallbackGraphID = fallbackGraphID
         self.onSuccess = onSuccess
         self.onCancel = onCancel

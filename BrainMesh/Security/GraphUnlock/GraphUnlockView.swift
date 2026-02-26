@@ -6,11 +6,8 @@
 //
 
 import SwiftUI
-import SwiftData
 
 struct GraphUnlockView: View {
-
-    @Environment(\.modelContext) private var modelContext
     @EnvironmentObject private var graphLock: GraphLockCoordinator
 
     let request: GraphLockRequest
@@ -195,7 +192,6 @@ struct GraphUnlockView: View {
         }
     }
 
-    @MainActor
     private func unlockWithPassword() async {
         guard isWorking == false else { return }
         errorMessage = nil
@@ -205,23 +201,12 @@ struct GraphUnlockView: View {
         let cleaned = password.trimmingCharacters(in: .whitespacesAndNewlines)
         guard cleaned.isEmpty == false else { return }
 
-        // IMPORTANT:
-        // Do not reference `request.graphID` directly inside `#Predicate`.
-        // SwiftData's macro system can struggle to type-check predicates that
-        // capture key paths into non-model structs (like `GraphLockRequest`).
-        // Capturing a plain UUID value is safe.
-        let graphID = request.graphID
-
-        let fd = FetchDescriptor<MetaGraph>(
-            predicate: #Predicate { g in g.id == graphID }
-        )
-
-        guard let graph = try? modelContext.fetch(fd).first else {
-            showError("Graph nicht gefunden.")
+        guard let passwordSnapshot = request.snapshot.password else {
+            showError("Passwort ist nicht konfiguriert.")
             return
         }
 
-        if graphLock.verifyPassword(cleaned, for: graph) {
+        if graphLock.verifyPassword(cleaned, snapshot: passwordSnapshot) {
             graphLock.completeCurrentRequest(success: true)
         } else {
             showError("Passwort ist falsch.")

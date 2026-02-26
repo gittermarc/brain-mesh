@@ -47,12 +47,15 @@ final class GraphLockCoordinator: ObservableObject {
             return
         }
 
+        let snapshot = GraphUnlockSnapshotLoader.makeSnapshot(for: graph)
+
         let req = GraphLockRequest(
             graphID: graph.id,
             graphName: graph.name,
             purpose: purpose,
             allowBiometrics: graph.lockBiometricsEnabled,
             allowPassword: (graph.lockPasswordEnabled && graph.isPasswordConfigured),
+            snapshot: snapshot,
             fallbackGraphID: fallbackGraphID,
             onSuccess: onSuccess,
             onCancel: onCancel
@@ -152,6 +155,15 @@ final class GraphLockCoordinator: ObservableObject {
             saltB64: salt,
             hashB64: hash,
             iterations: graph.passwordIterations
+        )
+    }
+
+    func verifyPassword(_ password: String, snapshot: GraphLockPasswordSnapshot) -> Bool {
+        GraphLockCrypto.verifyPassword(
+            password: password,
+            saltB64: snapshot.saltB64,
+            hashB64: snapshot.hashB64,
+            iterations: snapshot.iterations
         )
     }
 
