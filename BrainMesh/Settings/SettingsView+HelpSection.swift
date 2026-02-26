@@ -1,5 +1,5 @@
 //
-//  SettingsView+HelpSection.swift
+//  HelpSupportView+HelpSection.swift
 //  BrainMesh
 //
 //  Created by Marc Fechner on 10.02.26.
@@ -7,7 +7,7 @@
 
 import SwiftUI
 
-extension SettingsView {
+extension HelpSupportView {
     var helpSection: some View {
         Section("Hilfe") {
             Button {

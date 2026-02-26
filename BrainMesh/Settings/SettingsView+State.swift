@@ -1,5 +1,5 @@
 //
-//  SettingsView+State.swift
+//  HelpSupportView+State.swift
 //  BrainMesh
 //
 //  Created by Marc Fechner on 10.02.26.
@@ -8,7 +8,7 @@
 import Foundation
 import SwiftUI
 
-extension SettingsView {
+extension HelpSupportView {
     var appVersion: String {
         Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "–"
     }

@@ -17,17 +17,12 @@ struct SettingsView: View {
     }
 
     @Environment(\.dismiss) private var dismiss
-    @EnvironmentObject var onboarding: OnboardingCoordinator
 
     @State private var showImportSettings: Bool = false
-    @State var showDetailsIntro: Bool = false
 
     var body: some View {
         List {
-            helpSection
             hubSection
-            infoSection
-            SettingsAboutSection()
         }
         .navigationTitle("Einstellungen")
         .navigationBarTitleDisplayMode(.inline)
@@ -37,9 +32,6 @@ struct SettingsView: View {
                     Button("Fertig") { dismiss() }
                 }
             }
-        }
-        .sheet(isPresented: $showDetailsIntro) {
-            DetailsOnboardingSheetView()
         }
         .sheet(isPresented: $showImportSettings) {
             NavigationStack {
@@ -74,6 +66,17 @@ struct SettingsView: View {
                 )
             }
             .settingsHubCardStyle(showsAccessoryChevron: false)
+
+            NavigationLink {
+                HelpSupportView()
+            } label: {
+                SettingsHubCardRow(
+                    systemImage: "lifepreserver",
+                    title: "Hilfe & Support",
+                    subtitle: "Onboarding, Version & Infos"
+                )
+            }
+            .settingsHubCardStyle(showsAccessoryChevron: false)
         } header: {
             EmptyView()
         }
@@ -84,6 +87,5 @@ struct SettingsView: View {
 #Preview {
     NavigationStack {
         SettingsView(showDoneButton: false)
-            .environmentObject(OnboardingCoordinator())
     }
 }
