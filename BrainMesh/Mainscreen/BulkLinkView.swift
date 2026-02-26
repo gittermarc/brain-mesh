@@ -14,6 +14,7 @@ struct BulkLinkView: View {
 
     let source: NodeRef
     let graphID: UUID?
+    let onCompleted: ((BulkLinkCompletion) -> Void)?
 
     @State private var selectedTargets: Set<NodeRef> = []
     @State private var note: String = ""
@@ -26,6 +27,13 @@ struct BulkLinkView: View {
     @State private var showOnlyUnlinked: Bool = false
     @State private var resultAlert: BulkLinkResult?
     @State private var errorAlert: BulkLinkError?
+    @State private var isSaving: Bool = false
+
+    init(source: NodeRef, graphID: UUID?, onCompleted: ((BulkLinkCompletion) -> Void)? = nil) {
+        self.source = source
+        self.graphID = graphID
+        self.onCompleted = onCompleted
+    }
 
     private var loadKey: BulkLinkLoadKey {
         BulkLinkLoadKey(sourceID: source.id, graphID: graphID)
@@ -109,13 +117,21 @@ struct BulkLinkView: View {
             .safeAreaInset(edge: .bottom) {
                 VStack(spacing: 10) {
                     Button {
-                        Task { await save() }
+                        Task { @MainActor in
+                            await save()
+                        }
                     } label: {
-                        Text(saveButtonTitle)
-                            .frame(maxWidth: .infinity)
+                        HStack(spacing: 10) {
+                            if isSaving {
+                                ProgressView()
+                                    .controlSize(.small)
+                            }
+                            Text(isSaving ? "Erstelle…" : saveButtonTitle)
+                        }
+                        .frame(maxWidth: .infinity)
                     }
                     .buttonStyle(.borderedProminent)
-                    .disabled(selectedTargets.isEmpty)
+                    .disabled(selectedTargets.isEmpty || isSaving)
                 }
                 .padding(.horizontal)
                 .padding(.vertical, 8)
@@ -156,6 +172,7 @@ struct BulkLinkView: View {
             .map { $0 }
     }
 
+    @MainActor
     private func refreshExistingLinkSets() async {
         await BulkLinkLoader.shared.configure(container: AnyModelContainer(modelContext.container))
 
@@ -174,7 +191,12 @@ struct BulkLinkView: View {
         }
     }
 
+    @MainActor
     private func save() async {
+        if isSaving { return }
+        isSaving = true
+        defer { isSaving = false }
+
         // Always work with the latest existing link sets.
         await refreshExistingLinkSets()
 
@@ -277,32 +299,56 @@ struct BulkLinkView: View {
             return
         }
 
-        let totalCreated = createdForward + createdReverse
-        if totalCreated == 0 {
+        let completion = BulkLinkCompletion(
+            createdForward: createdForward,
+            createdReverse: createdReverse,
+            skippedDuplicates: skippedDuplicates,
+            skippedSelf: skippedSelf,
+            isBidirectional: createBidirectional
+        )
+
+        if let onCompleted {
+            onCompleted(completion)
+            return
+        }
+
+        if completion.totalCreated == 0 {
             resultAlert = BulkLinkResult(
                 message: "Keine neuen Links erstellt.\n\nÜbersprungen: \(skippedDuplicates) doppelt, \(skippedSelf) self-link."
             )
-        } else {
-            var parts: [String] = []
-            parts.append("Erstellt: \(createdForward) ausgehend")
-            if createBidirectional {
-                parts.append("\(createdReverse) rückwärts")
-            }
-            if skippedDuplicates > 0 {
-                parts.append("Übersprungen: \(skippedDuplicates) doppelt")
-            }
-            if skippedSelf > 0 {
-                parts.append("\(skippedSelf) self-link")
-            }
-            resultAlert = BulkLinkResult(message: parts.joined(separator: "\n"))
+            return
         }
+
+        var parts: [String] = []
+        parts.append("Erstellt: \(createdForward) ausgehend")
+        if createBidirectional {
+            parts.append("\(createdReverse) rückwärts")
+        }
+        if skippedDuplicates > 0 {
+            parts.append("Übersprungen: \(skippedDuplicates) doppelt")
+        }
+        if skippedSelf > 0 {
+            parts.append("Übersprungen: \(skippedSelf) self-link")
+        }
+        resultAlert = BulkLinkResult(message: parts.joined(separator: "\n"))
     }
 
+    @MainActor
     private func rollback(inserts: [MetaLink]) {
         for l in inserts {
             modelContext.delete(l)
         }
     }
+}
+
+struct BulkLinkCompletion: Sendable {
+    let createdForward: Int
+    let createdReverse: Int
+    let skippedDuplicates: Int
+    let skippedSelf: Int
+    let isBidirectional: Bool
+
+    var totalCreated: Int { createdForward + createdReverse }
 }
 
 private struct BulkLinkLoadKey: Hashable {
