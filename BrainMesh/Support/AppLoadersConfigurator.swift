@@ -43,6 +43,9 @@ enum AppLoadersConfigurator {
             // Node pickers are used across many flows; loading off-main avoids stalls while opening/typing.
             await NodePickerLoader.shared.configure(container: anyContainer)
 
+            // Bulk link flow needs existing link sets for duplicate detection – load off-main.
+            await BulkLinkLoader.shared.configure(container: anyContainer)
+
             // Renaming entities/attributes updates denormalized link labels; do it off-main.
             await NodeRenameService.shared.configure(container: anyContainer)
         }

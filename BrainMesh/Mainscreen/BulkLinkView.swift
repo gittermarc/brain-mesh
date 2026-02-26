@@ -27,6 +27,10 @@ struct BulkLinkView: View {
     @State private var resultAlert: BulkLinkResult?
     @State private var errorAlert: BulkLinkError?
 
+    private var loadKey: BulkLinkLoadKey {
+        BulkLinkLoadKey(sourceID: source.id, graphID: graphID)
+    }
+
     var body: some View {
         NavigationStack {
             Form {
@@ -105,7 +109,7 @@ struct BulkLinkView: View {
             .safeAreaInset(edge: .bottom) {
                 VStack(spacing: 10) {
                     Button {
-                        save()
+                        Task { await save() }
                     } label: {
                         Text(saveButtonTitle)
                             .frame(maxWidth: .infinity)
@@ -117,8 +121,8 @@ struct BulkLinkView: View {
                 .padding(.vertical, 8)
                 .background(.ultraThinMaterial)
             }
-            .task {
-                loadExistingLinkSets()
+            .task(id: loadKey) {
+                await refreshExistingLinkSets()
             }
             .alert(item: $resultAlert) { result in
                 Alert(
@@ -152,61 +156,27 @@ struct BulkLinkView: View {
             .map { $0 }
     }
 
-    private func loadExistingLinkSets() {
-        let sKind = source.kind.rawValue
-        let sID = source.id
+    private func refreshExistingLinkSets() async {
+        await BulkLinkLoader.shared.configure(container: AnyModelContainer(modelContext.container))
 
         do {
-            let outgoingFD: FetchDescriptor<MetaLink>
-            if let gid = graphID {
-                outgoingFD = FetchDescriptor<MetaLink>(
-                    predicate: #Predicate { l in
-                        l.sourceKindRaw == sKind &&
-                        l.sourceID == sID &&
-                        l.graphID == gid
-                    }
-                )
-            } else {
-                outgoingFD = FetchDescriptor<MetaLink>(
-                    predicate: #Predicate { l in
-                        l.sourceKindRaw == sKind &&
-                        l.sourceID == sID
-                    }
-                )
-            }
+            let snapshot = try await BulkLinkLoader.shared.loadSnapshot(
+                sourceKindRaw: source.kind.rawValue,
+                sourceID: source.id,
+                graphID: graphID
+            )
 
-            let outgoing = try modelContext.fetch(outgoingFD)
-            existingOutgoingTargets = Set(outgoing.map { NodeRefKey(kind: $0.targetKind, id: $0.targetID) })
-
-            let incomingFD: FetchDescriptor<MetaLink>
-            if let gid = graphID {
-                incomingFD = FetchDescriptor<MetaLink>(
-                    predicate: #Predicate { l in
-                        l.targetKindRaw == sKind &&
-                        l.targetID == sID &&
-                        l.graphID == gid
-                    }
-                )
-            } else {
-                incomingFD = FetchDescriptor<MetaLink>(
-                    predicate: #Predicate { l in
-                        l.targetKindRaw == sKind &&
-                        l.targetID == sID
-                    }
-                )
-            }
-
-            let incoming = try modelContext.fetch(incomingFD)
-            existingIncomingSources = Set(incoming.map { NodeRefKey(kind: $0.sourceKind, id: $0.sourceID) })
+            existingOutgoingTargets = snapshot.existingOutgoingTargets
+            existingIncomingSources = snapshot.existingIncomingSources
         } catch {
             existingOutgoingTargets = []
             existingIncomingSources = []
         }
     }
 
-    private func save() {
+    private func save() async {
         // Always work with the latest existing link sets.
-        loadExistingLinkSets()
+        await refreshExistingLinkSets()
 
         let cleanedNote = note.trimmingCharacters(in: .whitespacesAndNewlines)
         let finalNote = cleanedNote.isEmpty ? nil : cleanedNote
@@ -303,7 +273,7 @@ struct BulkLinkView: View {
         } catch {
             errorAlert = BulkLinkError(message: "Speichern fehlgeschlagen: \(error.localizedDescription)")
             rollback(inserts: inserted)
-            loadExistingLinkSets()
+            await refreshExistingLinkSets()
             return
         }
 
@@ -333,6 +303,11 @@ struct BulkLinkView: View {
             modelContext.delete(l)
         }
     }
+}
+
+private struct BulkLinkLoadKey: Hashable {
+    let sourceID: UUID
+    let graphID: UUID?
 }
 
 private struct BulkLinkResult: Identifiable {
