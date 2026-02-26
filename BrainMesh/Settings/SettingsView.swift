@@ -20,10 +20,54 @@ struct SettingsView: View {
 
     @State private var showImportSettings: Bool = false
 
+    @Environment(\.dynamicTypeSize) private var dynamicTypeSize
+
     var body: some View {
-        List {
-            hubSection
+        ScrollView {
+            LazyVGrid(columns: hubGridColumns, spacing: 12) {
+                displayTile
+
+                Button {
+                    showImportSettings = true
+                } label: {
+                    SettingsHubTile(
+                        systemImage: "square.and.arrow.down",
+                        title: "Import",
+                        subtitle: "Bild- und Video-Kompression",
+                        showsAccessoryIndicator: true
+                    )
+                }
+                .buttonStyle(SettingsHubTileButtonStyle())
+
+                NavigationLink {
+                    SyncMaintenanceView()
+                } label: {
+                    SettingsHubTile(
+                        systemImage: "arrow.triangle.2.circlepath",
+                        title: "Sync & Wartung",
+                        subtitle: "iCloud-Status und lokale Caches",
+                        showsAccessoryIndicator: false
+                    )
+                }
+                .buttonStyle(SettingsHubTileButtonStyle())
+
+                NavigationLink {
+                    HelpSupportView()
+                } label: {
+                    SettingsHubTile(
+                        systemImage: "lifepreserver",
+                        title: "Hilfe & Support",
+                        subtitle: "Onboarding, Version & Infos",
+                        showsAccessoryIndicator: false
+                    )
+                }
+                .buttonStyle(SettingsHubTileButtonStyle())
+            }
+            .padding(.horizontal, 16)
+            .padding(.top, 12)
+            .padding(.bottom, 24)
         }
+        .background(Color(.systemGroupedBackground).ignoresSafeArea())
         .navigationTitle("Einstellungen")
         .navigationBarTitleDisplayMode(.inline)
         .toolbar {
@@ -40,46 +84,9 @@ struct SettingsView: View {
         }
     }
 
-    private var hubSection: some View {
-        Section {
-            displayCard
-
-            Button {
-                showImportSettings = true
-            } label: {
-                SettingsHubCardRow(
-                    systemImage: "square.and.arrow.down",
-                    title: "Import",
-                    subtitle: "Bild- und Video-Kompression"
-                )
-            }
-            .buttonStyle(.plain)
-            .settingsHubCardStyle(showsAccessoryChevron: true)
-
-            NavigationLink {
-                SyncMaintenanceView()
-            } label: {
-                SettingsHubCardRow(
-                    systemImage: "arrow.triangle.2.circlepath",
-                    title: "Sync & Wartung",
-                    subtitle: "iCloud-Status und lokale Caches"
-                )
-            }
-            .settingsHubCardStyle(showsAccessoryChevron: false)
-
-            NavigationLink {
-                HelpSupportView()
-            } label: {
-                SettingsHubCardRow(
-                    systemImage: "lifepreserver",
-                    title: "Hilfe & Support",
-                    subtitle: "Onboarding, Version & Infos"
-                )
-            }
-            .settingsHubCardStyle(showsAccessoryChevron: false)
-        } header: {
-            EmptyView()
-        }
+    private var hubGridColumns: [GridItem] {
+        let columnCount: Int = dynamicTypeSize.isAccessibilitySize ? 1 : 2
+        return Array(repeating: GridItem(.flexible(), spacing: 12), count: columnCount)
     }
 
 }
