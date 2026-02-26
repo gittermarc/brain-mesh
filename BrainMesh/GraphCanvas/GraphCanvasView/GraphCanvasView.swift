@@ -26,6 +26,10 @@ struct GraphCanvasView: View {
     let workMode: WorkMode
     let collisionStrength: CGFloat
 
+    /// External gate: only run the physics timer while the canvas is actually visible and the app is active.
+    /// (GraphCanvasScreen is the source of truth for this.)
+    let simulationAllowed: Bool
+
     // ✅ Spotlight Physik: nur auf relevanten Nodes simulieren (selection+neighbors)
     let physicsRelevant: Set<NodeKey>?
 
@@ -97,10 +101,13 @@ struct GraphCanvasView: View {
             .gesture(dragGesture(in: size))
             .gesture(zoomGesture())
             .onAppear {
-                startSimulation()
+                updateSimulationState()
                 refreshThumbnailCache()
             }
             .onDisappear { stopSimulation() }
+            .onChange(of: simulationAllowed) { _, _ in
+                updateSimulationState()
+            }
             .onChange(of: nodes.count) { _, _ in
                 wakeSimulationIfNeeded()
             }

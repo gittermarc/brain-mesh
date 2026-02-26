@@ -10,6 +10,7 @@ import SwiftData
 
 struct GraphCanvasScreen: View {
     @Environment(\.modelContext) var modelContext
+    @Environment(\.scenePhase) private var scenePhase
     // NOTE: Must not be `private` because several view helpers live in separate extension files.
     @EnvironmentObject var onboarding: OnboardingCoordinator
 
@@ -111,6 +112,21 @@ struct GraphCanvasScreen: View {
     @State var loadError: String?
     @State var showInspector = false
 
+    // ✅ Visibility gate for physics timer (P0.2)
+    @State private var isScreenVisible: Bool = false
+
+    private var isAnySheetPresented: Bool {
+        showGraphPicker || showFocusPicker || showInspector ||
+        selectedEntity != nil || selectedAttribute != nil ||
+        detailsValueEditRequest != nil
+    }
+
+    private var simulationAllowed: Bool {
+        // We only want the 30 FPS timer while the canvas is actually on-screen and the app is active.
+        // Also pause while any sheet covers the canvas.
+        isScreenVisible && scenePhase == .active && !isAnySheetPresented
+    }
+
     // ✅ Cancellable loads (avoid overlapping work when multiple triggers fire quickly)
     // NOTE: Must not be `private` because the load pipeline lives in extension files.
     @State var loadTask: Task<Void, Never>?
@@ -167,6 +183,7 @@ struct GraphCanvasScreen: View {
                         lens: lensCache,
                         workMode: workMode,
                         collisionStrength: CGFloat(collisionStrength),
+                        simulationAllowed: simulationAllowed,
                         physicsRelevant: physicsRelevantCache,
                         selectedImagePath: selectedImagePath(),
                         onTapSelectedThumbnail: {
@@ -201,6 +218,8 @@ struct GraphCanvasScreen: View {
             }
             .navigationTitle("Graph")
             .navigationBarTitleDisplayMode(.inline)
+            .onAppear { isScreenVisible = true }
+            .onDisappear { isScreenVisible = false }
             .toolbar {
                 // NOTE:
                 // SwiftUI will collapse overflowing toolbar items into a system “…” overflow button.

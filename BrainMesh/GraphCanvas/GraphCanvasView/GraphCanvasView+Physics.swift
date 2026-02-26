@@ -9,12 +9,31 @@ import SwiftUI
 import os
 
 extension GraphCanvasView {
+    func updateSimulationState() {
+        // Centralized gate: canvas must be visible + app active.
+        if simulationAllowed {
+            // If we were sleeping we want to start again, otherwise keep running.
+            wakeSimulationIfNeeded()
+        } else {
+            stopSimulation()
+        }
+    }
+
     func startSimulation() {
+        guard simulationAllowed else {
+            stopSimulation()
+            return
+        }
         stopSimulation()
         // Reset idle state when (re)starting.
         physicsIdleTicks = 0
         physicsIsSleeping = false
         timer = Timer.scheduledTimer(withTimeInterval: 1.0/30.0, repeats: true) { _ in
+            // If visibility / scene state changed since starting, stop immediately.
+            guard simulationAllowed else {
+                stopSimulation()
+                return
+            }
             stepSimulation()
         }
     }
@@ -25,6 +44,10 @@ extension GraphCanvasView {
     }
 
     func wakeSimulationIfNeeded() {
+        guard simulationAllowed else {
+            stopSimulation()
+            return
+        }
         // If we were sleeping (timer stopped), restart. If we're running, just clear idle state.
         physicsIdleTicks = 0
         physicsIsSleeping = false
@@ -50,6 +73,10 @@ extension GraphCanvasView {
     }
 
     func stepSimulation() {
+        guard simulationAllowed else {
+            stopSimulation()
+            return
+        }
         guard nodes.count >= 2 else { return }
 
         let tickTimer = BMDuration()
