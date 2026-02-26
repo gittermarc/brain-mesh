@@ -117,11 +117,9 @@ actor EntitiesHomeLoader {
         try Task.checkCancellation()
 
         let now = Date()
-        let shouldUseCache = true
-
         let attrCounts: [UUID: Int]
         if includeAttrs {
-            let cachedAttrCounts: [UUID: Int]? = shouldUseCache ? cachedCounts(for: gid, now: now) : nil
+            let cachedAttrCounts: [UUID: Int]? = cachedCounts(for: gid, now: now)
 
             if let cachedAttrCounts {
                 attrCounts = cachedAttrCounts
@@ -140,7 +138,7 @@ actor EntitiesHomeLoader {
 
         let linkCountsByEntityID: [UUID: Int]?
         if includeLinks {
-            let cachedLinkCounts: [UUID: Int]? = shouldUseCache ? cachedLinkCounts(for: gid, now: now) : nil
+            let cachedLinkCounts: [UUID: Int]? = cachedLinkCounts(for: gid, now: now)
 
             if let cachedLinkCounts {
                 linkCountsByEntityID = cachedLinkCounts

@@ -131,7 +131,7 @@ struct GraphStatsView: View {
             }
             .navigationTitle("Statistiken")
             .task(id: statsLoadKey) {
-                _ = await triggerReload(for: statsLoadKey, force: false)
+                _ = triggerReload(for: statsLoadKey, force: false)
             }
             .onChange(of: showPerGraph) { _, newValue in
                 if newValue {
@@ -139,7 +139,7 @@ struct GraphStatsView: View {
                 }
             }
             .refreshable {
-                let task = await triggerReload(for: statsLoadKey, force: true)
+                let task = triggerReload(for: statsLoadKey, force: true)
                 await task?.value
 
                 if showPerGraph {

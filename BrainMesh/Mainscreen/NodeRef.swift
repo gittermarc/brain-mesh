@@ -8,7 +8,7 @@
 import Foundation
 
 /// Lightweight reference used in pickers and link-creation flows.
-struct NodeRef: Identifiable, Hashable {
+nonisolated struct NodeRef: Identifiable, Hashable, Sendable {
     let kind: NodeKind
     let id: UUID
     let label: String

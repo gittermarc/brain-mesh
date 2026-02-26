@@ -11,7 +11,7 @@ import Foundation
 ///
 /// NOTE: GraphCanvas already defines a `NodeKey` type.
 /// This type intentionally uses a different name to avoid ambiguous lookups.
-struct NodeRefKey: Hashable {
+nonisolated struct NodeRefKey: Hashable, Sendable {
     let kind: NodeKind
     let id: UUID
 

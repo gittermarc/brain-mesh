@@ -11,7 +11,7 @@ import Foundation
 ///
 /// - `text`: The suggested full string to insert.
 /// - `count`: How often this exact string was used in this graph for this field.
-struct DetailsCompletionSuggestion: Identifiable, Hashable, Sendable {
+nonisolated struct DetailsCompletionSuggestion: Identifiable, Hashable, Sendable {
     let id: String
     let text: String
     let count: Int

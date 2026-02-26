@@ -43,6 +43,8 @@ enum PhotoGalleryImportController {
     ) async -> PhotoGalleryImportResult {
 
         let preset = ImageGalleryImportPreferences.compressionPreset()
+        let maxDecodePixelSize = preset.maxDecodePixelSize
+        let targetBytes = preset.targetBytes
 
         var imported: Int = 0
         var failed: Int = 0
@@ -81,11 +83,11 @@ enum PhotoGalleryImportController {
                 }
 
                 let prepared = await Task.detached(priority: .userInitiated) { () -> (id: UUID, jpeg: Data, local: String?, ext: String)? in
-                    guard let decoded = ImageImportPipeline.decodeImageSafely(from: raw, maxPixelSize: preset.maxDecodePixelSize) else {
+                    guard let decoded = ImageImportPipeline.decodeImageSafely(from: raw, maxPixelSize: maxDecodePixelSize) else {
                         return nil
                     }
 
-                    guard let jpeg = ImageImportPipeline.prepareJPEGForGallery(decoded, targetBytes: preset.targetBytes) else {
+                    guard let jpeg = ImageImportPipeline.prepareJPEGForGallery(decoded, targetBytes: targetBytes) else {
                         return nil
                     }
 

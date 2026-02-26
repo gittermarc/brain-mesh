@@ -17,7 +17,7 @@ import SwiftData
 /// - Hard limits keep memory and matching predictable.
 ///
 /// Usage (later in UI integration):
-/// 1) `await DetailsCompletionIndex.shared.ensureLoaded(graphID:fieldID:in:)` when opening the editor.
+/// 1) `await DetailsCompletionIndex.shared.ensureLoaded(graphID:fieldID:using:)` when opening the editor.
 /// 2) On each keystroke: `await ...suggestions(graphID:fieldID:prefix:)` (no fetch).
 actor DetailsCompletionIndex {
     static let shared = DetailsCompletionIndex()
@@ -72,7 +72,7 @@ actor DetailsCompletionIndex {
 
     /// Loads and caches the index for a given (graphID, fieldID) once.
     /// Safe to call multiple times; subsequent calls are no-ops.
-    func ensureLoaded(graphID: UUID, fieldID: UUID, in modelContext: ModelContext) async {
+    func ensureLoaded(graphID: UUID, fieldID: UUID, using container: AnyModelContainer) async {
         let key = Key(graphID: graphID, fieldID: fieldID)
         if caches[key] != nil { return }
 
@@ -80,7 +80,7 @@ actor DetailsCompletionIndex {
             let cache = try await Self.buildCache(
                 graphID: graphID,
                 fieldID: fieldID,
-                in: modelContext,
+                using: container,
                 maxUnique: config.maxUniqueCandidates
             )
             caches[key] = cache
@@ -141,23 +141,28 @@ actor DetailsCompletionIndex {
     private static func buildCache(
         graphID: UUID,
         fieldID: UUID,
-        in modelContext: ModelContext,
+        using container: AnyModelContainer,
         maxUnique: Int
     ) async throws -> Cache {
         let gid = graphID
         let fid = fieldID
 
-        // SwiftData ModelContext is typically main-actor bound in SwiftUI apps.
-        let rawValues: [String] = try await MainActor.run {
+        let configuredContainer = container
+
+        let rawValues: [String] = try await Task.detached(priority: .utility) { [configuredContainer, gid, fid] in
+            let context = ModelContext(configuredContainer.container)
+            context.autosaveEnabled = false
+
             let fd = FetchDescriptor(
                 predicate: #Predicate<MetaDetailFieldValue> { v in
                     v.fieldID == fid && (v.graphID == gid || v.graphID == nil)
                 }
             )
             // No sorting needed for aggregation.
-            let rows = try modelContext.fetch(fd)
+            let rows = try context.fetch(fd)
             return rows.compactMap { $0.stringValue }
-        }
+        }.value
+
 
         if rawValues.isEmpty {
             return Cache(entries: [])

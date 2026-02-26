@@ -6,6 +6,7 @@
 //
 
 import SwiftUI
+import UIKit
 
 /// Renders a "ghost" completion behind a text input by drawing the full suggestion
 /// where the already-typed prefix is invisible and only the remaining suffix is visible.
@@ -22,7 +23,7 @@ struct DetailsCompletionGhostText: View {
     var body: some View {
         if let parts = Self.makeParts(currentText: currentText, suggestionText: suggestionText) {
             // Keep layout stable by reserving the prefix width, but hide it visually.
-            (Text(parts.hiddenPrefix).foregroundStyle(.clear) + Text(parts.visibleSuffix).foregroundStyle(.tertiary))
+            Text(Self.makeAttributedGhostText(hiddenPrefix: parts.hiddenPrefix, visibleSuffix: parts.visibleSuffix))
                 .lineLimit(1)
                 .allowsHitTesting(false)
         }
@@ -31,6 +32,16 @@ struct DetailsCompletionGhostText: View {
     private struct Parts {
         let hiddenPrefix: String
         let visibleSuffix: String
+    }
+
+    private static func makeAttributedGhostText(hiddenPrefix: String, visibleSuffix: String) -> AttributedString {
+        var prefix = AttributedString(hiddenPrefix)
+        prefix.foregroundColor = .clear
+
+        var suffix = AttributedString(visibleSuffix)
+        suffix.foregroundColor = Color(uiColor: .tertiaryLabel)
+
+        return prefix + suffix
     }
 
     private static func makeParts(currentText: String, suggestionText: String) -> Parts? {

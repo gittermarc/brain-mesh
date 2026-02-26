@@ -11,8 +11,10 @@ extension DetailsValueEditorSheet {
 
         didWarmUpCompletionIndex = true
 
+        let container = AnyModelContainer(modelContext.container)
+
         Task { @MainActor in
-            await DetailsCompletionIndex.shared.ensureLoaded(graphID: gid, fieldID: field.id, in: modelContext)
+            await DetailsCompletionIndex.shared.ensureLoaded(graphID: gid, fieldID: field.id, using: container)
             refreshTopCompletionIfPossible()
             refreshMultiLineSuggestionsIfPossible()
         }
