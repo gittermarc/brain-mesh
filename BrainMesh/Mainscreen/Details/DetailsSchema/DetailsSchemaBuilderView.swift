@@ -13,16 +13,47 @@ struct DetailsSchemaBuilderView: View {
 
     @Bindable var entity: MetaEntity
 
+    @Query private var savedTemplates: [MetaDetailsTemplate]
+
     @State private var showAddSheet: Bool = false
+    @State private var showSaveTemplateSheet: Bool = false
     @State private var editField: MetaDetailFieldDefinition? = nil
 
     @State private var alert: DetailsSchemaAlert? = nil
+
+    init(entity: MetaEntity) {
+        self._entity = Bindable(wrappedValue: entity)
+
+        if let graphID = entity.graphID {
+            self._savedTemplates = Query(
+                filter: #Predicate<MetaDetailsTemplate> { $0.graphID == graphID },
+                sort: [
+                    SortDescriptor(\MetaDetailsTemplate.nameFolded),
+                    SortDescriptor(\MetaDetailsTemplate.createdAt, order: .reverse)
+                ]
+            )
+        } else {
+            self._savedTemplates = Query(
+                filter: #Predicate<MetaDetailsTemplate> { $0.graphID == nil },
+                sort: [
+                    SortDescriptor(\MetaDetailsTemplate.nameFolded),
+                    SortDescriptor(\MetaDetailsTemplate.createdAt, order: .reverse)
+                ]
+            )
+        }
+    }
 
     var body: some View {
         List {
             if entity.detailFieldsList.isEmpty {
                 DetailsSchemaTemplatesSection { template in
                     DetailsSchemaActions.applyTemplate(template, to: entity, modelContext: modelContext)
+                }
+
+                if !savedTemplates.isEmpty {
+                    DetailsSchemaSavedSetsSection(templates: savedTemplates) { template in
+                        DetailsSchemaActions.applyTemplate(template, to: entity, modelContext: modelContext)
+                    }
                 }
             }
 
@@ -42,7 +73,16 @@ struct DetailsSchemaBuilderView: View {
         .navigationTitle("Details")
         .navigationBarTitleDisplayMode(.inline)
         .toolbar {
-            ToolbarItem(placement: .topBarTrailing) {
+            ToolbarItemGroup(placement: .topBarTrailing) {
+                if !entity.detailFieldsList.isEmpty {
+                    Button {
+                        showSaveTemplateSheet = true
+                    } label: {
+                        Image(systemName: "bookmark")
+                    }
+                    .accessibilityLabel("Als Set speichern")
+                }
+
                 Button {
                     showAddSheet = true
                 } label: {
@@ -67,6 +107,9 @@ struct DetailsSchemaBuilderView: View {
                     break
                 }
             }
+        }
+        .sheet(isPresented: $showSaveTemplateSheet) {
+            DetailsSchemaSaveTemplateSheet(entity: entity)
         }
         .sheet(item: $editField) { field in
             DetailsEditFieldSheet(entity: entity, field: field) { result in
