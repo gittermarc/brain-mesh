@@ -131,6 +131,9 @@ struct GraphCanvasScreen: View {
     // NOTE: Must not be `private` because the load pipeline lives in extension files.
     @State var loadTask: Task<Void, Never>?
 
+    // ✅ Stale-result guard (only commit if token matches the latest scheduled load)
+    @State var currentLoadToken: UUID = UUID()
+
     // MiniMap emphasis
     @State var miniMapEmphasized: Bool = false
     @State var miniMapPulseTask: Task<Void, Never>?
@@ -366,8 +369,12 @@ struct GraphCanvasScreen: View {
     func scheduleLoadGraph(resetLayout: Bool) {
         Task { @MainActor in
             loadTask?.cancel()
-            loadTask = Task {
-                await loadGraph(resetLayout: resetLayout)
+
+            let token = UUID()
+            currentLoadToken = token
+
+            loadTask = Task(priority: .utility) {
+                await loadGraph(loadToken: token, resetLayout: resetLayout)
             }
         }
     }

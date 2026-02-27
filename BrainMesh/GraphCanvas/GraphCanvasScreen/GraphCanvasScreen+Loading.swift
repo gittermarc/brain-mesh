@@ -22,7 +22,10 @@ extension GraphCanvasScreen {
     }
 
     @MainActor
-    func loadGraph(resetLayout: Bool = true) async {
+    func loadGraph(loadToken: UUID, resetLayout: Bool = true) async {
+        // ✅ Stale-result guard: only the latest scheduled load is allowed to touch UI state.
+        guard currentLoadToken == loadToken else { return }
+
         if Task.isCancelled {
             isLoading = false
             return
@@ -47,6 +50,9 @@ extension GraphCanvasScreen {
                 maxNodes: maxNodes,
                 maxLinks: maxLinks
             )
+
+            // If another load was scheduled while we were fetching, ignore this result.
+            guard currentLoadToken == loadToken else { return }
 
             if Task.isCancelled {
                 isLoading = false
@@ -77,6 +83,9 @@ extension GraphCanvasScreen {
             selection = newSelection
             directedEdgeNotes = newDirectedNotes
 
+            // If another load was scheduled while we were applying the result, ignore any further work.
+            guard currentLoadToken == loadToken else { return }
+
             if Task.isCancelled {
                 isLoading = false
                 return
@@ -88,7 +97,16 @@ extension GraphCanvasScreen {
             BMLog.load.info(
                 "loadGraph ok mode=\(mode, privacy: .public) focus=\(focusID, privacy: .public) hops=\(hopsValue, privacy: .public) attrs=\(includeAttrs, privacy: .public) nodes=\(nodes.count, privacy: .public) edges=\(edges.count, privacy: .public) ms=\(t.millisecondsElapsed, format: .fixed(precision: 2))"
             )
+        } catch is CancellationError {
+            // Cancellation is expected when switching graphs / focus / settings quickly.
+            // We intentionally do not surface this as an error.
+            if currentLoadToken == loadToken {
+                isLoading = false
+            }
         } catch {
+            // Ignore stale errors from older loads.
+            guard currentLoadToken == loadToken else { return }
+
             isLoading = false
             loadError = error.localizedDescription
 

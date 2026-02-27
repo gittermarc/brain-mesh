@@ -55,29 +55,31 @@ actor GraphCanvasDataLoader {
         }
 
         // Run SwiftData fetches and relationship traversal off the UI thread.
-        return try await Task.detached(priority: .utility) { [configuredContainer] in
-            let context = ModelContext(configuredContainer.container)
-            context.autosaveEnabled = false
+        try Task.checkCancellation()
 
-            if let focusEntityID {
-                return try GraphCanvasDataLoader.loadNeighborhood(
-                    context: context,
-                    activeGraphID: activeGraphID,
-                    centerID: focusEntityID,
-                    hops: hops,
-                    includeAttributes: includeAttributes,
-                    maxNodes: maxNodes,
-                    maxLinks: maxLinks
-                )
-            } else {
-                return try GraphCanvasDataLoader.loadGlobal(
-                    context: context,
-                    activeGraphID: activeGraphID,
-                    maxNodes: maxNodes,
-                    maxLinks: maxLinks
-                )
-            }
-        }.value
+        let context = ModelContext(configuredContainer.container)
+        context.autosaveEnabled = false
+
+        try Task.checkCancellation()
+
+        if let focusEntityID {
+            return try GraphCanvasDataLoader.loadNeighborhood(
+                context: context,
+                activeGraphID: activeGraphID,
+                centerID: focusEntityID,
+                hops: hops,
+                includeAttributes: includeAttributes,
+                maxNodes: maxNodes,
+                maxLinks: maxLinks
+            )
+        } else {
+            return try GraphCanvasDataLoader.loadGlobal(
+                context: context,
+                activeGraphID: activeGraphID,
+                maxNodes: maxNodes,
+                maxLinks: maxLinks
+            )
+        }
     }
 
     // MARK: - Core loaders
@@ -88,6 +90,8 @@ actor GraphCanvasDataLoader {
         maxNodes: Int,
         maxLinks: Int
     ) throws -> GraphCanvasSnapshot {
+        try Task.checkCancellation()
+
         var eFD: FetchDescriptor<MetaEntity>
         if let gid = activeGraphID {
             eFD = FetchDescriptor(
@@ -99,6 +103,7 @@ actor GraphCanvasDataLoader {
         }
         eFD.fetchLimit = maxNodes
         let ents = try context.fetch(eFD)
+        try Task.checkCancellation()
 
         let kEntity = NodeKind.entity.rawValue
         var lFD: FetchDescriptor<MetaLink>
@@ -120,6 +125,7 @@ actor GraphCanvasDataLoader {
         }
         lFD.fetchLimit = maxLinks
         let links = try context.fetch(lFD)
+        try Task.checkCancellation()
 
         let nodeIDs = Set(ents.map { $0.id })
         let filteredLinks = links.filter { nodeIDs.contains($0.sourceID) && nodeIDs.contains($0.targetID) }
@@ -145,6 +151,7 @@ actor GraphCanvasDataLoader {
         var newIconSymbolCache: [NodeKey: String] = [:]
 
         for e in ents {
+            try Task.checkCancellation()
             let k = NodeKey(kind: .entity, uuid: e.id)
             newLabelCache[k] = e.name
             if let p = e.imagePath, !p.isEmpty { newImagePathCache[k] = p }
@@ -173,6 +180,8 @@ actor GraphCanvasDataLoader {
         let kEntity = NodeKind.entity.rawValue
         let gid = activeGraphID
 
+        try Task.checkCancellation()
+
         // BFS – Entity neighborhood (batch per hop, no per-node fetch)
         var visitedEntities: Set<UUID> = [centerID]
         var frontier: Set<UUID> = [centerID]
@@ -185,10 +194,12 @@ actor GraphCanvasDataLoader {
 
         if hops > 0 {
             for _ in 1...hops {
+                try Task.checkCancellation()
+
                 if visitedEntities.count >= maxNodes { break }
                 if frontier.isEmpty { break }
                 if collectedEntityLinks.count >= maxLinks { break }
-                if Task.isCancelled { break }
+                try Task.checkCancellation()
 
                 let frontierIDs = Array(frontier)
                 let remainingLinks = max(0, maxLinks - collectedEntityLinks.count)
@@ -218,12 +229,15 @@ actor GraphCanvasDataLoader {
 
                 hopFD.fetchLimit = remainingLinks
                 let hopLinks = (try? context.fetch(hopFD)) ?? []
+                try Task.checkCancellation()
                 if hopLinks.isEmpty { break }
 
                 var next: Set<UUID> = []
                 next.reserveCapacity(frontier.count * 2)
 
                 for l in hopLinks {
+                    try Task.checkCancellation()
+
                     if !seenEntityLinkIDs.insert(l.id).inserted { continue }
 
                     collectedEntityLinks.append(l)
@@ -266,6 +280,7 @@ actor GraphCanvasDataLoader {
         }
         eFD.fetchLimit = maxNodes
         let ents = try context.fetch(eFD)
+        try Task.checkCancellation()
 
         // Attributes (optional) – keep behavior, but only within node budget
         var attrs: [MetaAttribute] = []
@@ -273,6 +288,8 @@ actor GraphCanvasDataLoader {
             let remaining = max(0, maxNodes - ents.count)
             if remaining > 0 {
                 for e in ents {
+                    try Task.checkCancellation()
+
                     let sortedAttrs = e.attributesList.sorted { $0.name < $1.name }
                     for a in sortedAttrs {
                         if let gid, a.graphID != gid { continue }
@@ -287,8 +304,14 @@ actor GraphCanvasDataLoader {
         // Nodes
         var newNodes: [GraphNode] = []
         newNodes.reserveCapacity(ents.count + attrs.count)
-        for e in ents { newNodes.append(GraphNode(key: NodeKey(kind: .entity, uuid: e.id), label: e.name)) }
-        for a in attrs { newNodes.append(GraphNode(key: NodeKey(kind: .attribute, uuid: a.id), label: a.name)) }
+        for e in ents {
+            try Task.checkCancellation()
+            newNodes.append(GraphNode(key: NodeKey(kind: .entity, uuid: e.id), label: e.name))
+        }
+        for a in attrs {
+            try Task.checkCancellation()
+            newNodes.append(GraphNode(key: NodeKey(kind: .attribute, uuid: a.id), label: a.name))
+        }
 
         let nodeKeySet = Set(newNodes.map(\.key))
 
@@ -299,6 +322,8 @@ actor GraphCanvasDataLoader {
 
         // 1) Entity–Entity links from BFS collection
         for l in collectedEntityLinks {
+            try Task.checkCancellation()
+
             let a = NodeKey(kind: .entity, uuid: l.sourceID)
             let b = NodeKey(kind: .entity, uuid: l.targetID)
             if nodeKeySet.contains(a) && nodeKeySet.contains(b) {
@@ -321,6 +346,8 @@ actor GraphCanvasDataLoader {
             }
 
             for a in attrs {
+                try Task.checkCancellation()
+
                 guard let ownerID = attrOwner[a.id] else { continue }
 
                 let ek = NodeKey(kind: .entity, uuid: ownerID)
@@ -360,8 +387,10 @@ actor GraphCanvasDataLoader {
                 // Oversample a bit because we filter by (kind,id) in-memory.
                 linkFD.fetchLimit = min(maxLinks, max(remaining * 4, remaining))
                 let candidateLinks = (try? context.fetch(linkFD)) ?? []
+                try Task.checkCancellation()
 
                 for l in candidateLinks {
+                    try Task.checkCancellation()
                     let a = NodeKey(kind: NodeKind(rawValue: l.sourceKindRaw) ?? .entity, uuid: l.sourceID)
                     let b = NodeKey(kind: NodeKind(rawValue: l.targetKindRaw) ?? .entity, uuid: l.targetID)
                     if nodeKeySet.contains(a) && nodeKeySet.contains(b) {
@@ -386,6 +415,7 @@ actor GraphCanvasDataLoader {
         var newIconSymbolCache: [NodeKey: String] = [:]
 
         for e in ents {
+            try Task.checkCancellation()
             let k = NodeKey(kind: .entity, uuid: e.id)
             newLabelCache[k] = e.name
             if let p = e.imagePath, !p.isEmpty { newImagePathCache[k] = p }
@@ -393,6 +423,7 @@ actor GraphCanvasDataLoader {
         }
 
         for a in attrs {
+            try Task.checkCancellation()
             let k = NodeKey(kind: .attribute, uuid: a.id)
             newLabelCache[k] = a.displayName
             if let p = a.imagePath, !p.isEmpty { newImagePathCache[k] = p }
