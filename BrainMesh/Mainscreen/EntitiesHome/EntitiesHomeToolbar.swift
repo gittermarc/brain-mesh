@@ -19,6 +19,16 @@ struct EntitiesHomeToolbar: ToolbarContent {
         UIDevice.current.userInterfaceIdiom == .pad
     }
 
+    private var leadingMaxWidth: CGFloat? {
+        guard isPad else { return nil }
+        // In compact iPad widths (e.g. iPad mini Portrait) the top bar can become very tight because
+        // searchable() injects its own trailing search button. If our leading graph label grows too wide,
+        // iPadOS moves our trailing items into the system overflow ("...") which adds an extra tap.
+        // We keep the leading label noticeably narrower in compact mode to ensure our own menu is
+        // directly tappable in the top bar.
+        return preferExpandedActions ? 220 : 140
+    }
+
     var body: some ToolbarContent {
         ToolbarItem(placement: .topBarLeading) {
             Button { showGraphPicker = true } label: {
@@ -26,7 +36,7 @@ struct EntitiesHomeToolbar: ToolbarContent {
                     .labelStyle(.titleAndIcon)
                     .lineLimit(1)
                     .truncationMode(.tail)
-                    .frame(maxWidth: isPad ? 220 : nil, alignment: .leading)
+                    .frame(maxWidth: leadingMaxWidth, alignment: .leading)
             }
             .accessibilityLabel("Graph auswählen")
         }
@@ -61,16 +71,18 @@ struct EntitiesHomeToolbar: ToolbarContent {
                 // iPad mini (Portrait) can run out of top bar space quickly when the active graph name is long.
                 // When SwiftUI collapses trailing toolbar items, icon-only buttons without an explicit label can
                 // become effectively undiscoverable. We consolidate "Ansicht" + "Sortieren" into a single menu
-                // and promote the "+" button to the primary action, so it's always reachable.
-                ToolbarItem(placement: .primaryAction) {
-                    Button { showAddEntity = true } label: {
-                        Image(systemName: "plus")
-                    }
-                    .accessibilityLabel("Entität anlegen")
-                }
-
+                // and put creation inside the same menu. This keeps the number of trailing items low enough
+                // that iPadOS won't move our menu into the system overflow ("...") — avoiding a double tap.
                 ToolbarItem(placement: .topBarTrailing) {
                     Menu {
+                        Button {
+                            showAddEntity = true
+                        } label: {
+                            Label("Entität anlegen", systemImage: "plus")
+                        }
+
+                        Divider()
+
                         Button {
                             showViewOptions = true
                         } label: {
@@ -86,14 +98,6 @@ struct EntitiesHomeToolbar: ToolbarContent {
                             }
                         }
                         .pickerStyle(.inline)
-
-                        Divider()
-
-                        Button {
-                            showAddEntity = true
-                        } label: {
-                            Label("Entität anlegen", systemImage: "plus")
-                        }
                     } label: {
                         Image(systemName: "ellipsis.circle")
                     }
