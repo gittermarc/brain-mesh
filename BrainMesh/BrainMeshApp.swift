@@ -16,6 +16,8 @@ struct BrainMeshApp: App {
     @StateObject private var onboardingCoordinator = OnboardingCoordinator()
     @StateObject private var graphLockCoordinator = GraphLockCoordinator()
     @StateObject private var systemModalCoordinator = SystemModalCoordinator()
+    @StateObject private var tabRouter = RootTabRouter()
+    @StateObject private var graphJump = GraphJumpCoordinator()
 
     private let sharedModelContainer: ModelContainer
 
@@ -70,6 +72,8 @@ struct BrainMeshApp: App {
                 .environmentObject(onboardingCoordinator)
                 .environmentObject(graphLockCoordinator)
                 .environmentObject(systemModalCoordinator)
+                .environmentObject(tabRouter)
+                .environmentObject(graphJump)
         }
         .modelContainer(sharedModelContainer)
     }
