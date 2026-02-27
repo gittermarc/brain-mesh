@@ -24,6 +24,7 @@ struct EntitiesHomeView: View {
     @State var showAddEntity = false
     @State var showGraphPicker = false
     @State var showViewOptions = false
+    @State private var preferExpandedToolbarActions = false
 
     @AppStorage(BMAppStorageKeys.entitiesHomeSort) private var entitiesHomeSortRaw: String = EntitiesHomeSortOption.nameAZ.rawValue
 
@@ -171,13 +172,28 @@ struct EntitiesHomeView: View {
             }
             .navigationTitle("Entitäten")
             .searchable(text: $searchText, prompt: "Entität, Attribut, Notiz suchen…")
+            .background(
+                GeometryReader { proxy in
+                    Color.clear
+                        .onAppear {
+                            // On iPad mini in Portrait, toolbar space is tight and SwiftUI may drop trailing
+                            // icon-only items. We switch to a compact, menu-based toolbar when the available
+                            // width is below a safe threshold.
+                            preferExpandedToolbarActions = proxy.size.width >= 820
+                        }
+                        .onChange(of: proxy.size) { _, newSize in
+                            preferExpandedToolbarActions = newSize.width >= 820
+                        }
+                }
+            )
             .toolbar {
                 EntitiesHomeToolbar(
                     activeGraphName: activeGraphName,
                     showGraphPicker: $showGraphPicker,
                     showViewOptions: $showViewOptions,
                     sortSelection: sortBinding,
-                    showAddEntity: $showAddEntity
+                    showAddEntity: $showAddEntity,
+                    preferExpandedActions: preferExpandedToolbarActions
                 )
             }
             .sheet(isPresented: $showViewOptions) {
