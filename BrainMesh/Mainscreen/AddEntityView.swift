@@ -7,43 +7,229 @@
 
 import SwiftUI
 import SwiftData
+import PhotosUI
+import UIKit
 
 struct AddEntityView: View {
     @Environment(\.dismiss) private var dismiss
     @Environment(\.modelContext) private var modelContext
+    @EnvironmentObject private var systemModals: SystemModalCoordinator
 
     @AppStorage(BMAppStorageKeys.activeGraphID) private var activeGraphIDString: String = ""
     private var activeGraphID: UUID? { UUID(uuidString: activeGraphIDString) }
 
-    @State private var name = ""
-    @State private var iconSymbolName: String? = nil
+    @StateObject private var draft = NodeCreateDraft()
+
+    @State private var didCreate: Bool = false
+    @State private var didMarkSystemModal: Bool = false
+
+    private var canSubmit: Bool {
+        !draft.name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+    }
 
     var body: some View {
         NavigationStack {
             Form {
-                TextField("Name", text: $name)
-                    .textInputAutocapitalization(.words)
+                previewHeader
 
-                Section("Icon") {
-                    IconPickerRow(title: "Icon auswählen", symbolName: $iconSymbolName)
-                }
+                basicsSection
+
+                notesAndPhotoSection
             }
             .navigationTitle("Neue Entität")
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
-                    Button("Abbrechen") { dismiss() }
-                }
-                ToolbarItem(placement: .confirmationAction) {
-                    Button("Speichern") {
-                        let cleaned = name.trimmingCharacters(in: .whitespacesAndNewlines)
-                        let e = MetaEntity(name: cleaned, graphID: activeGraphID, iconSymbolName: iconSymbolName)
-                        modelContext.insert(e)
-                        try? modelContext.save()
+                    Button("Abbrechen") {
+                        Task { await draft.cleanupOrphanedLocalCacheIfNeeded() }
                         dismiss()
                     }
-                    .disabled(name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
                 }
             }
+            .safeAreaInset(edge: .bottom) {
+                VStack(spacing: 10) {
+                    Button {
+                        save()
+                    } label: {
+                        Text("Entität erstellen")
+                            .frame(maxWidth: .infinity)
+                    }
+                    .buttonStyle(.borderedProminent)
+                    .controlSize(.large)
+                    .disabled(!canSubmit)
+                }
+                .padding(.horizontal)
+                .padding(.vertical, 8)
+                .background(.ultraThinMaterial)
+            }
+            .photosPicker(
+                isPresented: Binding(
+                    get: { draft.isPickingPhoto },
+                    set: { draft.isPickingPhoto = $0 }
+                ),
+                selection: Binding(
+                    get: { draft.pickerItem },
+                    set: { draft.pickerItem = $0 }
+                ),
+                matching: .images
+            )
+            .onChange(of: draft.pickerItem) { _, newItem in
+                guard let newItem else { return }
+                Task { await draft.importPhoto(newItem) }
+            }
+            .onChange(of: draft.isPickingPhoto) { _, isPresented in
+                if isPresented {
+                    if !didMarkSystemModal {
+                        didMarkSystemModal = true
+                        systemModals.beginSystemModal()
+                    }
+                } else {
+                    if didMarkSystemModal {
+                        didMarkSystemModal = false
+                        systemModals.endSystemModal()
+                    }
+                }
+            }
+            .onDisappear {
+                if didMarkSystemModal {
+                    didMarkSystemModal = false
+                    systemModals.endSystemModal()
+                }
+
+                if !didCreate {
+                    Task { await draft.cleanupOrphanedLocalCacheIfNeeded() }
+                }
+            }
+            .alert("Bild konnte nicht geladen werden", isPresented: Binding(
+                get: { draft.loadError != nil },
+                set: { if !$0 { draft.loadError = nil } }
+            )) {
+                Button("OK", role: .cancel) {}
+            } message: {
+                Text(draft.loadError ?? "")
+            }
         }
+    }
+
+    private var previewHeader: some View {
+        Section {
+            NodeCreatePreviewHeader(
+                kindTitle: "Entität",
+                name: draft.name,
+                iconSymbolName: draft.iconSymbolName,
+                subtitle: "Optional: Notiz & Headerbild",
+                previewImage: draft.previewUIImage
+            )
+            .padding(.vertical, 6)
+            .listRowInsets(EdgeInsets())
+            .listRowBackground(Color.clear)
+        }
+        .listSectionSeparator(.hidden)
+    }
+
+    private var basicsSection: some View {
+        Section {
+            TextField("Name", text: Binding(
+                get: { draft.name },
+                set: { draft.name = $0 }
+            ))
+            .textInputAutocapitalization(.words)
+
+            IconPickerRow(
+                title: "Icon auswählen",
+                symbolName: Binding(
+                    get: { draft.iconSymbolName },
+                    set: { draft.iconSymbolName = $0 }
+                )
+            )
+        } header: {
+            DetailSectionHeader(
+                title: "Basics",
+                systemImage: "sparkles",
+                subtitle: "Name & Icon kannst du später jederzeit ändern."
+            )
+        }
+    }
+
+    private var notesAndPhotoSection: some View {
+        Section {
+            notesEditor
+            photoBlock
+        } header: {
+            DetailSectionHeader(
+                title: "Notizen & Bild",
+                systemImage: "pencil.and.outline",
+                subtitle: "Notizen sind durchsuchbar. Bilder werden iCloud-schonend gespeichert."
+            )
+        }
+    }
+
+    private var notesEditor: some View {
+        ZStack(alignment: .topLeading) {
+            if draft.notes.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                Text("Notizen hinzufügen …")
+                    .foregroundStyle(.secondary)
+                    .padding(.horizontal, 5)
+                    .padding(.vertical, 8)
+            }
+            TextEditor(text: Binding(
+                get: { draft.notes },
+                set: { draft.notes = $0 }
+            ))
+            .frame(minHeight: 140)
+        }
+    }
+
+    private var photoBlock: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            if let ui = draft.previewUIImage {
+                Image(uiImage: ui)
+                    .resizable()
+                    .scaledToFit()
+                    .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+                    .overlay(RoundedRectangle(cornerRadius: 12, style: .continuous).stroke(.secondary.opacity(0.25)))
+                    .padding(.top, 6)
+            } else {
+                Text("Kein Headerbild ausgewählt.")
+                    .foregroundStyle(.secondary)
+            }
+
+            HStack(spacing: 12) {
+                Button {
+                    draft.isPickingPhoto = true
+                } label: {
+                    Label(draft.hasPhoto() ? "Headerbild ersetzen" : "Headerbild auswählen", systemImage: "photo")
+                }
+
+                if draft.hasPhoto() {
+                    Button(role: .destructive) {
+                        draft.removePhoto()
+                    } label: {
+                        Label("Entfernen", systemImage: "trash")
+                    }
+                }
+
+                Spacer(minLength: 0)
+            }
+        }
+    }
+
+    private func save() {
+        let cleaned = draft.name.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !cleaned.isEmpty else { return }
+
+        let e = MetaEntity(name: cleaned, graphID: activeGraphID, iconSymbolName: draft.iconSymbolName)
+        e.id = draft.stableID
+        e.notes = draft.notes
+
+        if let d = draft.imageData, !d.isEmpty {
+            e.imageData = d
+            e.imagePath = (draft.imagePath?.isEmpty == false) ? draft.imagePath : draft.stableFilename()
+        }
+
+        modelContext.insert(e)
+        try? modelContext.save()
+
+        didCreate = true
+        dismiss()
     }
 }
