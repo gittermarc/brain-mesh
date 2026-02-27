@@ -25,6 +25,9 @@ struct SettingsView: View {
     var body: some View {
         ScrollView {
             LazyVGrid(columns: hubGridColumns, spacing: 12) {
+                proTile
+                    .gridCellColumns(hubGridColumns.count)
+
                 displayTile
 
                 Button {
@@ -95,4 +98,5 @@ struct SettingsView: View {
     NavigationStack {
         SettingsView(showDoneButton: false)
     }
+    .environmentObject(ProEntitlementStore())
 }
