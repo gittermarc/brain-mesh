@@ -5,6 +5,7 @@
 
 import SwiftUI
 import SwiftData
+import Foundation
 
 extension GraphCanvasScreen {
 
@@ -171,6 +172,62 @@ extension GraphCanvasScreen {
 
             if let s = a.iconSymbolName, !s.isEmpty { iconSymbolCache[key] = s }
             else { iconSymbolCache.removeValue(forKey: key) }
+        }
+    }
+
+    // MARK: - Graph Jump staging (PR 3)
+
+    /// Stages a pending jump so it can be applied after the next load (when nodes + layout are available).
+    @MainActor
+    func stageGraphJump(_ jump: GraphJump) {
+        // Avoid re-staging the same jump repeatedly.
+        if stagedJumpID == jump.id { return }
+        stagedJumpID = jump.id
+        stagedJumpGraphID = jump.graphID
+        stagedSelectAfterLoad = jump.nodeKey
+        stagedCenterAfterLoad = jump.centerOnArrival ? jump.nodeKey : nil
+    }
+
+    @MainActor
+    func clearStagedGraphJump() {
+        stagedJumpID = nil
+        stagedJumpGraphID = nil
+        stagedSelectAfterLoad = nil
+        stagedCenterAfterLoad = nil
+    }
+
+    /// Applies the staged jump if the required node exists in the just-loaded snapshot.
+    @MainActor
+    func applyStagedJumpAfterLoadIfNeeded(availableKeys: Set<NodeKey>) {
+        guard let stagedID = stagedJumpID else { return }
+        guard let stagedGraphID = stagedJumpGraphID else { return }
+        guard let key = stagedSelectAfterLoad else { return }
+
+        // Only apply if this load belongs to the expected graph.
+        guard activeGraphID == stagedGraphID else { return }
+        guard availableKeys.contains(key) else { return }
+
+        selection = key
+
+        if stagedCenterAfterLoad == key {
+            centerOnNodeAfterLayout(key)
+        }
+
+        // Consume only if the coordinator still holds the same jump.
+        if let pending = graphJump.pendingJump, pending.id == stagedID {
+            _ = graphJump.consumeJump()
+        }
+
+        clearStagedGraphJump()
+    }
+
+    /// Centers the camera after SwiftUI had a chance to commit `positions` for the new layout.
+    @MainActor
+    func centerOnNodeAfterLayout(_ key: NodeKey) {
+        Task { @MainActor in
+            await Task.yield()
+            guard positions[key] != nil else { return }
+            cameraCommand = CameraCommand(kind: .center(key))
         }
     }
 

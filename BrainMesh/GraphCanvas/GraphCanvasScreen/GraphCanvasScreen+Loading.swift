@@ -92,6 +92,9 @@ extension GraphCanvasScreen {
             }
 
             if resetLayout { seedLayout(preservePinned: true) }
+
+            // ✅ Jump handling: after nodes + layout are committed, select + center if a staged jump is waiting.
+            applyStagedJumpAfterLoadIfNeeded(availableKeys: nodeKeys)
             isLoading = false
 
             BMLog.load.info(
