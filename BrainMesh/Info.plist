@@ -8,5 +8,9 @@
 	</array>
 	<key>NSFaceIDUsageDescription</key>
 	<string>BrainMesh nutzt Face ID / Touch ID, um geschützte Graphen zu entsperren.</string>
+	<key>BM_PRO_SUBSCRIPTION_ID_01</key>
+	<string>01</string>
+	<key>BM_PRO_SUBSCRIPTION_ID_02</key>
+	<string>02</string>
 </dict>
 </plist>

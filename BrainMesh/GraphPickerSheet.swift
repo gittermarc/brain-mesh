@@ -17,6 +17,7 @@ struct GraphPickerSheet: View {
     @Environment(\.modelContext) private var modelContext
 
     @EnvironmentObject private var graphLock: GraphLockCoordinator
+    @EnvironmentObject private var proStore: ProEntitlementStore
 
     @AppStorage(BMAppStorageKeys.activeGraphID) private var activeGraphIDString: String = ""
 
@@ -25,6 +26,9 @@ struct GraphPickerSheet: View {
 
     @State private var showAdd = false
     @State private var newName = ""
+
+    @State private var showProPaywall = false
+    @State private var paywallFeature: ProFeature = .moreGraphs
 
     // Item-driven sheet to avoid SwiftUI "blank sheet" races.
     @State private var securityGraph: MetaGraph?
@@ -80,6 +84,12 @@ struct GraphPickerSheet: View {
 
                 ToolbarItem(placement: .topBarTrailing) {
                     Button {
+                        if !proStore.isProActive && displayedGraphs.count >= ProLimits.freeGraphLimit {
+                            paywallFeature = .moreGraphs
+                            showProPaywall = true
+                            return
+                        }
+
                         newName = ""
                         showAdd = true
                     } label: {
@@ -143,6 +153,9 @@ struct GraphPickerSheet: View {
         .sheet(item: $securityGraph) { g in
             GraphSecuritySheet(graph: g)
         }
+            .sheet(isPresented: $showProPaywall) {
+                ProPaywallView(feature: paywallFeature)
+            }
         .presentationDetents([.medium, .large])
     }
 

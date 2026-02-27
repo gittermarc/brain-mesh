@@ -13,12 +13,16 @@ struct GraphSecuritySheet: View {
     @Environment(\.dismiss) private var dismiss
     @Environment(\.modelContext) private var modelContext
     @EnvironmentObject private var graphLock: GraphLockCoordinator
+    @EnvironmentObject private var proStore: ProEntitlementStore
 
     @Bindable var graph: MetaGraph
 
     @State private var showSetPassword: Bool = false
     @State private var showRemovePasswordConfirm: Bool = false
     @State private var showBiometricsUnavailable: Bool = false
+
+    @State private var showProPaywall: Bool = false
+    @State private var paywallFeature: ProFeature = .graphProtection
 
     @State private var biometricsAvailable: Bool = false
     @State private var biometricsLabel: String = "Biometrie"
@@ -73,7 +77,12 @@ struct GraphSecuritySheet: View {
                     if graph.lockPasswordEnabled {
                         if graph.isPasswordConfigured {
                             Button {
-                                showSetPassword = true
+                                if !proStore.isProActive {
+                                    paywallFeature = .graphProtection
+                                    showProPaywall = true
+                                } else {
+                                    showSetPassword = true
+                                }
                             } label: {
                                 Label("Passwort ändern", systemImage: "key")
                             }
@@ -85,7 +94,12 @@ struct GraphSecuritySheet: View {
                             }
                         } else {
                             Button {
-                                showSetPassword = true
+                                if !proStore.isProActive {
+                                    paywallFeature = .graphProtection
+                                    showProPaywall = true
+                                } else {
+                                    showSetPassword = true
+                                }
                             } label: {
                                 Label("Passwort setzen", systemImage: "key")
                             }
@@ -122,6 +136,9 @@ struct GraphSecuritySheet: View {
             .sheet(isPresented: $showSetPassword) {
                 GraphSetPasswordView(graph: graph)
             }
+            .sheet(isPresented: $showProPaywall) {
+                ProPaywallView(feature: paywallFeature)
+            }
             .task {
                 let info = graphLock.canUseBiometrics()
                 biometricsAvailable = info.available
@@ -135,6 +152,11 @@ struct GraphSecuritySheet: View {
             get: { graph.lockBiometricsEnabled },
             set: { newValue in
                 if newValue {
+                    if !proStore.isProActive {
+                        paywallFeature = .graphProtection
+                        showProPaywall = true
+                        return
+                    }
                     if biometricsAvailable {
                         graph.lockBiometricsEnabled = true
                         graphLock.lock(graphID: graph.id)
@@ -156,6 +178,11 @@ struct GraphSecuritySheet: View {
             get: { graph.lockPasswordEnabled },
             set: { newValue in
                 if newValue {
+                    if !proStore.isProActive {
+                        paywallFeature = .graphProtection
+                        showProPaywall = true
+                        return
+                    }
                     graph.lockPasswordEnabled = true
                     graphLock.lock(graphID: graph.id)
                     save()
