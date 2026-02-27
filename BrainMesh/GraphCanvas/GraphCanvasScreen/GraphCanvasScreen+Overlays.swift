@@ -121,23 +121,8 @@ extension GraphCanvasScreen {
 
                 Spacer()
 
-                // ✅ Degree cap “more”
-                if hiddenLinks > 0 {
-                    Button {
-                        showAllLinksForSelection = true
-                    } label: {
-                        Label("Mehr (\(hiddenLinks))", systemImage: "ellipsis.circle")
-                    }
-                    .buttonStyle(.bordered)
-                    .help("Weitere Links dieser Node anzeigen")
-                } else if showAllLinksForSelection {
-                    Button {
-                        showAllLinksForSelection = false
-                    } label: {
-                        Label("Weniger", systemImage: "chevron.up.circle")
-                    }
-                    .buttonStyle(.bordered)
-                }
+                // ✅ Degree cap “more/less” (never grows vertically on narrow iPhone widths)
+                degreeCapToggleButton(hiddenLinks: hiddenLinks)
 
                 // ✅ Expand
                 Button {
@@ -207,6 +192,65 @@ extension GraphCanvasScreen {
         .clipShape(RoundedRectangle(cornerRadius: 14))
         .shadow(radius: 6, y: 2)
         .frame(maxWidth: 640)
+    }
+
+    @ViewBuilder
+    func degreeCapToggleButton(hiddenLinks: Int) -> some View {
+        if hiddenLinks > 0 {
+            // On iPhone portrait, the full “Mehr (12)” label can wrap and make the action chip very tall.
+            // `ViewThatFits` automatically falls back to compact variants that keep the height stable.
+            ViewThatFits(in: .horizontal) {
+                Button {
+                    showAllLinksForSelection = true
+                } label: {
+                    Label("Mehr (\(hiddenLinks))", systemImage: "ellipsis.circle")
+                        .lineLimit(1)
+                        .minimumScaleFactor(0.85)
+                }
+                .buttonStyle(.bordered)
+
+                Button {
+                    showAllLinksForSelection = true
+                } label: {
+                    HStack(spacing: 4) {
+                        Image(systemName: "ellipsis.circle")
+                        Text(verbatim: "\(hiddenLinks)")
+                            .monospacedDigit()
+                    }
+                    .lineLimit(1)
+                }
+                .buttonStyle(.bordered)
+
+                Button {
+                    showAllLinksForSelection = true
+                } label: {
+                    Image(systemName: "ellipsis.circle")
+                }
+                .buttonStyle(.bordered)
+            }
+            .accessibilityLabel("Mehr (\(hiddenLinks))")
+            .help("Weitere Links dieser Node anzeigen")
+        } else if showAllLinksForSelection {
+            ViewThatFits(in: .horizontal) {
+                Button {
+                    showAllLinksForSelection = false
+                } label: {
+                    Label("Weniger", systemImage: "chevron.up.circle")
+                        .lineLimit(1)
+                        .minimumScaleFactor(0.85)
+                }
+                .buttonStyle(.bordered)
+
+                Button {
+                    showAllLinksForSelection = false
+                } label: {
+                    Image(systemName: "chevron.up.circle")
+                }
+                .buttonStyle(.bordered)
+            }
+            .accessibilityLabel("Weniger")
+            .help("Nur die wichtigsten Links anzeigen")
+        }
     }
 
     func detailsPeekBar(chips: [GraphDetailsPeekChip]) -> some View {
