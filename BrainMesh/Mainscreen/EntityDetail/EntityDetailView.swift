@@ -96,6 +96,8 @@ struct EntityDetailView: View {
                         )
 
                         EntityDetailHighlightsRow(
+                            graphID: entity.graphID,
+                            nodeKey: NodeKey(kind: .entity, uuid: entity.id),
                             notes: entity.notes,
                             outgoingLinks: outgoingLinks,
                             incomingLinks: incomingLinks,

@@ -8,6 +8,15 @@
 import SwiftUI
 
 struct EntityDetailHighlightsRow: View {
+    @EnvironmentObject private var tabRouter: RootTabRouter
+    @EnvironmentObject private var graphJump: GraphJumpCoordinator
+    @AppStorage(BMAppStorageKeys.activeGraphID) private var activeGraphIDString: String = ""
+
+    private var activeGraphID: UUID? { UUID(uuidString: activeGraphIDString) }
+
+    let graphID: UUID?
+    let nodeKey: NodeKey
+
     let notes: String
     let outgoingLinks: [MetaLink]
     let incomingLinks: [MetaLink]
@@ -46,12 +55,34 @@ struct EntityDetailHighlightsRow: View {
             )
 
             NodeHighlightTile(
+                title: "Im Graph",
+                systemImage: "circle.grid.cross",
+                subtitle: "Node markieren · Verbindungen zeigen",
+                footer: "Tippen zum Öffnen",
+                onTap: { openInGraph() }
+            )
+
+            NodeHighlightTile(
                 title: "Top Links",
                 systemImage: "link",
                 subtitle: topLinks.isEmpty ? "Keine Links" : topLinks.map { $0.label }.joined(separator: " · "),
                 footer: "Tippen für Alle",
                 onTap: { onJumpToConnections() }
             )
+        }
+    }
+
+    private func openInGraph() {
+        let gid = graphID ?? activeGraphID
+
+        Task { @MainActor in
+            if let gid {
+                if activeGraphIDString != gid.uuidString {
+                    activeGraphIDString = gid.uuidString
+                }
+                graphJump.requestJump(to: nodeKey, in: gid, centerOnArrival: true)
+            }
+            tabRouter.openGraph(animated: true)
         }
     }
 }

@@ -32,6 +32,8 @@ extension AttributeDetailView {
         )
 
         AttributeDetailHighlightsRow(
+            graphID: attribute.graphID ?? attribute.owner?.graphID,
+            nodeKey: NodeKey(kind: .attribute, uuid: attribute.id),
             notes: attribute.notes,
             outgoingLinks: outgoingLinks,
             incomingLinks: incomingLinks,
