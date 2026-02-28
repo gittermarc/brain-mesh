@@ -12,5 +12,27 @@
 	<string>01</string>
 	<key>BM_PRO_SUBSCRIPTION_ID_02</key>
 	<string>02</string>
+	<key>UTExportedTypeDeclarations</key>
+	<array>
+		<dict>
+			<key>UTTypeIdentifier</key>
+			<string>de.marcfechner.brainmesh.graph</string>
+			<key>UTTypeDescription</key>
+			<string>BrainMesh Graph Export</string>
+			<key>UTTypeConformsTo</key>
+			<array>
+				<string>public.json</string>
+			</array>
+			<key>UTTypeTagSpecification</key>
+			<dict>
+				<key>public.filename-extension</key>
+				<array>
+					<string>bmgraph</string>
+				</array>
+				<key>public.mime-type</key>
+				<string>application/vnd.brainmesh.graph+json</string>
+			</dict>
+		</dict>
+	</array>
 </dict>
 </plist>
