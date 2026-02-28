@@ -1,0 +1,107 @@
+{
+  "appPolicies" : {
+    "eula" : "",
+    "policies" : [
+      {
+        "locale" : "en_US",
+        "policyText" : "",
+        "policyURL" : ""
+      }
+    ]
+  },
+  "identifier" : "143CFB98",
+  "nonRenewingSubscriptions" : [
+
+  ],
+  "products" : [
+
+  ],
+  "settings" : {
+    "_applicationInternalID" : "6756629300",
+    "_askToBuyEnabled" : false,
+    "_billingGracePeriodEnabled" : false,
+    "_billingIssuesEnabled" : false,
+    "_developerTeamID" : "HPJKAPZ8A3",
+    "_disableDialogs" : false,
+    "_failTransactionsEnabled" : false,
+    "_lastSynchronizedDate" : 793950688.67331302,
+    "_locale" : "de",
+    "_renewalBillingIssuesEnabled" : false,
+    "_storefront" : "DEU",
+    "_storeKitErrors" : [
+
+    ],
+    "_timeRate" : 0
+  },
+  "subscriptionGroups" : [
+    {
+      "id" : "21952804",
+      "localizations" : [
+
+      ],
+      "name" : "BrainMesh Pro",
+      "subscriptions" : [
+        {
+          "adHocOffers" : [
+
+          ],
+          "codeOffers" : [
+
+          ],
+          "displayPrice" : "0.99",
+          "familyShareable" : false,
+          "groupNumber" : 1,
+          "internalID" : "6759787347",
+          "introductoryOffer" : null,
+          "localizations" : [
+            {
+              "description" : "BrainMesh Pro - im Monatstarif",
+              "displayName" : "BrainMesh Pro - monatlich",
+              "locale" : "de"
+            }
+          ],
+          "productID" : "01",
+          "recurringSubscriptionPeriod" : "P1M",
+          "referenceName" : "de.marcfechner.BrainMesh.pro.monthly",
+          "subscriptionGroupID" : "21952804",
+          "type" : "RecurringSubscription",
+          "winbackOffers" : [
+
+          ]
+        },
+        {
+          "adHocOffers" : [
+
+          ],
+          "codeOffers" : [
+
+          ],
+          "displayPrice" : "9.99",
+          "familyShareable" : false,
+          "groupNumber" : 2,
+          "internalID" : "6759787224",
+          "introductoryOffer" : null,
+          "localizations" : [
+            {
+              "description" : "BrainMesh Pro - im Jahrestarif",
+              "displayName" : "BrainMesh Pro - jährlich",
+              "locale" : "de"
+            }
+          ],
+          "productID" : "02",
+          "recurringSubscriptionPeriod" : "P1Y",
+          "referenceName" : "de.marcfechner.BrainMesh.pro.yearly",
+          "subscriptionGroupID" : "21952804",
+          "type" : "RecurringSubscription",
+          "winbackOffers" : [
+
+          ]
+        }
+      ]
+    }
+  ],
+  "version" : {
+    "major" : 4,
+    "minor" : 0
+  }
+}
