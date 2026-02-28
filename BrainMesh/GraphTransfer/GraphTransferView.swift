@@ -42,11 +42,13 @@ struct GraphTransferView: View {
             allowedContentTypes: [.brainMeshGraph],
             allowsMultipleSelection: false
         ) { result in
-            // Always end the "system modal" grace window.
-            systemModals.endSystemModal()
-            // Defensive: make sure the file importer can't re-open on state updates.
-            model.isShowingFileImporter = false
-            model.handlePickedFile(result)
+            Task { @MainActor in
+                // Always end the "system modal" grace window.
+                systemModals.endSystemModal()
+                // Defensive: make sure the file importer can't re-open on state updates.
+                model.isShowingFileImporter = false
+                model.handlePickedFile(result)
+            }
         }
         .sheet(isPresented: $model.isShowingShareSheet, onDismiss: {
             systemModals.endSystemModal()
@@ -94,8 +96,10 @@ struct GraphTransferView: View {
             contentType: .brainMeshGraph,
             defaultFilename: model.exportDefaultFilename
         ) { result in
-            systemModals.endSystemModal()
-            model.handleFileExportResult(result)
+            Task { @MainActor in
+                systemModals.endSystemModal()
+                model.handleFileExportResult(result)
+            }
         }
 .alert(item: $model.alertState) { state in
             Alert(
@@ -254,8 +258,7 @@ struct GraphTransferView: View {
         switch model.importState {
         case .idle:
             Button {
-                systemModals.beginSystemModal()
-                model.isShowingFileImporter = true
+                presentFileImporter()
             } label: {
                 Label("Datei auswählen…", systemImage: "doc")
             }
@@ -268,29 +271,29 @@ struct GraphTransferView: View {
             }
 
         case .ready(let preview):
-            VStack(alignment: .leading, spacing: 12) {
-                importPreviewCard(preview)
+            // NOTE: In a List row, nested buttons inside a single VStack can sometimes become unreliable
+            // (the row highlights but the inner buttons don't fire). By returning multiple top-level rows
+            // here, each button becomes its own List row and remains consistently tappable.
+            importPreviewCard(preview)
 
-                HStack {
-                    Button {
-                        Task {
-                            await model.attemptStartImport(using: modelContext, isProActive: proStore.isProActive)
-                        }
-                    } label: {
-                        Label("Import starten", systemImage: "tray.and.arrow.down")
-                    }
-                    .disabled(model.isBusy)
-
-                    Spacer()
-
-                    Button("Andere Datei…") {
-                        systemModals.beginSystemModal()
-                        model.isShowingFileImporter = true
-                    }
-                    .foregroundStyle(.secondary)
-                    .disabled(model.isBusy)
+            Button {
+                Task {
+                    await model.attemptStartImport(using: modelContext, isProActive: proStore.isProActive)
                 }
+            } label: {
+                Label("Import starten", systemImage: "tray.and.arrow.down")
             }
+            .disabled(model.isBusy)
+            .buttonStyle(.borderless)
+
+            Button {
+                presentFileImporter()
+            } label: {
+                Text("Andere Datei…")
+            }
+            .foregroundStyle(.secondary)
+            .disabled(model.isBusy)
+            .buttonStyle(.borderless)
 
         case .importing(let progress):
             VStack(alignment: .leading, spacing: 8) {
@@ -306,41 +309,57 @@ struct GraphTransferView: View {
             }
 
         case .finished(let result):
-            VStack(alignment: .leading, spacing: 12) {
-                importResultCard(result)
+            importResultCard(result)
 
-                Button {
-                    activeGraphIDString = result.newGraphID.uuidString
-                    Task { @MainActor in
-                        tabRouter.openGraph()
-                    }
-                } label: {
-                    Label("Zum importierten Graph wechseln", systemImage: "arrow.turn.down.right")
+            Button {
+                activeGraphIDString = result.newGraphID.uuidString
+                Task { @MainActor in
+                    tabRouter.openGraph()
                 }
-
-                Button("Fertig") {
-                    model.resetImport()
-                }
-                .foregroundStyle(.secondary)
+            } label: {
+                Label("Zum importierten Graph wechseln", systemImage: "arrow.turn.down.right")
             }
+            .buttonStyle(.borderless)
+
+            Button {
+                model.resetImport()
+            } label: {
+                Text("Fertig")
+            }
+            .foregroundStyle(.secondary)
+            .buttonStyle(.borderless)
 
         case .failed(let message):
-            VStack(alignment: .leading, spacing: 10) {
-                Text(message)
-                    .foregroundStyle(.secondary)
-                HStack {
-                    Button("Andere Datei…") {
-                        systemModals.beginSystemModal()
-                        model.isShowingFileImporter = true
-                    }
-                    .disabled(model.isBusy)
-                    Spacer()
-                    Button("Zurücksetzen") {
-                        model.resetImport()
-                    }
-                    .foregroundStyle(.secondary)
-                }
+            Text(message)
+                .foregroundStyle(.secondary)
+
+            Button {
+                presentFileImporter()
+            } label: {
+                Text("Andere Datei…")
             }
+            .disabled(model.isBusy)
+            .buttonStyle(.borderless)
+
+            Button {
+                model.resetImport()
+            } label: {
+                Text("Zurücksetzen")
+            }
+            .foregroundStyle(.secondary)
+            .buttonStyle(.borderless)
+        }
+    }
+
+    @MainActor
+    private func presentFileImporter() {
+        // Always close any stale presentation state first.
+        model.isShowingFileImporter = false
+        systemModals.beginSystemModal()
+        // Present on the next runloop tick so SwiftUI sees a state change.
+        Task { @MainActor in
+            await Task.yield()
+            model.isShowingFileImporter = true
         }
     }
 
