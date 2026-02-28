@@ -42,7 +42,13 @@ struct DisplaySettingsState: Codable, Equatable {
     }
 
     var attributesAllList: AttributesAllListDisplaySettings {
-        attributesAllListOverride ?? AttributesAllListDisplaySettings.preset(preset)
+        let presetValue = AttributesAllListDisplaySettings.preset(preset)
+        var resolved = attributesAllListOverride ?? presetValue
+
+        // Sticky headers are no longer user-configurable via the UI.
+        // Always resolve them from the current preset to avoid "hidden" persisted overrides.
+        resolved.stickyHeadersEnabled = presetValue.stickyHeadersEnabled
+        return resolved
     }
 
     // MARK: - Resets

@@ -165,7 +165,6 @@ struct DisplaySettingsAttributesAllListSection: View {
                 }
             }
 
-            Toggle("Sticky Header", isOn: display.attributesAllListBinding(\.stickyHeadersEnabled))
 
             Button {
                 display.resetAttributesAllList()
