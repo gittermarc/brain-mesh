@@ -27,14 +27,14 @@ struct DisplaySettingsPresetSection: View {
             .onAppear {
                 selection = display.preset
             }
-            .onChange(of: display.preset) { newValue in
+            .onChange(of: display.preset) { _, newValue in
                 // Keep the segmented control in sync with external changes.
                 guard pendingPreset == nil else { return }
                 if selection != newValue {
                     selection = newValue
                 }
             }
-            .onChange(of: selection) { newValue in
+            .onChange(of: selection) { _, newValue in
                 handlePresetSelection(newValue)
             }
             .confirmationDialog("Preset anwenden?", isPresented: $showPresetApplyDialog, titleVisibility: .visible) {
