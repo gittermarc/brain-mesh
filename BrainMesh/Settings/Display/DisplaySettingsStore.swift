@@ -33,9 +33,34 @@ final class DisplaySettingsStore: ObservableObject {
     var attributeDetail: AttributeDetailDisplaySettings { state.attributeDetail }
     var attributesAllList: AttributesAllListDisplaySettings { state.attributesAllList }
 
+    // MARK: - Override state (for UX)
+
+    var overrideCount: Int {
+        var count = 0
+        if state.entitiesHomeOverride != nil { count += 1 }
+        if state.entityDetailOverride != nil { count += 1 }
+        if state.attributeDetailOverride != nil { count += 1 }
+        if state.attributesAllListOverride != nil { count += 1 }
+        return count
+    }
+
+    var hasAnyOverrides: Bool { overrideCount > 0 }
+
     // MARK: - Preset
 
     func setPreset(_ preset: DisplayPreset) {
+        state.preset = preset
+        persist()
+    }
+
+    /// Applies the given preset.
+    /// - Parameters:
+    ///   - preset: The new preset.
+    ///   - applyToAllScreens: If `true`, clears all per-screen overrides so the preset becomes visible immediately everywhere.
+    func applyPreset(_ preset: DisplayPreset, applyToAllScreens: Bool) {
+        if applyToAllScreens {
+            state.resetAll()
+        }
         state.preset = preset
         persist()
     }
