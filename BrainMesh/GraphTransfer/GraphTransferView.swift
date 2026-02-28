@@ -16,6 +16,8 @@ struct GraphTransferView: View {
     @Environment(\.modelContext) private var modelContext
     @EnvironmentObject private var tabRouter: RootTabRouter
     @EnvironmentObject private var systemModals: SystemModalCoordinator
+    @EnvironmentObject private var graphLock: GraphLockCoordinator
+    @EnvironmentObject private var proStore: ProEntitlementStore
 
     @AppStorage(BMAppStorageKeys.activeGraphID) private var activeGraphIDString: String = ""
 
@@ -53,6 +55,36 @@ struct GraphTransferView: View {
                 ActivityView(itemSource: nil)
             }
         }
+
+        .sheet(isPresented: $model.isShowingReplaceSheet) {
+            NavigationStack {
+                GraphReplacePickerSheet(
+                    candidates: model.replaceCandidates,
+                    onCancel: {
+                        model.isShowingReplaceSheet = false
+                    },
+                    onConfirmReplace: { candidate in
+                        model.isShowingReplaceSheet = false
+                        Task {
+                            await model.replaceAndImport(
+                                candidate: candidate,
+                                modelContext: modelContext,
+                                graphLock: graphLock,
+                                currentActiveGraphIDString: activeGraphIDString,
+                                setActiveGraphIDString: { newValue in
+                                    activeGraphIDString = newValue
+                                }
+                            )
+                        }
+                    }
+                )
+            }
+            .presentationDetents([.medium, .large])
+        }
+
+        .sheet(isPresented: $model.isShowingProPaywall) {
+            ProPaywallView(feature: .moreGraphs)
+        }
         
         .fileExporter(
             isPresented: $model.isShowingFileExporter,
@@ -83,6 +115,24 @@ struct GraphTransferView: View {
             },
             message: {
                 Text(model.exportConfirmMessage(activeGraphName: model.activeGraphName))
+            }
+        )
+
+        .alert(
+            "Mehrere Graphen sind Pro",
+            isPresented: $model.isShowingImportLimitAlert,
+            actions: {
+                Button("Abbrechen", role: .cancel) {
+                }
+                Button("Pro aktivieren") {
+                    model.presentProPaywall()
+                }
+                Button("Graph ersetzen") {
+                    model.presentReplacePicker(using: modelContext)
+                }
+            },
+            message: {
+                Text("In der Gratis-Version kannst du bis zu \(GraphTransferLimits.freeMaxGraphs) Graphen haben. Du kannst einen vorhandenen Graphen ersetzen oder Pro aktivieren.")
             }
         )
     }
@@ -222,7 +272,7 @@ struct GraphTransferView: View {
                 HStack {
                     Button {
                         Task {
-                            await model.startImport()
+                            await model.attemptStartImport(using: modelContext, isProActive: proStore.isProActive)
                         }
                     } label: {
                         Label("Import starten", systemImage: "tray.and.arrow.down")
@@ -382,6 +432,12 @@ final class GraphTransferViewModel: ObservableObject, @unchecked Sendable {
         var message: String
     }
 
+    struct ReplaceCandidate: Identifiable, Hashable {
+        var id: UUID
+        var name: String
+        var createdAt: Date
+    }
+
     // UI
     @Published var activeGraphName: String = "—"
 
@@ -396,6 +452,10 @@ final class GraphTransferViewModel: ObservableObject, @unchecked Sendable {
     @Published var isShowingFileImporter: Bool = false
     @Published var isShowingShareSheet: Bool = false
 
+    @Published var isShowingImportLimitAlert: Bool = false
+    @Published var isShowingReplaceSheet: Bool = false
+    @Published var isShowingProPaywall: Bool = false
+
     @Published var isShowingFileExporter: Bool = false
     @Published var exportDocument: BMGraphFileDocument = BMGraphFileDocument(data: Data())
 
@@ -403,6 +463,8 @@ final class GraphTransferViewModel: ObservableObject, @unchecked Sendable {
     @Published var selectedImportURL: URL? = nil
 
     @Published var alertState: AlertState? = nil
+
+    @Published var replaceCandidates: [ReplaceCandidate] = []
 
     private var didConfigure: Bool = false
 
@@ -578,6 +640,116 @@ final class GraphTransferViewModel: ObservableObject, @unchecked Sendable {
     }
 
     func startImport() async {
+        await performImport()
+    }
+
+    func canCreateAdditionalGraph(isPro: Bool, currentGraphCount: Int) -> Bool {
+        if isPro { return true }
+        return currentGraphCount < GraphTransferLimits.freeMaxGraphs
+    }
+
+    func attemptStartImport(using modelContext: ModelContext, isProActive: Bool) async {
+        guard isBusy == false else { return }
+        guard selectedImportURL != nil else { return }
+
+        let uniqueGraphs = fetchUniqueGraphs(using: modelContext)
+        let currentCount = uniqueGraphs.count
+
+        if canCreateAdditionalGraph(isPro: isProActive, currentGraphCount: currentCount) {
+            await performImport()
+        } else {
+            isShowingImportLimitAlert = true
+        }
+    }
+
+    func presentReplacePicker(using modelContext: ModelContext) {
+        isShowingImportLimitAlert = false
+        isShowingProPaywall = false
+
+        let uniqueGraphs = fetchUniqueGraphs(using: modelContext)
+        replaceCandidates = uniqueGraphs
+            .sorted { $0.createdAt < $1.createdAt }
+            .map { g in
+                let n = g.name.trimmingCharacters(in: .whitespacesAndNewlines)
+                return ReplaceCandidate(id: g.id, name: n.isEmpty ? "Graph" : n, createdAt: g.createdAt)
+            }
+
+        isShowingReplaceSheet = true
+    }
+
+    func presentProPaywall() {
+        isShowingImportLimitAlert = false
+        isShowingReplaceSheet = false
+        isShowingProPaywall = true
+    }
+
+    func replaceAndImport(
+        candidate: ReplaceCandidate,
+        modelContext: ModelContext,
+        graphLock: GraphLockCoordinator,
+        currentActiveGraphIDString: String,
+        setActiveGraphIDString: @MainActor @escaping (String) -> Void
+    ) async {
+        guard isBusy == false else { return }
+        guard selectedImportURL != nil else { return }
+
+        do {
+            let activeID = UUID(uuidString: currentActiveGraphIDString)
+
+            let uniqueGraphs = fetchUniqueGraphs(using: modelContext)
+            let graphRecord = try fetchGraphRecord(for: candidate.id, using: modelContext)
+
+            let deleteResult = try await GraphDeletionService.deleteGraphCompletely(
+                graphToDelete: graphRecord,
+                currentActiveGraphID: activeID,
+                graphs: uniqueGraphs,
+                uniqueGraphs: uniqueGraphs,
+                modelContext: modelContext,
+                graphLock: graphLock
+            )
+
+            if let newActive = deleteResult.newActiveGraphID {
+                await MainActor.run {
+                    setActiveGraphIDString(newActive.uuidString)
+                }
+            }
+
+            await performImport()
+        } catch {
+            alertState = AlertState(title: "Graph ersetzen", message: "Löschen fehlgeschlagen: \(error)")
+        }
+    }
+
+    func resetImport() {
+        importState = .idle
+        selectedImportURL = nil
+    }
+
+    private func fetchUniqueGraphs(using modelContext: ModelContext) -> [MetaGraph] {
+        var fd = FetchDescriptor<MetaGraph>()
+        fd.sortBy = [SortDescriptor(\MetaGraph.createdAt, order: .forward)]
+        do {
+            let graphs = try modelContext.fetch(fd)
+            var seen = Set<UUID>()
+            return graphs.filter { seen.insert($0.id).inserted }
+        } catch {
+            return []
+        }
+    }
+
+    private func fetchGraphRecord(for id: UUID, using modelContext: ModelContext) throws -> MetaGraph {
+        let gid = id
+        var fd = FetchDescriptor<MetaGraph>(predicate: #Predicate { g in
+            g.id == gid
+        })
+        fd.fetchLimit = 1
+        if let g = try modelContext.fetch(fd).first {
+            return g
+        }
+        throw GraphTransferError.graphNotFound(graphID: id)
+    }
+
+    private func performImport() async {
         guard isBusy == false else { return }
         guard let url = selectedImportURL else { return }
 
@@ -597,11 +769,6 @@ final class GraphTransferViewModel: ObservableObject, @unchecked Sendable {
             importState = .failed(message: "Import fehlgeschlagen")
             alertState = AlertState(title: "Import fehlgeschlagen", message: String(describing: error))
         }
-    }
-
-    func resetImport() {
-        importState = .idle
-        selectedImportURL = nil
     }
 }
 
@@ -668,4 +835,6 @@ struct BMGraphFileDocument: FileDocument {
     }
     .environmentObject(RootTabRouter())
     .environmentObject(SystemModalCoordinator())
+    .environmentObject(GraphLockCoordinator())
+    .environmentObject(ProEntitlementStore())
 }
