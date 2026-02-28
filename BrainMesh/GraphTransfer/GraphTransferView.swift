@@ -603,7 +603,6 @@ final class GraphTransferViewModel: ObservableObject, @unchecked Sendable {
             alertState = AlertState(title: "Export", message: "Datei konnte nicht geladen werden.")
             return false
         }
-        return false
     }
 
     func handleFileExportResult(_ result: Result<URL, Error>) {
@@ -786,8 +785,8 @@ final class GraphTransferViewModel: ObservableObject, @unchecked Sendable {
 
         importState = .importing(progress: GraphTransferProgress(phase: .inspecting, completed: 0, label: "Datei wird geprüft…"))
 
-        let progressHandler: @Sendable (GraphTransferProgress) -> Void = { [weak self] prog in
-            Task { @MainActor in
+        let progressHandler: @Sendable (GraphTransferProgress) -> Void = { prog in
+            Task { @MainActor [weak self] in
                 guard let self else { return }
                 self.importState = .importing(progress: prog)
             }
