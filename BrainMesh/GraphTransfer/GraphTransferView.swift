@@ -44,6 +44,8 @@ struct GraphTransferView: View {
         ) { result in
             // Always end the "system modal" grace window.
             systemModals.endSystemModal()
+            // Defensive: make sure the file importer can't re-open on state updates.
+            model.isShowingFileImporter = false
             model.handlePickedFile(result)
         }
         .sheet(isPresented: $model.isShowingShareSheet, onDismiss: {
@@ -608,6 +610,10 @@ final class GraphTransferViewModel: ObservableObject, @unchecked Sendable {
     func handlePickedFile(_ result: Result<[URL], Error>) {
         guard isBusy == false else { return }
 
+        // Defensive: fileImporter should be dismissed after a result.
+        // If the binding remains true, SwiftUI may re-present the picker on the next render pass.
+        isShowingFileImporter = false
+
         switch result {
         case .success(let urls):
             guard let url = urls.first else { return }
@@ -651,6 +657,9 @@ final class GraphTransferViewModel: ObservableObject, @unchecked Sendable {
     func attemptStartImport(using modelContext: ModelContext, isProActive: Bool) async {
         guard isBusy == false else { return }
         guard selectedImportURL != nil else { return }
+
+        // Defensive: ensure we never re-present the picker while starting import.
+        isShowingFileImporter = false
 
         let uniqueGraphs = fetchUniqueGraphs(using: modelContext)
         let currentCount = uniqueGraphs.count
@@ -752,6 +761,9 @@ final class GraphTransferViewModel: ObservableObject, @unchecked Sendable {
     private func performImport() async {
         guard isBusy == false else { return }
         guard let url = selectedImportURL else { return }
+
+        // Defensive: ensure the picker is not shown while importing.
+        isShowingFileImporter = false
 
         importState = .importing(progress: GraphTransferProgress(phase: .inspecting, completed: 0, label: "Import läuft…"))
 
