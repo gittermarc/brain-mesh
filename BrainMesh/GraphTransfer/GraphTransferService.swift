@@ -244,6 +244,14 @@ actor GraphTransferService {
 
 private extension GraphTransferService {
 
+    enum ImportTuning {
+        static let saveBatchSize: Int = 500
+        static let cancellationStride: Int = 50
+        static let yieldStride: Int = 200
+        static let cancellationStrideValuesAndLinks: Int = 100
+        static let yieldStrideValuesAndLinks: Int = 300
+    }
+
     static func importAsNewGraphRemap(
         file: GraphExportFileV1,
         container: AnyModelContainer,
@@ -272,7 +280,7 @@ private extension GraphTransferService {
         // Batch save helper
         var insertedSinceLastSave = 0
         func maybeSave() throws {
-            if insertedSinceLastSave >= 500 {
+            if insertedSinceLastSave >= ImportTuning.saveBatchSize {
                 do {
                     try context.save()
                     insertedSinceLastSave = 0
@@ -287,8 +295,8 @@ private extension GraphTransferService {
         progress?(GraphTransferProgress(phase: .entities, completed: 0, total: totalEntities, label: "Entitäten werden importiert…"))
 
         for (idx, dto) in file.entities.enumerated() {
-            if idx % 50 == 0 { try Task.checkCancellation() }
-            if idx % 200 == 0 { await Task.yield() }
+            if idx % ImportTuning.cancellationStride == 0 { try Task.checkCancellation() }
+            if idx % ImportTuning.yieldStride == 0 { await Task.yield() }
 
             let newID = UUID()
             entityIDMap[dto.id] = newID
@@ -306,7 +314,7 @@ private extension GraphTransferService {
             insertedSinceLastSave += 1
             try maybeSave()
 
-            if idx % 50 == 0 || idx + 1 == totalEntities {
+            if idx % ImportTuning.cancellationStride == 0 || idx + 1 == totalEntities {
                 progress?(GraphTransferProgress(phase: .entities, completed: idx + 1, total: totalEntities, label: "Entitäten: \(idx + 1)/\(totalEntities)"))
             }
         }
@@ -316,8 +324,8 @@ private extension GraphTransferService {
         progress?(GraphTransferProgress(phase: .fields, completed: 0, total: totalFields, label: "Details-Felder werden importiert…"))
 
         for (idx, dto) in file.detailFieldDefinitions.enumerated() {
-            if idx % 50 == 0 { try Task.checkCancellation() }
-            if idx % 200 == 0 { await Task.yield() }
+            if idx % ImportTuning.cancellationStride == 0 { try Task.checkCancellation() }
+            if idx % ImportTuning.yieldStride == 0 { await Task.yield() }
 
             guard let newOwnerEntityID = entityIDMap[dto.entityID],
                   let owner = entitiesByNewID[newOwnerEntityID]
@@ -346,7 +354,7 @@ private extension GraphTransferService {
             insertedSinceLastSave += 1
             try maybeSave()
 
-            if idx % 50 == 0 || idx + 1 == totalFields {
+            if idx % ImportTuning.cancellationStride == 0 || idx + 1 == totalFields {
                 progress?(GraphTransferProgress(phase: .fields, completed: idx + 1, total: totalFields, label: "Felder: \(idx + 1)/\(totalFields)"))
             }
         }
@@ -356,8 +364,8 @@ private extension GraphTransferService {
         progress?(GraphTransferProgress(phase: .attributes, completed: 0, total: totalAttributes, label: "Attribute werden importiert…"))
 
         for (idx, dto) in file.attributes.enumerated() {
-            if idx % 50 == 0 { try Task.checkCancellation() }
-            if idx % 200 == 0 { await Task.yield() }
+            if idx % ImportTuning.cancellationStride == 0 { try Task.checkCancellation() }
+            if idx % ImportTuning.yieldStride == 0 { await Task.yield() }
 
             guard let oldOwnerID = dto.ownerEntityID,
                   let newOwnerID = entityIDMap[oldOwnerID],
@@ -383,7 +391,7 @@ private extension GraphTransferService {
             insertedSinceLastSave += 1
             try maybeSave()
 
-            if idx % 50 == 0 || idx + 1 == totalAttributes {
+            if idx % ImportTuning.cancellationStride == 0 || idx + 1 == totalAttributes {
                 progress?(GraphTransferProgress(phase: .attributes, completed: idx + 1, total: totalAttributes, label: "Attribute: \(idx + 1)/\(totalAttributes)"))
             }
         }
@@ -394,8 +402,8 @@ private extension GraphTransferService {
 
         var importedValues = 0
         for (idx, dto) in file.detailFieldValues.enumerated() {
-            if idx % 100 == 0 { try Task.checkCancellation() }
-            if idx % 300 == 0 { await Task.yield() }
+            if idx % ImportTuning.cancellationStrideValuesAndLinks == 0 { try Task.checkCancellation() }
+            if idx % ImportTuning.yieldStrideValuesAndLinks == 0 { await Task.yield() }
 
             guard let newAttrID = attributeIDMap[dto.attributeID],
                   let attr = attributesByNewID[newAttrID]
@@ -429,7 +437,7 @@ private extension GraphTransferService {
             insertedSinceLastSave += 1
             try maybeSave()
 
-            if idx % 100 == 0 || idx + 1 == totalValues {
+            if idx % ImportTuning.cancellationStrideValuesAndLinks == 0 || idx + 1 == totalValues {
                 progress?(GraphTransferProgress(phase: .values, completed: idx + 1, total: totalValues, label: "Werte: \(idx + 1)/\(totalValues)"))
             }
         }
@@ -442,8 +450,8 @@ private extension GraphTransferService {
         var skippedLinks = 0
 
         for (idx, dto) in file.links.enumerated() {
-            if idx % 100 == 0 { try Task.checkCancellation() }
-            if idx % 300 == 0 { await Task.yield() }
+            if idx % ImportTuning.cancellationStrideValuesAndLinks == 0 { try Task.checkCancellation() }
+            if idx % ImportTuning.yieldStrideValuesAndLinks == 0 { await Task.yield() }
 
             guard let newSourceID = remapNodeID(kindRaw: dto.sourceKindRaw, oldID: dto.sourceID, entityIDMap: entityIDMap, attributeIDMap: attributeIDMap),
                   let newTargetID = remapNodeID(kindRaw: dto.targetKindRaw, oldID: dto.targetID, entityIDMap: entityIDMap, attributeIDMap: attributeIDMap)
@@ -474,7 +482,7 @@ private extension GraphTransferService {
             insertedSinceLastSave += 1
             try maybeSave()
 
-            if idx % 100 == 0 || idx + 1 == totalLinks {
+            if idx % ImportTuning.cancellationStrideValuesAndLinks == 0 || idx + 1 == totalLinks {
                 progress?(GraphTransferProgress(phase: .links, completed: idx + 1, total: totalLinks, label: "Links: \(idx + 1)/\(totalLinks)"))
             }
         }

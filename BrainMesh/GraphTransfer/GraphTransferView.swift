@@ -573,7 +573,7 @@ final class GraphTransferViewModel: ObservableObject, @unchecked Sendable {
             exportState = .ready(url: url, summary: summary)
         } catch {
             exportState = .failed(message: "Export fehlgeschlagen")
-            alertState = AlertState(title: "Export fehlgeschlagen", message: String(describing: error))
+            alertState = AlertState(title: "Export fehlgeschlagen", message: userFacingMessage(for: error))
         }
     }
 
@@ -600,7 +600,7 @@ final class GraphTransferViewModel: ObservableObject, @unchecked Sendable {
             isShowingFileExporter = true
             return true
         } catch {
-            alertState = AlertState(title: "Export", message: "Datei konnte nicht geladen werden: \(error)")
+            alertState = AlertState(title: "Export", message: "Datei konnte nicht geladen werden.")
             return false
         }
         return false
@@ -617,7 +617,7 @@ final class GraphTransferViewModel: ObservableObject, @unchecked Sendable {
                 // userCancelled
                 return
             }
-            alertState = AlertState(title: "Export", message: "Speichern fehlgeschlagen: \(error)")
+            alertState = AlertState(title: "Export", message: "Speichern fehlgeschlagen.")
         }
     }
 
@@ -649,7 +649,7 @@ final class GraphTransferViewModel: ObservableObject, @unchecked Sendable {
                 return
             }
             importState = .failed(message: "Datei konnte nicht geöffnet werden")
-            alertState = AlertState(title: "Import", message: String(describing: error))
+            alertState = AlertState(title: "Import", message: userFacingMessage(for: error))
         }
     }
 
@@ -660,7 +660,7 @@ final class GraphTransferViewModel: ObservableObject, @unchecked Sendable {
             importState = .ready(preview: preview)
         } catch {
             importState = .failed(message: "Datei ist ungültig")
-            alertState = AlertState(title: "Import", message: String(describing: error))
+            alertState = AlertState(title: "Import", message: userFacingMessage(for: error))
         }
     }
 
@@ -744,7 +744,7 @@ final class GraphTransferViewModel: ObservableObject, @unchecked Sendable {
 
             await performImport()
         } catch {
-            alertState = AlertState(title: "Graph ersetzen", message: "Löschen fehlgeschlagen: \(error)")
+            alertState = AlertState(title: "Graph ersetzen", message: "Löschen fehlgeschlagen.")
         }
     }
 
@@ -784,7 +784,7 @@ final class GraphTransferViewModel: ObservableObject, @unchecked Sendable {
         // Defensive: ensure the picker is not shown while importing.
         isShowingFileImporter = false
 
-        importState = .importing(progress: GraphTransferProgress(phase: .inspecting, completed: 0, label: "Import läuft…"))
+        importState = .importing(progress: GraphTransferProgress(phase: .inspecting, completed: 0, label: "Datei wird geprüft…"))
 
         let progressHandler: @Sendable (GraphTransferProgress) -> Void = { [weak self] prog in
             Task { @MainActor in
@@ -798,8 +798,46 @@ final class GraphTransferViewModel: ObservableObject, @unchecked Sendable {
             importState = .finished(result: result)
         } catch {
             importState = .failed(message: "Import fehlgeschlagen")
-            alertState = AlertState(title: "Import fehlgeschlagen", message: String(describing: error))
+            alertState = AlertState(title: "Import fehlgeschlagen", message: userFacingMessage(for: error))
         }
+    }
+
+    private func userFacingMessage(for error: Error) -> String {
+        #if DEBUG
+        print("⚠️ GraphTransfer error: \(error)")
+        #endif
+
+        if let e = error as? GraphTransferError {
+            switch e {
+            case .fileAccessDenied:
+                return "Kein Zugriff auf die ausgewählte Datei. Bitte wähle eine Datei aus der Dateien-App oder teile sie erneut in BrainMesh."
+            case .invalidFormat:
+                return "Diese Datei ist keine BrainMesh-Exportdatei."
+            case .unsupportedVersion:
+                return "Diese Exportdatei wurde mit einer neueren Version erstellt und kann aktuell nicht importiert werden."
+            case .decodeFailed:
+                return "Die Exportdatei ist beschädigt oder kann nicht gelesen werden."
+            case .readFailed:
+                return "Die Datei konnte nicht gelesen werden."
+            case .saveFailed:
+                return "Beim Speichern der importierten Daten ist ein Fehler aufgetreten."
+            case .writeFailed:
+                return "Die Exportdatei konnte nicht geschrieben werden."
+            case .graphNotFound:
+                return "Der gewählte Graph wurde nicht gefunden."
+            case .notConfigured:
+                return "Export/Import ist noch nicht bereit. Bitte starte die App neu und versuche es erneut."
+            case .notImplemented:
+                return "Diese Funktion ist noch nicht verfügbar."
+            }
+        }
+
+        let ns = error as NSError
+        if ns.domain == NSCocoaErrorDomain, (ns.code == 257 || ns.code == 513) {
+            return "Kein Zugriff auf die ausgewählte Datei."
+        }
+
+        return "Es ist ein unerwarteter Fehler aufgetreten."
     }
 }
 
