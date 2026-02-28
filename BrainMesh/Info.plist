@@ -21,6 +21,7 @@
 			<string>BrainMesh Graph Export</string>
 			<key>UTTypeConformsTo</key>
 			<array>
+				<string>public.data</string>
 				<string>public.json</string>
 			</array>
 			<key>UTTypeTagSpecification</key>
@@ -30,7 +31,9 @@
 					<string>bmgraph</string>
 				</array>
 				<key>public.mime-type</key>
-				<string>application/vnd.brainmesh.graph+json</string>
+				<array>
+							<string>application/vnd.brainmesh.graph+json</string>
+						</array>
 			</dict>
 		</dict>
 	</array>

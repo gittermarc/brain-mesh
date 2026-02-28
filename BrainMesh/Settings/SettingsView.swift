@@ -30,6 +30,8 @@ struct SettingsView: View {
 
                 displayTile
 
+                graphTransferTile
+
                 Button {
                     showImportSettings = true
                 } label: {
