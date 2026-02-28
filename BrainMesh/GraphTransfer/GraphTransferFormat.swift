@@ -7,7 +7,7 @@
 
 import Foundation
 
-enum GraphTransferFormat {
+nonisolated enum GraphTransferFormat {
     static let formatID: String = "brainmesh.graph"
     static let version: Int = 1
 }

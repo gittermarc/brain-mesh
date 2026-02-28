@@ -7,7 +7,7 @@
 
 import Foundation
 
-struct GraphExportFileV1: Codable, Sendable {
+nonisolated struct GraphExportFileV1: Codable, Sendable {
 
     // MARK: - Header
 

@@ -10,7 +10,7 @@ import Foundation
 
 // MARK: - Envelope meta
 
-struct CountsDTO: Codable, Sendable {
+nonisolated struct CountsDTO: Codable, Sendable {
     var graphs: Int
     var entities: Int
     var attributes: Int
@@ -37,7 +37,7 @@ struct CountsDTO: Codable, Sendable {
 
 // MARK: - Core objects
 
-struct GraphDTO: Codable, Sendable {
+nonisolated struct GraphDTO: Codable, Sendable {
     var id: UUID
     var createdAt: Date
     var name: String
@@ -49,7 +49,7 @@ struct GraphDTO: Codable, Sendable {
     }
 }
 
-struct EntityDTO: Codable, Sendable {
+nonisolated struct EntityDTO: Codable, Sendable {
     var id: UUID
     var createdAt: Date
     var graphID: UUID?
@@ -79,7 +79,7 @@ struct EntityDTO: Codable, Sendable {
     }
 }
 
-struct AttributeDTO: Codable, Sendable {
+nonisolated struct AttributeDTO: Codable, Sendable {
     var id: UUID
     var graphID: UUID?
 
@@ -111,7 +111,7 @@ struct AttributeDTO: Codable, Sendable {
     }
 }
 
-struct DetailFieldDefinitionDTO: Codable, Sendable {
+nonisolated struct DetailFieldDefinitionDTO: Codable, Sendable {
     var id: UUID
     var graphID: UUID?
 
@@ -148,7 +148,7 @@ struct DetailFieldDefinitionDTO: Codable, Sendable {
     }
 }
 
-struct DetailFieldValueDTO: Codable, Sendable {
+nonisolated struct DetailFieldValueDTO: Codable, Sendable {
     var id: UUID
     var graphID: UUID?
 
@@ -184,7 +184,7 @@ struct DetailFieldValueDTO: Codable, Sendable {
     }
 }
 
-struct LinkDTO: Codable, Sendable {
+nonisolated struct LinkDTO: Codable, Sendable {
     var id: UUID
     var createdAt: Date
     var graphID: UUID?

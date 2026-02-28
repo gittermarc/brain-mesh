@@ -7,26 +7,26 @@
 
 import Foundation
 
-enum ImportMode: Sendable {
+nonisolated enum ImportMode: Sendable {
     case asNewGraphRemap
 }
 
-struct ImportPreview: Sendable {
+nonisolated struct ImportPreview: Sendable {
     var graphName: String
     var exportedAt: Date
     var version: Int
     var counts: CountsDTO
 }
 
-struct ImportResult: Sendable {
+nonisolated struct ImportResult: Sendable {
     var newGraphID: UUID
     var insertedCounts: CountsDTO
     var skippedLinks: Int
 }
 
-struct GraphTransferProgress: Sendable {
+nonisolated struct GraphTransferProgress: Sendable {
 
-    enum Phase: Sendable {
+    nonisolated enum Phase: Sendable {
         case inspecting
         case creatingGraph
         case entities
