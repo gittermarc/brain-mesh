@@ -1,5 +1,5 @@
 //
-//  GraphCanvasScreen+Inspector.swift
+//  GraphCanvasScreen+InspectorOverlay.swift
 //  BrainMesh
 //
 
