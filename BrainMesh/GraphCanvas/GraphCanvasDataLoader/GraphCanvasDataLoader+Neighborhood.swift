@@ -1,174 +1,16 @@
 //
-//  GraphCanvasDataLoader.swift
+//  GraphCanvasDataLoader+Neighborhood.swift
 //  BrainMesh
 //
-//  P0.1: Load GraphCanvas data off the UI thread.
-//  Goal: Avoid blocking the main thread with SwiftData fetches when opening/switching graphs.
+//  Split from GraphCanvasDataLoader.swift (P0.x): Neighborhood BFS load.
 //
 
 import Foundation
 import SwiftData
-import os
 
-/// Snapshot DTO returned to the UI.
-///
-/// NOTE: This is intentionally a value-only container so the UI can commit state in one go.
-/// We mark it as `@unchecked Sendable` to keep the patch minimal (Graph types are value types).
-struct GraphCanvasSnapshot: @unchecked Sendable {
-    let nodes: [GraphNode]
-    let edges: [GraphEdge]
-    let directedEdgeNotes: [DirectedEdgeKey: String]
-    let labelCache: [NodeKey: String]
-    let imagePathCache: [NodeKey: String]
-    let iconSymbolCache: [NodeKey: String]
-}
+extension GraphCanvasDataLoader {
 
-actor GraphCanvasDataLoader {
-
-    static let shared = GraphCanvasDataLoader()
-
-    private var container: AnyModelContainer? = nil
-    private let log = Logger(subsystem: "BrainMesh", category: "GraphCanvasDataLoader")
-
-    func configure(container: AnyModelContainer) {
-        self.container = container
-        #if DEBUG
-        log.debug("✅ configured")
-        #endif
-    }
-
-    func loadSnapshot(
-        activeGraphID: UUID?,
-        focusEntityID: UUID?,
-        hops: Int,
-        includeAttributes: Bool,
-        maxNodes: Int,
-        maxLinks: Int
-    ) async throws -> GraphCanvasSnapshot {
-        let configuredContainer = self.container
-        guard let configuredContainer else {
-            throw NSError(
-                domain: "BrainMesh.GraphCanvasDataLoader",
-                code: 1,
-                userInfo: [NSLocalizedDescriptionKey: "GraphCanvasDataLoader not configured"]
-            )
-        }
-
-        // Run SwiftData fetches and relationship traversal off the UI thread.
-        try Task.checkCancellation()
-
-        let context = ModelContext(configuredContainer.container)
-        context.autosaveEnabled = false
-
-        try Task.checkCancellation()
-
-        if let focusEntityID {
-            return try GraphCanvasDataLoader.loadNeighborhood(
-                context: context,
-                activeGraphID: activeGraphID,
-                centerID: focusEntityID,
-                hops: hops,
-                includeAttributes: includeAttributes,
-                maxNodes: maxNodes,
-                maxLinks: maxLinks
-            )
-        } else {
-            return try GraphCanvasDataLoader.loadGlobal(
-                context: context,
-                activeGraphID: activeGraphID,
-                maxNodes: maxNodes,
-                maxLinks: maxLinks
-            )
-        }
-    }
-
-    // MARK: - Core loaders
-
-    private static func loadGlobal(
-        context: ModelContext,
-        activeGraphID: UUID?,
-        maxNodes: Int,
-        maxLinks: Int
-    ) throws -> GraphCanvasSnapshot {
-        try Task.checkCancellation()
-
-        var eFD: FetchDescriptor<MetaEntity>
-        if let gid = activeGraphID {
-            eFD = FetchDescriptor(
-                predicate: #Predicate<MetaEntity> { e in e.graphID == gid },
-                sortBy: [SortDescriptor(\MetaEntity.name)]
-            )
-        } else {
-            eFD = FetchDescriptor(sortBy: [SortDescriptor(\MetaEntity.name)])
-        }
-        eFD.fetchLimit = maxNodes
-        let ents = try context.fetch(eFD)
-        try Task.checkCancellation()
-
-        let kEntity = NodeKind.entity.rawValue
-        var lFD: FetchDescriptor<MetaLink>
-        if let gid = activeGraphID {
-            lFD = FetchDescriptor(
-                predicate: #Predicate<MetaLink> { l in
-                    l.graphID == gid &&
-                    l.sourceKindRaw == kEntity && l.targetKindRaw == kEntity
-                },
-                sortBy: [SortDescriptor(\MetaLink.createdAt, order: .reverse)]
-            )
-        } else {
-            lFD = FetchDescriptor(
-                predicate: #Predicate<MetaLink> { l in
-                    l.sourceKindRaw == kEntity && l.targetKindRaw == kEntity
-                },
-                sortBy: [SortDescriptor(\MetaLink.createdAt, order: .reverse)]
-            )
-        }
-        lFD.fetchLimit = maxLinks
-        let links = try context.fetch(lFD)
-        try Task.checkCancellation()
-
-        let nodeIDs = Set(ents.map { $0.id })
-        let filteredLinks = links.filter { nodeIDs.contains($0.sourceID) && nodeIDs.contains($0.targetID) }
-
-        let newNodes: [GraphNode] = ents.map { GraphNode(key: NodeKey(kind: .entity, uuid: $0.id), label: $0.name) }
-
-        var notes: [DirectedEdgeKey: String] = [:]
-        let newEdges: [GraphEdge] = filteredLinks.map { l in
-            let s = NodeKey(kind: .entity, uuid: l.sourceID)
-            let t = NodeKey(kind: .entity, uuid: l.targetID)
-
-            if let n = l.note?.trimmingCharacters(in: .whitespacesAndNewlines), !n.isEmpty {
-                let k = DirectedEdgeKey.make(source: s, target: t, type: .link)
-                if notes[k] == nil { notes[k] = n }
-            }
-
-            return GraphEdge(a: s, b: t, type: .link)
-        }.unique()
-
-        // Render caches once per load.
-        var newLabelCache: [NodeKey: String] = [:]
-        var newImagePathCache: [NodeKey: String] = [:]
-        var newIconSymbolCache: [NodeKey: String] = [:]
-
-        for e in ents {
-            try Task.checkCancellation()
-            let k = NodeKey(kind: .entity, uuid: e.id)
-            newLabelCache[k] = e.name
-            if let p = e.imagePath, !p.isEmpty { newImagePathCache[k] = p }
-            if let s = e.iconSymbolName, !s.isEmpty { newIconSymbolCache[k] = s }
-        }
-
-        return GraphCanvasSnapshot(
-            nodes: newNodes,
-            edges: newEdges,
-            directedEdgeNotes: notes,
-            labelCache: newLabelCache,
-            imagePathCache: newImagePathCache,
-            iconSymbolCache: newIconSymbolCache
-        )
-    }
-
-    private static func loadNeighborhood(
+    static func loadNeighborhood(
         context: ModelContext,
         activeGraphID: UUID?,
         centerID: UUID,
@@ -408,35 +250,15 @@ actor GraphCanvasDataLoader {
         }
 
         let uniqueEdges = newEdges.unique()
-
-        // Render caches once per load.
-        var newLabelCache: [NodeKey: String] = [:]
-        var newImagePathCache: [NodeKey: String] = [:]
-        var newIconSymbolCache: [NodeKey: String] = [:]
-
-        for e in ents {
-            try Task.checkCancellation()
-            let k = NodeKey(kind: .entity, uuid: e.id)
-            newLabelCache[k] = e.name
-            if let p = e.imagePath, !p.isEmpty { newImagePathCache[k] = p }
-            if let s = e.iconSymbolName, !s.isEmpty { newIconSymbolCache[k] = s }
-        }
-
-        for a in attrs {
-            try Task.checkCancellation()
-            let k = NodeKey(kind: .attribute, uuid: a.id)
-            newLabelCache[k] = a.displayName
-            if let p = a.imagePath, !p.isEmpty { newImagePathCache[k] = p }
-            if let s = a.iconSymbolName, !s.isEmpty { newIconSymbolCache[k] = s }
-        }
+        let caches = try GraphCanvasDataLoader.buildRenderCaches(entities: ents, attributes: attrs)
 
         return GraphCanvasSnapshot(
             nodes: newNodes,
             edges: uniqueEdges,
             directedEdgeNotes: notes,
-            labelCache: newLabelCache,
-            imagePathCache: newImagePathCache,
-            iconSymbolCache: newIconSymbolCache
+            labelCache: caches.labelCache,
+            imagePathCache: caches.imagePathCache,
+            iconSymbolCache: caches.iconSymbolCache
         )
     }
 }
