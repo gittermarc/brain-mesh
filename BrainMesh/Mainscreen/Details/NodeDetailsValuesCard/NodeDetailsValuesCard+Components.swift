@@ -1,5 +1,5 @@
 //
-//  NodeDetailsValuesCard.swift
+//  NodeDetailsValuesCard+Components.swift
 //  BrainMesh
 //
 //  Phase 1: Details (frei konfigurierbare Felder)
@@ -7,94 +7,20 @@
 
 import SwiftUI
 
-struct NodeDetailsValuesCard: View {
-    let attribute: MetaAttribute
-    let owner: MetaEntity
+struct NodeDetailsValuesContent: View {
+    let rows: [NodeDetailsValuesCard.FieldRow]
+    let emptyRows: [NodeDetailsValuesCard.FieldRow]
 
-    var layout: AttributeDetailDetailsLayout = .list
-    var hideEmpty: Bool = false
+    let layout: AttributeDetailDetailsLayout
+    let hideEmpty: Bool
 
-    let onConfigureSchema: () -> Void
+    @Binding var showEmptyFields: Bool
+
     let onEditValue: (MetaDetailFieldDefinition) -> Void
-
-    @State private var showEmptyFields: Bool = false
-
-    private var fields: [MetaDetailFieldDefinition] {
-        owner.detailFieldsList
-    }
-
-    private struct FieldRow: Identifiable {
-        let id: UUID
-        let field: MetaDetailFieldDefinition
-        let value: String?
-
-        init(field: MetaDetailFieldDefinition, value: String?) {
-            self.id = field.id
-            self.field = field
-            self.value = value
-        }
-
-        var isEmpty: Bool {
-            value == nil
-        }
-    }
-
-    private var rows: [FieldRow] {
-        fields.map { field in
-            FieldRow(field: field, value: DetailsFormatting.displayValue(for: field, on: attribute))
-        }
-    }
-
-    private var visibleRows: [FieldRow] {
-        if hideEmpty {
-            return rows.filter { !$0.isEmpty }
-        }
-        return rows
-    }
-
-    private var emptyRows: [FieldRow] {
-        rows.filter { $0.isEmpty }
-    }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
-            NodeCardHeader(title: "Details", systemImage: "info.circle")
-
-            if fields.isEmpty {
-                NodeEmptyStateRow(
-                    text: "Noch keine Felder definiert.",
-                    ctaTitle: "Felder für \"\(owner.name.isEmpty ? "Entität" : owner.name)\" anlegen",
-                    ctaSystemImage: "slider.horizontal.3",
-                    ctaAction: onConfigureSchema
-                )
-            } else {
-                detailsContainer
-            }
-        }
-        .padding(16)
-        .background(Color(uiColor: .secondarySystemGroupedBackground), in: RoundedRectangle(cornerRadius: 24, style: .continuous))
-        .overlay(
-            RoundedRectangle(cornerRadius: 24, style: .continuous)
-                .stroke(Color.secondary.opacity(0.12))
-        )
-        .onAppear {
-            if hideEmpty, visibleRows.isEmpty, !emptyRows.isEmpty {
-                showEmptyFields = true
-            }
-        }
-        .onChange(of: hideEmpty) { _, newValue in
-            if newValue, visibleRows.isEmpty, !emptyRows.isEmpty {
-                showEmptyFields = true
-            }
-            if !newValue {
-                showEmptyFields = false
-            }
-        }
-    }
-
-    private var detailsContainer: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            if hideEmpty, visibleRows.isEmpty, !emptyRows.isEmpty {
+            if hideEmpty, rows.isEmpty, !emptyRows.isEmpty {
                 NodeEmptyStateRow(
                     text: "Noch keine Werte gesetzt.",
                     ctaTitle: "Leere Felder anzeigen",
@@ -105,7 +31,7 @@ struct NodeDetailsValuesCard: View {
                     }
                 }
             } else {
-                contentBody(rows: visibleRows)
+                contentBody(rows: rows)
             }
 
             if hideEmpty, !emptyRows.isEmpty {
@@ -154,7 +80,7 @@ struct NodeDetailsValuesCard: View {
     }
 
     @ViewBuilder
-    private func contentBody(rows: [FieldRow]) -> some View {
+    private func contentBody(rows: [NodeDetailsValuesCard.FieldRow]) -> some View {
         switch layout {
         case .list:
             VStack(spacing: 0) {
@@ -215,7 +141,7 @@ struct NodeDetailsValuesCard: View {
     }
 }
 
-private struct DetailsKeyValueRow: View {
+struct DetailsKeyValueRow: View {
     let name: String
     let value: String?
     let isPinned: Bool
@@ -273,7 +199,7 @@ private struct DetailsKeyValueRow: View {
     }
 }
 
-private struct DetailsFieldCard: View {
+struct DetailsFieldCard: View {
     let name: String
     let value: String?
     let isPinned: Bool
@@ -330,7 +256,7 @@ private struct DetailsFieldCard: View {
     }
 }
 
-private struct DetailsFieldTile: View {
+struct DetailsFieldTile: View {
     let name: String
     let value: String?
     let isPinned: Bool
