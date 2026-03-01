@@ -14,8 +14,11 @@ struct EntityDetailView: View {
 
     @Bindable var entity: MetaEntity
 
-    @Query var outgoingLinks: [MetaLink]
-    @Query var incomingLinks: [MetaLink]
+    // P0.1: Links preview + counts (fetch-limited, no full-load @Query).
+    @State private var outgoingLinksPreview: [MetaLink] = []
+    @State private var incomingLinksPreview: [MetaLink] = []
+    @State private var outgoingLinksCount: Int = 0
+    @State private var incomingLinksCount: Int = 0
 
     // P0.2: Media preview + counts (fetch-limited, no full-load @Query).
     @State var mediaPreview: NodeMediaPreview = .empty
@@ -59,18 +62,6 @@ struct EntityDetailView: View {
 
     init(entity: MetaEntity) {
         self.entity = entity
-
-        _outgoingLinks = NodeLinksQueryBuilder.outgoingLinksQuery(
-            kind: .entity,
-            id: entity.id,
-            graphID: entity.graphID
-        )
-
-        _incomingLinks = NodeLinksQueryBuilder.incomingLinksQuery(
-            kind: .entity,
-            id: entity.id,
-            graphID: entity.graphID
-        )
     }
 
     var body: some View {
@@ -99,8 +90,8 @@ struct EntityDetailView: View {
                             graphID: entity.graphID,
                             nodeKey: NodeKey(kind: .entity, uuid: entity.id),
                             notes: entity.notes,
-                            outgoingLinks: outgoingLinks,
-                            incomingLinks: incomingLinks,
+                            outgoingLinks: outgoingLinksPreview,
+                            incomingLinks: incomingLinksPreview,
                             galleryThumbs: mediaPreview.galleryPreview,
                             galleryCount: mediaPreview.galleryCount,
                             attachmentCount: mediaPreview.attachmentCount,
@@ -126,6 +117,21 @@ struct EntityDetailView: View {
                     .onAppear {
                         Task { @MainActor in
                             await reloadMediaPreview()
+                            await reloadLinksPreview()
+                        }
+                    }
+                    .onChange(of: showAddLink) { _, isPresented in
+                        if !isPresented {
+                            Task { @MainActor in
+                                await reloadLinksPreview()
+                            }
+                        }
+                    }
+                    .onChange(of: showBulkLink) { _, isPresented in
+                        if !isPresented {
+                            Task { @MainActor in
+                                await reloadLinksPreview()
+                            }
                         }
                     }
                 }
@@ -138,8 +144,8 @@ struct EntityDetailView: View {
     private var heroPills: [NodeStatPill] {
         let base: [NodeStatPill] = [
             NodeStatPill(title: "\(entity.attributesList.count)", systemImage: "tag"),
-            NodeStatPill(title: "\(outgoingLinks.count)", systemImage: "arrow.up.right"),
-            NodeStatPill(title: "\(incomingLinks.count)", systemImage: "arrow.down.left"),
+            NodeStatPill(title: "\(outgoingLinksCount)", systemImage: "arrow.up.right"),
+            NodeStatPill(title: "\(incomingLinksCount)", systemImage: "arrow.down.left"),
             NodeStatPill(title: "\(mediaPreview.totalCount)", systemImage: "photo.on.rectangle")
         ]
 
@@ -244,8 +250,8 @@ struct EntityDetailView: View {
             return "\(g) Fotos · \(a) Dateien"
 
         case .connections:
-            let out = outgoingLinks.count
-            let inc = incomingLinks.count
+            let out = outgoingLinksCount
+            let inc = incomingLinksCount
             if out == 0 && inc == 0 { return nil }
             return "\(out) ausgehend · \(inc) eingehend"
         }
@@ -269,8 +275,8 @@ struct EntityDetailView: View {
                 ownerKind: .entity,
                 ownerID: entity.id,
                 graphID: entity.graphID,
-                outgoing: outgoingLinks,
-                incoming: incomingLinks,
+                outgoing: outgoingLinksPreview,
+                incoming: incomingLinksPreview,
                 segment: $connectionsSegment,
                 previewLimit: 5
             )
@@ -312,6 +318,28 @@ struct EntityDetailView: View {
         case .attributesPreview:
             NodeEntityAttributesCard(entity: entity)
                 .id(NodeDetailAnchor.attributes.rawValue)
+        }
+    }
+
+    // MARK: - Links Preview (P0.1)
+
+    @MainActor
+    private func reloadLinksPreview() async {
+        do {
+            let snapshot = try NodeLinksQueryBuilder.load(
+                context: modelContext,
+                kind: .entity,
+                id: entity.id,
+                graphID: entity.graphID,
+                previewLimit: 12
+            )
+
+            outgoingLinksPreview = snapshot.outgoingPreview
+            incomingLinksPreview = snapshot.incomingPreview
+            outgoingLinksCount = snapshot.outgoingCount
+            incomingLinksCount = snapshot.incomingCount
+        } catch {
+            // Keep the last known state. No user-facing alert for preview failures.
         }
     }
 }

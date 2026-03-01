@@ -55,7 +55,7 @@ extension AttributeDetailView {
     }
 
     var heroPills: [NodeStatPill] {
-        let linkCount = outgoingLinks.count + incomingLinks.count
+        let linkCount = outgoingLinksCount + incomingLinksCount
         let mediaCount = mediaPreview.totalCount
 
         var pills: [NodeStatPill] = []

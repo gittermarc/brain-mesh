@@ -17,8 +17,12 @@ struct AttributeDetailView: View {
 
     @Bindable var attribute: MetaAttribute
 
-    @Query var outgoingLinks: [MetaLink]
-    @Query var incomingLinks: [MetaLink]
+    // P0.1: Links preview + counts (fetch-limited, no full-load @Query).
+    // NOTE: Keep property names stable because AttributeDetailView is split across multiple files via extensions.
+    @State var outgoingLinks: [MetaLink] = []
+    @State var incomingLinks: [MetaLink] = []
+    @State var outgoingLinksCount: Int = 0
+    @State var incomingLinksCount: Int = 0
 
     // Media preview + counts (fetch-limited, no full-load @Query).
     @State var mediaPreview: NodeMediaPreview = .empty
@@ -67,9 +71,10 @@ struct AttributeDetailView: View {
 
     init(attribute: MetaAttribute) {
         self.attribute = attribute
+    }
 
-        _outgoingLinks = NodeLinksQueryBuilder.outgoingLinksQuery(kind: .attribute, id: attribute.id, graphID: attribute.graphID)
-        _incomingLinks = NodeLinksQueryBuilder.incomingLinksQuery(kind: .attribute, id: attribute.id, graphID: attribute.graphID)
+    private var linksTaskKey: String {
+        attribute.id.uuidString + "|" + (attribute.graphID?.uuidString ?? "nil")
     }
 
     var body: some View {
@@ -93,11 +98,55 @@ struct AttributeDetailView: View {
                     .task(id: attribute.id) {
                         await reloadMediaPreview()
                     }
+                    .task(id: linksTaskKey) {
+                        await reloadLinksPreview()
+                    }
                     .task(id: focusTaskKey) {
                         await applyFocusModeIfNeeded(proxy)
                     }
+                    .onAppear {
+                        Task { @MainActor in
+                            await reloadLinksPreview()
+                        }
+                    }
+                    .onChange(of: showAddLink) { _, isPresented in
+                        if !isPresented {
+                            Task { @MainActor in
+                                await reloadLinksPreview()
+                            }
+                        }
+                    }
+                    .onChange(of: showBulkLink) { _, isPresented in
+                        if !isPresented {
+                            Task { @MainActor in
+                                await reloadLinksPreview()
+                            }
+                        }
+                    }
                 }
             )
+        }
+    }
+
+    // MARK: - Links Preview (P0.1)
+
+    @MainActor
+    private func reloadLinksPreview() async {
+        do {
+            let snapshot = try NodeLinksQueryBuilder.load(
+                context: modelContext,
+                kind: .attribute,
+                id: attribute.id,
+                graphID: attribute.graphID,
+                previewLimit: 12
+            )
+
+            outgoingLinks = snapshot.outgoingPreview
+            incomingLinks = snapshot.incomingPreview
+            outgoingLinksCount = snapshot.outgoingCount
+            incomingLinksCount = snapshot.incomingCount
+        } catch {
+            // Keep the last known state. No user-facing alert for preview failures.
         }
     }
 }
