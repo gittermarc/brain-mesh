@@ -140,6 +140,12 @@ struct GraphCanvasScreen: View {
     @State var miniMapEmphasized: Bool = false
     @State var miniMapPulseTask: Task<Void, Never>?
 
+    // ✅ MiniMap throttle: only update the MiniMap inputs at a lower rate.
+    // Reason: `positions` changes at 30 FPS during physics ticks and would otherwise
+    // cause the MiniMap canvas to redraw excessively.
+    // NOTE: Must not be `private` because the MiniMap overlay lives in a separate extension file.
+    @State var miniMapPositionsSnapshot: [NodeKey: CGPoint] = [:]
+
     // Sheets
     @State var selectedEntity: MetaEntity?
     @State var selectedAttribute: MetaAttribute?
@@ -347,6 +353,9 @@ struct GraphCanvasScreen: View {
         .onAppear {
             recomputeDerivedState()
 
+            // Seed MiniMap snapshot so it can render immediately after the first layout.
+            miniMapPositionsSnapshot = positions
+
             // ✅ Details Peek: handle state restoration / app relaunch.
             // `selection` can be restored without triggering `.onChange`, so we recompute once on appear.
             recomputeDetailsPeek(for: selection)
@@ -359,6 +368,32 @@ struct GraphCanvasScreen: View {
         .onDisappear {
             // Best-effort: If the screen goes away, stop any in-flight load.
             loadTask?.cancel()
+        }
+
+        // ✅ MiniMap throttling: only refresh MiniMap positions while the simulation runs.
+        // This keeps the Canvas in MiniMapView from redrawing at 30 FPS.
+        .task(id: simulationAllowed) {
+            guard simulationAllowed else { return }
+
+            // Start with a fresh snapshot.
+            await MainActor.run {
+                miniMapPositionsSnapshot = positions
+            }
+
+            // 5 FPS is usually plenty for a MiniMap overlay.
+            let intervalNs: UInt64 = 200_000_000
+
+            while !Task.isCancelled {
+                try? await Task.sleep(nanoseconds: intervalNs)
+                if Task.isCancelled { return }
+
+                // Only commit if changed to avoid unnecessary invalidations.
+                await MainActor.run {
+                    if miniMapPositionsSnapshot != positions {
+                        miniMapPositionsSnapshot = positions
+                    }
+                }
+            }
         }
 
         // ✅ Cross-screen jump listener (Entity/Attribute detail → Graph)

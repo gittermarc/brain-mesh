@@ -41,7 +41,7 @@ extension GraphCanvasScreen {
             MiniMapView(
                 nodes: nodes,
                 edges: drawEdges,
-                positions: positions,
+                positions: miniMapPositionsSnapshot,
                 selection: selection,
                 focus: focusKey,
                 scale: scale,
