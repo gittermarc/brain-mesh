@@ -1,216 +1,21 @@
 //
-//  GraphTransferService.swift
+//  GraphTransferService+Import.swift
 //  BrainMesh
 //
-//  Actor-based service for graph export/import.
-//  (Skeleton only in PR GT1)
+//  Import implementation (inspect + import modes + remap).
 //
 
 import Foundation
-import os
 import SwiftData
-import UniformTypeIdentifiers
 
-actor GraphTransferService {
+extension GraphTransferService {
 
-    static let shared = GraphTransferService()
-
-    private var container: AnyModelContainer? = nil
-    private let log = Logger(subsystem: "BrainMesh", category: "GraphTransferService")
-
-    func configure(container: AnyModelContainer) {
-        self.container = container
-        #if DEBUG
-        log.debug("✅ configured")
-        #endif
-    }
-
-    // MARK: - Public Types
-
-    struct ExportOptions: Sendable {
-        var includeNotes: Bool
-        var includeIcons: Bool
-        var includeImages: Bool
-
-        init(includeNotes: Bool = true, includeIcons: Bool = true, includeImages: Bool = false) {
-            self.includeNotes = includeNotes
-            self.includeIcons = includeIcons
-            self.includeImages = includeImages
-        }
-    }
-
-    // MARK: - API (Stubs in PR GT1)
-
-    func exportGraph(graphID: UUID, options: ExportOptions) async throws -> URL {
-        guard let container else { throw GraphTransferError.notConfigured }
-
-        let context = ModelContext(container.container)
-        context.autosaveEnabled = false
-
-        // 1) Fetch graph
-        var graphFD = FetchDescriptor<MetaGraph>(predicate: #Predicate { g in
-            g.id == graphID
-        })
-        graphFD.fetchLimit = 1
-
-        guard let graph = try context.fetch(graphFD).first else {
-            throw GraphTransferError.graphNotFound(graphID: graphID)
-        }
-
-        // 2) Fetch all graph-scoped records
-        let gid = graphID
-
-        let entities = try context.fetch(FetchDescriptor<MetaEntity>(predicate: #Predicate { e in
-            e.graphID == gid
-        }))
-
-        let attributes = try context.fetch(FetchDescriptor<MetaAttribute>(predicate: #Predicate { a in
-            a.graphID == gid
-        }))
-
-        let fieldDefs = try context.fetch(FetchDescriptor<MetaDetailFieldDefinition>(predicate: #Predicate { d in
-            d.graphID == gid
-        }))
-
-        let fieldValues = try context.fetch(FetchDescriptor<MetaDetailFieldValue>(predicate: #Predicate { v in
-            v.graphID == gid
-        }))
-
-        let links = try context.fetch(FetchDescriptor<MetaLink>(predicate: #Predicate { l in
-            l.graphID == gid
-        }))
-
-        // 3) Map to DTOs
-        let graphDTO = GraphDTO(id: graph.id, createdAt: graph.createdAt, name: graph.name)
-
-        let entitiesDTO: [EntityDTO] = entities
-            .sorted(by: { $0.createdAt < $1.createdAt })
-            .map { e in
-                EntityDTO(
-                    id: e.id,
-                    createdAt: e.createdAt,
-                    graphID: e.graphID,
-                    name: e.name,
-                    notes: options.includeNotes ? e.notes : "",
-                    iconSymbolName: options.includeIcons ? e.iconSymbolName : nil,
-                    imageData: options.includeImages ? e.imageData : nil
-                )
-            }
-
-        let attributesDTO: [AttributeDTO] = attributes
-            .sorted(by: { $0.name < $1.name })
-            .map { a in
-                AttributeDTO(
-                    id: a.id,
-                    graphID: a.graphID,
-                    ownerEntityID: a.owner?.id,
-                    name: a.name,
-                    notes: options.includeNotes ? a.notes : "",
-                    iconSymbolName: options.includeIcons ? a.iconSymbolName : nil,
-                    imageData: options.includeImages ? a.imageData : nil
-                )
-            }
-
-        let fieldDefsDTO: [DetailFieldDefinitionDTO] = fieldDefs
-            .sorted(by: {
-                if $0.entityID == $1.entityID { return $0.sortIndex < $1.sortIndex }
-                return $0.entityID.uuidString < $1.entityID.uuidString
-            })
-            .map { d in
-                DetailFieldDefinitionDTO(
-                    id: d.id,
-                    graphID: d.graphID,
-                    entityID: d.entityID,
-                    name: d.name,
-                    typeRaw: d.typeRaw,
-                    sortIndex: d.sortIndex,
-                    isPinned: d.isPinned,
-                    unit: d.unit,
-                    options: d.options
-                )
-            }
-
-        let fieldValuesDTO: [DetailFieldValueDTO] = fieldValues
-            .sorted(by: {
-                if $0.attributeID == $1.attributeID { return $0.fieldID.uuidString < $1.fieldID.uuidString }
-                return $0.attributeID.uuidString < $1.attributeID.uuidString
-            })
-            .map { v in
-                DetailFieldValueDTO(
-                    id: v.id,
-                    graphID: v.graphID,
-                    attributeID: v.attributeID,
-                    fieldID: v.fieldID,
-                    stringValue: v.stringValue,
-                    intValue: v.intValue,
-                    doubleValue: v.doubleValue,
-                    dateValue: v.dateValue,
-                    boolValue: v.boolValue
-                )
-            }
-
-        let linksDTO: [LinkDTO] = links
-            .sorted(by: { $0.createdAt < $1.createdAt })
-            .map { l in
-                LinkDTO(
-                    id: l.id,
-                    createdAt: l.createdAt,
-                    graphID: l.graphID,
-                    note: options.includeNotes ? l.note : nil,
-                    sourceLabel: l.sourceLabel,
-                    targetLabel: l.targetLabel,
-                    sourceKindRaw: l.sourceKindRaw,
-                    sourceID: l.sourceID,
-                    targetKindRaw: l.targetKindRaw,
-                    targetID: l.targetID
-                )
-            }
-
-        let counts = CountsDTO(
-            graphs: 1,
-            entities: entitiesDTO.count,
-            attributes: attributesDTO.count,
-            detailFieldDefinitions: fieldDefsDTO.count,
-            detailFieldValues: fieldValuesDTO.count,
-            links: linksDTO.count
-        )
-
-        let exportFile = GraphExportFileV1(
-            exportedAt: Date(),
-            appVersion: Self.appVersionString,
-            appBuild: Self.appBuildString,
-            counts: counts,
-            graph: graphDTO,
-            entities: entitiesDTO,
-            attributes: attributesDTO,
-            detailFieldDefinitions: fieldDefsDTO,
-            detailFieldValues: fieldValuesDTO,
-            links: linksDTO
-        )
-
-        // 4) Encode + write
-        let data = try Self.encode(exportFile)
-        let fileURL = try Self.makeExportFileURL(graphName: graph.name)
-
-        do {
-            try data.write(to: fileURL, options: [.atomic])
-        } catch {
-            throw GraphTransferError.writeFailed(underlying: String(describing: error))
-        }
-
-        #if DEBUG
-        log.debug("✅ Exported graph \(graphID.uuidString, privacy: .public) to \(fileURL.path, privacy: .public)")
-        #endif
-
-        return fileURL
-    }
-
-    func inspectFile(url: URL) async throws -> ImportPreview {
+    func inspectFileImpl(url: URL) async throws -> ImportPreview {
         guard container != nil else { throw GraphTransferError.notConfigured }
 
-        let data = try Self.readFileData(url: url)
-        let file = try Self.decode(data)
-        try Self.validate(exportFile: file)
+        let data = try GraphTransferFileIO.readFileData(url: url)
+        let file = try GraphTransferCodec.decode(data)
+        try GraphTransferValidator.validate(exportFile: file)
 
         return ImportPreview(
             graphName: file.graph.name,
@@ -220,18 +25,18 @@ actor GraphTransferService {
         )
     }
 
-    func importGraph(
+    func importGraphImpl(
         from url: URL,
         mode: ImportMode,
-        progress: (@Sendable (GraphTransferProgress) -> Void)? = nil
+        progress: (@Sendable (GraphTransferProgress) -> Void)?
     ) async throws -> ImportResult {
         guard let container else { throw GraphTransferError.notConfigured }
 
         progress?(GraphTransferProgress(phase: .inspecting, completed: 0, label: "Datei wird geprüft…"))
 
-        let data = try Self.readFileData(url: url)
-        let file = try Self.decode(data)
-        try Self.validate(exportFile: file)
+        let data = try GraphTransferFileIO.readFileData(url: url)
+        let file = try GraphTransferCodec.decode(data)
+        try GraphTransferValidator.validate(exportFile: file)
 
         switch mode {
         case .asNewGraphRemap:
@@ -240,7 +45,7 @@ actor GraphTransferService {
     }
 }
 
-// MARK: - Import
+// MARK: - Import (Remap)
 
 private extension GraphTransferService {
 
@@ -526,118 +331,5 @@ private extension GraphTransferService {
             return attributeIDMap[oldID]
         }
         return nil
-    }
-}
-
-// MARK: - Helpers
-
-private extension GraphTransferService {
-
-    static func validate(exportFile: GraphExportFileV1) throws {
-        guard exportFile.format == GraphTransferFormat.formatID else {
-            throw GraphTransferError.invalidFormat
-        }
-        guard exportFile.version == GraphTransferFormat.version else {
-            throw GraphTransferError.unsupportedVersion(found: exportFile.version)
-        }
-    }
-
-    static func decode(_ data: Data) throws -> GraphExportFileV1 {
-        let decoder = JSONDecoder()
-        decoder.dateDecodingStrategy = .iso8601
-        do {
-            return try decoder.decode(GraphExportFileV1.self, from: data)
-        } catch {
-            throw GraphTransferError.decodeFailed(underlying: String(describing: error))
-        }
-    }
-
-    static func readFileData(url: URL) throws -> Data {
-        // Best-effort security-scoped access.
-        let didStart = url.startAccessingSecurityScopedResource()
-        defer {
-            if didStart { url.stopAccessingSecurityScopedResource() }
-        }
-
-        do {
-            return try Data(contentsOf: url)
-        } catch {
-            let ns = error as NSError
-            if ns.domain == NSCocoaErrorDomain, ns.code == 257 || ns.code == 513 {
-                throw GraphTransferError.fileAccessDenied
-            }
-            throw GraphTransferError.readFailed(underlying: String(describing: error))
-        }
-    }
-
-    static var appVersionString: String? {
-        Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String
-    }
-
-    static var appBuildString: String? {
-        Bundle.main.infoDictionary?["CFBundleVersion"] as? String
-    }
-
-    static func encode(_ exportFile: GraphExportFileV1) throws -> Data {
-        let encoder = JSONEncoder()
-        encoder.dateEncodingStrategy = .iso8601
-        var formatting: JSONEncoder.OutputFormatting = [.sortedKeys]
-        #if DEBUG
-        formatting.insert(.prettyPrinted)
-        #endif
-        encoder.outputFormatting = formatting
-        return try encoder.encode(exportFile)
-    }
-
-    static func makeExportFileURL(graphName: String) throws -> URL {
-        let dateString = exportDateString(Date())
-        let cleanedName = sanitizeFilenameComponent(graphName)
-        let graphComponent = cleanedName.isEmpty ? "Graph" : cleanedName
-
-        let base = "BrainMesh-\(graphComponent)-\(dateString)"
-        let tmp = FileManager.default.temporaryDirectory
-
-        var candidate = tmp
-            .appendingPathComponent(base)
-            .appendingPathExtension(UTType.brainMeshGraphFilenameExtension)
-
-        var idx = 2
-        while FileManager.default.fileExists(atPath: candidate.path) {
-            candidate = tmp
-                .appendingPathComponent("\(base)-\(idx)")
-                .appendingPathExtension(UTType.brainMeshGraphFilenameExtension)
-            idx += 1
-        }
-
-        return candidate
-    }
-
-    static func exportDateString(_ date: Date) -> String {
-        let df = DateFormatter()
-        df.locale = Locale(identifier: "en_US_POSIX")
-        df.timeZone = TimeZone(secondsFromGMT: 0)
-        df.dateFormat = "yyyy-MM-dd"
-        return df.string(from: date)
-    }
-
-    static func sanitizeFilenameComponent(_ input: String) -> String {
-        let trimmed = input.trimmingCharacters(in: .whitespacesAndNewlines)
-        if trimmed.isEmpty { return "" }
-
-        // Replace forbidden characters on common filesystems.
-        let forbidden = CharacterSet(charactersIn: "/\\:?%*|\"<>\n\r\t")
-        let replaced = trimmed
-            .components(separatedBy: forbidden)
-            .joined(separator: " ")
-
-        let collapsed = replaced
-            .split(whereSeparator: { $0.isWhitespace })
-            .joined(separator: " ")
-
-        // Keep filenames at a reasonable length.
-        let maxLen = 64
-        if collapsed.count <= maxLen { return collapsed }
-        let idx = collapsed.index(collapsed.startIndex, offsetBy: maxLen)
-        return String(collapsed[..<idx]).trimmingCharacters(in: .whitespacesAndNewlines)
     }
 }
