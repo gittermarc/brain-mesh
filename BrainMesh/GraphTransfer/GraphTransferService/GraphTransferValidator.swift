@@ -8,7 +8,7 @@
 import Foundation
 
 enum GraphTransferValidator {
-    static func validate(exportFile: GraphExportFileV1) throws {
+    nonisolated static func validate(exportFile: GraphExportFileV1) throws {
         guard exportFile.format == GraphTransferFormat.formatID else {
             throw GraphTransferError.invalidFormat
         }

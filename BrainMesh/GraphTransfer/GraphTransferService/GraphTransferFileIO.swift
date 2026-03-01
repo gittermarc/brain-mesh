@@ -10,7 +10,7 @@ import UniformTypeIdentifiers
 
 enum GraphTransferFileIO {
 
-    static func readFileData(url: URL) throws -> Data {
+    nonisolated static func readFileData(url: URL) throws -> Data {
         // Best-effort security-scoped access.
         let didStart = url.startAccessingSecurityScopedResource()
         defer {
@@ -28,7 +28,7 @@ enum GraphTransferFileIO {
         }
     }
 
-    static func makeExportFileURL(graphName: String) throws -> URL {
+    nonisolated static func makeExportFileURL(graphName: String) throws -> URL {
         let dateString = exportDateString(Date())
         let cleanedName = sanitizeFilenameComponent(graphName)
         let graphComponent = cleanedName.isEmpty ? "Graph" : cleanedName
@@ -56,7 +56,7 @@ enum GraphTransferFileIO {
 
 private extension GraphTransferFileIO {
 
-    static func exportDateString(_ date: Date) -> String {
+    nonisolated static func exportDateString(_ date: Date) -> String {
         let df = DateFormatter()
         df.locale = Locale(identifier: "en_US_POSIX")
         df.timeZone = TimeZone(secondsFromGMT: 0)
@@ -64,7 +64,7 @@ private extension GraphTransferFileIO {
         return df.string(from: date)
     }
 
-    static func sanitizeFilenameComponent(_ input: String) -> String {
+    nonisolated static func sanitizeFilenameComponent(_ input: String) -> String {
         let trimmed = input.trimmingCharacters(in: .whitespacesAndNewlines)
         if trimmed.isEmpty { return "" }
 

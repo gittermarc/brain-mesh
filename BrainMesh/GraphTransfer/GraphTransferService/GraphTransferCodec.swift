@@ -9,7 +9,7 @@ import Foundation
 
 enum GraphTransferCodec {
 
-    static func decode(_ data: Data) throws -> GraphExportFileV1 {
+    nonisolated static func decode(_ data: Data) throws -> GraphExportFileV1 {
         let decoder = JSONDecoder()
         decoder.dateDecodingStrategy = .iso8601
         do {
@@ -19,7 +19,7 @@ enum GraphTransferCodec {
         }
     }
 
-    static func encode(_ exportFile: GraphExportFileV1) throws -> Data {
+    nonisolated static func encode(_ exportFile: GraphExportFileV1) throws -> Data {
         let encoder = JSONEncoder()
         encoder.dateEncodingStrategy = .iso8601
 
