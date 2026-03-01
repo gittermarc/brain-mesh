@@ -252,7 +252,7 @@ private struct PhotoGalleryViewerPage: View {
 
     @State private var uiImage: UIImage? = nil
     @State private var isLoading: Bool = false
-
+    @State private var loadToken: UUID? = nil
     var body: some View {
         ZStack {
             if let uiImage {
@@ -273,25 +273,52 @@ private struct PhotoGalleryViewerPage: View {
         }
     }
 
-    @MainActor
     private func loadIfNeeded() async {
-        if uiImage != nil { return }
-        if isLoading { return }
-        isLoading = true
+        let token = UUID()
 
-        let url = AttachmentStore.ensurePreviewURL(for: attachment)
-        try? modelContext.save()
+        let url: URL? = await MainActor.run {
+            if uiImage != nil { return nil }
+            if isLoading { return nil }
+
+            isLoading = true
+            loadToken = token
+
+            let url = AttachmentStore.ensurePreviewURL(for: attachment)
+            try? modelContext.save()
+            return url
+        }
 
         guard let url else {
-            isLoading = false
+            await MainActor.run {
+                if loadToken == token {
+                    isLoading = false
+                }
+            }
             return
         }
 
-        let loaded = await Task.detached(priority: .userInitiated) {
-            UIImage(contentsOfFile: url.path)
+        if Task.isCancelled {
+            await MainActor.run {
+                if loadToken == token {
+                    isLoading = false
+                }
+            }
+            return
+        }
+
+        let loaded: UIImage? = await Task(priority: .userInitiated) {
+            if Task.isCancelled { return nil }
+            return autoreleasepool {
+                UIImage(contentsOfFile: url.path)
+            }
         }.value
 
-        uiImage = loaded
-        isLoading = false
+        if Task.isCancelled { return }
+
+        await MainActor.run {
+            guard loadToken == token else { return }
+            uiImage = loaded
+            isLoading = false
+        }
     }
 }

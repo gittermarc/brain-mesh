@@ -220,7 +220,14 @@ final class AllSFSymbolsPickerViewModel: ObservableObject {
 
     private let pageSize: Int = 720
 
+    private var loadTask: Task<Void, Never>? = nil
+    private var loadToken: UUID = UUID()
+
+    private var loadMoreTask: Task<Void, Never>? = nil
+    private var loadMoreToken: UUID = UUID()
+
     private var searchTask: Task<Void, Never>? = nil
+    private var searchToken: UUID = UUID()
 
     var countLabel: String {
         if isSearching {
@@ -244,23 +251,41 @@ final class AllSFSymbolsPickerViewModel: ObservableObject {
         isLoading = true
         errorMessage = nil
 
-        Task.detached(priority: .utility) {
+        loadTask?.cancel()
+        let token = UUID()
+        loadToken = token
+
+        let pageSize = self.pageSize
+
+        loadTask = Task(priority: .utility) { [pageSize] in
             do {
+                try Task.checkCancellation()
+
                 let symbols = try SFSymbolsCatalog.loadAllSymbolNames()
+                try Task.checkCancellation()
+
                 let index = IconSearchIndex(symbols: symbols)
+                try Task.checkCancellation()
 
                 await MainActor.run {
+                    guard self.loadToken == token else { return }
                     self.allSymbols = symbols
                     self.searchIndex = index
-                    self.displayedSymbols = Array(symbols.prefix(self.pageSize))
+                    self.displayedSymbols = Array(symbols.prefix(pageSize))
                     self.isLoading = false
 
                     if !self.searchText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
                         self.scheduleSearch(term: self.searchText)
                     }
                 }
+            } catch is CancellationError {
+                await MainActor.run {
+                    guard self.loadToken == token else { return }
+                    self.isLoading = false
+                }
             } catch {
                 await MainActor.run {
+                    guard self.loadToken == token else { return }
                     self.isLoading = false
                     self.errorMessage = error.localizedDescription
                 }
@@ -269,12 +294,20 @@ final class AllSFSymbolsPickerViewModel: ObservableObject {
     }
 
     func reload() {
+        loadTask?.cancel()
+        loadMoreTask?.cancel()
         cancelSearch()
+
+        loadToken = UUID()
+        loadMoreToken = UUID()
+
         allSymbols = []
         searchIndex = nil
         displayedSymbols = []
         searchResults = []
         isSearching = false
+        isLoadingMore = false
+
         loadIfNeeded()
     }
 
@@ -298,19 +331,41 @@ final class AllSFSymbolsPickerViewModel: ObservableObject {
 
         isLoadingMore = true
 
+        loadMoreTask?.cancel()
+        let token = UUID()
+        loadMoreToken = token
+
         // Snapshot state on MainActor, then slice off-main.
         let snapshotAll = allSymbols
         let start = displayedSymbols.count
         let end = min(snapshotAll.count, start + pageSize)
 
-        Task.detached(priority: .utility) {
+        loadMoreTask = Task(priority: .utility) { [snapshotAll, start, end] in
+            if Task.isCancelled { return }
+
             guard start < end else {
-                await MainActor.run { self.isLoadingMore = false }
+                await MainActor.run {
+                    guard self.loadMoreToken == token else { return }
+                    self.isLoadingMore = false
+                }
                 return
             }
 
             let more = Array(snapshotAll[start..<end])
+
+            if Task.isCancelled { return }
+
             await MainActor.run {
+                guard self.loadMoreToken == token else { return }
+                guard !self.isSearching else {
+                    self.isLoadingMore = false
+                    return
+                }
+                guard self.displayedSymbols.count == start else {
+                    self.isLoadingMore = false
+                    return
+                }
+
                 self.displayedSymbols.append(contentsOf: more)
                 self.isLoadingMore = false
             }
@@ -319,9 +374,16 @@ final class AllSFSymbolsPickerViewModel: ObservableObject {
 
     func scheduleSearch(term: String) {
         let trimmed = term.trimmingCharacters(in: .whitespacesAndNewlines)
+
+        // Cancel any inflight work that could update the grid while searching.
+        loadMoreTask?.cancel()
+        loadMoreToken = UUID()
+        isLoadingMore = false
+
         searchTask?.cancel()
 
         guard !trimmed.isEmpty else {
+            searchToken = UUID()
             isSearching = false
             searchResults = []
             return
@@ -329,7 +391,12 @@ final class AllSFSymbolsPickerViewModel: ObservableObject {
 
         isSearching = true
 
-        searchTask = Task.detached(priority: .userInitiated) {
+        let token = UUID()
+        searchToken = token
+
+        let indexSnapshot = searchIndex
+
+        searchTask = Task(priority: .userInitiated) { [trimmed, indexSnapshot] in
             do {
                 try await Task.sleep(nanoseconds: 160_000_000)
             } catch {
@@ -338,19 +405,24 @@ final class AllSFSymbolsPickerViewModel: ObservableObject {
 
             guard !Task.isCancelled else { return }
 
-            let index = await MainActor.run { self.searchIndex }
-            let results = index?.search(term: trimmed, limit: 1200) ?? []
+            let results = indexSnapshot?.search(term: trimmed, limit: 1200) ?? []
+
+            guard !Task.isCancelled else { return }
 
             await MainActor.run {
+                guard self.searchToken == token else { return }
+
                 // Only apply if the user hasn't changed the term in the meantime.
                 let current = self.searchText.trimmingCharacters(in: .whitespacesAndNewlines)
                 guard current == trimmed else { return }
+
                 self.searchResults = results
             }
         }
     }
 
     func cancelSearch() {
+        searchToken = UUID()
         searchTask?.cancel()
         searchTask = nil
     }

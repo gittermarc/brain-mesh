@@ -213,8 +213,9 @@ struct NodeAsyncPreviewImageView<Content: View, Placeholder: View>: View {
 
         if let data = imageData, !data.isEmpty {
             let dataCopy = data
-            let decoded: UIImage? = await Task.detached(priority: .userInitiated) {
-                autoreleasepool {
+            let decoded: UIImage? = await Task(priority: .userInitiated) {
+                if Task.isCancelled { return nil }
+                return autoreleasepool {
                     UIImage(data: dataCopy)
                 }
             }.value
