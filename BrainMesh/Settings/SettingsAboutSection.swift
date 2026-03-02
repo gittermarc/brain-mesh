@@ -11,6 +11,12 @@ import SwiftUI
 struct SettingsAboutSection: View {
     private let supportURL = URL(string: "https://apps.marcfechner.de/apps/brainmesh/anleitung-faq/")!
 
+    var onOpenInAppGuide: () -> Void
+
+    init(onOpenInAppGuide: @escaping () -> Void = {}) {
+        self.onOpenInAppGuide = onOpenInAppGuide
+    }
+
     var body: some View {
         Section("Über") {
             Text(
@@ -24,6 +30,12 @@ struct SettingsAboutSection: View {
 
             Link(destination: supportURL) {
                 Label("Hilfe & Support", systemImage: "lifepreserver")
+            }
+
+            Button {
+                onOpenInAppGuide()
+            } label: {
+                Label("Anleitung in der App", systemImage: "book.pages")
             }
         }
     }

@@ -17,7 +17,7 @@ extension HelpSupportView {
             }
 
             Button {
-                showDetailsIntro = true
+                sheet = .detailsIntro
             } label: {
                 Label("Neu: Details-Felder", systemImage: "sparkles")
             }
