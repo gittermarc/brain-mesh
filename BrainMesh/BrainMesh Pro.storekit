@@ -24,7 +24,7 @@
     "_developerTeamID" : "HPJKAPZ8A3",
     "_disableDialogs" : false,
     "_failTransactionsEnabled" : false,
-    "_lastSynchronizedDate" : 793950688.67331302,
+    "_lastSynchronizedDate" : 794265481.65449595,
     "_locale" : "de",
     "_renewalBillingIssuesEnabled" : false,
     "_storefront" : "DEU",
@@ -35,7 +35,7 @@
   },
   "subscriptionGroups" : [
     {
-      "id" : "21952804",
+      "id" : "21959438",
       "localizations" : [
 
       ],
@@ -51,7 +51,7 @@
           "displayPrice" : "0.99",
           "familyShareable" : false,
           "groupNumber" : 1,
-          "internalID" : "6759787347",
+          "internalID" : "6759987834",
           "introductoryOffer" : null,
           "localizations" : [
             {
@@ -60,10 +60,10 @@
               "locale" : "de"
             }
           ],
-          "productID" : "01",
+          "productID" : "de.marcfechner.brainmesh.pro.monthly",
           "recurringSubscriptionPeriod" : "P1M",
-          "referenceName" : "de.marcfechner.BrainMesh.pro.monthly",
-          "subscriptionGroupID" : "21952804",
+          "referenceName" : "de.marcfechner.brainmesh.pro.monthly",
+          "subscriptionGroupID" : "21959438",
           "type" : "RecurringSubscription",
           "winbackOffers" : [
 
@@ -78,8 +78,8 @@
           ],
           "displayPrice" : "9.99",
           "familyShareable" : false,
-          "groupNumber" : 2,
-          "internalID" : "6759787224",
+          "groupNumber" : 1,
+          "internalID" : "6759987886",
           "introductoryOffer" : null,
           "localizations" : [
             {
@@ -88,10 +88,10 @@
               "locale" : "de"
             }
           ],
-          "productID" : "02",
+          "productID" : "de.marcfechner.brainmesh.pro.yearly",
           "recurringSubscriptionPeriod" : "P1Y",
-          "referenceName" : "de.marcfechner.BrainMesh.pro.yearly",
-          "subscriptionGroupID" : "21952804",
+          "referenceName" : "de.marcfechner.brainmesh.pro.yearly",
+          "subscriptionGroupID" : "21959438",
           "type" : "RecurringSubscription",
           "winbackOffers" : [
 

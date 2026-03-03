@@ -15,8 +15,8 @@ enum ProProductIDs {
     static let monthlyInfoPlistKey = "BM_PRO_SUBSCRIPTION_ID_01"
     static let yearlyInfoPlistKey = "BM_PRO_SUBSCRIPTION_ID_02"
 
-    static let monthlyFallback = "01"
-    static let yearlyFallback = "02"
+    static let monthlyFallback = "de.marcfechner.brainmesh.pro.monthly"
+    static let yearlyFallback = "de.marcfechner.brainmesh.pro.yearly"
 
     static var monthly: String {
         (Bundle.main.object(forInfoDictionaryKey: monthlyInfoPlistKey) as? String)?.trimmingCharacters(in: .whitespacesAndNewlines)

@@ -9,9 +9,9 @@
 	<key>NSFaceIDUsageDescription</key>
 	<string>BrainMesh nutzt Face ID / Touch ID, um geschützte Graphen zu entsperren.</string>
 	<key>BM_PRO_SUBSCRIPTION_ID_01</key>
-	<string>01</string>
+	<string>de.marcfechner.brainmesh.pro.monthly</string>
 	<key>BM_PRO_SUBSCRIPTION_ID_02</key>
-	<string>02</string>
+	<string>de.marcfechner.brainmesh.pro.yearly</string>
 	<key>UTExportedTypeDeclarations</key>
 	<array>
 		<dict>
@@ -32,8 +32,8 @@
 				</array>
 				<key>public.mime-type</key>
 				<array>
-							<string>application/vnd.brainmesh.graph+json</string>
-						</array>
+					<string>application/vnd.brainmesh.graph+json</string>
+				</array>
 			</dict>
 		</dict>
 	</array>
