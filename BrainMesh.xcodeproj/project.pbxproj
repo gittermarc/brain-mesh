@@ -6,6 +6,10 @@
 	objectVersion = 77;
 	objects = {
 
+/* Begin PBXBuildFile section */
+		60F174FB2F57908F00EF4BE6 /* StoreKit.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 60F174FA2F57908E00EF4BE6 /* StoreKit.framework */; };
+/* End PBXBuildFile section */
+
 /* Begin PBXContainerItemProxy section */
 		60B29C6C2EED5D6600C8F4C7 /* PBXContainerItemProxy */ = {
 			isa = PBXContainerItemProxy;
@@ -27,6 +31,7 @@
 		60B29C5A2EED5D6400C8F4C7 /* BrainMesh.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = BrainMesh.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		60B29C6B2EED5D6600C8F4C7 /* BrainMeshTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = BrainMeshTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 		60B29C752EED5D6600C8F4C7 /* BrainMeshUITests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = BrainMeshUITests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
+		60F174FA2F57908E00EF4BE6 /* StoreKit.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = StoreKit.framework; path = System/Library/Frameworks/StoreKit.framework; sourceTree = SDKROOT; };
 /* End PBXFileReference section */
 
 /* Begin PBXFileSystemSynchronizedBuildFileExceptionSet section */
@@ -65,6 +70,7 @@
 			isa = PBXFrameworksBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				60F174FB2F57908F00EF4BE6 /* StoreKit.framework in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -91,6 +97,7 @@
 				60B29C5C2EED5D6400C8F4C7 /* BrainMesh */,
 				60B29C6E2EED5D6600C8F4C7 /* BrainMeshTests */,
 				60B29C782EED5D6600C8F4C7 /* BrainMeshUITests */,
+				60F174F92F57908E00EF4BE6 /* Frameworks */,
 				60B29C5B2EED5D6400C8F4C7 /* Products */,
 			);
 			sourceTree = "<group>";
@@ -103,6 +110,14 @@
 				60B29C752EED5D6600C8F4C7 /* BrainMeshUITests.xctest */,
 			);
 			name = Products;
+			sourceTree = "<group>";
+		};
+		60F174F92F57908E00EF4BE6 /* Frameworks */ = {
+			isa = PBXGroup;
+			children = (
+				60F174FA2F57908E00EF4BE6 /* StoreKit.framework */,
+			);
+			name = Frameworks;
 			sourceTree = "<group>";
 		};
 /* End PBXGroup section */
@@ -289,7 +304,7 @@
 				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
 				CODE_SIGN_ENTITLEMENTS = BrainMesh/BrainMesh.entitlements;
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 3;
+				CURRENT_PROJECT_VERSION = 4;
 				DEVELOPMENT_TEAM = HPJKAPZ8A3;
 				ENABLE_PREVIEWS = YES;
 				GENERATE_INFOPLIST_FILE = YES;
@@ -323,7 +338,7 @@
 				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
 				CODE_SIGN_ENTITLEMENTS = BrainMesh/BrainMesh.entitlements;
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 3;
+				CURRENT_PROJECT_VERSION = 4;
 				DEVELOPMENT_TEAM = HPJKAPZ8A3;
 				ENABLE_PREVIEWS = YES;
 				GENERATE_INFOPLIST_FILE = YES;
