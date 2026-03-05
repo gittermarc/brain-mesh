@@ -28,6 +28,8 @@ struct ProPaywallView: View {
 
                     actions
 
+                    legalLinks
+
                     footnotes
                 }
                 .padding(16)
@@ -157,6 +159,29 @@ struct ProPaywallView: View {
         }
         .frame(maxWidth: .infinity, alignment: .leading)
     }
+
+    private var legalLinks: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Text("Rechtliches")
+                .font(.headline)
+
+            VStack(alignment: .leading, spacing: 8) {
+                Link(destination: URL(string: "https://www.apple.com/legal/internet-services/itunes/dev/stdeula/")!) {
+                    Label("EULA (Endbenutzer-Lizenzvertrag)", systemImage: "doc.text")
+                }
+
+                Link(destination: URL(string: "https://apps.marcfechner.de/apps/brainmesh/datenschutzrichtlinie/")!) {
+                    Label("Datenschutz-Richtlinie", systemImage: "hand.raised")
+                }
+            }
+            .font(.subheadline)
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(16)
+        .background(.thinMaterial)
+        .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
+    }
+
 
     private var footnotes: some View {
         VStack(alignment: .leading, spacing: 6) {
