@@ -19,6 +19,7 @@ struct HelpSupportView: View {
             SettingsAboutSection {
                 sheet = .inAppGuide
             }
+            SettingsLegalInformationSection()
         }
         .navigationTitle("Hilfe & Support")
         .navigationBarTitleDisplayMode(.inline)
