@@ -1,0 +1,85 @@
+//
+//  AppRootView+ScenePhase.swift
+//  BrainMesh
+//
+
+import SwiftUI
+
+extension AppRootView {
+
+    func handleScenePhaseChange(_ newPhase: ScenePhase) {
+        observedScenePhase = newPhase
+
+        if newPhase == .active {
+            cancelPendingBackgroundLock()
+            // If a system picker is currently presented, avoid running
+            // foreground work that can disrupt it (especially after Face ID prompts).
+            guard systemModals.isSystemModalPresented == false else { return }
+            Task { await handleBecameActive() }
+        } else if newPhase == .background {
+            // Auto-lock when the app actually goes to background — but debounce the lock.
+            //
+            // Why: When the system presents a Face ID prompt from inside a picker (notably
+            // Photos' "Hidden" album), the scene can briefly flip to `.background` on some
+            // devices/OS versions. If we lock immediately, the unlock fullScreenCover
+            // dismisses the Photos picker mid-selection.
+            //
+            // Fix: Schedule the lock with a short delay and cancel it if we become active
+            // again quickly. Real "user backgrounded the app" cases still lock reliably.
+            scheduleDebouncedBackgroundLock()
+        } else {
+            // Intentionally do nothing on `.inactive` — system overlays and auth prompts
+            // can trigger it transiently, and locking there would be disruptive.
+        }
+    }
+
+    func cancelPendingBackgroundLock() {
+        pendingBackgroundLockTask?.cancel()
+        pendingBackgroundLockTask = nil
+    }
+
+    func scheduleDebouncedBackgroundLock() {
+        cancelPendingBackgroundLock()
+
+        // We want to auto-lock quickly when the user really backgrounds the app.
+        // But while a system picker is open (Photos/Hidden album Face ID, etc.), iOS can
+        // keep reporting `.background` and locking will dismiss/reset the picker.
+        //
+        // Strategy:
+        // - wait a short moment (debounce)
+        // - if still in background AND a picker is open, grant a short grace window
+        // - after grace (or if no picker), lock
+        let debounceNanos: UInt64 = 900_000_000
+        let graceSeconds: TimeInterval = 6.0
+        let gracePollNanos: UInt64 = 500_000_000
+
+        pendingBackgroundLockTask = Task { @MainActor in
+            do {
+                try await Task.sleep(nanoseconds: debounceNanos)
+            } catch {
+                return
+            }
+
+            guard !Task.isCancelled else { return }
+            guard observedScenePhase == .background else { return }
+
+            if systemModals.isSystemModalPresented {
+                var elapsed: TimeInterval = 0
+                while observedScenePhase == .background && systemModals.isSystemModalPresented && elapsed < graceSeconds {
+                    do {
+                        try await Task.sleep(nanoseconds: gracePollNanos)
+                    } catch {
+                        return
+                    }
+                    guard !Task.isCancelled else { return }
+                    elapsed += 0.5
+                }
+            }
+
+            guard !Task.isCancelled else { return }
+            guard observedScenePhase == .background else { return }
+
+            graphLock.lockAll()
+        }
+    }
+}
