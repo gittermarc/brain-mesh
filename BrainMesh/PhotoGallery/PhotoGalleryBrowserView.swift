@@ -8,8 +8,6 @@
 import SwiftUI
 import SwiftData
 import PhotosUI
-import UniformTypeIdentifiers
-import UIKit
 
 struct PhotoGalleryBrowserView: View {
     @Environment(\.dismiss) private var dismiss
@@ -29,9 +27,7 @@ struct PhotoGalleryBrowserView: View {
     @State private var pickedItems: [PhotosPickerItem] = []
     @State private var isPickingPhotos: Bool = false
     @State private var didMarkSystemModal: Bool = false
-    @State private var viewerRequest: PhotoGalleryViewerRequest? = nil
-    @State private var confirmDelete: MetaAttachment? = nil
-    @State private var errorMessage: String? = nil
+    @State private var presentation = PhotoGalleryBrowserPresentationState()
     @StateObject private var importProgress = ImportProgressState()
 
     private let maxSelectionCount: Int = 24
@@ -68,33 +64,33 @@ struct PhotoGalleryBrowserView: View {
                 Button {
                     isPickingPhotos = true
                 } label: {
-                    addTile
+                    PhotoGalleryBrowserAddTile()
                 }
                 .buttonStyle(.plain)
 
-                ForEach(galleryImages) { att in
+                ForEach(galleryImages) { attachment in
                     PhotoGalleryGridTile(
-                        attachment: att,
+                        attachment: attachment,
                         thumbRequestSide: thumbRequestSide,
                         onTap: {
-                            viewerRequest = PhotoGalleryViewerRequest(startAttachmentID: att.id)
+                            presentation.openViewer(startAttachmentID: attachment.id)
                         },
                         onSetAsMain: {
                             Task { @MainActor in
                                 do {
                                     try await PhotoGalleryActions(modelContext: modelContext).setAsMainPhoto(
-                                        att,
+                                        attachment,
                                         mainStableID: mainStableID,
                                         mainImageData: $mainImageData,
                                         mainImagePath: $mainImagePath
                                     )
                                 } catch {
-                                    errorMessage = error.localizedDescription
+                                    presentation.showError(error.localizedDescription)
                                 }
                             }
                         },
                         onDelete: {
-                            confirmDelete = att
+                            presentation.requestDelete(attachmentID: attachment.id)
                         }
                     )
                 }
@@ -136,7 +132,7 @@ struct PhotoGalleryBrowserView: View {
                 )
 
                 if result.didFailAnything {
-                    errorMessage = "Einige Bilder konnten nicht importiert werden (\(result.failed))."
+                    presentation.showError("Einige Bilder konnten nicht importiert werden (\(result.failed)).")
                 }
                 pickedItems = []
             }
@@ -163,42 +159,37 @@ struct PhotoGalleryBrowserView: View {
         // IMPORTANT: This view is presented inside a sheet.
         // Presenting another modal on top can race and dismiss immediately.
         // Use navigation push instead.
-        .navigationDestination(item: $viewerRequest) { req in
+        .navigationDestination(item: viewerRequestBinding) { request in
             PhotoGalleryViewerView(
                 ownerKind: ownerKind,
                 ownerID: ownerID,
                 graphID: graphID,
-                startAttachmentID: req.startAttachmentID,
+                startAttachmentID: request.startAttachmentID,
                 mainImageData: $mainImageData,
                 mainImagePath: $mainImagePath,
                 mainStableID: mainStableID
             )
             .onDisappear {
-                // Allow opening the same image again after popping back.
-                viewerRequest = nil
+                presentation.clearViewerRequest()
             }
         }
-        .alert("Bild löschen?", isPresented: Binding(
-            get: { confirmDelete != nil },
-            set: { if !$0 { confirmDelete = nil } }
-        )) {
+        .alert("Bild löschen?", isPresented: confirmDeleteBinding) {
             Button("Löschen", role: .destructive) {
-                if let att = confirmDelete {
-                    PhotoGalleryActions(modelContext: modelContext).delete(att)
+                if let attachment = attachmentForPendingDelete {
+                    PhotoGalleryActions(modelContext: modelContext).delete(attachment)
                 }
-                confirmDelete = nil
+                presentation.clearDeleteRequest()
             }
-            Button("Abbrechen", role: .cancel) { confirmDelete = nil }
+            Button("Abbrechen", role: .cancel) {
+                presentation.clearDeleteRequest()
+            }
         } message: {
             Text("Dieses Bild wird aus der Galerie entfernt.")
         }
-        .alert("Galerie", isPresented: Binding(
-            get: { errorMessage != nil },
-            set: { if !$0 { errorMessage = nil } }
-        )) {
+        .alert("Galerie", isPresented: errorBinding) {
             Button("OK", role: .cancel) {}
         } message: {
-            Text(errorMessage ?? "")
+            Text(presentation.errorMessage ?? "")
         }
         .photosPicker(
             isPresented: $isPickingPhotos,
@@ -212,107 +203,43 @@ struct PhotoGalleryBrowserView: View {
         [GridItem(.adaptive(minimum: 104, maximum: 180), spacing: 10)]
     }
 
-    private var addTile: some View {
-        ZStack {
-            RoundedRectangle(cornerRadius: 18)
-                .fill(.secondary.opacity(0.10))
-
-            VStack(spacing: 8) {
-                Image(systemName: "plus")
-                    .font(.system(size: 18, weight: .bold))
-                Text("Hinzufügen")
-                    .font(.footnote.weight(.semibold))
+    private var viewerRequestBinding: Binding<PhotoGalleryViewerRequest?> {
+        Binding(
+            get: { presentation.viewerRequest },
+            set: { newValue in
+                if let newValue {
+                    presentation.viewerRequest = newValue
+                } else {
+                    presentation.clearViewerRequest()
+                }
             }
-            .foregroundStyle(.secondary)
-        }
-        .aspectRatio(1, contentMode: .fit)
-    }
-
-}
-
-private struct PhotoGalleryGridTile: View {
-    let attachment: MetaAttachment
-    let thumbRequestSide: CGFloat
-    let onTap: () -> Void
-    let onSetAsMain: () -> Void
-    let onDelete: () -> Void
-
-
-    @Environment(\.displayScale) private var displayScale
-    @State private var thumbnail: UIImage? = nil
-
-    var body: some View {
-        PhotoGallerySquareTile(thumbnail: thumbnail, cornerRadius: 18) {
-            VStack(spacing: 8) {
-                ProgressView()
-                    .scaleEffect(0.9)
-                Image(systemName: "photo")
-                    .font(.system(size: 16, weight: .semibold))
-                    .foregroundStyle(.secondary)
-            }
-        } overlay: {
-            Menu {
-                Button {
-                    onTap()
-                } label: {
-                    Label("Ansehen", systemImage: "eye")
-                }
-
-                Button {
-                    onSetAsMain()
-                } label: {
-                    Label("Als Hauptbild setzen", systemImage: "star")
-                }
-
-                if let url = AttachmentStore.ensurePreviewURL(for: attachment) {
-                    ShareLink(item: url) {
-                        Label("Teilen", systemImage: "square.and.arrow.up")
-                    }
-                }
-
-                Button(role: .destructive) {
-                    onDelete()
-                } label: {
-                    Label("Löschen", systemImage: "trash")
-                }
-            } label: {
-                Image(systemName: "ellipsis.circle.fill")
-                    .font(.system(size: 18, weight: .semibold))
-                    .foregroundStyle(.primary.opacity(0.85))
-                    .padding(8)
-            }
-        }
-        .contentShape(Rectangle())
-        .onTapGesture { onTap() }
-        .task(id: attachment.id) {
-            await loadThumbnailIfNeeded()
-        }
-    }
-
-    private func loadThumbnailIfNeeded() async {
-        if thumbnail != nil { return }
-
-        guard let url = await AttachmentHydrator.shared.ensureFileURL(
-            attachmentID: attachment.id,
-            fileExtension: attachment.fileExtension,
-            localPath: attachment.localPath
-        ) else {
-            return
-        }
-
-        let scale = displayScale
-        let requestSize = CGSize(width: thumbRequestSide, height: thumbRequestSide)
-
-        let img = await AttachmentThumbnailStore.shared.thumbnail(
-            attachmentID: attachment.id,
-            fileURL: url,
-            isVideo: false,
-            requestSize: requestSize,
-            scale: scale
         )
+    }
 
-        await MainActor.run {
-            thumbnail = img
-        }
+    private var confirmDeleteBinding: Binding<Bool> {
+        Binding(
+            get: { presentation.confirmDeleteAttachmentID != nil },
+            set: { isPresented in
+                if !isPresented {
+                    presentation.clearDeleteRequest()
+                }
+            }
+        )
+    }
+
+    private var errorBinding: Binding<Bool> {
+        Binding(
+            get: { presentation.errorMessage != nil },
+            set: { isPresented in
+                if !isPresented {
+                    presentation.clearError()
+                }
+            }
+        )
+    }
+
+    private var attachmentForPendingDelete: MetaAttachment? {
+        guard let attachmentID = presentation.confirmDeleteAttachmentID else { return nil }
+        return galleryImages.first(where: { $0.id == attachmentID })
     }
 }

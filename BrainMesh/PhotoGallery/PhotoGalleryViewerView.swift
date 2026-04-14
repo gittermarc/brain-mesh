@@ -7,8 +7,6 @@
 
 import SwiftUI
 import SwiftData
-import UniformTypeIdentifiers
-import UIKit
 
 struct PhotoGalleryViewerView: View {
     @Environment(\.dismiss) private var dismiss
@@ -26,10 +24,8 @@ struct PhotoGalleryViewerView: View {
 
     @Query private var galleryImages: [MetaAttachment]
 
-    @State private var selectionID: UUID
-    @State private var showActions: Bool = false
-    @State private var confirmDelete: Bool = false
-    @State private var errorMessage: String? = nil
+    @State private var selectionState: PhotoGallerySelectionState
+    @State private var presentation = PhotoGalleryViewerPresentationState()
 
     init(
         ownerKind: NodeKind,
@@ -54,7 +50,10 @@ struct PhotoGalleryViewerView: View {
             graphID: graphID
         )
 
-        _selectionID = State(initialValue: startAttachmentID)
+        _selectionState = State(initialValue: PhotoGallerySelectionState(
+            attachmentIDs: [startAttachmentID],
+            startSelectionID: startAttachmentID
+        ))
     }
 
     var body: some View {
@@ -64,10 +63,10 @@ struct PhotoGalleryViewerView: View {
             if galleryImages.isEmpty {
                 emptyState
             } else {
-                TabView(selection: $selectionID) {
-                    ForEach(galleryImages) { att in
-                        PhotoGalleryViewerPage(attachment: att)
-                            .tag(att.id)
+                TabView(selection: selectionBinding) {
+                    ForEach(galleryImages) { attachment in
+                        PhotoGalleryViewerPage(attachment: attachment)
+                            .tag(attachment.id)
                     }
                 }
                 .tabViewStyle(.page(indexDisplayMode: .automatic))
@@ -76,10 +75,15 @@ struct PhotoGalleryViewerView: View {
 
             topBar
         }
-        .onChange(of: galleryImages.count) { _, newCount in
-            if newCount == 0 { dismiss() }
+        .task(id: galleryImageIDs) {
+            await MainActor.run {
+                selectionState.syncAttachmentIDs(galleryImageIDs)
+                if galleryImageIDs.isEmpty {
+                    dismiss()
+                }
+            }
         }
-        .confirmationDialog("", isPresented: $showActions, titleVisibility: .hidden) {
+        .confirmationDialog("", isPresented: showActionsBinding, titleVisibility: .hidden) {
             Button("Als Hauptbild setzen") {
                 Task { @MainActor in
                     await setSelectedAsMainPhoto()
@@ -93,12 +97,12 @@ struct PhotoGalleryViewerView: View {
             }
 
             Button("Löschen", role: .destructive) {
-                confirmDelete = true
+                presentation.confirmDelete = true
             }
 
             Button("Abbrechen", role: .cancel) {}
         }
-        .alert("Bild löschen?", isPresented: $confirmDelete) {
+        .alert("Bild löschen?", isPresented: confirmDeleteBinding) {
             Button("Löschen", role: .destructive) {
                 Task { @MainActor in
                     deleteSelected()
@@ -108,14 +112,45 @@ struct PhotoGalleryViewerView: View {
         } message: {
             Text("Dieses Bild wird aus der Galerie entfernt.")
         }
-        .alert("Galerie", isPresented: Binding(
-            get: { errorMessage != nil },
-            set: { if !$0 { errorMessage = nil } }
-        )) {
+        .alert("Galerie", isPresented: errorBinding) {
             Button("OK", role: .cancel) {}
         } message: {
-            Text(errorMessage ?? "")
+            Text(presentation.errorMessage ?? "")
         }
+    }
+
+    private var selectionBinding: Binding<UUID> {
+        Binding(
+            get: { selectionState.selectedAttachmentID ?? startAttachmentID },
+            set: { newValue in
+                selectionState.select(newValue)
+            }
+        )
+    }
+
+    private var showActionsBinding: Binding<Bool> {
+        Binding(
+            get: { presentation.showActions },
+            set: { presentation.showActions = $0 }
+        )
+    }
+
+    private var confirmDeleteBinding: Binding<Bool> {
+        Binding(
+            get: { presentation.confirmDelete },
+            set: { presentation.confirmDelete = $0 }
+        )
+    }
+
+    private var errorBinding: Binding<Bool> {
+        Binding(
+            get: { presentation.errorMessage != nil },
+            set: { isPresented in
+                if !isPresented {
+                    presentation.clearError()
+                }
+            }
+        )
     }
 
     private var emptyState: some View {
@@ -150,7 +185,7 @@ struct PhotoGalleryViewerView: View {
                 Spacer(minLength: 0)
 
                 Button {
-                    showActions = true
+                    presentation.showActions = true
                 } label: {
                     Image(systemName: "ellipsis.circle.fill")
                         .font(.system(size: 28, weight: .semibold))
@@ -169,16 +204,16 @@ struct PhotoGalleryViewerView: View {
 
     private var bottomCaption: some View {
         HStack {
-            if let selected = selectedAttachment {
-                Text(dateLabel(for: selected.createdAt))
+            if let selectedAttachment {
+                Text(dateLabel(for: selectedAttachment.createdAt))
                     .font(.caption)
                     .foregroundStyle(.white.opacity(0.75))
             }
 
             Spacer(minLength: 0)
 
-            if let idx = indexLabel {
-                Text(idx)
+            if let indexLabel = selectionState.indexLabel {
+                Text(indexLabel)
                     .font(.caption.weight(.semibold))
                     .foregroundStyle(.white.opacity(0.75))
             }
@@ -187,138 +222,56 @@ struct PhotoGalleryViewerView: View {
         .padding(.bottom, 12)
     }
 
-    private var selectedAttachment: MetaAttachment? {
-        galleryImages.first(where: { $0.id == selectionID })
+    private var galleryImageIDs: [UUID] {
+        galleryImages.map { $0.id }
     }
 
-    private var indexLabel: String? {
-        guard let idx = galleryImages.firstIndex(where: { $0.id == selectionID }) else { return nil }
-        return "\(idx + 1)/\(galleryImages.count)"
+    private var selectedAttachment: MetaAttachment? {
+        guard let selectedAttachmentID = selectionState.selectedAttachmentID else { return nil }
+        return galleryImages.first(where: { $0.id == selectedAttachmentID })
     }
 
     private func dateLabel(for date: Date) -> String {
-        let f = DateFormatter()
-        f.locale = .current
-        f.dateStyle = .medium
-        f.timeStyle = .short
-        return f.string(from: date)
+        let formatter = DateFormatter()
+        formatter.locale = .current
+        formatter.dateStyle = .medium
+        formatter.timeStyle = .short
+        return formatter.string(from: date)
     }
 
     private func selectedShareURL() -> URL? {
-        guard let selected = selectedAttachment else { return nil }
-        return AttachmentStore.ensurePreviewURL(for: selected)
+        guard let selectedAttachment else { return nil }
+        return AttachmentStore.ensurePreviewURL(for: selectedAttachment)
     }
 
     @MainActor
     private func setSelectedAsMainPhoto() async {
-        guard let selected = selectedAttachment else { return }
+        guard let selectedAttachment else { return }
 
         do {
             try await PhotoGalleryActions(modelContext: modelContext).setAsMainPhoto(
-                selected,
+                selectedAttachment,
                 mainStableID: mainStableID,
                 mainImageData: $mainImageData,
                 mainImagePath: $mainImagePath
             )
         } catch {
-            errorMessage = error.localizedDescription
+            presentation.showError(error.localizedDescription)
         }
     }
 
     @MainActor
     private func deleteSelected() {
-        guard let selected = selectedAttachment else { return }
+        guard let selectedAttachment else { return }
 
-        let currentIndex = galleryImages.firstIndex(where: { $0.id == selectionID }) ?? 0
+        let nextSelectionID = selectionState.nextSelectionAfterDeletingCurrent()
+        PhotoGalleryActions(modelContext: modelContext).delete(selectedAttachment)
 
-        PhotoGalleryActions(modelContext: modelContext).delete(selected)
-
-        let remaining = galleryImages.filter { $0.id != selected.id }
-        if remaining.isEmpty {
+        guard let nextSelectionID else {
             dismiss()
             return
         }
 
-        let nextIndex = min(currentIndex, remaining.count - 1)
-        selectionID = remaining[nextIndex].id
-    }
-
-}
-
-private struct PhotoGalleryViewerPage: View {
-    @Environment(\.modelContext) private var modelContext
-
-    let attachment: MetaAttachment
-
-    @State private var uiImage: UIImage? = nil
-    @State private var isLoading: Bool = false
-    @State private var loadToken: UUID? = nil
-    var body: some View {
-        ZStack {
-            if let uiImage {
-                ZoomableImageView(image: uiImage)
-                    .padding(.horizontal, 0)
-            } else {
-                VStack(spacing: 10) {
-                    ProgressView()
-                        .tint(.white.opacity(0.85))
-                    Image(systemName: "photo")
-                        .font(.system(size: 18, weight: .semibold))
-                        .foregroundStyle(.white.opacity(0.7))
-                }
-            }
-        }
-        .task(id: attachment.id) {
-            await loadIfNeeded()
-        }
-    }
-
-    private func loadIfNeeded() async {
-        let token = UUID()
-
-        let url: URL? = await MainActor.run {
-            if uiImage != nil { return nil }
-            if isLoading { return nil }
-
-            isLoading = true
-            loadToken = token
-
-            let url = AttachmentStore.ensurePreviewURL(for: attachment)
-            try? modelContext.save()
-            return url
-        }
-
-        guard let url else {
-            await MainActor.run {
-                if loadToken == token {
-                    isLoading = false
-                }
-            }
-            return
-        }
-
-        if Task.isCancelled {
-            await MainActor.run {
-                if loadToken == token {
-                    isLoading = false
-                }
-            }
-            return
-        }
-
-        let loaded: UIImage? = await Task(priority: .userInitiated) {
-            if Task.isCancelled { return nil }
-            return autoreleasepool {
-                UIImage(contentsOfFile: url.path)
-            }
-        }.value
-
-        if Task.isCancelled { return }
-
-        await MainActor.run {
-            guard loadToken == token else { return }
-            uiImage = loaded
-            isLoading = false
-        }
+        selectionState.select(nextSelectionID)
     }
 }
