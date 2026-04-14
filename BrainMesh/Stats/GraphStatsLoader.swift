@@ -48,7 +48,7 @@ struct GraphStatsDashboardSnapshot: @unchecked Sendable {
     let activeTrends: GraphTrendsSnapshot?
 }
 
-private struct GraphStatsDashboardCacheKey: Hashable {
+private nonisolated struct GraphStatsDashboardCacheKey: Hashable, Sendable {
     let graphIDs: [UUID]
     let activeGraphID: UUID?
     let days: Int

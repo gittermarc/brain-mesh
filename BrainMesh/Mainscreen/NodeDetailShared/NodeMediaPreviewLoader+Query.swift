@@ -8,17 +8,17 @@
 import Foundation
 import SwiftData
 
-private struct NodeMediaPreviewRecord: Sendable {
+private nonisolated struct NodeMediaPreviewRecord: Sendable {
     let id: UUID
     let createdAt: Date
 }
 
-private struct NodeMediaPreviewQueryResult: Sendable {
+private nonisolated struct NodeMediaPreviewQueryResult: Sendable {
     let count: Int
     let previewRecords: [NodeMediaPreviewRecord]
 }
 
-private enum NodeMediaPreviewGraphScope: Sendable {
+private nonisolated enum NodeMediaPreviewGraphScope: Sendable {
     case all
     case exact(UUID)
     case legacyNil
@@ -166,12 +166,12 @@ extension NodeMediaPreviewLoader {
     }
 }
 
-private enum NodeMediaPreviewContentKind: Sendable {
+private nonisolated enum NodeMediaPreviewContentKind: Sendable {
     case galleryImage
     case fileAndVideo
 }
 
-private func makePredicate(
+private nonisolated func makePredicate(
     ownerKindRaw: Int,
     ownerID: UUID,
     graphScope: NodeMediaPreviewGraphScope,
