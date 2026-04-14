@@ -32,6 +32,10 @@ enum AppLoadersConfigurator {
             await ImageHydrator.shared.configure(container: anyContainer)
             if Task.isCancelled { return }
 
+            // Media preview counts + preview ID selection run off-main for detail screens.
+            await NodeMediaPreviewLoader.shared.configure(container: anyContainer)
+            if Task.isCancelled { return }
+
             // Media list ("Alle" media screen) uses SwiftData fetches during navigation.
             await MediaAllLoader.shared.configure(container: anyContainer)
             if Task.isCancelled { return }

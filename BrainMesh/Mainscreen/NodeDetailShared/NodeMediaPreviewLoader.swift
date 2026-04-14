@@ -3,6 +3,8 @@
 //  BrainMesh
 //
 //  P0.1/P0.2: Fetch-limited media preview + counts for Entity/Attribute detail views.
+//  Hot-path hardening: count + preview ID selection run off-main, while the UI only
+//  materializes the small preview set inside the view context.
 //
 
 import Foundation
@@ -25,11 +27,32 @@ struct NodeMediaPreview {
     var totalCount: Int { galleryCount + attachmentCount }
 }
 
-enum NodeMediaPreviewLoader {
+struct NodeMediaPreviewSnapshot: Sendable {
+    let galleryPreviewIDs: [UUID]
+    let attachmentPreviewIDs: [UUID]
 
-    /// Loads a small preview set (gallery + attachments) and total counts.
-    ///
-    /// - Note: Uses `fetchLimit` to avoid pulling all attachments into memory.
+    let galleryCount: Int
+    let attachmentCount: Int
+}
+
+actor NodeMediaPreviewLoader {
+
+    static let shared = NodeMediaPreviewLoader()
+
+    private var container: AnyModelContainer? = nil
+
+    func configure(container: AnyModelContainer) {
+        self.container = container
+    }
+
+    func configureIfNeeded(container: AnyModelContainer) {
+        if self.container == nil {
+            self.container = container
+        }
+    }
+
+    /// Loads the preview snapshot off-main and materializes only the small preview rows
+    /// into the UI `ModelContext`.
     @MainActor
     static func load(
         context: ModelContext,
@@ -38,74 +61,98 @@ enum NodeMediaPreviewLoader {
         graphID: UUID?,
         galleryLimit: Int = 6,
         attachmentLimit: Int = 3
+    ) async throws -> NodeMediaPreview {
+        await shared.configureIfNeeded(container: AnyModelContainer(context.container))
+
+        let snapshot = try await shared.loadSnapshot(
+            ownerKindRaw: ownerKind.rawValue,
+            ownerID: ownerID,
+            graphID: graphID,
+            galleryLimit: galleryLimit,
+            attachmentLimit: attachmentLimit
+        )
+
+        return try materializePreview(from: snapshot, context: context)
+    }
+
+    func loadSnapshot(
+        ownerKindRaw: Int,
+        ownerID: UUID,
+        graphID: UUID?,
+        galleryLimit: Int = 6,
+        attachmentLimit: Int = 3
+    ) async throws -> NodeMediaPreviewSnapshot {
+        guard let configuredContainer = container else {
+            throw NSError(
+                domain: "BrainMesh.NodeMediaPreviewLoader",
+                code: 1,
+                userInfo: [NSLocalizedDescriptionKey: "NodeMediaPreviewLoader not configured"]
+            )
+        }
+
+        let normalizedGalleryLimit = max(0, galleryLimit)
+        let normalizedAttachmentLimit = max(0, attachmentLimit)
+
+        return try await Task.detached(priority: .utility) {
+            let context = ModelContext(configuredContainer.container)
+            context.autosaveEnabled = false
+
+            return try Self.makeSnapshot(
+                context: context,
+                ownerKindRaw: ownerKindRaw,
+                ownerID: ownerID,
+                graphID: graphID,
+                galleryLimit: normalizedGalleryLimit,
+                attachmentLimit: normalizedAttachmentLimit
+            )
+        }.value
+    }
+
+    @MainActor
+    private static func materializePreview(
+        from snapshot: NodeMediaPreviewSnapshot,
+        context: ModelContext
     ) throws -> NodeMediaPreview {
-        let kindRaw = ownerKind.rawValue
-        let oid = ownerID
-        let galleryRaw = AttachmentContentKind.galleryImage.rawValue
-
-		// Legacy safety: if older attachments for this owner still have `graphID == nil`,
-		// migrate them so all queries can use AND-only predicates.
-		AttachmentGraphIDMigration.migrateIfNeeded(
-			context: context,
-			ownerKindRaw: kindRaw,
-			ownerID: oid,
-			graphID: graphID
-		)
-
-		// IMPORTANT: Keep predicates store-translatable (avoid OR / optional tricks).
-		let galleryPredicate: Predicate<MetaAttachment>
-		let attachmentPredicate: Predicate<MetaAttachment>
-		if let gid = graphID {
-			galleryPredicate = #Predicate { a in
-				a.ownerKindRaw == kindRaw &&
-				a.ownerID == oid &&
-				a.graphID == gid &&
-				a.contentKindRaw == galleryRaw
-			}
-			attachmentPredicate = #Predicate { a in
-				a.ownerKindRaw == kindRaw &&
-				a.ownerID == oid &&
-				a.graphID == gid &&
-				a.contentKindRaw != galleryRaw
-			}
-		} else {
-			galleryPredicate = #Predicate { a in
-				a.ownerKindRaw == kindRaw &&
-				a.ownerID == oid &&
-				a.contentKindRaw == galleryRaw
-			}
-			attachmentPredicate = #Predicate { a in
-				a.ownerKindRaw == kindRaw &&
-				a.ownerID == oid &&
-				a.contentKindRaw != galleryRaw
-			}
-		}
-
-        // Counts (cheap, avoids loading full objects).
-        let galleryCount = try context.fetchCount(FetchDescriptor<MetaAttachment>(predicate: galleryPredicate))
-        let attachmentCount = try context.fetchCount(FetchDescriptor<MetaAttachment>(predicate: attachmentPredicate))
-
-        // Preview fetches.
-        var galleryFD = FetchDescriptor<MetaAttachment>(
-            predicate: galleryPredicate,
-            sortBy: [SortDescriptor(\MetaAttachment.createdAt, order: .reverse)]
+        let galleryPreview = try fetchAttachments(
+            context: context,
+            ids: snapshot.galleryPreviewIDs
         )
-        galleryFD.fetchLimit = max(0, galleryLimit)
-
-        var attachmentFD = FetchDescriptor<MetaAttachment>(
-            predicate: attachmentPredicate,
-            sortBy: [SortDescriptor(\MetaAttachment.createdAt, order: .reverse)]
+        let attachmentPreview = try fetchAttachments(
+            context: context,
+            ids: snapshot.attachmentPreviewIDs
         )
-        attachmentFD.fetchLimit = max(0, attachmentLimit)
-
-        let galleryPreview = (galleryFD.fetchLimit == 0) ? [] : (try context.fetch(galleryFD))
-        let attachmentPreview = (attachmentFD.fetchLimit == 0) ? [] : (try context.fetch(attachmentFD))
 
         return NodeMediaPreview(
             galleryPreview: galleryPreview,
             attachmentPreview: attachmentPreview,
-            galleryCount: galleryCount,
-            attachmentCount: attachmentCount
+            galleryCount: snapshot.galleryCount,
+            attachmentCount: snapshot.attachmentCount
         )
+    }
+
+    @MainActor
+    private static func fetchAttachments(
+        context: ModelContext,
+        ids: [UUID]
+    ) throws -> [MetaAttachment] {
+        guard !ids.isEmpty else { return [] }
+
+        return try ids.compactMap { id in
+            try fetchAttachment(context: context, id: id)
+        }
+    }
+
+    @MainActor
+    private static func fetchAttachment(
+        context: ModelContext,
+        id: UUID
+    ) throws -> MetaAttachment? {
+        let descriptor = FetchDescriptor<MetaAttachment>(
+            predicate: #Predicate { attachment in
+                attachment.id == id
+            }
+        )
+
+        return try context.fetch(descriptor).first
     }
 }

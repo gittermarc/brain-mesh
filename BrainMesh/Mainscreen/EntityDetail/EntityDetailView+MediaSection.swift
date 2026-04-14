@@ -16,7 +16,7 @@ extension EntityDetailView {
     @MainActor
     func reloadMediaPreview() async {
         do {
-            let preview = try NodeMediaPreviewLoader.load(
+            let preview = try await NodeMediaPreviewLoader.load(
                 context: modelContext,
                 ownerKind: .entity,
                 ownerID: entity.id,
