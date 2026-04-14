@@ -9,6 +9,11 @@ import SwiftData
 nonisolated extension GraphStatsService {
     /// Total counts across all graphs (including legacy / graphID == nil).
     func totalCounts() throws -> GraphCounts {
+        let scope = GraphStatsCountScope.total
+        if let cached = cachedCounts(for: scope) {
+            return cached
+        }
+
         let entities = try context.fetchCount(FetchDescriptor<MetaEntity>())
         let attributes = try context.fetchCount(FetchDescriptor<MetaAttribute>())
         let links = try context.fetchCount(FetchDescriptor<MetaLink>())
@@ -31,23 +36,28 @@ nonisolated extension GraphStatsService {
             FetchDescriptor<MetaAttribute>(predicate: #Predicate { $0.imageData != nil })
         )
 
-        // Attachments: count is cheap, bytes require a small fetch to sum byteCount.
-        let attachments = try context.fetchCount(FetchDescriptor<MetaAttachment>())
-        let attachmentBytes = try totalAttachmentBytes()
+        let attachmentAggregate = try totalAttachmentAggregate()
 
-        return GraphCounts(
+        let counts = GraphCounts(
             entities: entities,
             attributes: attributes,
             links: links,
             notes: entityNotes + attributeNotes + linkNotes,
             images: entityImages + attributeImages,
-            attachments: attachments,
-            attachmentBytes: attachmentBytes
+            attachments: attachmentAggregate.count,
+            attachmentBytes: attachmentAggregate.bytes
         )
+        storeCounts(counts, for: scope)
+        return counts
     }
 
     /// Counts for a single graph. Pass `nil` to get legacy counts (graphID == nil).
     func counts(for graphID: UUID?) throws -> GraphCounts {
+        let scope = GraphStatsCountScope.graph(graphID)
+        if let cached = cachedCounts(for: scope) {
+            return cached
+        }
+
         let entities = try context.fetchCount(
             FetchDescriptor<MetaEntity>(predicate: entityGraphPredicate(for: graphID))
         )
@@ -76,43 +86,56 @@ nonisolated extension GraphStatsService {
             FetchDescriptor<MetaAttribute>(predicate: attributeImageDataPredicate(for: graphID))
         )
 
-        let attachments = try context.fetchCount(
-            FetchDescriptor<MetaAttachment>(predicate: attachmentGraphPredicate(for: graphID))
-        )
-        let attachmentBytes = try attachmentBytes(for: graphID)
+        let attachmentAggregate = try attachmentAggregate(for: graphID)
 
-        return GraphCounts(
+        let counts = GraphCounts(
             entities: entities,
             attributes: attributes,
             links: links,
             notes: entityNotes + attributeNotes + linkNotes,
             images: entityImages + attributeImages,
-            attachments: attachments,
-            attachmentBytes: attachmentBytes
+            attachments: attachmentAggregate.count,
+            attachmentBytes: attachmentAggregate.bytes
         )
+        storeCounts(counts, for: scope)
+        return counts
     }
 }
 
-// MARK: - Attachment bytes
+// MARK: - Attachment aggregate
 
 private nonisolated extension GraphStatsService {
-    func totalAttachmentBytes() throws -> Int64 {
-        let items = try context.fetch(FetchDescriptor<MetaAttachment>())
-        var total: Int64 = 0
-        for a in items {
-            total += Int64(a.byteCount)
+    func totalAttachmentAggregate() throws -> GraphStatsAttachmentAggregate {
+        let scope = GraphStatsCountScope.total
+        if let cached = cachedAttachmentAggregate(for: scope) {
+            return cached
         }
-        return total
+
+        let items = try context.fetch(FetchDescriptor<MetaAttachment>())
+        let aggregate = makeAttachmentAggregate(from: items)
+        storeAttachmentAggregate(aggregate, for: scope)
+        return aggregate
     }
 
-    func attachmentBytes(for graphID: UUID?) throws -> Int64 {
+    func attachmentAggregate(for graphID: UUID?) throws -> GraphStatsAttachmentAggregate {
+        let scope = GraphStatsCountScope.graph(graphID)
+        if let cached = cachedAttachmentAggregate(for: scope) {
+            return cached
+        }
+
         let items = try context.fetch(
             FetchDescriptor<MetaAttachment>(predicate: attachmentGraphPredicate(for: graphID))
         )
-        var total: Int64 = 0
-        for a in items {
-            total += Int64(a.byteCount)
+        let aggregate = makeAttachmentAggregate(from: items)
+        storeAttachmentAggregate(aggregate, for: scope)
+        return aggregate
+    }
+
+    func makeAttachmentAggregate(from items: [MetaAttachment]) -> GraphStatsAttachmentAggregate {
+        var totalBytes: Int64 = 0
+        for item in items {
+            totalBytes += Int64(item.byteCount)
         }
-        return total
+        return GraphStatsAttachmentAggregate(count: items.count, bytes: totalBytes)
     }
 }

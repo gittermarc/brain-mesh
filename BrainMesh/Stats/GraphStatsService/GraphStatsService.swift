@@ -46,6 +46,16 @@ nonisolated struct GraphCounts: Equatable, Sendable {
     }
 }
 
+nonisolated enum GraphStatsCountScope: Hashable {
+    case total
+    case graph(UUID?)
+}
+
+nonisolated struct GraphStatsAttachmentAggregate: Equatable, Sendable {
+    let count: Int
+    let bytes: Int64
+}
+
 // MARK: - P0 Stats Extensions (Dashboard + Media + Structure)
 
 /// Small label/value pair for rankings (e.g. top file extensions).
@@ -138,6 +148,8 @@ nonisolated struct GraphStructureSnapshot: Equatable, Sendable {
 // so it can be used from background loaders (e.g. GraphStatsLoader's detached task).
 nonisolated final class GraphStatsService {
     let context: ModelContext
+    private var countsCache: [GraphStatsCountScope: GraphCounts] = [:]
+    private var attachmentAggregateCache: [GraphStatsCountScope: GraphStatsAttachmentAggregate] = [:]
 
     init(context: ModelContext) {
         self.context = context
@@ -150,6 +162,28 @@ nonisolated extension GraphStatsService {
     func shortID(_ id: UUID) -> String {
         let s = id.uuidString
         return String(s.prefix(8))
+    }
+
+    func countsCacheEntryCountForTesting() -> Int {
+        countsCache.count
+    }
+}
+
+nonisolated extension GraphStatsService {
+    func cachedCounts(for scope: GraphStatsCountScope) -> GraphCounts? {
+        countsCache[scope]
+    }
+
+    func storeCounts(_ counts: GraphCounts, for scope: GraphStatsCountScope) {
+        countsCache[scope] = counts
+    }
+
+    func cachedAttachmentAggregate(for scope: GraphStatsCountScope) -> GraphStatsAttachmentAggregate? {
+        attachmentAggregateCache[scope]
+    }
+
+    func storeAttachmentAggregate(_ aggregate: GraphStatsAttachmentAggregate, for scope: GraphStatsCountScope) {
+        attachmentAggregateCache[scope] = aggregate
     }
 }
 
