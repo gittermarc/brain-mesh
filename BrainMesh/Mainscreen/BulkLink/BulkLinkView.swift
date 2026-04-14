@@ -72,16 +72,16 @@ struct BulkLinkView: View {
 
                     if !selectedTargets.isEmpty {
                         let preview = selectedPreviewRows
-                        ForEach(preview, id: \.self) { r in
+                        ForEach(preview, id: \.self) { row in
                             HStack(spacing: 12) {
-                                Image(systemName: r.iconSymbolName ?? (r.kind == .entity ? "cube" : "tag"))
+                                Image(systemName: row.iconSymbolName ?? (row.kind == .entity ? "cube" : "tag"))
                                     .font(.system(size: 14, weight: .semibold))
                                     .frame(width: 22)
                                     .foregroundStyle(.tint)
-                                Text(r.label)
+                                Text(row.label)
                                 Spacer(minLength: 0)
                                 Button {
-                                    selectedTargets.remove(r)
+                                    selectedTargets.remove(row)
                                 } label: {
                                     Image(systemName: "xmark.circle.fill")
                                         .foregroundStyle(.secondary)
@@ -149,10 +149,10 @@ struct BulkLinkView: View {
                     }
                 )
             }
-            .alert(item: $errorAlert) { err in
+            .alert(item: $errorAlert) { error in
                 Alert(
                     title: Text("Nicht möglich"),
-                    message: Text(err.message),
+                    message: Text(error.message),
                     dismissButton: .default(Text("OK"))
                 )
             }
@@ -160,9 +160,9 @@ struct BulkLinkView: View {
     }
 
     private var saveButtonTitle: String {
-        let c = selectedTargets.count
-        if c == 0 { return "Erstelle Links" }
-        return "Erstelle \(c) Link\(c == 1 ? "" : "s")"
+        let count = selectedTargets.count
+        if count == 0 { return "Erstelle Links" }
+        return "Erstelle \(count) Link\(count == 1 ? "" : "s")"
     }
 
     private var selectedPreviewRows: [NodeRef] {
@@ -197,115 +197,60 @@ struct BulkLinkView: View {
         isSaving = true
         defer { isSaving = false }
 
-        // Always work with the latest existing link sets.
         await refreshExistingLinkSets()
 
-        let cleanedNote = note.trimmingCharacters(in: .whitespacesAndNewlines)
-        let finalNote = cleanedNote.isEmpty ? nil : cleanedNote
-
-        var createdForward = 0
-        var createdReverse = 0
-        var skippedDuplicates = 0
-        var skippedSelf = 0
-
-        let gid = graphID
-
-        var forwardDuplicates: [NodeRef] = []
-        var reverseDuplicates: [NodeRef] = []
-
-        // If the user explicitly disables duplicate ignoring, we abort early (no inserts).
-        if !ignoreDuplicates {
-            for t in selectedTargets {
-                if t.kind == source.kind && t.id == source.id { continue }
-
-                let tKey = NodeRefKey(nodeRef: t)
-                if existingOutgoingTargets.contains(tKey) {
-                    forwardDuplicates.append(t)
-                }
-                if createBidirectional && existingIncomingSources.contains(tKey) {
-                    reverseDuplicates.append(t)
-                }
-            }
-
-            let duplicateCount = forwardDuplicates.count + reverseDuplicates.count
-            if duplicateCount > 0 {
-                errorAlert = BulkLinkError(
-                    message: "Es existieren bereits \(duplicateCount) Verbindungen für deine Auswahl. Entferne diese Ziele oder aktiviere \"Doppelte ignorieren\"."
-                )
-                return
-            }
-        }
-
-        var inserted: [MetaLink] = []
-
-        for t in selectedTargets {
-            if t.kind == source.kind && t.id == source.id {
-                skippedSelf += 1
-                continue
-            }
-
-            let tKey = NodeRefKey(nodeRef: t)
-            if existingOutgoingTargets.contains(tKey) {
-                forwardDuplicates.append(t)
-                continue
-            }
-
-            let link = MetaLink(
-                sourceKind: source.kind,
-                sourceID: source.id,
-                sourceLabel: source.label,
-                targetKind: t.kind,
-                targetID: t.id,
-                targetLabel: t.label,
-                note: finalNote,
-                graphID: gid
-            )
-            modelContext.insert(link)
-            inserted.append(link)
-            createdForward += 1
-            existingOutgoingTargets.insert(tKey)
-
-            if createBidirectional {
-                if existingIncomingSources.contains(tKey) {
-                    reverseDuplicates.append(t)
-                } else {
-                    let reverse = MetaLink(
-                        sourceKind: t.kind,
-                        sourceID: t.id,
-                        sourceLabel: t.label,
-                        targetKind: source.kind,
-                        targetID: source.id,
-                        targetLabel: source.label,
-                        note: finalNote,
-                        graphID: gid
-                    )
-                    modelContext.insert(reverse)
-                    inserted.append(reverse)
-                    createdReverse += 1
-                    existingIncomingSources.insert(tKey)
-                }
-            }
-        }
-
-        let duplicateCount = forwardDuplicates.count + reverseDuplicates.count
-        skippedDuplicates = duplicateCount
-
+        let plan: BulkLinkMutationPlan
         do {
-            try modelContext.save()
+            plan = try BulkLinkPlanner.makePlan(
+                source: source,
+                selectedTargets: selectedTargets,
+                note: note,
+                createBidirectional: createBidirectional,
+                ignoreDuplicates: ignoreDuplicates,
+                existingOutgoingTargets: existingOutgoingTargets,
+                existingIncomingSources: existingIncomingSources,
+                graphID: graphID
+            )
+        } catch let plannerError as BulkLinkPlannerError {
+            errorAlert = BulkLinkError(message: plannerError.message)
+            return
         } catch {
-            errorAlert = BulkLinkError(message: "Speichern fehlgeschlagen: \(error.localizedDescription)")
-            rollback(inserts: inserted)
-            await refreshExistingLinkSets()
+            errorAlert = BulkLinkError(message: "Nicht möglich: \(error.localizedDescription)")
             return
         }
 
-        let completion = BulkLinkCompletion(
-            createdForward: createdForward,
-            createdReverse: createdReverse,
-            skippedDuplicates: skippedDuplicates,
-            skippedSelf: skippedSelf,
-            isBidirectional: createBidirectional
-        )
+        let completion: BulkLinkCompletion
+        do {
+            completion = try BulkLinkExecutor.execute(
+                plan: plan,
+                insert: { draft in
+                    let link = MetaLink(
+                        sourceKind: draft.source.kind,
+                        sourceID: draft.source.id,
+                        sourceLabel: draft.source.label,
+                        targetKind: draft.target.kind,
+                        targetID: draft.target.id,
+                        targetLabel: draft.target.label,
+                        note: draft.note,
+                        graphID: draft.graphID
+                    )
+                    modelContext.insert(link)
+                    return link
+                },
+                save: {
+                    try modelContext.save()
+                },
+                rollback: { inserted in
+                    for link in inserted {
+                        modelContext.delete(link)
+                    }
+                }
+            )
+        } catch {
+            errorAlert = BulkLinkError(message: "Speichern fehlgeschlagen: \(error.localizedDescription)")
+            await refreshExistingLinkSets()
+            return
+        }
 
         if let onCompleted {
             onCompleted(completion)
@@ -314,41 +259,24 @@ struct BulkLinkView: View {
 
         if completion.totalCreated == 0 {
             resultAlert = BulkLinkResult(
-                message: "Keine neuen Links erstellt.\n\nÜbersprungen: \(skippedDuplicates) doppelt, \(skippedSelf) self-link."
+                message: "Keine neuen Links erstellt.\n\nÜbersprungen: \(completion.skippedDuplicates) doppelt, \(completion.skippedSelf) self-link."
             )
             return
         }
 
         var parts: [String] = []
-        parts.append("Erstellt: \(createdForward) ausgehend")
-        if createBidirectional {
-            parts.append("\(createdReverse) rückwärts")
+        parts.append("Erstellt: \(completion.createdForward) ausgehend")
+        if completion.isBidirectional {
+            parts.append("\(completion.createdReverse) rückwärts")
         }
-        if skippedDuplicates > 0 {
-            parts.append("Übersprungen: \(skippedDuplicates) doppelt")
+        if completion.skippedDuplicates > 0 {
+            parts.append("Übersprungen: \(completion.skippedDuplicates) doppelt")
         }
-        if skippedSelf > 0 {
-            parts.append("Übersprungen: \(skippedSelf) self-link")
+        if completion.skippedSelf > 0 {
+            parts.append("Übersprungen: \(completion.skippedSelf) self-link")
         }
         resultAlert = BulkLinkResult(message: parts.joined(separator: "\n"))
     }
-
-    @MainActor
-    private func rollback(inserts: [MetaLink]) {
-        for l in inserts {
-            modelContext.delete(l)
-        }
-    }
-}
-
-struct BulkLinkCompletion: Sendable {
-    let createdForward: Int
-    let createdReverse: Int
-    let skippedDuplicates: Int
-    let skippedSelf: Int
-    let isBidirectional: Bool
-
-    var totalCreated: Int { createdForward + createdReverse }
 }
 
 private struct BulkLinkLoadKey: Hashable {
