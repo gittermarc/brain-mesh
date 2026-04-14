@@ -86,6 +86,75 @@ struct EntitiesHomeLoaderSearchTests {
         #expect(results.contains { $0.isNotesOnlyHit == false } == false)
     }
 
+
+    @Test
+    func linkNotesMatch_deduplicatesEntityAndOwnedAttributeEndpoints() throws {
+        let testStore = try BrainMeshTestContainer.makeInMemoryStore()
+        let fixtures = BrainMeshFixtureBuilder(context: testStore.context)
+        let graph = fixtures.makeGraph(name: "Primary")
+        let owner = fixtures.makeEntity(name: "Alpha", in: graph)
+        let ownedAttribute = fixtures.makeAttribute(name: "Leaf", owner: owner)
+        let _ = fixtures.makeLink(
+            source: .entity(owner),
+            target: .attribute(ownedAttribute),
+            note: "Shared bridge context"
+        )
+        try fixtures.save()
+
+        let results = try searchEntities(in: testStore, graphID: graph.id, term: "bridge")
+
+        #expect(results.map(\.entity.id) == [owner.id])
+        #expect(results.first?.isNotesOnlyHit == true)
+    }
+
+    @Test
+    func strongMatchesStayDeduplicatedWhenAlsoMatchedViaLinkNotes() throws {
+        let testStore = try BrainMeshTestContainer.makeInMemoryStore()
+        let fixtures = BrainMeshFixtureBuilder(context: testStore.context)
+        let graph = fixtures.makeGraph(name: "Primary")
+        let owner = fixtures.makeEntity(name: "Bridge Atlas", in: graph)
+        let target = fixtures.makeEntity(name: "Target", in: graph)
+        let _ = fixtures.makeLink(
+            source: .entity(owner),
+            target: .entity(target),
+            note: "Bridge alignment"
+        )
+        try fixtures.save()
+
+        let results = try searchEntities(in: testStore, graphID: graph.id, term: "bridge")
+
+        #expect(results.map(\.entity.name) == ["Bridge Atlas", "Target"])
+        #expect(results.first?.isNotesOnlyHit == false)
+        #expect(results.last?.isNotesOnlyHit == true)
+    }
+
+    @Test
+    func linkNotesMatch_returnsStableAlphabeticalSortAcrossEntityAndAttributeEndpoints() throws {
+        let testStore = try BrainMeshTestContainer.makeInMemoryStore()
+        let fixtures = BrainMeshFixtureBuilder(context: testStore.context)
+        let graph = fixtures.makeGraph(name: "Primary")
+        let zeta = fixtures.makeEntity(name: "Zeta", in: graph)
+        let alpha = fixtures.makeEntity(name: "Alpha", in: graph)
+        let betaOwner = fixtures.makeEntity(name: "Beta", in: graph)
+        let betaAttribute = fixtures.makeAttribute(name: "Leaf", owner: betaOwner)
+        let _ = fixtures.makeLink(
+            source: .entity(zeta),
+            target: .attribute(betaAttribute),
+            note: "Orbit marker"
+        )
+        let _ = fixtures.makeLink(
+            source: .entity(alpha),
+            target: .entity(zeta),
+            note: "Orbit marker"
+        )
+        try fixtures.save()
+
+        let results = try searchEntities(in: testStore, graphID: graph.id, term: "orbit")
+
+        #expect(results.map(\.entity.name) == ["Alpha", "Beta", "Zeta"])
+        #expect(results.allSatisfy { $0.isNotesOnlyHit })
+    }
+
     @Test
     func graphScoping_excludesMatchesFromOtherGraphs() throws {
         let testStore = try BrainMeshTestContainer.makeInMemoryStore()
