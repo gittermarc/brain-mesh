@@ -33,11 +33,78 @@ struct AttachmentListItem: Identifiable, Hashable, Sendable {
     }
 
     var displayTitle: String {
-        let t = title.trimmingCharacters(in: .whitespacesAndNewlines)
-        if !t.isEmpty { return t }
+        let trimmedTitle = title.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !trimmedTitle.isEmpty { return trimmedTitle }
         if !originalFilename.isEmpty { return originalFilename }
         return "Anhang"
     }
+}
+
+private enum MediaAllContentSelection: Sendable {
+    case gallery
+    case attachments
+}
+
+private func makeMediaAllPredicate(
+    ownerKindRaw: Int,
+    ownerID: UUID,
+    graphID: UUID?,
+    selection: MediaAllContentSelection
+) -> Predicate<MetaAttachment> {
+    let kindRaw = ownerKindRaw
+    let oid = ownerID
+    let galleryRaw = AttachmentContentKind.galleryImage.rawValue
+
+    switch selection {
+    case .gallery:
+        if let gid = graphID {
+            return #Predicate { attachment in
+                attachment.ownerKindRaw == kindRaw &&
+                attachment.ownerID == oid &&
+                attachment.graphID == gid &&
+                attachment.contentKindRaw == galleryRaw
+            }
+        }
+
+        return #Predicate { attachment in
+            attachment.ownerKindRaw == kindRaw &&
+            attachment.ownerID == oid &&
+            attachment.contentKindRaw == galleryRaw
+        }
+
+    case .attachments:
+        if let gid = graphID {
+            return #Predicate { attachment in
+                attachment.ownerKindRaw == kindRaw &&
+                attachment.ownerID == oid &&
+                attachment.graphID == gid &&
+                attachment.contentKindRaw != galleryRaw
+            }
+        }
+
+        return #Predicate { attachment in
+            attachment.ownerKindRaw == kindRaw &&
+            attachment.ownerID == oid &&
+            attachment.contentKindRaw != galleryRaw
+        }
+    }
+}
+
+private func makeAttachmentListItem(from attachment: MetaAttachment) -> AttachmentListItem {
+    AttachmentListItem(
+        id: attachment.id,
+        createdAt: attachment.createdAt,
+        graphID: attachment.graphID,
+        ownerKindRaw: attachment.ownerKindRaw,
+        ownerID: attachment.ownerID,
+        contentKindRaw: attachment.contentKindRaw,
+        title: attachment.title,
+        originalFilename: attachment.originalFilename,
+        contentTypeIdentifier: attachment.contentTypeIdentifier,
+        fileExtension: attachment.fileExtension,
+        byteCount: attachment.byteCount,
+        localPath: attachment.localPath
+    )
 }
 
 actor MediaAllLoader {
@@ -66,62 +133,19 @@ actor MediaAllLoader {
     }
 
     func fetchCounts(ownerKindRaw: Int, ownerID: UUID, graphID: UUID?) async -> (gallery: Int, attachments: Int) {
-        guard let container else { return (0, 0) }
-
-        return await Task.detached(priority: .utility) {
-            let context = ModelContext(container.container)
-            context.autosaveEnabled = false
-
-            let kindRaw = ownerKindRaw
-            let oid = ownerID
-            let galleryRaw = AttachmentContentKind.galleryImage.rawValue
-
-            do {
-                // IMPORTANT: keep predicates store-translatable (avoid OR / optional tricks).
-                let galleryCountDescriptor: FetchDescriptor<MetaAttachment>
-                let attachmentCountDescriptor: FetchDescriptor<MetaAttachment>
-
-                if let gid = graphID {
-                    galleryCountDescriptor = FetchDescriptor<MetaAttachment>(
-                        predicate: #Predicate { a in
-                            a.ownerKindRaw == kindRaw &&
-                            a.ownerID == oid &&
-                            a.graphID == gid &&
-                            a.contentKindRaw == galleryRaw
-                        }
-                    )
-                    attachmentCountDescriptor = FetchDescriptor<MetaAttachment>(
-                        predicate: #Predicate { a in
-                            a.ownerKindRaw == kindRaw &&
-                            a.ownerID == oid &&
-                            a.graphID == gid &&
-                            a.contentKindRaw != galleryRaw
-                        }
-                    )
-                } else {
-                    galleryCountDescriptor = FetchDescriptor<MetaAttachment>(
-                        predicate: #Predicate { a in
-                            a.ownerKindRaw == kindRaw &&
-                            a.ownerID == oid &&
-                            a.contentKindRaw == galleryRaw
-                        }
-                    )
-                    attachmentCountDescriptor = FetchDescriptor<MetaAttachment>(
-                        predicate: #Predicate { a in
-                            a.ownerKindRaw == kindRaw &&
-                            a.ownerID == oid &&
-                            a.contentKindRaw != galleryRaw
-                        }
-                    )
-                }
-
-                let g = try context.fetchCount(galleryCountDescriptor)
-                let a = try context.fetchCount(attachmentCountDescriptor)
-                return (g, a)
-            } catch {
-                return (0, 0)
-            }
-        }.value
+        let gallery = await fetchCount(
+            ownerKindRaw: ownerKindRaw,
+            ownerID: ownerID,
+            graphID: graphID,
+            selection: .gallery
+        )
+        let attachments = await fetchCount(
+            ownerKindRaw: ownerKindRaw,
+            ownerID: ownerID,
+            graphID: graphID,
+            selection: .attachments
+        )
+        return (gallery, attachments)
     }
 
     func fetchGalleryPage(
@@ -137,7 +161,7 @@ actor MediaAllLoader {
             graphID: graphID,
             offset: offset,
             limit: limit,
-            includeGalleryImages: true
+            selection: .gallery
         )
     }
 
@@ -154,8 +178,33 @@ actor MediaAllLoader {
             graphID: graphID,
             offset: offset,
             limit: limit,
-            includeGalleryImages: false
+            selection: .attachments
         )
+    }
+
+    private func fetchCount(
+        ownerKindRaw: Int,
+        ownerID: UUID,
+        graphID: UUID?,
+        selection: MediaAllContentSelection
+    ) async -> Int {
+        guard let container else { return 0 }
+
+        return await Task.detached(priority: .utility) {
+            let context = ModelContext(container.container)
+            context.autosaveEnabled = false
+
+            let descriptor = FetchDescriptor<MetaAttachment>(
+                predicate: makeMediaAllPredicate(
+                    ownerKindRaw: ownerKindRaw,
+                    ownerID: ownerID,
+                    graphID: graphID,
+                    selection: selection
+                )
+            )
+
+            return (try? context.fetchCount(descriptor)) ?? 0
+        }.value
     }
 
     private func fetchPage(
@@ -164,7 +213,7 @@ actor MediaAllLoader {
         graphID: UUID?,
         offset: Int,
         limit: Int,
-        includeGalleryImages: Bool
+        selection: MediaAllContentSelection
     ) async -> [AttachmentListItem] {
         guard let container else { return [] }
 
@@ -172,68 +221,20 @@ actor MediaAllLoader {
             let context = ModelContext(container.container)
             context.autosaveEnabled = false
 
-            let kindRaw = ownerKindRaw
-            let oid = ownerID
-            let galleryRaw = AttachmentContentKind.galleryImage.rawValue
-
-            let predicate: Predicate<MetaAttachment>
-            if includeGalleryImages {
-                if let gid = graphID {
-                    predicate = #Predicate { a in
-                        a.ownerKindRaw == kindRaw &&
-                        a.ownerID == oid &&
-                        a.graphID == gid &&
-                        a.contentKindRaw == galleryRaw
-                    }
-                } else {
-                    predicate = #Predicate { a in
-                        a.ownerKindRaw == kindRaw &&
-                        a.ownerID == oid &&
-                        a.contentKindRaw == galleryRaw
-                    }
-                }
-            } else {
-                if let gid = graphID {
-                    predicate = #Predicate { a in
-                        a.ownerKindRaw == kindRaw &&
-                        a.ownerID == oid &&
-                        a.graphID == gid &&
-                        a.contentKindRaw != galleryRaw
-                    }
-                } else {
-                    predicate = #Predicate { a in
-                        a.ownerKindRaw == kindRaw &&
-                        a.ownerID == oid &&
-                        a.contentKindRaw != galleryRaw
-                    }
-                }
-            }
-
             var descriptor = FetchDescriptor<MetaAttachment>(
-                predicate: predicate,
+                predicate: makeMediaAllPredicate(
+                    ownerKindRaw: ownerKindRaw,
+                    ownerID: ownerID,
+                    graphID: graphID,
+                    selection: selection
+                ),
                 sortBy: [SortDescriptor(\MetaAttachment.createdAt, order: .reverse)]
             )
             descriptor.fetchLimit = max(1, limit)
             descriptor.fetchOffset = max(0, offset)
 
             guard let rows = try? context.fetch(descriptor) else { return [] }
-
-            return rows.map { a in
-                AttachmentListItem(
-                    id: a.id,
-                    createdAt: a.createdAt,
-                    graphID: a.graphID,
-                    ownerKindRaw: a.ownerKindRaw,
-                    ownerID: a.ownerID,
-                    contentKindRaw: a.contentKindRaw,
-                    title: a.title,
-                    originalFilename: a.originalFilename,
-                    contentTypeIdentifier: a.contentTypeIdentifier,
-                    fileExtension: a.fileExtension,
-                    byteCount: a.byteCount,
-                    localPath: a.localPath
-                )
-            }
+            return rows.map(makeAttachmentListItem(from:))
         }.value
     }
 }

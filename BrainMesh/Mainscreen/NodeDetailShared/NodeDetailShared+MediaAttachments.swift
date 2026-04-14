@@ -9,8 +9,6 @@ import UniformTypeIdentifiers
 
 extension NodeMediaAllView {
 
-    // MARK: - Attachments Section
-
     @ViewBuilder
     var attachmentsSection: some View {
         VStack(alignment: .leading, spacing: 10) {
@@ -18,39 +16,41 @@ extension NodeMediaAllView {
                 Text("Anhänge")
                     .font(.headline)
 
-                if attachmentTotalCount > 0 {
-                    Text("\(min(attachments.count, attachmentTotalCount))/\(attachmentTotalCount)")
+                if attachmentsPage.totalCount > 0 {
+                    Text("\(attachmentsPage.loadedCount)/\(attachmentsPage.totalCount)")
                         .font(.caption.weight(.semibold))
                         .foregroundStyle(.secondary)
                 }
 
                 Spacer(minLength: 0)
 
-                if isLoadingAttachments {
+                if attachmentsPage.isLoading {
                     ProgressView()
                         .scaleEffect(0.85)
                 }
             }
 
-            if attachments.isEmpty {
-                Text(isLoadingAttachments ? "Anhänge werden geladen …" : "Keine Anhänge.")
+            if attachmentsPage.items.isEmpty {
+                Text(attachmentsPage.isLoading ? "Anhänge werden geladen …" : "Keine Anhänge.")
                     .foregroundStyle(.secondary)
             } else {
                 LazyVStack(alignment: .leading, spacing: 0) {
-                    ForEach(attachments) { att in
-                        AttachmentListRowLight(attachment: att)
+                    ForEach(attachmentsPage.items) { attachment in
+                        AttachmentListRowLight(attachment: attachment)
                             .contentShape(Rectangle())
-                            .onTapGesture { openAttachment(att) }
-                        if att.id != attachments.last?.id {
+                            .onTapGesture {
+                                openAttachment(attachment)
+                            }
+                        if attachment.id != attachmentsPage.items.last?.id {
                             Divider()
                         }
                     }
 
-                    if attachmentsHasMore {
+                    if attachmentsPage.hasMore {
                         loadMoreRow(
-                            title: isLoadingAttachments ? "Lade …" : "Weitere laden",
-                            isLoading: isLoadingAttachments,
-                            action: { forceLoadMoreAttachments() }
+                            title: attachmentsPage.isLoading ? "Lade …" : "Weitere laden",
+                            isLoading: attachmentsPage.isLoading,
+                            action: forceLoadMoreAttachments
                         )
                         .padding(.top, 4)
                     }
@@ -83,81 +83,6 @@ extension NodeMediaAllView {
             .disabled(isLoading)
 
             Spacer(minLength: 0)
-        }
-    }
-
-    // MARK: - Paging (Attachments)
-
-    func loadMoreAttachmentsIfNeeded() {
-        guard attachmentsHasMore, !isLoadingAttachments else { return }
-        Task { await loadMoreAttachments() }
-    }
-
-    func forceLoadMoreAttachments() {
-        guard attachmentsHasMore, !isLoadingAttachments else { return }
-        Task { await loadMoreAttachments() }
-    }
-
-    func loadMoreAttachments() async {
-        guard attachmentsHasMore else { return }
-        if isLoadingAttachments { return }
-        isLoadingAttachments = true
-        defer { isLoadingAttachments = false }
-
-        let page = await MediaAllLoader.shared.fetchAttachmentPage(
-            ownerKindRaw: ownerKind.rawValue,
-            ownerID: ownerID,
-            graphID: graphID,
-            offset: attachmentOffset,
-            limit: attachmentPageSize
-        )
-        if page.isEmpty {
-            attachmentsHasMore = false
-            return
-        }
-
-        let existing = Set(attachments.map(\.id))
-        let filtered = page.filter { !existing.contains($0.id) }
-        if filtered.isEmpty {
-            // No progress. Stop to avoid runaway loops.
-            attachmentsHasMore = false
-            return
-        }
-        attachments.append(contentsOf: filtered)
-        attachmentOffset += page.count
-
-        if attachmentTotalCount > 0 {
-            attachmentsHasMore = attachments.count < attachmentTotalCount
-        } else {
-            attachmentsHasMore = page.count >= attachmentPageSize
-        }
-    }
-
-    func openAttachment(_ attachment: AttachmentListItem) {
-        Task { @MainActor in
-            guard let url = await AttachmentHydrator.shared.ensureFileURL(
-                attachmentID: attachment.id,
-                fileExtension: attachment.fileExtension,
-                localPath: attachment.localPath
-            ) else {
-                errorMessage = "Vorschau ist nicht verfügbar (keine Daten/Datei gefunden)."
-                return
-            }
-
-            let isVideo = AttachmentStore.isVideo(contentTypeIdentifier: attachment.contentTypeIdentifier)
-                || ["mov", "mp4", "m4v"].contains(attachment.fileExtension.lowercased())
-
-            if isVideo {
-                videoPlayback = VideoPlaybackRequest(url: url, title: attachment.displayTitle)
-                return
-            }
-
-            attachmentPreviewSheet = NodeAttachmentPreviewSheetState(
-                url: url,
-                title: attachment.displayTitle,
-                contentTypeIdentifier: attachment.contentTypeIdentifier,
-                fileExtension: attachment.fileExtension
-            )
         }
     }
 }

@@ -186,4 +186,78 @@ struct MediaAllLoaderTests {
         let pageTitles = page.map { $0.title }
         #expect(pageTitles == ["First"])
     }
+
+
+    @Test
+    func fetchGalleryPage_includesOnlyGalleryImages_andRespectsOffset() async throws {
+        let testStore = try BrainMeshTestContainer.makeInMemoryStore()
+        let fixtures = BrainMeshFixtureBuilder(context: testStore.context)
+        let graph = fixtures.makeGraph(name: "Primary")
+        let owner = fixtures.makeEntity(name: "Atlas", in: graph)
+
+        let oldest = fixtures.makeAttachment(
+            owner: .entity(owner),
+            contentKind: .galleryImage,
+            title: "Oldest Gallery",
+            originalFilename: "oldest.jpg",
+            contentTypeIdentifier: "public.jpeg",
+            fileExtension: "jpg",
+            fileData: Data([0x01])
+        )
+        oldest.createdAt = Date(timeIntervalSince1970: 100)
+
+        let middle = fixtures.makeAttachment(
+            owner: .entity(owner),
+            contentKind: .galleryImage,
+            title: "Middle Gallery",
+            originalFilename: "middle.jpg",
+            contentTypeIdentifier: "public.jpeg",
+            fileExtension: "jpg",
+            fileData: Data([0x02])
+        )
+        middle.createdAt = Date(timeIntervalSince1970: 200)
+
+        let newest = fixtures.makeAttachment(
+            owner: .entity(owner),
+            contentKind: .galleryImage,
+            title: "Newest Gallery",
+            originalFilename: "newest.jpg",
+            contentTypeIdentifier: "public.jpeg",
+            fileExtension: "jpg",
+            fileData: Data([0x03])
+        )
+        newest.createdAt = Date(timeIntervalSince1970: 300)
+
+        let fileAttachment = fixtures.makeAttachment(
+            owner: .entity(owner),
+            contentKind: .file,
+            title: "Document",
+            originalFilename: "doc.pdf",
+            contentTypeIdentifier: "com.adobe.pdf",
+            fileExtension: "pdf",
+            fileData: Data([0x04])
+        )
+        fileAttachment.createdAt = Date(timeIntervalSince1970: 400)
+
+        try fixtures.save()
+
+        let loader = MediaAllLoader()
+        await loader.configure(container: AnyModelContainer(testStore.container))
+        let page = await loader.fetchGalleryPage(
+            ownerKindRaw: NodeKind.entity.rawValue,
+            ownerID: owner.id,
+            graphID: graph.id,
+            offset: 1,
+            limit: 1
+        )
+
+        let pageTitles = page.map { $0.title }
+        let containsNonGalleryItem = page.contains { item in
+            item.contentKind != .galleryImage
+        }
+
+        #expect(pageTitles == ["Middle Gallery"])
+        #expect(containsNonGalleryItem == false)
+    }
+
 }
