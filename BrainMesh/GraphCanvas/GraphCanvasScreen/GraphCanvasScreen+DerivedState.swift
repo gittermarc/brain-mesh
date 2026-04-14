@@ -8,27 +8,34 @@ import SwiftUI
 extension GraphCanvasScreen {
     @MainActor
     func recomputeDerivedState() {
-        let newDrawEdges = edgesForDisplay()
-    
-        // ✅ Auto-Spotlight (erzwingt hideNonRelevant=true, depth=1 sobald selection != nil)
-        let autoSpotlight = (selection != nil)
-        let effectiveLensEnabled = autoSpotlight ? true : lensEnabled
-        let effectiveLensHide = autoSpotlight ? true : lensHideNonRelevant
-        let effectiveLensDepth = autoSpotlight ? 1 : lensDepth
-    
-        let newLens = LensContext.build(
-            enabled: effectiveLensEnabled,
-            hideNonRelevant: effectiveLensHide,
-            depth: effectiveLensDepth,
+        let derivedState = GraphCanvasDerivedStateBuilder.build(
             selection: selection,
-            edges: newDrawEdges
+            edges: edges,
+            showAllLinksForSelection: showAllLinksForSelection,
+            degreeCap: degreeCap,
+            lensEnabled: lensEnabled,
+            lensHideNonRelevant: lensHideNonRelevant,
+            lensDepth: lensDepth,
+            labelForKey: { key in
+                displayLabel(for: key)
+            }
         )
-    
-        // ✅ Physik-Relevanz: im Spotlight nur auf Selection+Nachbarn simulieren
-        let newPhysicsRelevant: Set<NodeKey>? = (autoSpotlight ? newLens.relevant : nil)
-    
-        if drawEdgesCache != newDrawEdges { drawEdgesCache = newDrawEdges }
-        if lensCache != newLens { lensCache = newLens }
-        if physicsRelevantCache != newPhysicsRelevant { physicsRelevantCache = newPhysicsRelevant }
+
+        let cacheMutation = GraphCanvasDerivedStateCacheMutation.diff(
+            cachedDrawEdges: drawEdgesCache,
+            cachedLens: lensCache,
+            cachedPhysicsRelevant: physicsRelevantCache,
+            derived: derivedState
+        )
+
+        if cacheMutation.drawEdgesChanged {
+            drawEdgesCache = derivedState.drawEdges
+        }
+        if cacheMutation.lensChanged {
+            lensCache = derivedState.lens
+        }
+        if cacheMutation.physicsRelevantChanged {
+            physicsRelevantCache = derivedState.physicsRelevant
+        }
     }
 }

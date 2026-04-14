@@ -127,6 +127,160 @@ struct LensContext: Equatable {
     }
 }
 
+
+// MARK: - Derived State Planning
+
+struct GraphCanvasLensConfiguration: Equatable {
+    let autoSpotlight: Bool
+    let enabled: Bool
+    let hideNonRelevant: Bool
+    let depth: Int
+
+    static func resolve(
+        selection: NodeKey?,
+        lensEnabled: Bool,
+        lensHideNonRelevant: Bool,
+        lensDepth: Int
+    ) -> GraphCanvasLensConfiguration {
+        let autoSpotlight = (selection != nil)
+        if autoSpotlight {
+            return GraphCanvasLensConfiguration(
+                autoSpotlight: true,
+                enabled: true,
+                hideNonRelevant: true,
+                depth: 1
+            )
+        }
+
+        return GraphCanvasLensConfiguration(
+            autoSpotlight: false,
+            enabled: lensEnabled,
+            hideNonRelevant: lensHideNonRelevant,
+            depth: lensDepth
+        )
+    }
+}
+
+struct GraphCanvasDisplayEdgesPlanner {
+    static func displayEdges(
+        selection: NodeKey?,
+        allEdges: [GraphEdge],
+        showAllLinksForSelection: Bool,
+        degreeCap: Int,
+        labelForKey: (NodeKey) -> String
+    ) -> [GraphEdge] {
+        guard let selection else { return [] }
+
+        let incident = allEdges.filter { $0.a == selection || $0.b == selection }
+        let containment = incident.filter { $0.type == .containment }
+        var links = incident.filter { $0.type == .link }
+
+        links.sort {
+            let lhs = otherEnd(of: $0, from: selection)
+            let rhs = otherEnd(of: $1, from: selection)
+            return labelForKey(lhs) < labelForKey(rhs)
+        }
+
+        if !showAllLinksForSelection {
+            links = Array(links.prefix(degreeCap))
+        }
+
+        return (containment + links).unique()
+    }
+
+    static func hiddenLinkCount(
+        selection: NodeKey?,
+        allEdges: [GraphEdge],
+        showAllLinksForSelection: Bool,
+        degreeCap: Int
+    ) -> Int {
+        guard let selection else { return 0 }
+        if showAllLinksForSelection { return 0 }
+
+        let incidentLinkCount = allEdges.filter {
+            $0.type == .link && ($0.a == selection || $0.b == selection)
+        }.count
+        return max(0, incidentLinkCount - degreeCap)
+    }
+
+    private static func otherEnd(of edge: GraphEdge, from selection: NodeKey) -> NodeKey {
+        edge.a == selection ? edge.b : edge.a
+    }
+}
+
+struct GraphCanvasDerivedStateSnapshot: Equatable {
+    let drawEdges: [GraphEdge]
+    let lens: LensContext
+    let physicsRelevant: Set<NodeKey>?
+}
+
+struct GraphCanvasDerivedStateBuilder {
+    static func build(
+        selection: NodeKey?,
+        edges: [GraphEdge],
+        showAllLinksForSelection: Bool,
+        degreeCap: Int,
+        lensEnabled: Bool,
+        lensHideNonRelevant: Bool,
+        lensDepth: Int,
+        labelForKey: (NodeKey) -> String
+    ) -> GraphCanvasDerivedStateSnapshot {
+        let drawEdges = GraphCanvasDisplayEdgesPlanner.displayEdges(
+            selection: selection,
+            allEdges: edges,
+            showAllLinksForSelection: showAllLinksForSelection,
+            degreeCap: degreeCap,
+            labelForKey: labelForKey
+        )
+
+        let lensConfiguration = GraphCanvasLensConfiguration.resolve(
+            selection: selection,
+            lensEnabled: lensEnabled,
+            lensHideNonRelevant: lensHideNonRelevant,
+            lensDepth: lensDepth
+        )
+
+        let lens = LensContext.build(
+            enabled: lensConfiguration.enabled,
+            hideNonRelevant: lensConfiguration.hideNonRelevant,
+            depth: lensConfiguration.depth,
+            selection: selection,
+            edges: drawEdges
+        )
+
+        let physicsRelevant = lensConfiguration.autoSpotlight ? lens.relevant : nil
+
+        return GraphCanvasDerivedStateSnapshot(
+            drawEdges: drawEdges,
+            lens: lens,
+            physicsRelevant: physicsRelevant
+        )
+    }
+}
+
+struct GraphCanvasDerivedStateCacheMutation: Equatable {
+    let drawEdgesChanged: Bool
+    let lensChanged: Bool
+    let physicsRelevantChanged: Bool
+
+    var hasChanges: Bool {
+        drawEdgesChanged || lensChanged || physicsRelevantChanged
+    }
+
+    static func diff(
+        cachedDrawEdges: [GraphEdge],
+        cachedLens: LensContext,
+        cachedPhysicsRelevant: Set<NodeKey>?,
+        derived: GraphCanvasDerivedStateSnapshot
+    ) -> GraphCanvasDerivedStateCacheMutation {
+        GraphCanvasDerivedStateCacheMutation(
+            drawEdgesChanged: cachedDrawEdges != derived.drawEdges,
+            lensChanged: cachedLens != derived.lens,
+            physicsRelevantChanged: cachedPhysicsRelevant != derived.physicsRelevant
+        )
+    }
+}
+
 // MARK: - Graph Types
 
 nonisolated struct NodeKey: Hashable, Sendable {

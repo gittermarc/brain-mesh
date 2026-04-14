@@ -237,18 +237,7 @@ extension GraphCanvasScreen {
     
         // ✅ Selection change: reset “more”
         .onChange(of: selection) { _, newSelection in
-            showAllLinksForSelection = false
-    
-            if let key = newSelection {
-                Task {
-                    await ensureLocalMainImageCacheForSelectionIfNeeded(key)
-                }
-            }
-    
-            // ✅ Details Peek (Option A): precompute only when selection changes.
-            recomputeDetailsPeek(for: newSelection)
-    
-            recomputeDerivedState()
+            handleSelectionChange(newSelection)
         }
     }
 }

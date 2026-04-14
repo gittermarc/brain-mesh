@@ -12,39 +12,29 @@ extension GraphCanvasScreen {
     // MARK: - Spotlight edges (Nodes-only default + Degree cap)
 
     func edgesForDisplay() -> [GraphEdge] {
-        // ✅ Default: nodes-only (keine Linien)
-        guard let sel = selection else { return [] }
-
-        // ✅ Nur direkte Kanten des selektierten Nodes
-        let incident = edges.filter { $0.a == sel || $0.b == sel }
-
-        let containment = incident.filter { $0.type == .containment }
-        var links = incident.filter { $0.type == .link }
-
-        // stabilere Reihenfolge
-        links.sort { displayLabel(for: otherEnd(of: $0, sel: sel)) < displayLabel(for: otherEnd(of: $1, sel: sel)) }
-
-        if !showAllLinksForSelection {
-            links = Array(links.prefix(degreeCap))
-        }
-
-        return (containment + links).unique()
+        GraphCanvasDisplayEdgesPlanner.displayEdges(
+            selection: selection,
+            allEdges: edges,
+            showAllLinksForSelection: showAllLinksForSelection,
+            degreeCap: degreeCap,
+            labelForKey: { key in
+                displayLabel(for: key)
+            }
+        )
     }
 
-    private func otherEnd(of e: GraphEdge, sel: NodeKey) -> NodeKey {
-        (e.a == sel) ? e.b : e.a
-    }
-
-    private func displayLabel(for key: NodeKey) -> String {
+    func displayLabel(for key: NodeKey) -> String {
         if let cached = labelCache[key] { return cached }
         return nodes.first(where: { $0.key == key })?.label ?? ""
     }
 
     func hiddenLinkCountForSelection() -> Int {
-        guard let sel = selection else { return 0 }
-        if showAllLinksForSelection { return 0 }
-        let incidentLinkCount = edges.filter { $0.type == .link && ($0.a == sel || $0.b == sel) }.count
-        return max(0, incidentLinkCount - degreeCap)
+        GraphCanvasDisplayEdgesPlanner.hiddenLinkCount(
+            selection: selection,
+            allEdges: edges,
+            showAllLinksForSelection: showAllLinksForSelection,
+            degreeCap: degreeCap
+        )
     }
 
 
@@ -77,6 +67,20 @@ extension GraphCanvasScreen {
     func selectedImagePath() -> String? {
         guard let sel = selection else { return nil }
         return imagePathCache[sel]
+    }
+
+    @MainActor
+    func handleSelectionChange(_ newSelection: NodeKey?) {
+        showAllLinksForSelection = false
+
+        if let key = newSelection {
+            Task {
+                await ensureLocalMainImageCacheForSelectionIfNeeded(key)
+            }
+        }
+
+        recomputeDetailsPeek(for: newSelection)
+        recomputeDerivedState()
     }
 
 
