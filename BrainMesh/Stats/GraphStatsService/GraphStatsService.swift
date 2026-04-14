@@ -56,6 +56,14 @@ nonisolated struct GraphStatsAttachmentAggregate: Equatable, Sendable {
     let bytes: Int64
 }
 
+
+nonisolated struct GraphStatsScopeRevision: Equatable, Sendable {
+    let counts: GraphCounts
+    let newestEntityCreatedAt: Date?
+    let newestLinkCreatedAt: Date?
+    let newestAttachmentCreatedAt: Date?
+}
+
 // MARK: - P0 Stats Extensions (Dashboard + Media + Structure)
 
 /// Small label/value pair for rankings (e.g. top file extensions).
@@ -259,5 +267,95 @@ nonisolated extension GraphStatsService {
             return #Predicate<MetaAttribute> { $0.graphID == graphID && $0.imageData != nil }
         }
         return #Predicate<MetaAttribute> { $0.graphID == nil && $0.imageData != nil }
+    }
+}
+
+
+// MARK: - Revision helpers
+
+nonisolated extension GraphStatsService {
+    func totalRevision() throws -> GraphStatsScopeRevision {
+        GraphStatsScopeRevision(
+            counts: try totalCounts(),
+            newestEntityCreatedAt: try newestEntityCreatedAt(),
+            newestLinkCreatedAt: try newestLinkCreatedAt(for: nil, scoped: false),
+            newestAttachmentCreatedAt: try newestAttachmentCreatedAt(for: nil, scoped: false)
+        )
+    }
+
+    func revision(for graphID: UUID?) throws -> GraphStatsScopeRevision {
+        GraphStatsScopeRevision(
+            counts: try counts(for: graphID),
+            newestEntityCreatedAt: try newestEntityCreatedAt(for: graphID),
+            newestLinkCreatedAt: try newestLinkCreatedAt(for: graphID, scoped: true),
+            newestAttachmentCreatedAt: try newestAttachmentCreatedAt(for: graphID, scoped: true)
+        )
+    }
+}
+
+private nonisolated extension GraphStatsService {
+    func newestEntityCreatedAt() throws -> Date? {
+        var descriptor = FetchDescriptor<MetaEntity>(sortBy: [SortDescriptor(\MetaEntity.createdAt, order: .reverse)])
+        descriptor.fetchLimit = 1
+        return try context.fetch(descriptor).first?.createdAt
+    }
+
+    func newestEntityCreatedAt(for graphID: UUID?) throws -> Date? {
+        var descriptor = FetchDescriptor<MetaEntity>(
+            predicate: entityGraphPredicate(for: graphID),
+            sortBy: [SortDescriptor(\MetaEntity.createdAt, order: .reverse)]
+        )
+        descriptor.fetchLimit = 1
+        return try context.fetch(descriptor).first?.createdAt
+    }
+
+    func newestLinkCreatedAt(for graphID: UUID?, scoped: Bool) throws -> Date? {
+        let descriptor: FetchDescriptor<MetaLink>
+        if scoped {
+            descriptor = newestLinkCreatedAtDescriptor(for: graphID)
+        } else {
+            descriptor = newestLinkCreatedAtDescriptor()
+        }
+        return try context.fetch(descriptor).first?.createdAt
+    }
+
+    func newestAttachmentCreatedAt(for graphID: UUID?, scoped: Bool) throws -> Date? {
+        let descriptor: FetchDescriptor<MetaAttachment>
+        if scoped {
+            descriptor = newestAttachmentCreatedAtDescriptor(for: graphID)
+        } else {
+            descriptor = newestAttachmentCreatedAtDescriptor()
+        }
+        return try context.fetch(descriptor).first?.createdAt
+    }
+
+    func newestLinkCreatedAtDescriptor() -> FetchDescriptor<MetaLink> {
+        var descriptor = FetchDescriptor<MetaLink>(sortBy: [SortDescriptor(\MetaLink.createdAt, order: .reverse)])
+        descriptor.fetchLimit = 1
+        return descriptor
+    }
+
+    func newestLinkCreatedAtDescriptor(for graphID: UUID?) -> FetchDescriptor<MetaLink> {
+        var descriptor = FetchDescriptor<MetaLink>(
+            predicate: linkGraphPredicate(for: graphID),
+            sortBy: [SortDescriptor(\MetaLink.createdAt, order: .reverse)]
+        )
+        descriptor.fetchLimit = 1
+        return descriptor
+    }
+
+    func newestAttachmentCreatedAtDescriptor() -> FetchDescriptor<MetaAttachment> {
+        var descriptor = FetchDescriptor<MetaAttachment>(sortBy: [SortDescriptor(\MetaAttachment.createdAt, order: .reverse)])
+        descriptor.fetchLimit = 1
+        return descriptor
+    }
+
+    func newestAttachmentCreatedAtDescriptor(for graphID: UUID?) -> FetchDescriptor<MetaAttachment> {
+        var descriptor = FetchDescriptor<MetaAttachment>(
+            predicate: attachmentGraphPredicate(for: graphID),
+            sortBy: [SortDescriptor(\MetaAttachment.createdAt, order: .reverse)]
+        )
+        descriptor.fetchLimit = 1
+        return descriptor
     }
 }

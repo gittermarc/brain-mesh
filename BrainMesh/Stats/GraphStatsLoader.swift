@@ -48,6 +48,30 @@ struct GraphStatsDashboardSnapshot: @unchecked Sendable {
     let activeTrends: GraphTrendsSnapshot?
 }
 
+private struct GraphStatsDashboardCacheKey: Hashable {
+    let graphIDs: [UUID]
+    let activeGraphID: UUID?
+    let days: Int
+}
+
+private struct GraphStatsDashboardCacheEntry {
+    let totalRevision: GraphStatsScopeRevision
+    let legacyRevision: GraphStatsScopeRevision
+    let activeRevision: GraphStatsScopeRevision
+    let snapshot: GraphStatsDashboardSnapshot
+}
+
+private struct GraphStatsCountsCacheEntry {
+    let revision: GraphStatsScopeRevision
+    let counts: GraphCounts
+}
+
+private struct GraphStatsDashboardCacheState: Sendable {
+    let totalRevision: GraphStatsScopeRevision
+    let legacyRevision: GraphStatsScopeRevision
+    let activeRevision: GraphStatsScopeRevision
+}
+
 actor GraphStatsLoader {
 
     static let shared = GraphStatsLoader()
@@ -55,25 +79,48 @@ actor GraphStatsLoader {
     private var container: AnyModelContainer? = nil
     private let log = Logger(subsystem: "BrainMesh", category: "GraphStatsLoader")
 
+    private var dashboardCache: [GraphStatsDashboardCacheKey: GraphStatsDashboardCacheEntry] = [:]
+    private var countsCache: [GraphStatsCountScope: GraphStatsCountsCacheEntry] = [:]
+
+    private var dashboardCacheHits: Int = 0
+    private var countsCacheHits: Int = 0
+
     func configure(container: AnyModelContainer) {
         self.container = container
+        invalidateAllCaches()
         #if DEBUG
         log.debug("✅ configured")
         #endif
     }
 
+    func invalidateAllCaches() {
+        dashboardCache.removeAll()
+        countsCache.removeAll()
+    }
+
+    private func invalidateCountsCache(for graphIDs: [UUID]) {
+        for graphID in graphIDs {
+            countsCache.removeValue(forKey: .graph(graphID))
+        }
+    }
+
     func loadSnapshot(
         graphIDs: [UUID],
         activeGraphID: UUID?,
-        days: Int
+        days: Int,
+        forceReload: Bool = false
     ) async throws -> GraphStatsSnapshot {
         let dashboard = try await loadDashboardSnapshot(
             graphIDs: graphIDs,
             activeGraphID: activeGraphID,
-            days: days
+            days: days,
+            forceReload: forceReload
         )
 
-        let perGraphCounts = try await loadPerGraphCounts(graphIDs: graphIDs)
+        let perGraphCounts = try await loadPerGraphCounts(
+            graphIDs: graphIDs,
+            forceReload: forceReload
+        )
 
         var merged = dashboard.perGraph
         for (k, v) in perGraphCounts {
@@ -96,7 +143,8 @@ actor GraphStatsLoader {
     func loadDashboardSnapshot(
         graphIDs: [UUID],
         activeGraphID: UUID?,
-        days: Int
+        days: Int,
+        forceReload: Bool = false
     ) async throws -> GraphStatsDashboardSnapshot {
         let configuredContainer = self.container
         guard let configuredContainer else {
@@ -107,22 +155,53 @@ actor GraphStatsLoader {
             )
         }
 
+        if forceReload {
+            invalidateAllCaches()
+        }
+
         let pickedGraphID = graphIDs.first(where: { $0 == activeGraphID }) ?? graphIDs.first
         let normalizedDays = max(1, days)
+        let cacheKey = GraphStatsDashboardCacheKey(
+            graphIDs: graphIDs,
+            activeGraphID: activeGraphID,
+            days: normalizedDays
+        )
 
-        return try await Task.detached(priority: .utility) { [configuredContainer, pickedGraphID, normalizedDays] in
+        let state = try await Task.detached(priority: .utility) { [configuredContainer, pickedGraphID] in
+            let context = ModelContext(configuredContainer.container)
+            context.autosaveEnabled = false
+
+            let service = GraphStatsService(context: context)
+            let totalRevision = try service.totalRevision()
+            let legacyRevision = try service.revision(for: nil)
+            let activeRevision = try service.revision(for: pickedGraphID)
+
+            return GraphStatsDashboardCacheState(
+                totalRevision: totalRevision,
+                legacyRevision: legacyRevision,
+                activeRevision: activeRevision
+            )
+        }.value
+
+        if let cached = dashboardCache[cacheKey],
+           cached.totalRevision == state.totalRevision,
+           cached.legacyRevision == state.legacyRevision,
+           cached.activeRevision == state.activeRevision {
+            dashboardCacheHits += 1
+            return cached.snapshot
+        }
+
+        let snapshot = try await Task.detached(priority: .utility) { [configuredContainer, pickedGraphID, normalizedDays, state] in
             let context = ModelContext(configuredContainer.container)
             context.autosaveEnabled = false
 
             let service = GraphStatsService(context: context)
 
-            let total = try service.totalCounts()
-
             var per: [UUID?: GraphCounts] = [:]
-            per[nil] = try service.counts(for: nil)
+            per[nil] = state.legacyRevision.counts
 
             if let gid = pickedGraphID {
-                per[gid] = try service.counts(for: gid)
+                per[gid] = state.activeRevision.counts
             }
 
             // Details for dashboard graph; if there are no graphs yet, compute for legacy (nil).
@@ -131,7 +210,7 @@ actor GraphStatsLoader {
             let trends = try service.trendsSnapshot(for: pickedGraphID, days: normalizedDays)
 
             return GraphStatsDashboardSnapshot(
-                total: total,
+                total: state.totalRevision.counts,
                 perGraph: per,
                 dashboardGraphID: pickedGraphID,
                 activeMedia: media,
@@ -139,13 +218,23 @@ actor GraphStatsLoader {
                 activeTrends: trends
             )
         }.value
+
+        dashboardCache[cacheKey] = GraphStatsDashboardCacheEntry(
+            totalRevision: state.totalRevision,
+            legacyRevision: state.legacyRevision,
+            activeRevision: state.activeRevision,
+            snapshot: snapshot
+        )
+
+        return snapshot
     }
 
     /// Loads per-graph counts for the given graph IDs.
     ///
     /// Intended to be triggered lazily when the user expands "Pro Graph".
     func loadPerGraphCounts(
-        graphIDs: [UUID]
+        graphIDs: [UUID],
+        forceReload: Bool = false
     ) async throws -> [UUID?: GraphCounts] {
         let configuredContainer = self.container
         guard let configuredContainer else {
@@ -156,21 +245,61 @@ actor GraphStatsLoader {
             )
         }
 
-        return try await Task.detached(priority: .utility) { [configuredContainer, graphIDs] in
+        if forceReload {
+            invalidateCountsCache(for: graphIDs)
+        }
+
+        let revisions = try await Task.detached(priority: .utility) { [configuredContainer, graphIDs] in
             let context = ModelContext(configuredContainer.container)
             context.autosaveEnabled = false
 
             let service = GraphStatsService(context: context)
-
-            var per: [UUID?: GraphCounts] = [:]
+            var revisions: [UUID: GraphStatsScopeRevision] = [:]
 
             for gid in graphIDs {
                 try Task.checkCancellation()
-                per[gid] = try service.counts(for: gid)
+                revisions[gid] = try service.revision(for: gid)
                 await Task.yield()
             }
 
-            return per
+            return revisions
         }.value
+
+        var countsByGraph: [UUID?: GraphCounts] = [:]
+
+        for gid in graphIDs {
+            let scope = GraphStatsCountScope.graph(gid)
+            guard let revision = revisions[gid] else { continue }
+
+            if let cached = countsCache[scope], cached.revision == revision {
+                countsCacheHits += 1
+                countsByGraph[gid] = cached.counts
+                continue
+            }
+
+            countsCache[scope] = GraphStatsCountsCacheEntry(
+                revision: revision,
+                counts: revision.counts
+            )
+            countsByGraph[gid] = revision.counts
+        }
+
+        return countsByGraph
+    }
+
+    func dashboardCacheEntryCountForTesting() -> Int {
+        dashboardCache.count
+    }
+
+    func countsCacheEntryCountForTesting() -> Int {
+        countsCache.count
+    }
+
+    func dashboardCacheHitsForTesting() -> Int {
+        dashboardCacheHits
+    }
+
+    func countsCacheHitsForTesting() -> Int {
+        countsCacheHits
     }
 }

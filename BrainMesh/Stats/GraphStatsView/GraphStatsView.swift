@@ -203,7 +203,8 @@ struct GraphStatsView: View {
                 let snapshot = try await GraphStatsLoader.shared.loadDashboardSnapshot(
                     graphIDs: key.graphIDs,
                     activeGraphID: key.activeGraphID,
-                    days: key.days
+                    days: key.days,
+                    forceReload: force
                 )
 
                 try Task.checkCancellation()
@@ -270,7 +271,10 @@ struct GraphStatsView: View {
             do {
                 await Task.yield()
 
-                let counts = try await GraphStatsLoader.shared.loadPerGraphCounts(graphIDs: key.graphIDs)
+                let counts = try await GraphStatsLoader.shared.loadPerGraphCounts(
+                    graphIDs: key.graphIDs,
+                    forceReload: force
+                )
                 try Task.checkCancellation()
 
                 guard currentPerGraphLoadToken == token else { return }
