@@ -9,6 +9,11 @@ import Foundation
 
 extension EntitiesHomeLoader {
 
+    enum EntitiesHomeDerivedCountKind: String, Sendable {
+        case attributes
+        case links
+    }
+
     struct GraphScopeKey: Hashable, Sendable {
         let graphID: UUID?
     }
@@ -18,36 +23,51 @@ extension EntitiesHomeLoader {
         let countsByEntityID: [UUID: Int]
     }
 
-    struct LinkCountsCacheEntry: Sendable {
-        let fetchedAt: Date
-        let countsByEntityID: [UUID: Int]
-    }
-
-    func cachedCounts(for graphID: UUID?, now: Date) -> [UUID: Int]? {
-        let key = GraphScopeKey(graphID: graphID)
-        guard let entry = countsCache[key] else { return nil }
-        if now.timeIntervalSince(entry.fetchedAt) > countsCacheTTLSeconds {
+    func cachedCounts(
+        for kind: EntitiesHomeDerivedCountKind,
+        graphID: UUID?,
+        now: Date
+    ) -> [UUID: Int]? {
+        guard let entry = cachedCountEntry(for: kind, graphID: graphID) else {
+            return nil
+        }
+        guard isFresh(entry, now: now) else {
             return nil
         }
         return entry.countsByEntityID
     }
 
-    func storeCounts(_ counts: [UUID: Int], for graphID: UUID?, now: Date) {
+    func storeCounts(
+        _ counts: [UUID: Int],
+        for kind: EntitiesHomeDerivedCountKind,
+        graphID: UUID?,
+        now: Date
+    ) {
+        let entry = CountsCacheEntry(fetchedAt: now, countsByEntityID: counts)
         let key = GraphScopeKey(graphID: graphID)
-        countsCache[key] = CountsCacheEntry(fetchedAt: now, countsByEntityID: counts)
-    }
 
-    func cachedLinkCounts(for graphID: UUID?, now: Date) -> [UUID: Int]? {
-        let key = GraphScopeKey(graphID: graphID)
-        guard let entry = linkCountsCache[key] else { return nil }
-        if now.timeIntervalSince(entry.fetchedAt) > countsCacheTTLSeconds {
-            return nil
+        switch kind {
+        case .attributes:
+            countsCache[key] = entry
+        case .links:
+            linkCountsCache[key] = entry
         }
-        return entry.countsByEntityID
     }
 
-    func storeLinkCounts(_ counts: [UUID: Int], for graphID: UUID?, now: Date) {
+    func cachedCountEntry(
+        for kind: EntitiesHomeDerivedCountKind,
+        graphID: UUID?
+    ) -> CountsCacheEntry? {
         let key = GraphScopeKey(graphID: graphID)
-        linkCountsCache[key] = LinkCountsCacheEntry(fetchedAt: now, countsByEntityID: counts)
+        switch kind {
+        case .attributes:
+            return countsCache[key]
+        case .links:
+            return linkCountsCache[key]
+        }
+    }
+
+    func isFresh(_ entry: CountsCacheEntry, now: Date) -> Bool {
+        now.timeIntervalSince(entry.fetchedAt) <= countsCacheTTLSeconds
     }
 }

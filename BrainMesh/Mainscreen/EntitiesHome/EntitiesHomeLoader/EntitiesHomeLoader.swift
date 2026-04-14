@@ -23,7 +23,7 @@ actor EntitiesHomeLoader {
     // MARK: - Counts cache (avoid re-fetching all attributes/links while typing or toggling views)
 
     var countsCache: [GraphScopeKey: CountsCacheEntry] = [:]
-    var linkCountsCache: [GraphScopeKey: LinkCountsCacheEntry] = [:]
+    var linkCountsCache: [GraphScopeKey: CountsCacheEntry] = [:]
 
     /// Small TTL so counts don't stay stale for long, but typing/search doesn't repeatedly load everything.
     /// Cache is graph-wide to keep counts correct for any search subset (no partial-cache zeros).
@@ -65,8 +65,6 @@ actor EntitiesHomeLoader {
 
         let gid = activeGraphID
         let term = foldedSearch
-        let includeAttrs = includeAttributeCounts
-        let includeLinks = includeLinkCounts
         let includeNotes = includeNotesPreview
 
         try Task.checkCancellation()
@@ -79,44 +77,16 @@ actor EntitiesHomeLoader {
 
         try Task.checkCancellation()
 
-        let now = Date()
-        let attrCounts: [UUID: Int]
-        if includeAttrs {
-            let cachedAttrCounts: [UUID: Int]? = cachedCounts(for: gid, now: now)
-
-            if let cachedAttrCounts {
-                attrCounts = cachedAttrCounts
-            } else {
-                let computed = try EntitiesHomeLoader.computeAttributeCounts(
-                    context: context,
-                    graphID: gid
-                )
-                try Task.checkCancellation()
-                storeCounts(computed, for: gid, now: now)
-                attrCounts = computed
-            }
-        } else {
-            attrCounts = [:]
-        }
-
-        let linkCountsByEntityID: [UUID: Int]?
-        if includeLinks {
-            let cachedLinkCounts: [UUID: Int]? = cachedLinkCounts(for: gid, now: now)
-
-            if let cachedLinkCounts {
-                linkCountsByEntityID = cachedLinkCounts
-            } else {
-                let computed = try EntitiesHomeLoader.computeLinkCounts(
-                    context: context,
-                    graphID: gid
-                )
-                try Task.checkCancellation()
-                storeLinkCounts(computed, for: gid, now: now)
-                linkCountsByEntityID = computed
-            }
-        } else {
-            linkCountsByEntityID = nil
-        }
+        let countRequirements = EntitiesHomeCountRequirements(
+            includeAttributeCounts: includeAttributeCounts,
+            includeLinkCounts: includeLinkCounts
+        )
+        let derivedCounts = try resolveDerivedCounts(
+            context: context,
+            graphID: gid,
+            requirements: countRequirements,
+            now: Date()
+        )
 
         var rows: [EntitiesHomeRow] = []
         rows.reserveCapacity(entities.count)
@@ -126,22 +96,27 @@ actor EntitiesHomeLoader {
                 try Task.checkCancellation()
             }
 
-            let e = match.entity
-
-            let preview: String? = includeNotes ? EntitiesHomeLoader.makeNotesPreview(e.notes) : nil
-            let hasData = (e.imageData?.isEmpty == false)
+            let entity = match.entity
+            let preview: String? = includeNotes ? EntitiesHomeLoader.makeNotesPreview(entity.notes) : nil
+            let hasData = (entity.imageData?.isEmpty == false)
 
             rows.append(
                 EntitiesHomeRow(
-                    id: e.id,
-                    name: e.name,
-                    createdAt: e.createdAt,
-                    iconSymbolName: e.iconSymbolName,
-                    attributeCount: includeAttrs ? (attrCounts[e.id] ?? 0) : 0,
-                    linkCount: includeLinks ? (linkCountsByEntityID?[e.id] ?? 0) : nil,
+                    id: entity.id,
+                    name: entity.name,
+                    createdAt: entity.createdAt,
+                    iconSymbolName: entity.iconSymbolName,
+                    attributeCount: derivedCounts.attributeCount(
+                        for: entity.id,
+                        includeAttributeCounts: countRequirements.includeAttributeCounts
+                    ),
+                    linkCount: derivedCounts.linkCount(
+                        for: entity.id,
+                        includeLinkCounts: countRequirements.includeLinkCounts
+                    ),
                     notesPreview: preview,
                     isNotesOnlyHit: match.isNotesOnlyHit,
-                    imagePath: e.imagePath,
+                    imagePath: entity.imagePath,
                     hasImageData: hasData
                 )
             )
