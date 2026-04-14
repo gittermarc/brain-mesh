@@ -105,7 +105,7 @@ private nonisolated final class GraphTransferImportCoordinator {
     }
 }
 
-private extension GraphTransferImportCoordinator {
+private nonisolated extension GraphTransferImportCoordinator {
 
     func createGraph() {
         progress?(GraphTransferImportProgressFactory.creatingGraph())
