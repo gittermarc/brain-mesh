@@ -104,6 +104,136 @@ struct NodeMediaPreviewLoaderTests {
         #expect(snapshot.attachmentPreviewIDs.contains(crossGraphAttachment.id) == false)
     }
 
+
+    @Test
+    func loadSnapshot_mergesScopedAndLegacyPreviewRecordsBeforeApplyingLimit() async throws {
+        let testStore = try BrainMeshTestContainer.makeInMemoryStore()
+        let fixtures = BrainMeshFixtureBuilder(context: testStore.context)
+        let primaryGraph = fixtures.makeGraph(name: "Primary")
+        let secondaryGraph = fixtures.makeGraph(name: "Secondary")
+        let owner = fixtures.makeEntity(name: "Atlas", in: primaryGraph)
+
+        let scopedOldest = fixtures.makeAttachment(
+            owner: .entity(owner),
+            contentKind: .file,
+            title: "Scoped Oldest",
+            originalFilename: "scoped-oldest.pdf",
+            contentTypeIdentifier: "com.adobe.pdf",
+            fileExtension: "pdf",
+            fileData: Data([0x11])
+        )
+        scopedOldest.createdAt = Date(timeIntervalSince1970: 100)
+
+        let legacySecondOldest = MetaAttachment(
+            ownerKind: .entity,
+            ownerID: owner.id,
+            graphID: nil,
+            contentKind: .file,
+            title: "Legacy Second Oldest",
+            originalFilename: "legacy-second-oldest.pdf",
+            contentTypeIdentifier: "com.adobe.pdf",
+            fileExtension: "pdf",
+            byteCount: 1,
+            fileData: Data([0x12]),
+            localPath: nil
+        )
+        legacySecondOldest.createdAt = Date(timeIntervalSince1970: 200)
+        testStore.context.insert(legacySecondOldest)
+
+        let scopedMiddle = fixtures.makeAttachment(
+            owner: .entity(owner),
+            contentKind: .video,
+            title: "Scoped Middle",
+            originalFilename: "scoped-middle.mov",
+            contentTypeIdentifier: "public.movie",
+            fileExtension: "mov",
+            fileData: Data([0x13])
+        )
+        scopedMiddle.createdAt = Date(timeIntervalSince1970: 300)
+
+        let legacySecondNewest = MetaAttachment(
+            ownerKind: .entity,
+            ownerID: owner.id,
+            graphID: nil,
+            contentKind: .file,
+            title: "Legacy Second Newest",
+            originalFilename: "legacy-second-newest.pdf",
+            contentTypeIdentifier: "com.adobe.pdf",
+            fileExtension: "pdf",
+            byteCount: 1,
+            fileData: Data([0x14]),
+            localPath: nil
+        )
+        legacySecondNewest.createdAt = Date(timeIntervalSince1970: 400)
+        testStore.context.insert(legacySecondNewest)
+
+        let scopedNewest = fixtures.makeAttachment(
+            owner: .entity(owner),
+            contentKind: .file,
+            title: "Scoped Newest",
+            originalFilename: "scoped-newest.pdf",
+            contentTypeIdentifier: "com.adobe.pdf",
+            fileExtension: "pdf",
+            fileData: Data([0x15])
+        )
+        scopedNewest.createdAt = Date(timeIntervalSince1970: 500)
+
+        let legacyNewest = MetaAttachment(
+            ownerKind: .entity,
+            ownerID: owner.id,
+            graphID: nil,
+            contentKind: .video,
+            title: "Legacy Newest",
+            originalFilename: "legacy-newest.mov",
+            contentTypeIdentifier: "public.movie",
+            fileExtension: "mov",
+            byteCount: 1,
+            fileData: Data([0x16]),
+            localPath: nil
+        )
+        legacyNewest.createdAt = Date(timeIntervalSince1970: 600)
+        testStore.context.insert(legacyNewest)
+
+        let crossGraphNewest = MetaAttachment(
+            ownerKind: .entity,
+            ownerID: owner.id,
+            graphID: secondaryGraph.id,
+            contentKind: .file,
+            title: "Cross Graph Newest",
+            originalFilename: "cross-graph-newest.pdf",
+            contentTypeIdentifier: "com.adobe.pdf",
+            fileExtension: "pdf",
+            byteCount: 1,
+            fileData: Data([0x17]),
+            localPath: nil
+        )
+        crossGraphNewest.createdAt = Date(timeIntervalSince1970: 700)
+        testStore.context.insert(crossGraphNewest)
+
+        try fixtures.save()
+
+        let loader = NodeMediaPreviewLoader()
+        await loader.configure(container: AnyModelContainer(testStore.container))
+
+        let snapshot = try await loader.loadSnapshot(
+            ownerKindRaw: NodeKind.entity.rawValue,
+            ownerID: owner.id,
+            graphID: primaryGraph.id,
+            galleryLimit: 0,
+            attachmentLimit: 4
+        )
+
+        #expect(snapshot.galleryCount == 0)
+        #expect(snapshot.attachmentCount == 6)
+        #expect(snapshot.attachmentPreviewIDs == [
+            legacyNewest.id,
+            scopedNewest.id,
+            legacySecondNewest.id,
+            scopedMiddle.id
+        ])
+        #expect(snapshot.attachmentPreviewIDs.contains(crossGraphNewest.id) == false)
+    }
+
     @Test
     func loadSnapshot_respectsPreviewLimitsAndKeepsNewestItems() async throws {
         let testStore = try BrainMeshTestContainer.makeInMemoryStore()

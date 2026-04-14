@@ -24,6 +24,44 @@ private nonisolated enum NodeMediaPreviewGraphScope: Sendable {
     case legacyNil
 }
 
+private nonisolated struct NodeMediaPreviewQueryPlan: Sendable {
+    let graphScopes: [NodeMediaPreviewGraphScope]
+
+    static func make(graphID: UUID?) -> NodeMediaPreviewQueryPlan {
+        if let graphID {
+            return NodeMediaPreviewQueryPlan(
+                graphScopes: [.exact(graphID), .legacyNil]
+            )
+        }
+
+        return NodeMediaPreviewQueryPlan(graphScopes: [.all])
+    }
+
+    func mergePreviewIDs(
+        from results: [NodeMediaPreviewQueryResult],
+        limit: Int
+    ) -> [UUID] {
+        guard limit > 0 else { return [] }
+
+        if results.count == 1 {
+            return Array(results[0].previewRecords.prefix(limit).map(\.id))
+        }
+
+        let mergedRecords = results.flatMap(\.previewRecords)
+        return Array(
+            mergedRecords
+                .sorted { lhs, rhs in
+                    if lhs.createdAt == rhs.createdAt {
+                        return lhs.id.uuidString < rhs.id.uuidString
+                    }
+                    return lhs.createdAt > rhs.createdAt
+                }
+                .prefix(limit)
+                .map(\.id)
+        )
+    }
+}
+
 extension NodeMediaPreviewLoader {
 
     static func makeSnapshot(
@@ -34,11 +72,13 @@ extension NodeMediaPreviewLoader {
         galleryLimit: Int,
         attachmentLimit: Int
     ) throws -> NodeMediaPreviewSnapshot {
+        let queryPlan = NodeMediaPreviewQueryPlan.make(graphID: graphID)
+
         let gallery = try loadScopedPreview(
             context: context,
             ownerKindRaw: ownerKindRaw,
             ownerID: ownerID,
-            graphID: graphID,
+            queryPlan: queryPlan,
             contentKind: .galleryImage,
             previewLimit: galleryLimit
         )
@@ -48,7 +88,7 @@ extension NodeMediaPreviewLoader {
             context: context,
             ownerKindRaw: ownerKindRaw,
             ownerID: ownerID,
-            graphID: graphID,
+            queryPlan: queryPlan,
             contentKind: .fileAndVideo,
             previewLimit: attachmentLimit
         )
@@ -65,47 +105,54 @@ extension NodeMediaPreviewLoader {
         context: ModelContext,
         ownerKindRaw: Int,
         ownerID: UUID,
-        graphID: UUID?,
+        queryPlan: NodeMediaPreviewQueryPlan,
         contentKind: NodeMediaPreviewContentKind,
         previewLimit: Int
     ) throws -> (count: Int, previewIDs: [UUID]) {
-        if let graphID {
-            let current = try fetchQueryResult(
-                context: context,
-                ownerKindRaw: ownerKindRaw,
-                ownerID: ownerID,
-                graphScope: .exact(graphID),
-                contentKind: contentKind,
-                previewLimit: previewLimit
-            )
-            try Task.checkCancellation()
-
-            let legacy = try fetchQueryResult(
-                context: context,
-                ownerKindRaw: ownerKindRaw,
-                ownerID: ownerID,
-                graphScope: .legacyNil,
-                contentKind: contentKind,
-                previewLimit: previewLimit
-            )
-
-            let previewIDs = mergePreviewIDs(
-                current.previewRecords,
-                legacy.previewRecords,
-                limit: previewLimit
-            )
-            return (current.count + legacy.count, previewIDs)
-        }
-
-        let all = try fetchQueryResult(
+        let results = try fetchQueryResults(
             context: context,
             ownerKindRaw: ownerKindRaw,
             ownerID: ownerID,
-            graphScope: .all,
+            graphScopes: queryPlan.graphScopes,
             contentKind: contentKind,
             previewLimit: previewLimit
         )
-        return (all.count, all.previewRecords.map(\.id))
+
+        let count = results.reduce(0) { partialResult, result in
+            partialResult + result.count
+        }
+        let previewIDs = queryPlan.mergePreviewIDs(from: results, limit: previewLimit)
+        return (count, previewIDs)
+    }
+
+    private static func fetchQueryResults(
+        context: ModelContext,
+        ownerKindRaw: Int,
+        ownerID: UUID,
+        graphScopes: [NodeMediaPreviewGraphScope],
+        contentKind: NodeMediaPreviewContentKind,
+        previewLimit: Int
+    ) throws -> [NodeMediaPreviewQueryResult] {
+        var results: [NodeMediaPreviewQueryResult] = []
+        results.reserveCapacity(graphScopes.count)
+
+        for (index, graphScope) in graphScopes.enumerated() {
+            let result = try fetchQueryResult(
+                context: context,
+                ownerKindRaw: ownerKindRaw,
+                ownerID: ownerID,
+                graphScope: graphScope,
+                contentKind: contentKind,
+                previewLimit: previewLimit
+            )
+            results.append(result)
+
+            if index < graphScopes.count - 1 {
+                try Task.checkCancellation()
+            }
+        }
+
+        return results
     }
 
     private static func fetchQueryResult(
@@ -143,26 +190,6 @@ extension NodeMediaPreviewLoader {
         }
 
         return NodeMediaPreviewQueryResult(count: count, previewRecords: previewRecords)
-    }
-
-    private static func mergePreviewIDs(
-        _ current: [NodeMediaPreviewRecord],
-        _ legacy: [NodeMediaPreviewRecord],
-        limit: Int
-    ) -> [UUID] {
-        guard limit > 0 else { return [] }
-
-        return Array(
-            (current + legacy)
-                .sorted { lhs, rhs in
-                    if lhs.createdAt == rhs.createdAt {
-                        return lhs.id.uuidString < rhs.id.uuidString
-                    }
-                    return lhs.createdAt > rhs.createdAt
-                }
-                .prefix(limit)
-                .map(\.id)
-        )
     }
 }
 
