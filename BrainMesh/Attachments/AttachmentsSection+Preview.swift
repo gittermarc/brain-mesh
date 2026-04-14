@@ -12,41 +12,68 @@ extension AttachmentsSection {
 
     // MARK: - Preview
 
-    func openPreview(for attachment: MetaAttachment) {
-        guard let url = AttachmentStore.ensurePreviewURL(for: attachment) else {
-            errorMessage = "Vorschau ist nicht verfügbar (keine Daten/Datei gefunden)."
-            return
-        }
+    func openPreview(for attachment: AttachmentListItem) {
+        Task { @MainActor in
+            guard let url = await AttachmentHydrator.shared.ensureFileURL(
+                attachmentID: attachment.id,
+                fileExtension: attachment.fileExtension,
+                localPath: attachment.localPath
+            ) else {
+                errorMessage = "Vorschau ist nicht verfügbar (keine Daten/Datei gefunden)."
+                return
+            }
 
-        // Videos are presented via a dedicated UIKit-backed presenter.
-        // This avoids flaky SwiftUI sheet transitions when AVPlayer/VideoPlayer is involved.
-        if AttachmentStore.isVideo(contentTypeIdentifier: attachment.contentTypeIdentifier)
-            || ["mov", "mp4", "m4v"].contains(attachment.fileExtension.lowercased()) {
-            try? modelContext.save()
-            requestPlayVideo(VideoPlaybackRequest(url: url, title: attachment.title.isEmpty ? attachment.originalFilename : attachment.title))
-            return
-        }
+            let isVideo = AttachmentStore.isVideo(contentTypeIdentifier: attachment.contentTypeIdentifier)
+                || ["mov", "mp4", "m4v"].contains(attachment.fileExtension.lowercased())
 
-        // Persist localPath if we had to materialize the cache from synced data.
-        try? modelContext.save()
-        requestPresent(.preview(PreviewState(
-            url: url,
-            title: attachment.title.isEmpty ? attachment.originalFilename : attachment.title,
-            contentTypeIdentifier: attachment.contentTypeIdentifier,
-            fileExtension: attachment.fileExtension
-        )))
+            if isVideo {
+                requestPlayVideo(VideoPlaybackRequest(url: url, title: attachment.displayTitle))
+                return
+            }
+
+            requestPresent(.preview(PreviewState(
+                url: url,
+                title: attachment.displayTitle,
+                contentTypeIdentifier: attachment.contentTypeIdentifier,
+                fileExtension: attachment.fileExtension
+            )))
+        }
     }
 
     // MARK: - Delete
 
     func deleteAttachments(at offsets: IndexSet) {
-        for index in offsets {
-            let att = attachments[index]
-            AttachmentStore.delete(localPath: att.localPath)
-            AttachmentStore.delete(localPath: AttachmentStore.makeLocalFilename(attachmentID: att.id, fileExtension: att.fileExtension))
-            AttachmentThumbnailStore.deleteCachedThumbnail(attachmentID: att.id)
-            modelContext.delete(att)
+        let itemsToDelete = offsets.compactMap { index in
+            attachments.indices.contains(index) ? attachments[index] : nil
         }
+
+        for item in itemsToDelete {
+            AttachmentStore.delete(localPath: item.localPath)
+            AttachmentStore.delete(localPath: AttachmentStore.makeLocalFilename(attachmentID: item.id, fileExtension: item.fileExtension))
+            AttachmentThumbnailStore.deleteCachedThumbnail(attachmentID: item.id)
+
+            let attachmentID = item.id
+            var descriptor = FetchDescriptor<MetaAttachment>(
+                predicate: #Predicate { attachment in
+                    attachment.id == attachmentID
+                }
+            )
+            descriptor.fetchLimit = 1
+
+            let models = try? modelContext.fetch(descriptor)
+            if let model = models?.first {
+                modelContext.delete(model)
+            }
+        }
+
         try? modelContext.save()
+
+        attachments.remove(atOffsets: offsets)
+        totalCount = max(0, totalCount - itemsToDelete.count)
+        hasMore = attachments.count < totalCount
+
+        Task { @MainActor in
+            await refresh()
+        }
     }
 }

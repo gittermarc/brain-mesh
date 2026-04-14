@@ -72,6 +72,8 @@ extension AttachmentsSection {
                 modelContext.insert(att)
                 try? modelContext.save()
 
+                await refresh()
+
                 importProgress.setCompleted(2)
                 importProgress.finish(finalSubtitle: "Fertig")
 
@@ -160,6 +162,8 @@ extension AttachmentsSection {
 
             modelContext.insert(att)
             try? modelContext.save()
+
+            await refresh()
 
             importProgress.setCompleted(2)
             importProgress.finish(finalSubtitle: "Fertig")

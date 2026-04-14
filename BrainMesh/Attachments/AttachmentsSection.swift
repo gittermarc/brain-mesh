@@ -17,7 +17,12 @@ struct AttachmentsSection: View {
     let ownerID: UUID
     let graphID: UUID?
 
-    @Query var attachments: [MetaAttachment]
+    @State var attachments: [AttachmentListItem] = []
+    @State var totalCount: Int = 0
+    @State var isLoading: Bool = false
+    @State var hasMore: Bool = true
+    @State var offset: Int = 0
+    @State var loadedScopeID: String? = nil
 
     // NOTE: must be module-visible because the import pipeline lives in a separate extension file.
     @StateObject var importProgress = ImportProgressState()
@@ -31,6 +36,8 @@ struct AttachmentsSection: View {
 
     @State var errorMessage: String? = nil
 
+    let pageSize: Int = 20
+
     /// Keep it sane: this is meant for small files.
     let maxBytes: Int = 25 * 1024 * 1024
 
@@ -38,33 +45,6 @@ struct AttachmentsSection: View {
         self.ownerKind = ownerKind
         self.ownerID = ownerID
         self.graphID = graphID
-
-        let kindRaw = ownerKind.rawValue
-        let oid = ownerID
-        let gid = graphID
-        let galleryRaw = AttachmentContentKind.galleryImage.rawValue
-
-		// IMPORTANT: keep predicates store-translatable (avoid OR / optional tricks).
-		if let gid {
-			_attachments = Query(
-				filter: #Predicate<MetaAttachment> { a in
-					a.ownerKindRaw == kindRaw &&
-					a.ownerID == oid &&
-					a.graphID == gid &&
-					a.contentKindRaw != galleryRaw
-				},
-				sort: [SortDescriptor(\MetaAttachment.createdAt, order: .reverse)]
-			)
-		} else {
-			_attachments = Query(
-				filter: #Predicate<MetaAttachment> { a in
-					a.ownerKindRaw == kindRaw &&
-					a.ownerID == oid &&
-					a.contentKindRaw != galleryRaw
-				},
-				sort: [SortDescriptor(\MetaAttachment.createdAt, order: .reverse)]
-			)
-		}
     }
 
     var body: some View {
@@ -76,16 +56,35 @@ struct AttachmentsSection: View {
             }
 
             if attachments.isEmpty {
-                Text("Keine Anhänge hinzugefügt.")
+                Text(isLoading ? "Anhänge werden geladen …" : "Keine Anhänge hinzugefügt.")
                     .foregroundStyle(.secondary)
             } else {
                 ForEach(attachments) { att in
-                    AttachmentCardRow(attachment: att)
+                    AttachmentListCardRow(attachment: att)
                         .onTapGesture {
                             openPreview(for: att)
                         }
                 }
                 .onDelete(perform: deleteAttachments)
+
+                if hasMore {
+                    Button {
+                        Task { @MainActor in
+                            await loadMore()
+                        }
+                    } label: {
+                        HStack {
+                            Spacer(minLength: 0)
+                            if isLoading {
+                                ProgressView()
+                            } else {
+                                Label("Mehr laden", systemImage: "arrow.down.circle")
+                            }
+                            Spacer(minLength: 0)
+                        }
+                    }
+                    .disabled(isLoading)
+                }
             }
 
             Menu {
@@ -107,8 +106,11 @@ struct AttachmentsSection: View {
             DetailSectionHeader(
                 title: "Anhänge",
                 systemImage: "paperclip",
-                subtitle: "Dateien & Videos (klein halten – maximal \(ByteCountFormatter.string(fromByteCount: Int64(maxBytes), countStyle: .file)))."
+                subtitle: headerSubtitle
             )
+        }
+        .task(id: loadTaskID) {
+            await loadInitialIfNeeded()
         }
         .fileImporter(
             isPresented: $isImportingFile,
@@ -154,6 +156,15 @@ struct AttachmentsSection: View {
         } message: {
             Text(errorMessage ?? "")
         }
+    }
+
+    var headerSubtitle: String {
+        let sizeText = ByteCountFormatter.string(fromByteCount: Int64(maxBytes), countStyle: .file)
+        return "Dateien & Videos (klein halten – maximal \(sizeText))."
+    }
+
+    var loadTaskID: String {
+        "\(ownerKind.rawValue)-\(ownerID.uuidString)-\(graphID?.uuidString ?? "nil")"
     }
 
     // MARK: - Sheet Models
