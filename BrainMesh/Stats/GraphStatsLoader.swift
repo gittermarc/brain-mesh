@@ -99,9 +99,65 @@ actor GraphStatsLoader {
     }
 
     private func invalidateCountsCache(for graphIDs: [UUID]) {
-        for graphID in graphIDs {
-            countsCache.removeValue(forKey: .graph(graphID))
+        let scopes = graphIDs.map { GraphStatsCountScope.graph($0) }
+        invalidateCountsCache(for: scopes)
+    }
+
+    private func invalidateCountsCache(for scopes: [GraphStatsCountScope]) {
+        for scope in scopes {
+            countsCache.removeValue(forKey: scope)
         }
+    }
+
+    private func cachedDashboardSnapshot(
+        for cacheKey: GraphStatsDashboardCacheKey,
+        state: GraphStatsDashboardCacheState
+    ) -> GraphStatsDashboardSnapshot? {
+        guard let cached = dashboardCache[cacheKey],
+              cached.totalRevision == state.totalRevision,
+              cached.legacyRevision == state.legacyRevision,
+              cached.activeRevision == state.activeRevision else {
+            return nil
+        }
+
+        dashboardCacheHits += 1
+        return cached.snapshot
+    }
+
+    private func storeDashboardSnapshot(
+        _ snapshot: GraphStatsDashboardSnapshot,
+        for cacheKey: GraphStatsDashboardCacheKey,
+        state: GraphStatsDashboardCacheState
+    ) {
+        dashboardCache[cacheKey] = GraphStatsDashboardCacheEntry(
+            totalRevision: state.totalRevision,
+            legacyRevision: state.legacyRevision,
+            activeRevision: state.activeRevision,
+            snapshot: snapshot
+        )
+    }
+
+    private func cachedCounts(
+        for scope: GraphStatsCountScope,
+        revision: GraphStatsScopeRevision
+    ) -> GraphCounts? {
+        guard let cached = countsCache[scope], cached.revision == revision else {
+            return nil
+        }
+
+        countsCacheHits += 1
+        return cached.counts
+    }
+
+    private func storeCounts(
+        _ counts: GraphCounts,
+        for scope: GraphStatsCountScope,
+        revision: GraphStatsScopeRevision
+    ) {
+        countsCache[scope] = GraphStatsCountsCacheEntry(
+            revision: revision,
+            counts: counts
+        )
     }
 
     func loadSnapshot(
@@ -183,12 +239,8 @@ actor GraphStatsLoader {
             )
         }.value
 
-        if let cached = dashboardCache[cacheKey],
-           cached.totalRevision == state.totalRevision,
-           cached.legacyRevision == state.legacyRevision,
-           cached.activeRevision == state.activeRevision {
-            dashboardCacheHits += 1
-            return cached.snapshot
+        if let cached = cachedDashboardSnapshot(for: cacheKey, state: state) {
+            return cached
         }
 
         let snapshot = try await Task.detached(priority: .utility) { [configuredContainer, pickedGraphID, normalizedDays, state] in
@@ -219,12 +271,7 @@ actor GraphStatsLoader {
             )
         }.value
 
-        dashboardCache[cacheKey] = GraphStatsDashboardCacheEntry(
-            totalRevision: state.totalRevision,
-            legacyRevision: state.legacyRevision,
-            activeRevision: state.activeRevision,
-            snapshot: snapshot
-        )
+        storeDashboardSnapshot(snapshot, for: cacheKey, state: state)
 
         return snapshot
     }
@@ -271,16 +318,12 @@ actor GraphStatsLoader {
             let scope = GraphStatsCountScope.graph(gid)
             guard let revision = revisions[gid] else { continue }
 
-            if let cached = countsCache[scope], cached.revision == revision {
-                countsCacheHits += 1
-                countsByGraph[gid] = cached.counts
+            if let cached = cachedCounts(for: scope, revision: revision) {
+                countsByGraph[gid] = cached
                 continue
             }
 
-            countsCache[scope] = GraphStatsCountsCacheEntry(
-                revision: revision,
-                counts: revision.counts
-            )
+            storeCounts(revision.counts, for: scope, revision: revision)
             countsByGraph[gid] = revision.counts
         }
 

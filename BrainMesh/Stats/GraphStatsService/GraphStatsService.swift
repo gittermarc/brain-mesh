@@ -56,6 +56,25 @@ nonisolated struct GraphStatsAttachmentAggregate: Equatable, Sendable {
     let bytes: Int64
 }
 
+nonisolated struct GraphStatsBaseCounts: Equatable, Sendable {
+    let entities: Int
+    let attributes: Int
+    let links: Int
+    let notes: Int
+    let images: Int
+
+    func makeCounts(attachmentAggregate: GraphStatsAttachmentAggregate) -> GraphCounts {
+        GraphCounts(
+            entities: entities,
+            attributes: attributes,
+            links: links,
+            notes: notes,
+            images: images,
+            attachments: attachmentAggregate.count,
+            attachmentBytes: attachmentAggregate.bytes
+        )
+    }
+}
 
 nonisolated struct GraphStatsScopeRevision: Equatable, Sendable {
     let counts: GraphCounts
@@ -174,6 +193,10 @@ nonisolated extension GraphStatsService {
 
     func countsCacheEntryCountForTesting() -> Int {
         countsCache.count
+    }
+
+    func attachmentAggregateCacheEntryCountForTesting() -> Int {
+        attachmentAggregateCache.count
     }
 }
 

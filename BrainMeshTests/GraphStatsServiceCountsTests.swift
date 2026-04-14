@@ -217,5 +217,6 @@ struct GraphStatsServiceCountsTests {
         #expect(firstTotalCounts == secondTotalCounts)
         #expect(firstLegacyCounts == secondLegacyCounts)
         #expect(service.countsCacheEntryCountForTesting() == 3)
+        #expect(service.attachmentAggregateCacheEntryCountForTesting() == 3)
     }
 }

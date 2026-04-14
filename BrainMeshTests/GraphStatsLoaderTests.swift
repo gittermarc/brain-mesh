@@ -138,6 +138,51 @@ struct GraphStatsLoaderTests {
         #expect(await loader.dashboardCacheHitsForTesting() == 0)
     }
 
+
+    @Test
+    func loadPerGraphCounts_invalidatesCachedCountsAfterAttachmentChange() async throws {
+        let testStore = try BrainMeshTestContainer.makeInMemoryStore()
+        let fixtures = BrainMeshFixtureBuilder(context: testStore.context)
+        let graph = fixtures.makeGraph(name: "Primary")
+        let entity = fixtures.makeEntity(name: "Atlas", in: graph)
+        _ = fixtures.makeAttachment(
+            owner: .entity(entity),
+            contentKind: .file,
+            title: "Spec",
+            originalFilename: "spec.pdf",
+            contentTypeIdentifier: "com.adobe.pdf",
+            fileExtension: "pdf",
+            byteCount: 12,
+            fileData: Data([0x01, 0x02])
+        )
+        try fixtures.save()
+
+        let loader = GraphStatsLoader()
+        await loader.configure(container: AnyModelContainer(testStore.container))
+
+        let first = try await loader.loadPerGraphCounts(graphIDs: [graph.id])
+
+        _ = fixtures.makeAttachment(
+            owner: .entity(entity),
+            contentKind: .video,
+            title: "Clip",
+            originalFilename: "clip.mov",
+            contentTypeIdentifier: "public.movie",
+            fileExtension: "mov",
+            byteCount: 30,
+            fileData: Data([0x03, 0x04])
+        )
+        try fixtures.save()
+
+        let second = try await loader.loadPerGraphCounts(graphIDs: [graph.id])
+
+        #expect(first[graph.id]?.attachments == 1)
+        #expect(first[graph.id]?.attachmentBytes == 12)
+        #expect(second[graph.id]?.attachments == 2)
+        #expect(second[graph.id]?.attachmentBytes == 42)
+        #expect(await loader.countsCacheHitsForTesting() == 0)
+    }
+
     @Test
     func loadDashboardSnapshot_forceReloadBypassesCacheEvenWhenDataDidNotChange() async throws {
         let testStore = try BrainMeshTestContainer.makeInMemoryStore()
