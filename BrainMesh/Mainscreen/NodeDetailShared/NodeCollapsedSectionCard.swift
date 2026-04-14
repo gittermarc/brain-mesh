@@ -12,6 +12,7 @@ struct NodeCollapsedSectionCard: View {
     let systemImage: String
 
     var subtitle: String? = nil
+    var markdownSubtitle: String? = nil
     var actionTitle: String = "Anzeigen"
 
     let action: () -> Void
@@ -31,7 +32,14 @@ struct NodeCollapsedSectionCard: View {
                         .font(.body.weight(.semibold))
                         .foregroundStyle(.primary)
 
-                    if let subtitle, !subtitle.isEmpty {
+                    if let markdownSubtitle, !markdownSubtitle.isEmpty {
+                        MarkdownRenderedText(
+                            markdown: markdownSubtitle,
+                            lineLimit: 2,
+                            font: .caption,
+                            foregroundColor: .secondary
+                        )
+                    } else if let subtitle, !subtitle.isEmpty {
                         Text(subtitle)
                             .font(.caption)
                             .foregroundStyle(.secondary)

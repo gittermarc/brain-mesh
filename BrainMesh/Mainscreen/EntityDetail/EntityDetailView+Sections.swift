@@ -26,7 +26,8 @@ extension EntityDetailView {
             let card = NodeCollapsedSectionCard(
                 title: entitySectionTitle(section),
                 systemImage: entitySectionSystemImage(section),
-                subtitle: entitySectionSubtitle(section),
+                subtitle: section == .notes ? nil : entitySectionSubtitle(section),
+                markdownSubtitle: section == .notes ? entityNotesPreviewMarkdown() : nil,
                 actionTitle: "Anzeigen"
             ) {
                 withAnimation(.snappy) {
@@ -96,9 +97,10 @@ extension EntityDetailView {
             return "\(n) \(n == 1 ? "Feld" : "Felder")"
 
         case .notes:
-            let trimmed = entity.notes.trimmingCharacters(in: .whitespacesAndNewlines)
-            if trimmed.isEmpty { return nil }
-            return trimmed.count > 40 ? String(trimmed.prefix(40)) + " (gekürzt)" : trimmed
+            if let preview = MarkdownCommands.notesPreviewLine(entity.notes) {
+                return preview.count > 40 ? String(preview.prefix(40)) + " (gekürzt)" : preview
+            }
+            return nil
 
         case .media:
             let g = mediaPreview.galleryCount
@@ -112,6 +114,11 @@ extension EntityDetailView {
             if out == 0 && inc == 0 { return nil }
             return "\(out) ausgehend · \(inc) eingehend"
         }
+    }
+
+    func entityNotesPreviewMarkdown() -> String? {
+        let trimmed = entity.notes.trimmingCharacters(in: .whitespacesAndNewlines)
+        return trimmed.isEmpty ? nil : trimmed
     }
 
     @ViewBuilder

@@ -27,6 +27,7 @@ struct NodeHighlightTile<Accessory: View>: View {
     let title: String
     let systemImage: String
     let subtitle: String
+    let subtitleMarkdown: String?
     let footer: String
     var accessory: (() -> Accessory)? = nil
     let onTap: () -> Void
@@ -35,6 +36,7 @@ struct NodeHighlightTile<Accessory: View>: View {
         title: String,
         systemImage: String,
         subtitle: String,
+        subtitleMarkdown: String? = nil,
         footer: String,
         accessory: (() -> Accessory)? = nil,
         onTap: @escaping () -> Void
@@ -42,6 +44,7 @@ struct NodeHighlightTile<Accessory: View>: View {
         self.title = title
         self.systemImage = systemImage
         self.subtitle = subtitle
+        self.subtitleMarkdown = subtitleMarkdown
         self.footer = footer
         self.accessory = accessory
         self.onTap = onTap
@@ -60,10 +63,19 @@ struct NodeHighlightTile<Accessory: View>: View {
                     Spacer(minLength: 0)
                 }
 
-                Text(subtitle)
-                    .font(.subheadline.weight(.semibold))
-                    .foregroundStyle(.primary)
-                    .lineLimit(2)
+                if let subtitleMarkdown, !subtitleMarkdown.isEmpty {
+                    MarkdownRenderedText(
+                        markdown: subtitleMarkdown,
+                        lineLimit: 2,
+                        font: .subheadline.weight(.semibold),
+                        foregroundColor: .primary
+                    )
+                } else {
+                    Text(subtitle)
+                        .font(.subheadline.weight(.semibold))
+                        .foregroundStyle(.primary)
+                        .lineLimit(2)
+                }
 
                 if let accessory {
                     accessory()
@@ -90,6 +102,7 @@ extension NodeHighlightTile where Accessory == EmptyView {
         title: String,
         systemImage: String,
         subtitle: String,
+        subtitleMarkdown: String? = nil,
         footer: String,
         onTap: @escaping () -> Void
     ) {
@@ -97,6 +110,7 @@ extension NodeHighlightTile where Accessory == EmptyView {
             title: title,
             systemImage: systemImage,
             subtitle: subtitle,
+            subtitleMarkdown: subtitleMarkdown,
             footer: footer,
             accessory: nil,
             onTap: onTap
@@ -217,19 +231,56 @@ struct NodeNotesCard: View {
 struct MarkdownRenderedText: View {
     let markdown: String
     var lineLimit: Int? = nil
+    var font: Font = .body
+    var foregroundColor: Color = .primary
+
+    private var renderedAttributedString: AttributedString? {
+        Self.makeRenderedAttributedString(from: markdown)
+    }
 
     var body: some View {
-        if let attributed = try? AttributedString(markdown: markdown) {
-            Text(attributed)
-                .font(.body)
-                .foregroundStyle(.primary)
-                .lineLimit(lineLimit)
-        } else {
-            Text(MarkdownCommands.plainText(from: markdown))
-                .font(.body)
-                .foregroundStyle(.primary)
-                .lineLimit(lineLimit)
+        Group {
+            if let renderedAttributedString {
+                Text(renderedAttributedString)
+            } else {
+                Text(MarkdownCommands.plainText(from: markdown))
+            }
         }
+        .font(font)
+        .foregroundStyle(foregroundColor)
+        .lineLimit(lineLimit)
+        .multilineTextAlignment(.leading)
+    }
+
+    private static func makeRenderedAttributedString(from markdown: String) -> AttributedString? {
+        let normalized = markdown
+            .replacingOccurrences(of: "\r\n", with: "\n")
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+
+        guard !normalized.isEmpty else { return nil }
+
+        let lines = normalized.split(separator: "\n", omittingEmptySubsequences: false)
+        var combined = AttributedString()
+        var hasVisibleContent = false
+
+        for index in lines.indices {
+            if index > lines.startIndex {
+                combined += AttributedString("\n")
+            }
+
+            let line = String(lines[index])
+            guard !line.isEmpty else { continue }
+
+            if let attributedLine = try? AttributedString(markdown: line) {
+                combined += attributedLine
+                hasVisibleContent = true
+            } else {
+                combined += AttributedString(MarkdownCommands.plainText(from: line))
+                hasVisibleContent = true
+            }
+        }
+
+        return hasVisibleContent ? combined : nil
     }
 }
 

@@ -40,7 +40,8 @@ struct EntityDetailHighlightsRow: View {
             NodeHighlightTile(
                 title: "Notiz",
                 systemImage: "note.text",
-                subtitle: hasNote ? NodeTopLinks.previewText(noteSnippet, maxChars: 80) : "Noch keine Notiz",
+                subtitle: hasNote ? NodeTopLinks.previewText(MarkdownCommands.plainText(from: noteSnippet), maxChars: 80) : "Noch keine Notiz",
+                subtitleMarkdown: hasNote ? noteSnippet : nil,
                 footer: hasNote ? "Tippen zum Bearbeiten" : "Tippen zum Schreiben",
                 onTap: { onEditNotes() }
             )

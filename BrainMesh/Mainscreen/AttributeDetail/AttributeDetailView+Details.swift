@@ -36,7 +36,8 @@ extension AttributeDetailView {
             let card = NodeCollapsedSectionCard(
                 title: attributeSectionTitle(section),
                 systemImage: attributeSectionSystemImage(section),
-                subtitle: attributeSectionSubtitle(section),
+                subtitle: section == .notes ? nil : attributeSectionSubtitle(section),
+                markdownSubtitle: section == .notes ? attributeNotesPreviewMarkdown() : nil,
                 actionTitle: "Anzeigen"
             ) {
                 withAnimation(.snappy) {
@@ -101,9 +102,10 @@ extension AttributeDetailView {
             return "\(n) \(n == 1 ? "Feld" : "Felder")"
 
         case .notes:
-            let trimmed = attribute.notes.trimmingCharacters(in: .whitespacesAndNewlines)
-            if trimmed.isEmpty { return nil }
-            return trimmed.count > 40 ? String(trimmed.prefix(40)) + " (gekürzt)" : trimmed
+            if let preview = MarkdownCommands.notesPreviewLine(attribute.notes) {
+                return preview.count > 40 ? String(preview.prefix(40)) + " (gekürzt)" : preview
+            }
+            return nil
 
         case .media:
             let g = mediaPreview.galleryCount
@@ -117,6 +119,11 @@ extension AttributeDetailView {
             if out == 0 && inc == 0 { return nil }
             return "\(out) ausgehend · \(inc) eingehend"
         }
+    }
+
+    func attributeNotesPreviewMarkdown() -> String? {
+        let trimmed = attribute.notes.trimmingCharacters(in: .whitespacesAndNewlines)
+        return trimmed.isEmpty ? nil : trimmed
     }
 
     @ViewBuilder
