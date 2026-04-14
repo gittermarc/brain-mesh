@@ -10,7 +10,7 @@
 import Foundation
 import SwiftData
 
-struct AttachmentListItem: Identifiable, Hashable, Sendable {
+nonisolated struct AttachmentListItem: Identifiable, Hashable, Sendable {
     let id: UUID
     let createdAt: Date
 
@@ -40,12 +40,12 @@ struct AttachmentListItem: Identifiable, Hashable, Sendable {
     }
 }
 
-private enum MediaAllContentSelection: Sendable {
+private nonisolated enum MediaAllContentSelection: Sendable {
     case gallery
     case attachments
 }
 
-private func makeMediaAllPredicate(
+private nonisolated func makeMediaAllPredicate(
     ownerKindRaw: Int,
     ownerID: UUID,
     graphID: UUID?,
@@ -90,7 +90,7 @@ private func makeMediaAllPredicate(
     }
 }
 
-private func makeAttachmentListItem(from attachment: MetaAttachment) -> AttachmentListItem {
+private nonisolated func makeAttachmentListItem(from attachment: MetaAttachment) -> AttachmentListItem {
     AttachmentListItem(
         id: attachment.id,
         createdAt: attachment.createdAt,

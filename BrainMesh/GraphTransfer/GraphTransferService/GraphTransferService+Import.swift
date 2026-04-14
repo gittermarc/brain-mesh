@@ -64,7 +64,7 @@ private extension GraphTransferService {
     }
 }
 
-private final class GraphTransferImportCoordinator {
+private nonisolated final class GraphTransferImportCoordinator {
     private let file: GraphExportFileV1
     private let context: ModelContext
     private let progress: (@Sendable (GraphTransferProgress) -> Void)?
