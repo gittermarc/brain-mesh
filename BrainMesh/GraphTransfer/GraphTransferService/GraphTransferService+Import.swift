@@ -13,10 +13,7 @@ extension GraphTransferService {
     func inspectFileImpl(url: URL) async throws -> ImportPreview {
         guard container != nil else { throw GraphTransferError.notConfigured }
 
-        let data = try GraphTransferFileIO.readFileData(url: url)
-        let file = try GraphTransferCodec.decode(data)
-        try GraphTransferValidator.validate(exportFile: file)
-
+        let file = try Self.decodeValidatedImportFile(url: url)
         return ImportPreview(
             graphName: file.graph.name,
             exportedAt: file.exportedAt,
@@ -32,15 +29,17 @@ extension GraphTransferService {
     ) async throws -> ImportResult {
         guard let container else { throw GraphTransferError.notConfigured }
 
-        progress?(GraphTransferProgress(phase: .inspecting, completed: 0, label: "Datei wird geprüft…"))
-
-        let data = try GraphTransferFileIO.readFileData(url: url)
-        let file = try GraphTransferCodec.decode(data)
-        try GraphTransferValidator.validate(exportFile: file)
+        progress?(GraphTransferImportProgressFactory.inspecting())
+        let file = try Self.decodeValidatedImportFile(url: url)
 
         switch mode {
         case .asNewGraphRemap:
-            return try await Self.importAsNewGraphRemap(file: file, container: container, progress: progress)
+            let coordinator = GraphTransferImportCoordinator(
+                file: file,
+                container: container,
+                progress: progress
+            )
+            return try await coordinator.runAsNewGraphRemap()
         }
     }
 }
@@ -57,51 +56,80 @@ private extension GraphTransferService {
         static let yieldStrideValuesAndLinks: Int = 300
     }
 
-    static func importAsNewGraphRemap(
+    static func decodeValidatedImportFile(url: URL) throws -> GraphExportFileV1 {
+        let data = try GraphTransferFileIO.readFileData(url: url)
+        let file = try GraphTransferCodec.decode(data)
+        try GraphTransferValidator.validate(exportFile: file)
+        return file
+    }
+}
+
+private final class GraphTransferImportCoordinator {
+    private let file: GraphExportFileV1
+    private let context: ModelContext
+    private let progress: (@Sendable (GraphTransferProgress) -> Void)?
+
+    private let newGraphID = UUID()
+
+    private var entityIDMap: [UUID: UUID] = [:]
+    private var attributeIDMap: [UUID: UUID] = [:]
+    private var fieldIDMap: [UUID: UUID] = [:]
+
+    private var entitiesByNewID: [UUID: MetaEntity] = [:]
+    private var attributesByNewID: [UUID: MetaAttribute] = [:]
+
+    private var importedValues = 0
+    private var importedLinks = 0
+    private var skippedLinks = 0
+    private var insertedSinceLastSave = 0
+
+    init(
         file: GraphExportFileV1,
         container: AnyModelContainer,
         progress: (@Sendable (GraphTransferProgress) -> Void)?
-    ) async throws -> ImportResult {
-        let context = ModelContext(container.container)
-        context.autosaveEnabled = false
+    ) {
+        self.file = file
+        self.context = ModelContext(container.container)
+        self.context.autosaveEnabled = false
+        self.progress = progress
+    }
 
-        progress?(GraphTransferProgress(phase: .creatingGraph, completed: 0, label: "Neuer Graph wird angelegt…"))
+    func runAsNewGraphRemap() async throws -> ImportResult {
+        createGraph()
+        try await importEntities()
+        try await importFieldDefinitions()
+        try await importAttributes()
+        try await importDetailFieldValues()
+        try await importLinks()
+        return try finalizeImport()
+    }
+}
 
-        let newGraphID = UUID()
+private extension GraphTransferImportCoordinator {
+
+    func createGraph() {
+        progress?(GraphTransferImportProgressFactory.creatingGraph())
 
         let graph = MetaGraph(name: file.graph.name)
         graph.id = newGraphID
         graph.createdAt = file.graph.createdAt
         context.insert(graph)
+    }
 
-        // Remap dictionaries
-        var entityIDMap: [UUID: UUID] = [:]
-        var attributeIDMap: [UUID: UUID] = [:]
-        var fieldIDMap: [UUID: UUID] = [:]
-
-        var entitiesByNewID: [UUID: MetaEntity] = [:]
-        var attributesByNewID: [UUID: MetaAttribute] = [:]
-
-        // Batch save helper
-        var insertedSinceLastSave = 0
-        func maybeSave() throws {
-            if insertedSinceLastSave >= ImportTuning.saveBatchSize {
-                do {
-                    try context.save()
-                    insertedSinceLastSave = 0
-                } catch {
-                    throw GraphTransferError.saveFailed(underlying: String(describing: error))
-                }
-            }
-        }
-
-        // 1) Entities
+    func importEntities() async throws {
         let totalEntities = file.entities.count
-        progress?(GraphTransferProgress(phase: .entities, completed: 0, total: totalEntities, label: "Entitäten werden importiert…"))
+        progress?(GraphTransferImportProgressFactory.phaseStart(
+            .entities,
+            total: totalEntities,
+            label: "Entitäten werden importiert…"
+        ))
 
         for (idx, dto) in file.entities.enumerated() {
-            if idx % ImportTuning.cancellationStride == 0 { try Task.checkCancellation() }
-            if idx % ImportTuning.yieldStride == 0 { await Task.yield() }
+            try await performCheckpoint(
+                index: idx,
+                cancellationStride: GraphTransferService.ImportTuning.cancellationStride,
+                yieldStride: GraphTransferService.ImportTuning.yieldStride
+            )
 
             let newID = UUID()
             entityIDMap[dto.id] = newID
@@ -116,21 +144,31 @@ private extension GraphTransferService {
             context.insert(entity)
             entitiesByNewID[newID] = entity
 
-            insertedSinceLastSave += 1
-            try maybeSave()
-
-            if idx % ImportTuning.cancellationStride == 0 || idx + 1 == totalEntities {
-                progress?(GraphTransferProgress(phase: .entities, completed: idx + 1, total: totalEntities, label: "Entitäten: \(idx + 1)/\(totalEntities)"))
-            }
+            try recordInsertion()
+            reportPhaseStepIfNeeded(
+                phase: .entities,
+                noun: "Entitäten",
+                index: idx,
+                total: totalEntities,
+                stride: GraphTransferService.ImportTuning.cancellationStride
+            )
         }
+    }
 
-        // 2) Detail field definitions
+    func importFieldDefinitions() async throws {
         let totalFields = file.detailFieldDefinitions.count
-        progress?(GraphTransferProgress(phase: .fields, completed: 0, total: totalFields, label: "Details-Felder werden importiert…"))
+        progress?(GraphTransferImportProgressFactory.phaseStart(
+            .fields,
+            total: totalFields,
+            label: "Details-Felder werden importiert…"
+        ))
 
         for (idx, dto) in file.detailFieldDefinitions.enumerated() {
-            if idx % ImportTuning.cancellationStride == 0 { try Task.checkCancellation() }
-            if idx % ImportTuning.yieldStride == 0 { await Task.yield() }
+            try await performCheckpoint(
+                index: idx,
+                cancellationStride: GraphTransferService.ImportTuning.cancellationStride,
+                yieldStride: GraphTransferService.ImportTuning.yieldStride
+            )
 
             guard let newOwnerEntityID = entityIDMap[dto.entityID],
                   let owner = entitiesByNewID[newOwnerEntityID]
@@ -142,7 +180,7 @@ private extension GraphTransferService {
             fieldIDMap[dto.id] = newID
 
             let type = DetailFieldType(rawValue: dto.typeRaw) ?? .singleLineText
-            let def = MetaDetailFieldDefinition(
+            let definition = MetaDetailFieldDefinition(
                 owner: owner,
                 name: dto.name,
                 type: type,
@@ -151,116 +189,149 @@ private extension GraphTransferService {
                 options: dto.options,
                 isPinned: dto.isPinned
             )
-            def.id = newID
-            def.graphID = newGraphID
-            owner.addDetailField(def)
+            definition.id = newID
+            definition.graphID = newGraphID
+            owner.addDetailField(definition)
 
-            context.insert(def)
-            insertedSinceLastSave += 1
-            try maybeSave()
-
-            if idx % ImportTuning.cancellationStride == 0 || idx + 1 == totalFields {
-                progress?(GraphTransferProgress(phase: .fields, completed: idx + 1, total: totalFields, label: "Felder: \(idx + 1)/\(totalFields)"))
-            }
+            context.insert(definition)
+            try recordInsertion()
+            reportPhaseStepIfNeeded(
+                phase: .fields,
+                noun: "Felder",
+                index: idx,
+                total: totalFields,
+                stride: GraphTransferService.ImportTuning.cancellationStride
+            )
         }
+    }
 
-        // 3) Attributes
+    func importAttributes() async throws {
         let totalAttributes = file.attributes.count
-        progress?(GraphTransferProgress(phase: .attributes, completed: 0, total: totalAttributes, label: "Attribute werden importiert…"))
+        progress?(GraphTransferImportProgressFactory.phaseStart(
+            .attributes,
+            total: totalAttributes,
+            label: "Attribute werden importiert…"
+        ))
 
         for (idx, dto) in file.attributes.enumerated() {
-            if idx % ImportTuning.cancellationStride == 0 { try Task.checkCancellation() }
-            if idx % ImportTuning.yieldStride == 0 { await Task.yield() }
+            try await performCheckpoint(
+                index: idx,
+                cancellationStride: GraphTransferService.ImportTuning.cancellationStride,
+                yieldStride: GraphTransferService.ImportTuning.yieldStride
+            )
 
             guard let oldOwnerID = dto.ownerEntityID,
                   let newOwnerID = entityIDMap[oldOwnerID],
                   let owner = entitiesByNewID[newOwnerID]
             else {
-                // Attribute without owner are ignored (would be orphaned and mostly useless in UI).
                 continue
             }
 
             let newID = UUID()
             attributeIDMap[dto.id] = newID
 
-            let attr = MetaAttribute(name: dto.name, owner: owner, graphID: newGraphID, iconSymbolName: dto.iconSymbolName)
-            attr.id = newID
-            attr.notes = dto.notes
-            attr.imageData = dto.imageData
-            attr.imagePath = nil
-            owner.addAttribute(attr)
+            let attribute = MetaAttribute(name: dto.name, owner: owner, graphID: newGraphID, iconSymbolName: dto.iconSymbolName)
+            attribute.id = newID
+            attribute.notes = dto.notes
+            attribute.imageData = dto.imageData
+            attribute.imagePath = nil
+            owner.addAttribute(attribute)
 
-            context.insert(attr)
-            attributesByNewID[newID] = attr
+            context.insert(attribute)
+            attributesByNewID[newID] = attribute
 
-            insertedSinceLastSave += 1
-            try maybeSave()
-
-            if idx % ImportTuning.cancellationStride == 0 || idx + 1 == totalAttributes {
-                progress?(GraphTransferProgress(phase: .attributes, completed: idx + 1, total: totalAttributes, label: "Attribute: \(idx + 1)/\(totalAttributes)"))
-            }
+            try recordInsertion()
+            reportPhaseStepIfNeeded(
+                phase: .attributes,
+                noun: "Attribute",
+                index: idx,
+                total: totalAttributes,
+                stride: GraphTransferService.ImportTuning.cancellationStride
+            )
         }
+    }
 
-        // 4) Detail field values
+    func importDetailFieldValues() async throws {
         let totalValues = file.detailFieldValues.count
-        progress?(GraphTransferProgress(phase: .values, completed: 0, total: totalValues, label: "Details-Werte werden importiert…"))
+        progress?(GraphTransferImportProgressFactory.phaseStart(
+            .values,
+            total: totalValues,
+            label: "Details-Werte werden importiert…"
+        ))
 
-        var importedValues = 0
         for (idx, dto) in file.detailFieldValues.enumerated() {
-            if idx % ImportTuning.cancellationStrideValuesAndLinks == 0 { try Task.checkCancellation() }
-            if idx % ImportTuning.yieldStrideValuesAndLinks == 0 { await Task.yield() }
+            try await performCheckpoint(
+                index: idx,
+                cancellationStride: GraphTransferService.ImportTuning.cancellationStrideValuesAndLinks,
+                yieldStride: GraphTransferService.ImportTuning.yieldStrideValuesAndLinks
+            )
 
             guard let newAttrID = attributeIDMap[dto.attributeID],
-                  let attr = attributesByNewID[newAttrID]
+                  let attribute = attributesByNewID[newAttrID],
+                  let newFieldID = fieldIDMap[dto.fieldID]
             else {
                 continue
             }
-            guard let newFieldID = fieldIDMap[dto.fieldID] else {
+
+            let existingFieldIDs = Set(attribute.detailValues?.map(\.fieldID) ?? [])
+            if GraphTransferImportDetailValueDeduper.shouldImport(fieldID: newFieldID, existingFieldIDs: existingFieldIDs) == false {
                 continue
             }
 
-            let value = MetaDetailFieldValue(attribute: attr, fieldID: newFieldID)
+            let value = MetaDetailFieldValue(attribute: attribute, fieldID: newFieldID)
             value.id = UUID()
             value.graphID = newGraphID
-
             value.stringValue = dto.stringValue
             value.intValue = dto.intValue
             value.doubleValue = dto.doubleValue
             value.dateValue = dto.dateValue
             value.boolValue = dto.boolValue
 
-            if attr.detailValues == nil { attr.detailValues = [] }
-            // De-dupe per attribute+field (defensive against legacy duplicates).
-            if attr.detailValues?.contains(where: { $0.fieldID == newFieldID }) == true {
-                continue
+            if attribute.detailValues == nil {
+                attribute.detailValues = []
             }
-            attr.detailValues?.append(value)
+            attribute.detailValues?.append(value)
 
             context.insert(value)
             importedValues += 1
 
-            insertedSinceLastSave += 1
-            try maybeSave()
-
-            if idx % ImportTuning.cancellationStrideValuesAndLinks == 0 || idx + 1 == totalValues {
-                progress?(GraphTransferProgress(phase: .values, completed: idx + 1, total: totalValues, label: "Werte: \(idx + 1)/\(totalValues)"))
-            }
+            try recordInsertion()
+            reportPhaseStepIfNeeded(
+                phase: .values,
+                noun: "Werte",
+                index: idx,
+                total: totalValues,
+                stride: GraphTransferService.ImportTuning.cancellationStrideValuesAndLinks
+            )
         }
+    }
 
-        // 5) Links
+    func importLinks() async throws {
         let totalLinks = file.links.count
-        progress?(GraphTransferProgress(phase: .links, completed: 0, total: totalLinks, label: "Links werden importiert…"))
-
-        var importedLinks = 0
-        var skippedLinks = 0
+        progress?(GraphTransferImportProgressFactory.phaseStart(
+            .links,
+            total: totalLinks,
+            label: "Links werden importiert…"
+        ))
 
         for (idx, dto) in file.links.enumerated() {
-            if idx % ImportTuning.cancellationStrideValuesAndLinks == 0 { try Task.checkCancellation() }
-            if idx % ImportTuning.yieldStrideValuesAndLinks == 0 { await Task.yield() }
+            try await performCheckpoint(
+                index: idx,
+                cancellationStride: GraphTransferService.ImportTuning.cancellationStrideValuesAndLinks,
+                yieldStride: GraphTransferService.ImportTuning.yieldStrideValuesAndLinks
+            )
 
-            guard let newSourceID = remapNodeID(kindRaw: dto.sourceKindRaw, oldID: dto.sourceID, entityIDMap: entityIDMap, attributeIDMap: attributeIDMap),
-                  let newTargetID = remapNodeID(kindRaw: dto.targetKindRaw, oldID: dto.targetID, entityIDMap: entityIDMap, attributeIDMap: attributeIDMap)
-            else {
+            guard let newSourceID = GraphTransferImportNodeRemapper.remapNodeID(
+                kindRaw: dto.sourceKindRaw,
+                oldID: dto.sourceID,
+                entityIDMap: entityIDMap,
+                attributeIDMap: attributeIDMap
+            ), let newTargetID = GraphTransferImportNodeRemapper.remapNodeID(
+                kindRaw: dto.targetKindRaw,
+                oldID: dto.targetID,
+                entityIDMap: entityIDMap,
+                attributeIDMap: attributeIDMap
+            ) else {
                 skippedLinks += 1
                 continue
             }
@@ -278,58 +349,89 @@ private extension GraphTransferService {
                 note: dto.note,
                 graphID: newGraphID
             )
-
             link.id = UUID()
             link.createdAt = dto.createdAt
             context.insert(link)
+
             importedLinks += 1
-
-            insertedSinceLastSave += 1
-            try maybeSave()
-
-            if idx % ImportTuning.cancellationStrideValuesAndLinks == 0 || idx + 1 == totalLinks {
-                progress?(GraphTransferProgress(phase: .links, completed: idx + 1, total: totalLinks, label: "Links: \(idx + 1)/\(totalLinks)"))
-            }
+            try recordInsertion()
+            reportPhaseStepIfNeeded(
+                phase: .links,
+                noun: "Links",
+                index: idx,
+                total: totalLinks,
+                stride: GraphTransferService.ImportTuning.cancellationStrideValuesAndLinks
+            )
         }
+    }
 
-        // Final save
-        progress?(GraphTransferProgress(phase: .saving, completed: 0, label: "Speichere…"))
+    func finalizeImport() throws -> ImportResult {
+        progress?(GraphTransferImportProgressFactory.saving())
+        try saveContext()
+        progress?(GraphTransferImportProgressFactory.done())
+
+        return ImportResult(
+            newGraphID: newGraphID,
+            insertedCounts: CountsDTO(
+                graphs: 1,
+                entities: entitiesByNewID.count,
+                attributes: attributesByNewID.count,
+                detailFieldDefinitions: fieldIDMap.count,
+                detailFieldValues: importedValues,
+                links: importedLinks
+            ),
+            skippedLinks: skippedLinks
+        )
+    }
+
+    func performCheckpoint(index: Int, cancellationStride: Int, yieldStride: Int) async throws {
+        if index % cancellationStride == 0 {
+            try Task.checkCancellation()
+        }
+        if index % yieldStride == 0 {
+            await Task.yield()
+        }
+    }
+
+    func recordInsertion() throws {
+        insertedSinceLastSave += 1
+        try maybeSave()
+    }
+
+    func maybeSave() throws {
+        if insertedSinceLastSave >= GraphTransferService.ImportTuning.saveBatchSize {
+            try saveContext()
+            insertedSinceLastSave = 0
+        }
+    }
+
+    func saveContext() throws {
         do {
             try context.save()
         } catch {
             throw GraphTransferError.saveFailed(underlying: String(describing: error))
         }
-
-        let insertedCounts = CountsDTO(
-            graphs: 1,
-            entities: entitiesByNewID.count,
-            attributes: attributesByNewID.count,
-            detailFieldDefinitions: fieldIDMap.count,
-            detailFieldValues: importedValues,
-            links: importedLinks
-        )
-
-        progress?(GraphTransferProgress(phase: .done, completed: 1, total: 1, label: "Fertig"))
-
-        return ImportResult(
-            newGraphID: newGraphID,
-            insertedCounts: insertedCounts,
-            skippedLinks: skippedLinks
-        )
     }
 
-    static func remapNodeID(
-        kindRaw: Int,
-        oldID: UUID,
-        entityIDMap: [UUID: UUID],
-        attributeIDMap: [UUID: UUID]
-    ) -> UUID? {
-        if kindRaw == NodeKind.entity.rawValue {
-            return entityIDMap[oldID]
+    func reportPhaseStepIfNeeded(
+        phase: GraphTransferProgress.Phase,
+        noun: String,
+        index: Int,
+        total: Int,
+        stride: Int
+    ) {
+        guard shouldReportProgress(index: index, total: total, stride: stride) else {
+            return
         }
-        if kindRaw == NodeKind.attribute.rawValue {
-            return attributeIDMap[oldID]
-        }
-        return nil
+        progress?(GraphTransferImportProgressFactory.phaseStep(
+            phase,
+            completed: index + 1,
+            total: total,
+            noun: noun
+        ))
+    }
+
+    func shouldReportProgress(index: Int, total: Int, stride: Int) -> Bool {
+        index % stride == 0 || index + 1 == total
     }
 }
