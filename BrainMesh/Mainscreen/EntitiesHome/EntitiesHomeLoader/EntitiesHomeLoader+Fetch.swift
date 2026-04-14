@@ -127,76 +127,16 @@ extension EntitiesHomeLoader {
         let links = try context.fetch(fdLinks)
 
         if links.isEmpty == false {
-            let entityKindRaw = NodeKind.entity.rawValue
-            let attributeKindRaw = NodeKind.attribute.rawValue
+            let resolvedLinkMatches = try resolveLinkMatchedEntities(
+                context: context,
+                graphID: gid,
+                links: links,
+                preloadedEntitiesByID: unique
+            )
 
-            var entityIDs: Set<UUID> = []
-            var attributeIDs: Set<UUID> = []
-            entityIDs.reserveCapacity(min(links.count * 2, 512))
-            attributeIDs.reserveCapacity(min(links.count, 512))
-
-            for (idx, l) in links.enumerated() {
-                if idx % 256 == 0 {
-                    try Task.checkCancellation()
-                }
-
-                if l.sourceKindRaw == entityKindRaw {
-                    entityIDs.insert(l.sourceID)
-                } else if l.sourceKindRaw == attributeKindRaw {
-                    attributeIDs.insert(l.sourceID)
-                }
-
-                if l.targetKindRaw == entityKindRaw {
-                    entityIDs.insert(l.targetID)
-                } else if l.targetKindRaw == attributeKindRaw {
-                    attributeIDs.insert(l.targetID)
-                }
-            }
-
-            // Resolve entity endpoints
-            for (idx, id) in entityIDs.enumerated() {
-                if idx % 256 == 0 {
-                    try Task.checkCancellation()
-                }
-
-                if unique[id] != nil {
-                    notesMatch.insert(id)
-                    continue
-                }
-
-                let fd = FetchDescriptor<MetaEntity>(predicate: #Predicate<MetaEntity> { e in
-                    e.id == id
-                })
-                if let e = try context.fetch(fd).first {
-                    if let gid {
-                        if e.graphID == gid {
-                            unique[e.id] = e
-                            notesMatch.insert(e.id)
-                        }
-                    } else {
-                        unique[e.id] = e
-                        notesMatch.insert(e.id)
-                    }
-                }
-            }
-
-            // Resolve attribute endpoints → owner entity
-            for (idx, id) in attributeIDs.enumerated() {
-                if idx % 256 == 0 {
-                    try Task.checkCancellation()
-                }
-
-                let fd = FetchDescriptor<MetaAttribute>(predicate: #Predicate<MetaAttribute> { a in
-                    a.id == id
-                })
-                guard let a = try context.fetch(fd).first, let owner = a.owner else { continue }
-
-                if let gid {
-                    if owner.graphID != gid { continue }
-                }
-
-                unique[owner.id] = owner
-                notesMatch.insert(owner.id)
+            for entity in resolvedLinkMatches {
+                unique[entity.id] = entity
+                notesMatch.insert(entity.id)
             }
         }
 
@@ -209,6 +149,103 @@ extension EntitiesHomeLoader {
             let isNotesOnly = notesMatch.contains(e.id) && strongMatch.contains(e.id) == false
             return MatchedEntity(entity: e, isNotesOnlyHit: isNotesOnly)
         }
+    }
+
+    private static func resolveLinkMatchedEntities(
+        context: ModelContext,
+        graphID: UUID?,
+        links: [MetaLink],
+        preloadedEntitiesByID: [UUID: MetaEntity]
+    ) throws -> [MetaEntity] {
+        let entityKindRaw = NodeKind.entity.rawValue
+        let attributeKindRaw = NodeKind.attribute.rawValue
+
+        var matchedEntitiesByID: [UUID: MetaEntity] = [:]
+        matchedEntitiesByID.reserveCapacity(min(preloadedEntitiesByID.count + links.count, 512))
+
+        var unresolvedEntityIDs: Set<UUID> = []
+        var matchedAttributeIDs: Set<UUID> = []
+        unresolvedEntityIDs.reserveCapacity(min(links.count * 2, 512))
+        matchedAttributeIDs.reserveCapacity(min(links.count, 512))
+
+        for (idx, link) in links.enumerated() {
+            if idx % 256 == 0 {
+                try Task.checkCancellation()
+            }
+
+            if link.sourceKindRaw == entityKindRaw {
+                if let entity = preloadedEntitiesByID[link.sourceID] {
+                    matchedEntitiesByID[entity.id] = entity
+                } else {
+                    unresolvedEntityIDs.insert(link.sourceID)
+                }
+            } else if link.sourceKindRaw == attributeKindRaw {
+                matchedAttributeIDs.insert(link.sourceID)
+            }
+
+            if link.targetKindRaw == entityKindRaw {
+                if let entity = preloadedEntitiesByID[link.targetID] {
+                    matchedEntitiesByID[entity.id] = entity
+                } else {
+                    unresolvedEntityIDs.insert(link.targetID)
+                }
+            } else if link.targetKindRaw == attributeKindRaw {
+                matchedAttributeIDs.insert(link.targetID)
+            }
+        }
+
+        if unresolvedEntityIDs.isEmpty == false {
+            let resolvedEntities = try fetchEntitiesInScope(context: context, graphID: graphID)
+            for (idx, entity) in resolvedEntities.enumerated() {
+                if idx % 256 == 0 {
+                    try Task.checkCancellation()
+                }
+                guard unresolvedEntityIDs.contains(entity.id) else { continue }
+                matchedEntitiesByID[entity.id] = entity
+            }
+        }
+
+        if matchedAttributeIDs.isEmpty == false {
+            let resolvedAttributes = try fetchAttributesInScope(context: context, graphID: graphID)
+            for (idx, attribute) in resolvedAttributes.enumerated() {
+                if idx % 256 == 0 {
+                    try Task.checkCancellation()
+                }
+                guard matchedAttributeIDs.contains(attribute.id), let owner = attribute.owner else { continue }
+                if let graphID, owner.graphID != graphID { continue }
+                matchedEntitiesByID[owner.id] = owner
+            }
+        }
+
+        return Array(matchedEntitiesByID.values)
+    }
+
+    private static func fetchEntitiesInScope(
+        context: ModelContext,
+        graphID: UUID?
+    ) throws -> [MetaEntity] {
+        if let graphID {
+            let descriptor = FetchDescriptor<MetaEntity>(predicate: #Predicate<MetaEntity> { entity in
+                entity.graphID == graphID
+            })
+            return try context.fetch(descriptor)
+        }
+
+        return try context.fetch(FetchDescriptor<MetaEntity>())
+    }
+
+    private static func fetchAttributesInScope(
+        context: ModelContext,
+        graphID: UUID?
+    ) throws -> [MetaAttribute] {
+        if let graphID {
+            let descriptor = FetchDescriptor<MetaAttribute>(predicate: #Predicate<MetaAttribute> { attribute in
+                attribute.graphID == graphID
+            })
+            return try context.fetch(descriptor)
+        }
+
+        return try context.fetch(FetchDescriptor<MetaAttribute>())
     }
 
     static func makeNotesPreview(_ notes: String) -> String? {
