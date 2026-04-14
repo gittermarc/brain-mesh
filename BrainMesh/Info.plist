@@ -2,28 +2,26 @@
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
-	<key>UIBackgroundModes</key>
-	<array>
-		<string>remote-notification</string>
-	</array>
-	<key>NSFaceIDUsageDescription</key>
-	<string>BrainMesh nutzt Face ID / Touch ID, um geschützte Graphen zu entsperren.</string>
 	<key>BM_PRO_SUBSCRIPTION_ID_01</key>
 	<string>de.marcfechner.brainmesh.pro.monthly</string>
 	<key>BM_PRO_SUBSCRIPTION_ID_02</key>
 	<string>de.marcfechner.brainmesh.pro.yearly</string>
+	<key>UIBackgroundModes</key>
+	<array>
+		<string>remote-notification</string>
+	</array>
 	<key>UTExportedTypeDeclarations</key>
 	<array>
 		<dict>
-			<key>UTTypeIdentifier</key>
-			<string>de.marcfechner.brainmesh.graph</string>
-			<key>UTTypeDescription</key>
-			<string>BrainMesh Graph Export</string>
 			<key>UTTypeConformsTo</key>
 			<array>
 				<string>public.data</string>
 				<string>public.json</string>
 			</array>
+			<key>UTTypeDescription</key>
+			<string>BrainMesh Graph Export</string>
+			<key>UTTypeIdentifier</key>
+			<string>de.marcfechner.brainmesh.graph</string>
 			<key>UTTypeTagSpecification</key>
 			<dict>
 				<key>public.filename-extension</key>
