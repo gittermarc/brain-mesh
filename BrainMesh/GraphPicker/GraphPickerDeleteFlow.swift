@@ -52,10 +52,10 @@ struct GraphPickerDeleteFlow: ViewModifier {
                 Button("Löschen", role: .destructive) {
                     guard let g = deleteGraph else { return }
 
-                    // Close the alert first to avoid UITableView update inconsistencies.
+                    // Close the alert first so the sheet can settle before the delete transition starts.
                     deleteGraph = nil
 
-                    // Optimistically remove the row from the List's frozen snapshot.
+                    // Optimistically remove the card from the current presentation snapshot.
                     onWillDelete(g)
 
                     Task { await performDelete(graph: g) }
@@ -100,7 +100,7 @@ struct GraphPickerDeleteFlow: ViewModifier {
         isDeleting = true
         defer { isDeleting = false }
 
-        // Let the UI settle for one runloop tick (prevents some UIKit list update edge cases).
+        // Let the UI settle for one runloop tick before the destructive update runs.
         await Task.yield()
 
         do {
