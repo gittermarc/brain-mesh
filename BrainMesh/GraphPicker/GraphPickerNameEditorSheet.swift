@@ -2,7 +2,7 @@
 //  GraphPickerNameEditorSheet.swift
 //  BrainMesh
 //
-//  Created by OpenAI on 14.04.26.
+//  Created by Marc Fechner on 14.04.26.
 //
 
 import SwiftUI

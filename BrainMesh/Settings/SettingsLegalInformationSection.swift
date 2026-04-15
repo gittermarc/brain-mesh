@@ -2,7 +2,7 @@
 //  SettingsLegalInformationSection.swift
 //  BrainMesh
 //
-//  Created by OpenAI on 05.03.26.
+//  Created by Marc Fechner on 05.03.26.
 //
 
 import Foundation
