@@ -91,6 +91,11 @@ extension GraphCanvasScreen {
             // ✅ Entity selection summary + list of defined detail fields
             if node.key.kind == .entity {
                 entityFieldsPeekPanel(summaryChips: detailsPeekChips, fields: entityFieldsPeekItems)
+
+                if let activeFocus = detailsFocusSummaryCache.activeFocus,
+                   activeFocus.entityID == node.key.uuid {
+                    graphDetailsFocusSummaryChip(summary: detailsFocusSummaryCache)
+                }
             }
         }
         .padding(10)
@@ -158,6 +163,41 @@ extension GraphCanvasScreen {
             .help("Nur die wichtigsten Links anzeigen")
         }
     }
+
+
+    @ViewBuilder
+    func graphDetailsFocusSummaryChip(summary: GraphDetailsMatchSummary) -> some View {
+        if let activeFocus = summary.activeFocus {
+            VStack(alignment: .leading, spacing: 6) {
+                HStack(spacing: 6) {
+                    Image(systemName: "line.3.horizontal.decrease.circle")
+                        .foregroundStyle(.tint)
+                    Text("Details-Fokus aktiv")
+                        .font(.caption.weight(.semibold))
+                    Spacer()
+                    Text(activeFocus.mode.title)
+                        .font(.caption2)
+                        .foregroundStyle(.secondary)
+                }
+
+                Text(verbatim: GraphDetailsFocusFormatting.ruleText(focusState: activeFocus, field: summary.field))
+                    .font(.caption)
+                    .foregroundStyle(.primary)
+                    .lineLimit(2)
+
+                Text(verbatim: "Treffer \(summary.matchCount) von \(summary.inspectedAttributeCount)")
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+            }
+            .padding(10)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 12))
+            .overlay(
+                RoundedRectangle(cornerRadius: 12).stroke(.tint.opacity(0.24))
+            )
+        }
+    }
+
 
     // MARK: - Helpers
 

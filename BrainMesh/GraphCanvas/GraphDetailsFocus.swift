@@ -24,6 +24,83 @@ enum GraphDetailsMatchValue: Equatable, Sendable {
     case date(Date)
 }
 
+
+
+enum GraphDetailsComparisonOperator: String, CaseIterable, Equatable, Sendable, Identifiable {
+    case equals
+    case lessThan
+    case lessThanOrEqual
+    case greaterThan
+    case greaterThanOrEqual
+    case isEmpty
+    case isNotEmpty
+
+    var id: String { rawValue }
+
+    var title: String {
+        switch self {
+        case .equals:
+            return "="
+        case .lessThan:
+            return "<"
+        case .lessThanOrEqual:
+            return "≤"
+        case .greaterThan:
+            return ">"
+        case .greaterThanOrEqual:
+            return "≥"
+        case .isEmpty:
+            return "Ist leer"
+        case .isNotEmpty:
+            return "Ist nicht leer"
+        }
+    }
+
+    var requiresValue: Bool {
+        switch self {
+        case .isEmpty, .isNotEmpty:
+            return false
+        case .equals, .lessThan, .lessThanOrEqual, .greaterThan, .greaterThanOrEqual:
+            return true
+        }
+    }
+
+    static func supported(for fieldType: DetailFieldType) -> [GraphDetailsComparisonOperator] {
+        switch fieldType {
+        case .singleChoice, .toggle:
+            return [.equals, .isEmpty, .isNotEmpty]
+        case .numberInt, .numberDouble, .date:
+            return [.equals, .lessThan, .lessThanOrEqual, .greaterThan, .greaterThanOrEqual, .isEmpty, .isNotEmpty]
+        case .singleLineText, .multiLineText:
+            return []
+        }
+    }
+
+    func makeComparison(value: GraphDetailsMatchValue?) -> GraphDetailsMatchComparison? {
+        switch self {
+        case .equals:
+            guard let value else { return nil }
+            return .equals(value)
+        case .lessThan:
+            guard let value else { return nil }
+            return .lessThan(value)
+        case .lessThanOrEqual:
+            guard let value else { return nil }
+            return .lessThanOrEqual(value)
+        case .greaterThan:
+            guard let value else { return nil }
+            return .greaterThan(value)
+        case .greaterThanOrEqual:
+            guard let value else { return nil }
+            return .greaterThanOrEqual(value)
+        case .isEmpty:
+            return .isEmpty
+        case .isNotEmpty:
+            return .isNotEmpty
+        }
+    }
+}
+
 enum GraphDetailsMatchComparison: Equatable, Sendable {
     case equals(GraphDetailsMatchValue)
     case lessThan(GraphDetailsMatchValue)
@@ -388,6 +465,115 @@ enum GraphDetailsMatcher {
             return lhs > rhs
         case .greaterThanOrEqual:
             return lhs >= rhs
+        }
+    }
+}
+
+
+extension GraphDetailsMatchComparison {
+    var comparisonOperator: GraphDetailsComparisonOperator {
+        switch self {
+        case .equals:
+            return .equals
+        case .lessThan:
+            return .lessThan
+        case .lessThanOrEqual:
+            return .lessThanOrEqual
+        case .greaterThan:
+            return .greaterThan
+        case .greaterThanOrEqual:
+            return .greaterThanOrEqual
+        case .isEmpty:
+            return .isEmpty
+        case .isNotEmpty:
+            return .isNotEmpty
+        }
+    }
+
+    var value: GraphDetailsMatchValue? {
+        switch self {
+        case .equals(let value),
+             .lessThan(let value),
+             .lessThanOrEqual(let value),
+             .greaterThan(let value),
+             .greaterThanOrEqual(let value):
+            return value
+        case .isEmpty, .isNotEmpty:
+            return nil
+        }
+    }
+}
+
+extension GraphDetailsFocusMode {
+    var title: String {
+        switch self {
+        case .highlight:
+            return "Hervorheben"
+        case .onlyMatches:
+            return "Nur Treffer"
+        }
+    }
+}
+
+extension GraphDetailsPreparedField {
+    var supportedComparisonOperators: [GraphDetailsComparisonOperator] {
+        GraphDetailsComparisonOperator.supported(for: type)
+    }
+}
+
+enum GraphDetailsFocusFormatting {
+    static func ruleText(
+        focusState: GraphDetailsFocusState,
+        field: GraphDetailsPreparedField?
+    ) -> String {
+        let resolvedField = field ?? GraphDetailsPreparedField(
+            id: focusState.rule.fieldID,
+            entityID: focusState.entityID,
+            name: focusState.rule.fieldName,
+            type: focusState.rule.fieldType,
+            sortIndex: 0,
+            isPinned: false,
+            unit: nil,
+            options: []
+        )
+
+        return "\(resolvedField.name) \(comparisonText(focusState.rule.comparison, field: resolvedField))"
+    }
+
+    static func comparisonText(
+        _ comparison: GraphDetailsMatchComparison,
+        field: GraphDetailsPreparedField?
+    ) -> String {
+        let symbol = comparison.comparisonOperator.title
+        guard let value = comparison.value else {
+            return symbol
+        }
+        let valueText = matchValueText(value, field: field)
+        return "\(symbol) \(valueText)"
+    }
+
+    static func matchValueText(
+        _ value: GraphDetailsMatchValue,
+        field: GraphDetailsPreparedField?
+    ) -> String {
+        switch value {
+        case .choice(let choice):
+            return choice
+        case .toggle(let boolValue):
+            return boolValue ? "Ja" : "Nein"
+        case .int(let intValue):
+            if let unit = field?.unit?.trimmingCharacters(in: .whitespacesAndNewlines), !unit.isEmpty {
+                return "\(intValue) \(unit)"
+            }
+            return "\(intValue)"
+        case .double(let doubleValue):
+            let formatted = doubleValue.formatted(.number.precision(.fractionLength(0...2)))
+            if let unit = field?.unit?.trimmingCharacters(in: .whitespacesAndNewlines), !unit.isEmpty {
+                return "\(formatted) \(unit)"
+            }
+            return formatted
+        case .date(let dateValue):
+            return dateValue.formatted(date: .numeric, time: .omitted)
         }
     }
 }

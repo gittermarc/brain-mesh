@@ -26,10 +26,24 @@ extension GraphCanvasScreen {
 
     struct GraphEntityFieldPeekItem: Identifiable, Hashable {
         let fieldID: UUID
+        let entityID: UUID
         let fieldName: String
+        let fieldType: DetailFieldType
         let isPinned: Bool
+        let supportsFocus: Bool
+        let sortIndex: Int
 
         var id: UUID { fieldID }
+    }
+
+    struct GraphDetailsFocusEditorRequest: Identifiable, Equatable {
+        let entityID: UUID
+        let entityName: String
+        let field: GraphDetailsPreparedField
+
+        var id: String {
+            "\(entityID.uuidString)|\(field.id.uuidString)"
+        }
     }
 
     struct GraphDetailsValueEditRequest: Identifiable {
@@ -88,6 +102,27 @@ extension GraphCanvasScreen {
         guard let field = owner.detailFieldsList.first(where: { $0.id == fieldID }) else { return }
         detailsValueEditRequest = GraphDetailsValueEditRequest(attribute: attr, field: field)
     }
+
+
+    @MainActor
+    func openDetailsFocusEditor(fieldID: UUID) {
+        guard let selection, selection.kind == .entity else { return }
+        guard let entity = fetchEntity(id: selection.uuid) else { return }
+        guard let field = entity.detailFieldsList.first(where: { $0.id == fieldID }) else { return }
+        guard field.type.supportsGraphDetailsFocus else { return }
+
+        detailsFocusEditorRequest = GraphDetailsFocusEditorRequest(
+            entityID: entity.id,
+            entityName: entity.name,
+            field: GraphDetailsPreparedField(field: field)
+        )
+    }
+
+    @MainActor
+    func clearDetailsFocus() {
+        detailsFocusState = nil
+    }
+
 
     // MARK: - Builder
 
@@ -158,13 +193,27 @@ extension GraphCanvasScreen {
 
 
     func buildEntityFieldsPeekItems(for entity: MetaEntity) -> [GraphEntityFieldPeekItem] {
-        entity.detailFieldsList.map { field in
-            GraphEntityFieldPeekItem(
-                fieldID: field.id,
-                fieldName: field.name,
-                isPinned: field.isPinned
-            )
-        }
+        entity.detailFieldsList
+            .map { field in
+                GraphEntityFieldPeekItem(
+                    fieldID: field.id,
+                    entityID: entity.id,
+                    fieldName: field.name,
+                    fieldType: field.type,
+                    isPinned: field.isPinned,
+                    supportsFocus: field.type.supportsGraphDetailsFocus,
+                    sortIndex: field.sortIndex
+                )
+            }
+            .sorted { lhs, rhs in
+                if lhs.isPinned != rhs.isPinned {
+                    return lhs.isPinned && !rhs.isPinned
+                }
+                if lhs.sortIndex != rhs.sortIndex {
+                    return lhs.sortIndex < rhs.sortIndex
+                }
+                return lhs.fieldName.localizedCaseInsensitiveCompare(rhs.fieldName) == .orderedAscending
+            }
     }
 
     func buildEntitySummaryChips(for entity: MetaEntity) -> [GraphDetailsPeekChip] {

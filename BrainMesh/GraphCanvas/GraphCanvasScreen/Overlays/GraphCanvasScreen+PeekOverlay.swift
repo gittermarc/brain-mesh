@@ -59,16 +59,31 @@ extension GraphCanvasScreen {
         .frame(maxWidth: .infinity, alignment: .leading)
     }
 
+    @ViewBuilder
     func entityFieldRow(_ field: GraphEntityFieldPeekItem) -> some View {
-        HStack(spacing: 6) {
+        let isActiveFocus = detailsFocusState?.entityID == field.entityID && detailsFocusState?.rule.fieldID == field.fieldID
+
+        let content = HStack(spacing: 6) {
             if field.isPinned {
                 Image(systemName: "pin.fill")
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }
 
+            if isActiveFocus {
+                Image(systemName: "line.3.horizontal.decrease.circle.fill")
+                    .font(.caption)
+                    .foregroundStyle(.tint)
+            }
+
             Text(verbatim: field.fieldName)
-                .foregroundStyle(.primary)
+                .foregroundStyle(field.supportsFocus ? .primary : .secondary)
+
+            if !field.supportsFocus {
+                Text(verbatim: field.fieldType.title)
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+            }
         }
         .font(.caption.weight(.semibold))
         .lineLimit(1)
@@ -76,8 +91,27 @@ extension GraphCanvasScreen {
         .padding(.vertical, 6)
         .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 10))
         .overlay(
-            RoundedRectangle(cornerRadius: 10).stroke(.secondary.opacity(0.18))
+            RoundedRectangle(cornerRadius: 10)
+                .stroke(
+                    isActiveFocus
+                    ? AnyShapeStyle(.tint)
+                    : AnyShapeStyle(.secondary.opacity(0.18)),
+                    lineWidth: isActiveFocus ? 1.2 : 1
+                )
         )
+
+        if field.supportsFocus {
+            Button {
+                openDetailsFocusEditor(fieldID: field.fieldID)
+            } label: {
+                content
+            }
+            .buttonStyle(.plain)
+            .help("Details-Fokus konfigurieren")
+        } else {
+            content
+                .opacity(0.72)
+        }
     }
 
     func detailsPeekChip(_ chip: GraphDetailsPeekChip) -> some View {

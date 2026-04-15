@@ -85,6 +85,9 @@ struct GraphCanvasScreen: View {
     // ✅ Details Peek editing (PR A2)
     @State var detailsValueEditRequest: GraphDetailsValueEditRequest? = nil
 
+    // ✅ Graph details focus UI (PR 2)
+    @State var detailsFocusEditorRequest: GraphDetailsFocusEditorRequest? = nil
+
     // ✅ Graph details focus foundation (prepared outside render path)
     @State var detailsFocusState: GraphDetailsFocusState? = nil
     @State var detailsFocusPreparedState: GraphDetailsPreparedState = .empty

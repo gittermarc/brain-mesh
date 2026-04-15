@@ -59,7 +59,7 @@ extension GraphCanvasScreen {
 
             Divider().frame(height: 20)
 
-            Text(verbatim: "N \(nodes.count) · L \(edges.count) · 📌 \(pinned.count)")
+            Text(verbatim: sideStatusMetricsText)
                 .font(.caption2)
                 .foregroundStyle(.secondary)
                 .lineLimit(1)
@@ -73,6 +73,14 @@ extension GraphCanvasScreen {
     var focusKey: NodeKey? {
         guard let f = focusEntity else { return nil }
         return NodeKey(kind: .entity, uuid: f.id)
+    }
+
+    var sideStatusMetricsText: String {
+        var parts: [String] = ["N \(nodes.count)", "L \(edges.count)", "📌 \(pinned.count)"]
+        if detailsFocusSummaryCache.hasActiveFocus {
+            parts.append("Treffer \(detailsFocusSummaryCache.matchCount)")
+        }
+        return parts.joined(separator: " · ")
     }
 
     func pulseMiniMap() {

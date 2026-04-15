@@ -141,6 +141,19 @@ extension GraphCanvasScreen {
             }) { req in
                 DetailsValueEditorSheet(attribute: req.attribute, field: req.field)
             }
+
+            .sheet(item: $detailsFocusEditorRequest) { request in
+                GraphDetailsFocusEditorSheet(
+                    request: request,
+                    activeFocusState: detailsFocusState,
+                    onApply: { newFocusState in
+                        detailsFocusState = newFocusState
+                    },
+                    onClear: {
+                        clearDetailsFocus()
+                    }
+                )
+            }
     
             // Initial load (und Safety: ActiveGraphID setzen, falls leer)
             .task(id: graphs.count) {

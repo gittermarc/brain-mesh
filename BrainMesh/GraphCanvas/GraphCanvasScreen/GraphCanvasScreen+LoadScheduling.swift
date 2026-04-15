@@ -9,7 +9,7 @@ extension GraphCanvasScreen {
     var isAnySheetPresented: Bool {
         showGraphPicker || showFocusPicker || showInspector ||
         selectedEntity != nil || selectedAttribute != nil ||
-        detailsValueEditRequest != nil
+        detailsValueEditRequest != nil || detailsFocusEditorRequest != nil
     }
 
     var simulationAllowed: Bool {

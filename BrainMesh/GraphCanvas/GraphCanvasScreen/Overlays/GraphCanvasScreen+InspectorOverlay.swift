@@ -167,6 +167,42 @@ extension GraphCanvasScreen {
                     }
                 }
 
+
+                Section("Details-Fokus") {
+                    if let activeFocus = detailsFocusSummaryCache.activeFocus {
+                        let field = detailsFocusSummaryCache.field
+
+                        LabeledContent("Regel") {
+                            Text(verbatim: GraphDetailsFocusFormatting.ruleText(focusState: activeFocus, field: field))
+                                .multilineTextAlignment(.trailing)
+                        }
+
+                        LabeledContent("Modus") {
+                            Text(verbatim: activeFocus.mode.title)
+                        }
+
+                        LabeledContent("Treffer") {
+                            Text(verbatim: "\(detailsFocusSummaryCache.matchCount) / \(detailsFocusSummaryCache.inspectedAttributeCount)")
+                        }
+
+                        if detailsFocusSummaryCache.isFieldAvailable == false {
+                            Text("Aktuell sind keine sichtbaren Attribute mit diesem Feld im Graph vorhanden.")
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                        }
+
+                        Button(role: .destructive) {
+                            clearDetailsFocus()
+                        } label: {
+                            Label("Zurücksetzen", systemImage: "line.3.horizontal.decrease.circle.badge.xmark")
+                        }
+                    } else {
+                        Text("Noch kein Details-Fokus aktiv.")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
+                }
+
                 Section("Pins") {
                     HStack {
                         Text("Pinned")
