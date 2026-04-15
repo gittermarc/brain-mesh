@@ -79,7 +79,8 @@ extension GraphCanvasDataLoader {
             directedEdgeNotes: notes,
             labelCache: caches.labelCache,
             imagePathCache: caches.imagePathCache,
-            iconSymbolCache: caches.iconSymbolCache
+            iconSymbolCache: caches.iconSymbolCache,
+            detailsFocusPreparedState: .empty
         )
     }
 }

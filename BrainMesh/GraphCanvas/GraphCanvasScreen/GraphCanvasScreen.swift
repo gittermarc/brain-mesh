@@ -85,6 +85,10 @@ struct GraphCanvasScreen: View {
     // ✅ Details Peek editing (PR A2)
     @State var detailsValueEditRequest: GraphDetailsValueEditRequest? = nil
 
+    // ✅ Graph details focus foundation (prepared outside render path)
+    @State var detailsFocusState: GraphDetailsFocusState? = nil
+    @State var detailsFocusPreparedState: GraphDetailsPreparedState = .empty
+
     // ✅ Derived render state (cached)
     // Previously computed inside `body` on every re-render.
     // During physics ticks, `positions/velocities` change frequently which triggers many re-renders.
@@ -98,6 +102,7 @@ struct GraphCanvasScreen: View {
         edges: []
     )
     @State var physicsRelevantCache: Set<NodeKey>? = nil
+    @State var detailsFocusSummaryCache: GraphDetailsMatchSummary = .empty
 
     // ✅ Degree cap (Link edges) + “more”
     // NOTE: Must not be `private` because helpers live in separate extension files.

@@ -142,6 +142,7 @@ struct GraphCanvasDerivedStateTests {
             cachedDrawEdges: base.drawEdges,
             cachedLens: base.lens,
             cachedPhysicsRelevant: base.physicsRelevant,
+            cachedDetailsFocusSummary: base.detailsFocusSummary,
             derived: base
         )
 
@@ -162,6 +163,7 @@ struct GraphCanvasDerivedStateTests {
             cachedDrawEdges: base.drawEdges,
             cachedLens: base.lens,
             cachedPhysicsRelevant: base.physicsRelevant,
+            cachedDetailsFocusSummary: base.detailsFocusSummary,
             derived: expanded
         )
 
@@ -169,9 +171,96 @@ struct GraphCanvasDerivedStateTests {
         #expect(unchanged.drawEdgesChanged == false)
         #expect(unchanged.lensChanged == false)
         #expect(unchanged.physicsRelevantChanged == false)
+        #expect(unchanged.detailsFocusSummaryChanged == false)
 
         #expect(changed.hasChanges == true)
         #expect(changed.drawEdgesChanged == true)
+        #expect(changed.detailsFocusSummaryChanged == false)
+    }
+
+    @Test
+    func derivedStateBuilder_includesDetailsFocusSummaryForVisibleAttributes() {
+        let entityID = UUID(uuidString: "00000000-0000-0000-0000-000000000051")!
+        let fieldID = UUID(uuidString: "00000000-0000-0000-0000-000000000052")!
+        let matchingKey = NodeKey(kind: .attribute, uuid: UUID(uuidString: "00000000-0000-0000-0000-000000000053")!)
+        let nonMatchingKey = NodeKey(kind: .attribute, uuid: UUID(uuidString: "00000000-0000-0000-0000-000000000054")!)
+
+        let preparedState = GraphDetailsPreparedState(
+            attributes: [
+                GraphDetailsPreparedAttribute(
+                    nodeKey: matchingKey,
+                    attributeID: matchingKey.uuid,
+                    entityID: entityID,
+                    valuesByFieldID: [
+                        fieldID: GraphDetailsPreparedValue(
+                            stringValue: "In Arbeit",
+                            intValue: nil,
+                            doubleValue: nil,
+                            dateValue: nil,
+                            boolValue: nil
+                        )
+                    ]
+                ),
+                GraphDetailsPreparedAttribute(
+                    nodeKey: nonMatchingKey,
+                    attributeID: nonMatchingKey.uuid,
+                    entityID: entityID,
+                    valuesByFieldID: [
+                        fieldID: GraphDetailsPreparedValue(
+                            stringValue: "Geplant",
+                            intValue: nil,
+                            doubleValue: nil,
+                            dateValue: nil,
+                            boolValue: nil
+                        )
+                    ]
+                )
+            ],
+            fieldsByEntityID: [
+                entityID: [
+                    GraphDetailsPreparedField(
+                        id: fieldID,
+                        entityID: entityID,
+                        name: "Status",
+                        type: .singleChoice,
+                        sortIndex: 0,
+                        isPinned: true,
+                        unit: nil,
+                        options: ["Geplant", "In Arbeit"]
+                    )
+                ]
+            ]
+        )
+
+        let focusState = GraphDetailsFocusState(
+            entityID: entityID,
+            entityName: "Projekt",
+            rule: GraphDetailsMatchRule(
+                fieldID: fieldID,
+                fieldName: "Status",
+                fieldType: .singleChoice,
+                comparison: .equals(.choice("In Arbeit"))
+            ),
+            mode: .highlight
+        )
+
+        let derived = GraphCanvasDerivedStateBuilder.build(
+            selection: nil,
+            edges: [],
+            showAllLinksForSelection: false,
+            degreeCap: 12,
+            lensEnabled: false,
+            lensHideNonRelevant: false,
+            lensDepth: 2,
+            detailsFocusState: focusState,
+            detailsFocusPreparedState: preparedState,
+            labelForKey: { _ in "" }
+        )
+
+        #expect(derived.detailsFocusSummary.hasActiveFocus == true)
+        #expect(derived.detailsFocusSummary.inspectedAttributeCount == 2)
+        #expect(derived.detailsFocusSummary.matchCount == 1)
+        #expect(derived.detailsFocusSummary.matchedAttributeNodeKeys == Set([matchingKey]))
     }
 
     private func makeKey(_ uuidString: String) -> NodeKey {

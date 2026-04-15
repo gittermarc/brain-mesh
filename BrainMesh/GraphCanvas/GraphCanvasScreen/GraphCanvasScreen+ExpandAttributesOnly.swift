@@ -107,6 +107,7 @@ extension GraphCanvasScreen {
 
         let mergedEdges = (edges + newEdges).unique()
         edges = Array(mergedEdges.prefix(maxLinks))
+        recomputeDetailsFocusPreparedState()
 
         seedNewNodesNearForAttributes(key, newNodeKeys: appendedNodes.map(\.key))
 

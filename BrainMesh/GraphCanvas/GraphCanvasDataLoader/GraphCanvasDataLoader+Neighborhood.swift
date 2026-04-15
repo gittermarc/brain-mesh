@@ -251,6 +251,10 @@ extension GraphCanvasDataLoader {
 
         let uniqueEdges = newEdges.unique()
         let caches = try GraphCanvasDataLoader.buildRenderCaches(entities: ents, attributes: attrs)
+        let detailsFocusPreparedState = GraphDetailsPreparedState.build(
+            entities: ents,
+            attributes: attrs
+        )
 
         return GraphCanvasSnapshot(
             nodes: newNodes,
@@ -258,7 +262,8 @@ extension GraphCanvasDataLoader {
             directedEdgeNotes: notes,
             labelCache: caches.labelCache,
             imagePathCache: caches.imagePathCache,
-            iconSymbolCache: caches.iconSymbolCache
+            iconSymbolCache: caches.iconSymbolCache,
+            detailsFocusPreparedState: detailsFocusPreparedState
         )
     }
 }

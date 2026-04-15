@@ -16,6 +16,8 @@ extension GraphCanvasScreen {
             lensEnabled: lensEnabled,
             lensHideNonRelevant: lensHideNonRelevant,
             lensDepth: lensDepth,
+            detailsFocusState: detailsFocusState,
+            detailsFocusPreparedState: detailsFocusPreparedState,
             labelForKey: { key in
                 displayLabel(for: key)
             }
@@ -25,6 +27,7 @@ extension GraphCanvasScreen {
             cachedDrawEdges: drawEdgesCache,
             cachedLens: lensCache,
             cachedPhysicsRelevant: physicsRelevantCache,
+            cachedDetailsFocusSummary: detailsFocusSummaryCache,
             derived: derivedState
         )
 
@@ -36,6 +39,9 @@ extension GraphCanvasScreen {
         }
         if cacheMutation.physicsRelevantChanged {
             physicsRelevantCache = derivedState.physicsRelevant
+        }
+        if cacheMutation.detailsFocusSummaryChanged {
+            detailsFocusSummaryCache = derivedState.detailsFocusSummary
         }
     }
 }

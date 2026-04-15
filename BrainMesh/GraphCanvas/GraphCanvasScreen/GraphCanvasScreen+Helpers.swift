@@ -70,6 +70,44 @@ extension GraphCanvasScreen {
     }
 
     @MainActor
+    func recomputeDetailsFocusPreparedState() {
+        let visibleAttributeIDs = nodes.compactMap { node in
+            node.key.kind == .attribute ? node.key.uuid : nil
+        }
+
+        guard !visibleAttributeIDs.isEmpty else {
+            detailsFocusPreparedState = .empty
+            return
+        }
+
+        let attributeIDs = Array(Set(visibleAttributeIDs))
+        let attributeDescriptor = FetchDescriptor<MetaAttribute>(
+            predicate: #Predicate<MetaAttribute> { attribute in
+                attributeIDs.contains(attribute.id)
+            }
+        )
+        let attributes = (try? modelContext.fetch(attributeDescriptor)) ?? []
+
+        let entityIDs = Array(Set(attributes.compactMap { $0.owner?.id }))
+        let entities: [MetaEntity]
+        if entityIDs.isEmpty {
+            entities = []
+        } else {
+            let entityDescriptor = FetchDescriptor<MetaEntity>(
+                predicate: #Predicate<MetaEntity> { entity in
+                    entityIDs.contains(entity.id)
+                }
+            )
+            entities = (try? modelContext.fetch(entityDescriptor)) ?? []
+        }
+
+        detailsFocusPreparedState = GraphDetailsPreparedState.build(
+            entities: entities,
+            attributes: attributes
+        )
+    }
+
+    @MainActor
     func handleSelectionChange(_ newSelection: NodeKey?) {
         showAllLinksForSelection = false
 

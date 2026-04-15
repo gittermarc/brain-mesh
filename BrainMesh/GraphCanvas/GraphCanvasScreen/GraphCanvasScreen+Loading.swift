@@ -79,6 +79,7 @@ extension GraphCanvasScreen {
             labelCache = snapshot.labelCache
             imagePathCache = snapshot.imagePathCache
             iconSymbolCache = snapshot.iconSymbolCache
+            detailsFocusPreparedState = snapshot.detailsFocusPreparedState
             pinned = newPinned
             selection = newSelection
             directedEdgeNotes = newDirectedNotes

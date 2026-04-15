@@ -212,6 +212,7 @@ struct GraphCanvasDerivedStateSnapshot: Equatable {
     let drawEdges: [GraphEdge]
     let lens: LensContext
     let physicsRelevant: Set<NodeKey>?
+    let detailsFocusSummary: GraphDetailsMatchSummary
 }
 
 struct GraphCanvasDerivedStateBuilder {
@@ -223,6 +224,8 @@ struct GraphCanvasDerivedStateBuilder {
         lensEnabled: Bool,
         lensHideNonRelevant: Bool,
         lensDepth: Int,
+        detailsFocusState: GraphDetailsFocusState? = nil,
+        detailsFocusPreparedState: GraphDetailsPreparedState = .empty,
         labelForKey: (NodeKey) -> String
     ) -> GraphCanvasDerivedStateSnapshot {
         let drawEdges = GraphCanvasDisplayEdgesPlanner.displayEdges(
@@ -249,11 +252,16 @@ struct GraphCanvasDerivedStateBuilder {
         )
 
         let physicsRelevant = lensConfiguration.autoSpotlight ? lens.relevant : nil
+        let detailsFocusSummary = GraphDetailsMatcher.summary(
+            focusState: detailsFocusState,
+            preparedState: detailsFocusPreparedState
+        )
 
         return GraphCanvasDerivedStateSnapshot(
             drawEdges: drawEdges,
             lens: lens,
-            physicsRelevant: physicsRelevant
+            physicsRelevant: physicsRelevant,
+            detailsFocusSummary: detailsFocusSummary
         )
     }
 }
@@ -262,21 +270,24 @@ struct GraphCanvasDerivedStateCacheMutation: Equatable {
     let drawEdgesChanged: Bool
     let lensChanged: Bool
     let physicsRelevantChanged: Bool
+    let detailsFocusSummaryChanged: Bool
 
     var hasChanges: Bool {
-        drawEdgesChanged || lensChanged || physicsRelevantChanged
+        drawEdgesChanged || lensChanged || physicsRelevantChanged || detailsFocusSummaryChanged
     }
 
     static func diff(
         cachedDrawEdges: [GraphEdge],
         cachedLens: LensContext,
         cachedPhysicsRelevant: Set<NodeKey>?,
+        cachedDetailsFocusSummary: GraphDetailsMatchSummary,
         derived: GraphCanvasDerivedStateSnapshot
     ) -> GraphCanvasDerivedStateCacheMutation {
         GraphCanvasDerivedStateCacheMutation(
             drawEdgesChanged: cachedDrawEdges != derived.drawEdges,
             lensChanged: cachedLens != derived.lens,
-            physicsRelevantChanged: cachedPhysicsRelevant != derived.physicsRelevant
+            physicsRelevantChanged: cachedPhysicsRelevant != derived.physicsRelevant,
+            detailsFocusSummaryChanged: cachedDetailsFocusSummary != derived.detailsFocusSummary
         )
     }
 }

@@ -118,8 +118,9 @@ extension GraphCanvasScreen {
                     .onDisappear {
                         refreshNodeCaches(for: NodeKey(kind: .entity, uuid: entity.id))
     
-                        // ✅ If schema/pinning changed, refresh the peek for the current selection.
+                        // ✅ If schema/pinning changed, refresh the peek and prepared details-focus state.
                         recomputeDetailsPeek(for: selection)
+                        recomputeDetailsFocusPreparedState()
                     }
             }
             .sheet(item: $selectedAttribute) { attr in
@@ -127,14 +128,16 @@ extension GraphCanvasScreen {
                     .onDisappear {
                         refreshNodeCaches(for: NodeKey(kind: .attribute, uuid: attr.id))
     
-                        // ✅ If details values changed, refresh the peek for the current selection.
+                        // ✅ If details values changed, refresh the peek and prepared details-focus state.
                         recomputeDetailsPeek(for: selection)
+                        recomputeDetailsFocusPreparedState()
                     }
             }
     
             // ✅ Tap-to-Edit for Details Peek chips
             .sheet(item: $detailsValueEditRequest, onDismiss: {
                 recomputeDetailsPeek(for: selection)
+                recomputeDetailsFocusPreparedState()
             }) { req in
                 DetailsValueEditorSheet(attribute: req.attribute, field: req.field)
             }
@@ -150,6 +153,9 @@ extension GraphCanvasScreen {
                 focusEntity = nil
                 selection = nil
                 pinned.removeAll()
+                detailsFocusState = nil
+                detailsFocusPreparedState = .empty
+                detailsFocusSummaryCache = .empty
     
                 // If a cross-screen jump is pending, prepare the graph state so the next load can include the node.
                 if let jump = graphJump.pendingJump {
@@ -234,6 +240,8 @@ extension GraphCanvasScreen {
         .onChange(of: lensEnabled) { _, _ in recomputeDerivedState() }
         .onChange(of: lensHideNonRelevant) { _, _ in recomputeDerivedState() }
         .onChange(of: lensDepth) { _, _ in recomputeDerivedState() }
+        .onChange(of: detailsFocusState) { _, _ in recomputeDerivedState() }
+        .onChange(of: detailsFocusPreparedState) { _, _ in recomputeDerivedState() }
     
         // ✅ Selection change: reset “more”
         .onChange(of: selection) { _, newSelection in

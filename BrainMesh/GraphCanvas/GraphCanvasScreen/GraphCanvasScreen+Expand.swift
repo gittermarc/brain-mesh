@@ -182,6 +182,7 @@ extension GraphCanvasScreen {
         edges = Array(mergedEdges.prefix(maxLinks))
 
         directedEdgeNotes = newNotes
+        recomputeDetailsFocusPreparedState()
 
         seedNewNodesNear(key, newNodeKeys: appendedNodes.map(\.key))
 
