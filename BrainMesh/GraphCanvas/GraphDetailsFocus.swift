@@ -1,6 +1,6 @@
 import Foundation
 
-extension DetailFieldType {
+nonisolated extension DetailFieldType {
     var supportsGraphDetailsFocus: Bool {
         switch self {
         case .numberInt, .numberDouble, .date, .toggle, .singleChoice:
@@ -135,7 +135,7 @@ struct GraphDetailsPreparedField: Equatable, Sendable {
     let unit: String?
     let options: [String]
 
-    init(
+    nonisolated init(
         id: UUID,
         entityID: UUID,
         name: String,
@@ -174,7 +174,7 @@ struct GraphDetailsPreparedValue: Equatable, Sendable {
     let dateValue: Date?
     let boolValue: Bool?
 
-    init(
+    nonisolated init(
         stringValue: String?,
         intValue: Int?,
         doubleValue: Double?,
