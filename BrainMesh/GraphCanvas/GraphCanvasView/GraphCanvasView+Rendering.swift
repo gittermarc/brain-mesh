@@ -71,7 +71,10 @@ extension GraphCanvasView {
         let noteAlpha = RenderingSupport.fade(scale, from: 1.32, to: 1.52)
         let thumbAlpha = RenderingSupport.fade(scale, from: 1.26, to: 1.42)
 
-        let spotlightLabelsOnly = (selection != nil)
+        let spotlightLabelsOnly = GraphCanvasSelectionSpotlightPolicy.limitsLabels(
+            selection: selection,
+            detailsFocusRenderPlan: detailsFocusRenderPlan
+        )
         let showNotes = (noteAlpha > 0.02) && (selection != nil)
 
         return ZoomAlphas(
@@ -110,6 +113,7 @@ extension GraphCanvasView {
         for n in nodes {
             let key = n.key
             if lens.hideNonRelevant && lens.isHidden(key) { continue }
+            if detailsFocusRenderPlan.isHidden(key) { continue }
 
             if let p = positions[key] {
                 screenPoints[key] = toScreen(p, center: center)
@@ -128,6 +132,7 @@ extension GraphCanvasView {
         // Ensure endpoints exist for edges (defensive, in case edges reference nodes not in `nodes`)
         for e in drawEdges {
             if lens.hideNonRelevant && (lens.isHidden(e.a) || lens.isHidden(e.b)) { continue }
+            if !detailsFocusRenderPlan.shouldRender(edge: e) { continue }
 
             if screenPoints[e.a] == nil, let p = positions[e.a] {
                 screenPoints[e.a] = toScreen(p, center: center)

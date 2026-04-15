@@ -143,6 +143,7 @@ struct GraphCanvasDerivedStateTests {
             cachedLens: base.lens,
             cachedPhysicsRelevant: base.physicsRelevant,
             cachedDetailsFocusSummary: base.detailsFocusSummary,
+            cachedDetailsFocusRenderPlan: base.detailsFocusRenderPlan,
             derived: base
         )
 
@@ -164,6 +165,7 @@ struct GraphCanvasDerivedStateTests {
             cachedLens: base.lens,
             cachedPhysicsRelevant: base.physicsRelevant,
             cachedDetailsFocusSummary: base.detailsFocusSummary,
+            cachedDetailsFocusRenderPlan: base.detailsFocusRenderPlan,
             derived: expanded
         )
 
@@ -172,10 +174,12 @@ struct GraphCanvasDerivedStateTests {
         #expect(unchanged.lensChanged == false)
         #expect(unchanged.physicsRelevantChanged == false)
         #expect(unchanged.detailsFocusSummaryChanged == false)
+        #expect(unchanged.detailsFocusRenderPlanChanged == false)
 
         #expect(changed.hasChanges == true)
         #expect(changed.drawEdgesChanged == true)
         #expect(changed.detailsFocusSummaryChanged == false)
+        #expect(changed.detailsFocusRenderPlanChanged == false)
     }
 
     @Test
@@ -261,6 +265,189 @@ struct GraphCanvasDerivedStateTests {
         #expect(derived.detailsFocusSummary.inspectedAttributeCount == 2)
         #expect(derived.detailsFocusSummary.matchCount == 1)
         #expect(derived.detailsFocusSummary.matchedAttributeNodeKeys == Set([matchingKey]))
+    }
+
+    @Test
+    func derivedStateBuilder_activeDetailsFocusSuppressesSelectionAutoSpotlight() {
+        let selection = makeKey("00000000-0000-0000-0000-000000000061")
+        let matchingAttribute = NodeKey(kind: .attribute, uuid: UUID(uuidString: "00000000-0000-0000-0000-000000000062")!)
+        let nonMatchingAttribute = NodeKey(kind: .attribute, uuid: UUID(uuidString: "00000000-0000-0000-0000-000000000063")!)
+        let entityID = UUID(uuidString: "00000000-0000-0000-0000-000000000064")!
+        let fieldID = UUID(uuidString: "00000000-0000-0000-0000-000000000065")!
+
+        let preparedState = GraphDetailsPreparedState(
+            attributes: [
+                GraphDetailsPreparedAttribute(
+                    nodeKey: matchingAttribute,
+                    attributeID: matchingAttribute.uuid,
+                    entityID: entityID,
+                    valuesByFieldID: [
+                        fieldID: GraphDetailsPreparedValue(
+                            stringValue: "In Arbeit",
+                            intValue: nil,
+                            doubleValue: nil,
+                            dateValue: nil,
+                            boolValue: nil
+                        )
+                    ]
+                ),
+                GraphDetailsPreparedAttribute(
+                    nodeKey: nonMatchingAttribute,
+                    attributeID: nonMatchingAttribute.uuid,
+                    entityID: entityID,
+                    valuesByFieldID: [
+                        fieldID: GraphDetailsPreparedValue(
+                            stringValue: "Geplant",
+                            intValue: nil,
+                            doubleValue: nil,
+                            dateValue: nil,
+                            boolValue: nil
+                        )
+                    ]
+                )
+            ],
+            fieldsByEntityID: [
+                entityID: [
+                    GraphDetailsPreparedField(
+                        id: fieldID,
+                        entityID: entityID,
+                        name: "Status",
+                        type: .singleChoice,
+                        sortIndex: 0,
+                        isPinned: true,
+                        unit: nil,
+                        options: ["Geplant", "In Arbeit"]
+                    )
+                ]
+            ]
+        )
+
+        let focusState = GraphDetailsFocusState(
+            entityID: entityID,
+            entityName: "Projekt",
+            rule: GraphDetailsMatchRule(
+                fieldID: fieldID,
+                fieldName: "Status",
+                fieldType: .singleChoice,
+                comparison: .equals(.choice("In Arbeit"))
+            ),
+            mode: .highlight
+        )
+
+        let matchingEdge = GraphEdge(a: selection, b: matchingAttribute, type: .link)
+        let nonMatchingEdge = GraphEdge(a: selection, b: nonMatchingAttribute, type: .link)
+
+        let derived = GraphCanvasDerivedStateBuilder.build(
+            selection: selection,
+            edges: [matchingEdge, nonMatchingEdge],
+            showAllLinksForSelection: true,
+            degreeCap: 12,
+            lensEnabled: false,
+            lensHideNonRelevant: false,
+            lensDepth: 2,
+            detailsFocusState: focusState,
+            detailsFocusPreparedState: preparedState,
+            labelForKey: { _ in "" }
+        )
+
+        #expect(derived.lens.enabled == false)
+        #expect(derived.physicsRelevant == nil)
+        #expect(derived.detailsFocusRenderPlan.suppressesSelectionSpotlight == true)
+        #expect(derived.detailsFocusRenderPlan.dimmedAttributeNodeKeys == Set([nonMatchingAttribute]))
+        #expect(GraphCanvasSelectionSpotlightPolicy.limitsLabels(
+            selection: selection,
+            detailsFocusRenderPlan: derived.detailsFocusRenderPlan
+        ) == false)
+    }
+
+    @Test
+    func derivedStateBuilder_onlyMatchesFiltersDisplayEdgesAndHidesNonMatchingAttributes() {
+        let selection = makeKey("00000000-0000-0000-0000-000000000071")
+        let matchingAttribute = NodeKey(kind: .attribute, uuid: UUID(uuidString: "00000000-0000-0000-0000-000000000072")!)
+        let nonMatchingAttribute = NodeKey(kind: .attribute, uuid: UUID(uuidString: "00000000-0000-0000-0000-000000000073")!)
+        let entityID = UUID(uuidString: "00000000-0000-0000-0000-000000000074")!
+        let fieldID = UUID(uuidString: "00000000-0000-0000-0000-000000000075")!
+
+        let preparedState = GraphDetailsPreparedState(
+            attributes: [
+                GraphDetailsPreparedAttribute(
+                    nodeKey: matchingAttribute,
+                    attributeID: matchingAttribute.uuid,
+                    entityID: entityID,
+                    valuesByFieldID: [
+                        fieldID: GraphDetailsPreparedValue(
+                            stringValue: "In Arbeit",
+                            intValue: nil,
+                            doubleValue: nil,
+                            dateValue: nil,
+                            boolValue: nil
+                        )
+                    ]
+                ),
+                GraphDetailsPreparedAttribute(
+                    nodeKey: nonMatchingAttribute,
+                    attributeID: nonMatchingAttribute.uuid,
+                    entityID: entityID,
+                    valuesByFieldID: [
+                        fieldID: GraphDetailsPreparedValue(
+                            stringValue: "Geplant",
+                            intValue: nil,
+                            doubleValue: nil,
+                            dateValue: nil,
+                            boolValue: nil
+                        )
+                    ]
+                )
+            ],
+            fieldsByEntityID: [
+                entityID: [
+                    GraphDetailsPreparedField(
+                        id: fieldID,
+                        entityID: entityID,
+                        name: "Status",
+                        type: .singleChoice,
+                        sortIndex: 0,
+                        isPinned: true,
+                        unit: nil,
+                        options: ["Geplant", "In Arbeit"]
+                    )
+                ]
+            ]
+        )
+
+        let focusState = GraphDetailsFocusState(
+            entityID: entityID,
+            entityName: "Projekt",
+            rule: GraphDetailsMatchRule(
+                fieldID: fieldID,
+                fieldName: "Status",
+                fieldType: .singleChoice,
+                comparison: .equals(.choice("In Arbeit"))
+            ),
+            mode: .onlyMatches
+        )
+
+        let matchingEdge = GraphEdge(a: selection, b: matchingAttribute, type: .link)
+        let nonMatchingEdge = GraphEdge(a: selection, b: nonMatchingAttribute, type: .link)
+
+        let derived = GraphCanvasDerivedStateBuilder.build(
+            selection: selection,
+            edges: [matchingEdge, nonMatchingEdge],
+            showAllLinksForSelection: true,
+            degreeCap: 12,
+            lensEnabled: false,
+            lensHideNonRelevant: false,
+            lensDepth: 2,
+            detailsFocusState: focusState,
+            detailsFocusPreparedState: preparedState,
+            labelForKey: { _ in "" }
+        )
+
+        #expect(derived.drawEdges == [matchingEdge])
+        #expect(derived.detailsFocusRenderPlan.hiddenAttributeNodeKeys == Set([nonMatchingAttribute]))
+        #expect(derived.detailsFocusRenderPlan.matchedAttributeNodeKeys == Set([matchingAttribute]))
+        #expect(derived.detailsFocusRenderPlan.shouldRender(edge: matchingEdge) == true)
+        #expect(derived.detailsFocusRenderPlan.shouldRender(edge: nonMatchingEdge) == false)
     }
 
     private func makeKey(_ uuidString: String) -> NodeKey {

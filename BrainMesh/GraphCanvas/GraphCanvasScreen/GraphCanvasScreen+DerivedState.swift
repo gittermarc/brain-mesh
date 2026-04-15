@@ -28,6 +28,7 @@ extension GraphCanvasScreen {
             cachedLens: lensCache,
             cachedPhysicsRelevant: physicsRelevantCache,
             cachedDetailsFocusSummary: detailsFocusSummaryCache,
+            cachedDetailsFocusRenderPlan: detailsFocusRenderPlanCache,
             derived: derivedState
         )
 
@@ -42,6 +43,9 @@ extension GraphCanvasScreen {
         }
         if cacheMutation.detailsFocusSummaryChanged {
             detailsFocusSummaryCache = derivedState.detailsFocusSummary
+        }
+        if cacheMutation.detailsFocusRenderPlanChanged {
+            detailsFocusRenderPlanCache = derivedState.detailsFocusRenderPlan
         }
     }
 }

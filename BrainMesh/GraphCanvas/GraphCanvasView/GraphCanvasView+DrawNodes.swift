@@ -17,11 +17,14 @@ extension GraphCanvasView {
     ) {
         for n in nodes {
             if lens.hideNonRelevant && lens.isHidden(n.key) { continue }
+            if detailsFocusRenderPlan.isHidden(n.key) { continue }
             guard let s = frame.screenPoints[n.key] else { continue }
 
             let isPinned = pinned.contains(n.key)
             let isSelected = (selection == n.key)
-            let nodeAlpha = lens.nodeOpacity(n.key)
+            let detailsOpacityMultiplier = detailsFocusRenderPlan.nodeOpacityMultiplier(for: n.key)
+            let nodeAlpha = lens.nodeOpacity(n.key) * detailsOpacityMultiplier
+            let isMatchedDetailsAttribute = detailsFocusRenderPlan.isMatchedAttribute(n.key)
 
             switch n.key.kind {
             case .entity:
@@ -86,17 +89,31 @@ extension GraphCanvasView {
                 let rect = CGRect(x: s.x - w/2, y: s.y - h/2, width: w, height: h)
                 let rr = Path(roundedRect: rect, cornerRadius: 6)
 
-                context.fill(rr, with: .color(theme.attributeColor.opacity((isPinned ? 0.18 : 0.12) * nodeAlpha)))
+                let fillOpacity = (isPinned ? 0.18 : 0.12) * nodeAlpha * (isMatchedDetailsAttribute ? 1.45 : 1.0)
+                let strokeOpacity = (isPinned ? 0.70 : 0.50) * nodeAlpha * (isMatchedDetailsAttribute ? 1.20 : 1.0)
+                let strokeWidth: CGFloat = isMatchedDetailsAttribute ? max(isPinned ? 2 : 1, 2.4) : (isPinned ? 2 : 1)
+
+                context.fill(rr, with: .color(theme.attributeColor.opacity(fillOpacity)))
                 context.stroke(
                     rr,
-                    with: .color(theme.attributeColor.opacity((isPinned ? 0.70 : 0.50) * nodeAlpha)),
-                    lineWidth: isPinned ? 2 : 1
+                    with: .color(theme.attributeColor.opacity(strokeOpacity)),
+                    lineWidth: strokeWidth
                 )
 
+                if isMatchedDetailsAttribute {
+                    let haloRect = rect.insetBy(dx: -4, dy: -4)
+                    let halo = Path(roundedRect: haloRect, cornerRadius: 10)
+                    context.stroke(
+                        halo,
+                        with: .color(theme.highlightColor.opacity(0.92 * nodeAlpha)),
+                        lineWidth: 3
+                    )
+                }
+
                 if isSelected {
-                    let pad: CGFloat = 3
+                    let pad: CGFloat = isMatchedDetailsAttribute ? 5 : 3
                     let ringRect = rect.insetBy(dx: -pad, dy: -pad)
-                    let ring = Path(roundedRect: ringRect, cornerRadius: 8)
+                    let ring = Path(roundedRect: ringRect, cornerRadius: isMatchedDetailsAttribute ? 10 : 8)
                     context.stroke(ring, with: .color(theme.highlightColor.opacity(0.95 * nodeAlpha)), lineWidth: 3)
                 }
 
@@ -119,7 +136,7 @@ extension GraphCanvasView {
                             at: CGPoint(x: s.x + off.x, y: s.y + 24 + off.y),
                             alpha: labelA,
                             isSelected: isSelected,
-                            wantHalo: isSelected || labelA < 0.90,
+                            wantHalo: isSelected || isMatchedDetailsAttribute || labelA < 0.90,
                             in: context,
                             font: .caption2,
                             maxWidth: 170,

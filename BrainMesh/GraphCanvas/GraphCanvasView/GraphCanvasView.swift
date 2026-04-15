@@ -22,6 +22,7 @@ struct GraphCanvasView: View {
 
     let directedEdgeNotes: [DirectedEdgeKey: String]
     let lens: LensContext
+    let detailsFocusRenderPlan: GraphDetailsRenderPlan
 
     let workMode: WorkMode
     let collisionStrength: CGFloat

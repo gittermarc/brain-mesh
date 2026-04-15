@@ -106,6 +106,7 @@ struct GraphCanvasScreen: View {
     )
     @State var physicsRelevantCache: Set<NodeKey>? = nil
     @State var detailsFocusSummaryCache: GraphDetailsMatchSummary = .empty
+    @State var detailsFocusRenderPlanCache: GraphDetailsRenderPlan = .empty
 
     // ✅ Degree cap (Link edges) + “more”
     // NOTE: Must not be `private` because helpers live in separate extension files.

@@ -23,6 +23,7 @@ extension GraphCanvasScreen {
                         physicsEdges: edges,
                         directedEdgeNotes: directedEdgeNotes,
                         lens: lensCache,
+                        detailsFocusRenderPlan: detailsFocusRenderPlanCache,
                         workMode: workMode,
                         collisionStrength: CGFloat(collisionStrength),
                         simulationAllowed: simulationAllowed,
@@ -169,6 +170,7 @@ extension GraphCanvasScreen {
                 detailsFocusState = nil
                 detailsFocusPreparedState = .empty
                 detailsFocusSummaryCache = .empty
+                detailsFocusRenderPlanCache = .empty
     
                 // If a cross-screen jump is pending, prepare the graph state so the next load can include the node.
                 if let jump = graphJump.pendingJump {

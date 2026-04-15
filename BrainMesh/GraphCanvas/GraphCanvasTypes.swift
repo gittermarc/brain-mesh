@@ -140,10 +140,10 @@ struct GraphCanvasLensConfiguration: Equatable {
         selection: NodeKey?,
         lensEnabled: Bool,
         lensHideNonRelevant: Bool,
-        lensDepth: Int
+        lensDepth: Int,
+        detailsFocusSuppressesSelectionSpotlight: Bool
     ) -> GraphCanvasLensConfiguration {
-        let autoSpotlight = (selection != nil)
-        if autoSpotlight {
+        if selection != nil, !lensEnabled, !detailsFocusSuppressesSelectionSpotlight {
             return GraphCanvasLensConfiguration(
                 autoSpotlight: true,
                 enabled: true,
@@ -158,6 +158,105 @@ struct GraphCanvasLensConfiguration: Equatable {
             hideNonRelevant: lensHideNonRelevant,
             depth: lensDepth
         )
+    }
+}
+
+struct GraphDetailsRenderPlan: Equatable {
+    let activeFocus: GraphDetailsFocusState?
+    let candidateAttributeNodeKeys: Set<NodeKey>
+    let matchedAttributeNodeKeys: Set<NodeKey>
+    let hiddenAttributeNodeKeys: Set<NodeKey>
+    let dimmedAttributeNodeKeys: Set<NodeKey>
+    let suppressesSelectionSpotlight: Bool
+
+    static let empty = GraphDetailsRenderPlan(
+        activeFocus: nil,
+        candidateAttributeNodeKeys: [],
+        matchedAttributeNodeKeys: [],
+        hiddenAttributeNodeKeys: [],
+        dimmedAttributeNodeKeys: [],
+        suppressesSelectionSpotlight: false
+    )
+
+    var hasActiveFocus: Bool {
+        activeFocus != nil
+    }
+
+    func isHidden(_ key: NodeKey) -> Bool {
+        hiddenAttributeNodeKeys.contains(key)
+    }
+
+    func isMatchedAttribute(_ key: NodeKey) -> Bool {
+        matchedAttributeNodeKeys.contains(key)
+    }
+
+    func isCandidateAttribute(_ key: NodeKey) -> Bool {
+        candidateAttributeNodeKeys.contains(key)
+    }
+
+    func nodeOpacityMultiplier(for key: NodeKey) -> CGFloat {
+        if hiddenAttributeNodeKeys.contains(key) {
+            return 0.0
+        }
+        if dimmedAttributeNodeKeys.contains(key) {
+            return 0.26
+        }
+        return 1.0
+    }
+
+    func edgeOpacityMultiplier(a: NodeKey, b: NodeKey) -> CGFloat {
+        if isHidden(a) || isHidden(b) {
+            return 0.0
+        }
+        if dimmedAttributeNodeKeys.contains(a) || dimmedAttributeNodeKeys.contains(b) {
+            return 0.22
+        }
+        return 1.0
+    }
+
+    func shouldRender(edge: GraphEdge) -> Bool {
+        !isHidden(edge.a) && !isHidden(edge.b)
+    }
+}
+
+enum GraphDetailsRenderPlanner {
+    static func build(summary: GraphDetailsMatchSummary) -> GraphDetailsRenderPlan {
+        guard let focus = summary.activeFocus else {
+            return .empty
+        }
+
+        let candidateKeys = summary.candidateAttributeNodeKeys
+        let matchedKeys = summary.matchedAttributeNodeKeys
+
+        switch focus.mode {
+        case .highlight:
+            return GraphDetailsRenderPlan(
+                activeFocus: focus,
+                candidateAttributeNodeKeys: candidateKeys,
+                matchedAttributeNodeKeys: matchedKeys,
+                hiddenAttributeNodeKeys: [],
+                dimmedAttributeNodeKeys: candidateKeys.subtracting(matchedKeys),
+                suppressesSelectionSpotlight: true
+            )
+        case .onlyMatches:
+            return GraphDetailsRenderPlan(
+                activeFocus: focus,
+                candidateAttributeNodeKeys: candidateKeys,
+                matchedAttributeNodeKeys: matchedKeys,
+                hiddenAttributeNodeKeys: candidateKeys.subtracting(matchedKeys),
+                dimmedAttributeNodeKeys: [],
+                suppressesSelectionSpotlight: true
+            )
+        }
+    }
+}
+
+enum GraphCanvasSelectionSpotlightPolicy {
+    static func limitsLabels(
+        selection: NodeKey?,
+        detailsFocusRenderPlan: GraphDetailsRenderPlan
+    ) -> Bool {
+        selection != nil && !detailsFocusRenderPlan.suppressesSelectionSpotlight
     }
 }
 
@@ -213,6 +312,7 @@ struct GraphCanvasDerivedStateSnapshot: Equatable {
     let lens: LensContext
     let physicsRelevant: Set<NodeKey>?
     let detailsFocusSummary: GraphDetailsMatchSummary
+    let detailsFocusRenderPlan: GraphDetailsRenderPlan
 }
 
 struct GraphCanvasDerivedStateBuilder {
@@ -228,7 +328,7 @@ struct GraphCanvasDerivedStateBuilder {
         detailsFocusPreparedState: GraphDetailsPreparedState = .empty,
         labelForKey: (NodeKey) -> String
     ) -> GraphCanvasDerivedStateSnapshot {
-        let drawEdges = GraphCanvasDisplayEdgesPlanner.displayEdges(
+        let baseDrawEdges = GraphCanvasDisplayEdgesPlanner.displayEdges(
             selection: selection,
             allEdges: edges,
             showAllLinksForSelection: showAllLinksForSelection,
@@ -236,11 +336,19 @@ struct GraphCanvasDerivedStateBuilder {
             labelForKey: labelForKey
         )
 
+        let detailsFocusSummary = GraphDetailsMatcher.summary(
+            focusState: detailsFocusState,
+            preparedState: detailsFocusPreparedState
+        )
+        let detailsFocusRenderPlan = GraphDetailsRenderPlanner.build(summary: detailsFocusSummary)
+        let drawEdges = baseDrawEdges.filter { detailsFocusRenderPlan.shouldRender(edge: $0) }
+
         let lensConfiguration = GraphCanvasLensConfiguration.resolve(
             selection: selection,
             lensEnabled: lensEnabled,
             lensHideNonRelevant: lensHideNonRelevant,
-            lensDepth: lensDepth
+            lensDepth: lensDepth,
+            detailsFocusSuppressesSelectionSpotlight: detailsFocusRenderPlan.suppressesSelectionSpotlight
         )
 
         let lens = LensContext.build(
@@ -252,16 +360,13 @@ struct GraphCanvasDerivedStateBuilder {
         )
 
         let physicsRelevant = lensConfiguration.autoSpotlight ? lens.relevant : nil
-        let detailsFocusSummary = GraphDetailsMatcher.summary(
-            focusState: detailsFocusState,
-            preparedState: detailsFocusPreparedState
-        )
 
         return GraphCanvasDerivedStateSnapshot(
             drawEdges: drawEdges,
             lens: lens,
             physicsRelevant: physicsRelevant,
-            detailsFocusSummary: detailsFocusSummary
+            detailsFocusSummary: detailsFocusSummary,
+            detailsFocusRenderPlan: detailsFocusRenderPlan
         )
     }
 }
@@ -271,9 +376,10 @@ struct GraphCanvasDerivedStateCacheMutation: Equatable {
     let lensChanged: Bool
     let physicsRelevantChanged: Bool
     let detailsFocusSummaryChanged: Bool
+    let detailsFocusRenderPlanChanged: Bool
 
     var hasChanges: Bool {
-        drawEdgesChanged || lensChanged || physicsRelevantChanged || detailsFocusSummaryChanged
+        drawEdgesChanged || lensChanged || physicsRelevantChanged || detailsFocusSummaryChanged || detailsFocusRenderPlanChanged
     }
 
     static func diff(
@@ -281,13 +387,15 @@ struct GraphCanvasDerivedStateCacheMutation: Equatable {
         cachedLens: LensContext,
         cachedPhysicsRelevant: Set<NodeKey>?,
         cachedDetailsFocusSummary: GraphDetailsMatchSummary,
+        cachedDetailsFocusRenderPlan: GraphDetailsRenderPlan,
         derived: GraphCanvasDerivedStateSnapshot
     ) -> GraphCanvasDerivedStateCacheMutation {
         GraphCanvasDerivedStateCacheMutation(
             drawEdgesChanged: cachedDrawEdges != derived.drawEdges,
             lensChanged: cachedLens != derived.lens,
             physicsRelevantChanged: cachedPhysicsRelevant != derived.physicsRelevant,
-            detailsFocusSummaryChanged: cachedDetailsFocusSummary != derived.detailsFocusSummary
+            detailsFocusSummaryChanged: cachedDetailsFocusSummary != derived.detailsFocusSummary,
+            detailsFocusRenderPlanChanged: cachedDetailsFocusRenderPlan != derived.detailsFocusRenderPlan
         )
     }
 }

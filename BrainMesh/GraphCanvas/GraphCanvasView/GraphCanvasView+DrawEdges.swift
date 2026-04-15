@@ -17,10 +17,12 @@ extension GraphCanvasView {
     ) {
         for e in drawEdges {
             if lens.hideNonRelevant && (lens.isHidden(e.a) || lens.isHidden(e.b)) { continue }
+            if !detailsFocusRenderPlan.shouldRender(edge: e) { continue }
 
             guard let a = frame.screenPoints[e.a], let b = frame.screenPoints[e.b] else { continue }
 
-            let edgeAlpha = lens.edgeOpacity(a: e.a, b: e.b)
+            let edgeAlpha = lens.edgeOpacity(a: e.a, b: e.b) * detailsFocusRenderPlan.edgeOpacityMultiplier(a: e.a, b: e.b)
+            if edgeAlpha <= 0.001 { continue }
 
             var path = Path()
             path.move(to: a)
