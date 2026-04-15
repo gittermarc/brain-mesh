@@ -80,7 +80,7 @@ extension GraphCanvasDataLoader {
             labelCache: caches.labelCache,
             imagePathCache: caches.imagePathCache,
             iconSymbolCache: caches.iconSymbolCache,
-            detailsFocusPreparedState: .empty
+            detailsFocusPreparedState: GraphDetailsPreparedState(attributes: [], fieldsByEntityID: [:])
         )
     }
 }
