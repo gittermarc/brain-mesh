@@ -37,7 +37,7 @@ struct GraphTransferPreviewCopyTests {
     }
 
     @Test
-    func previewIssueSummaryPrioritizesBlockingProblems() {
+    func previewIssueSummaryPrioritizesBlockingProblems() throws {
         let preview = ImportPreview(
             kind: .fullBackup,
             graphName: "Problem",
