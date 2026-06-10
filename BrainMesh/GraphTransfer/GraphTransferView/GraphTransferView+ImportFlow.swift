@@ -39,15 +39,19 @@ extension GraphTransferView {
             // here, each button becomes its own List row and remains consistently tappable.
             GraphTransferImportPreviewCard(preview: preview)
 
-            Button {
-                Task {
-                    await model.attemptStartImport(using: modelContext, isProActive: proStore.isProActive)
+            if preview.canStartImport {
+                Button {
+                    Task {
+                        await model.attemptStartImport(using: modelContext, isProActive: proStore.isProActive)
+                    }
+                } label: {
+                    Label("Import starten", systemImage: "tray.and.arrow.down")
                 }
-            } label: {
-                Label("Import starten", systemImage: "tray.and.arrow.down")
+                .disabled(model.isBusy)
+                .buttonStyle(.borderless)
+            } else {
+                GraphTransferImportUnavailableCard(preview: preview)
             }
-            .disabled(model.isBusy)
-            .buttonStyle(.borderless)
 
             Button {
                 presentFileImporter()

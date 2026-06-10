@@ -19,6 +19,12 @@ enum GraphTransferError: Error, Sendable {
     case backupAttachmentReadFailed(attachmentID: UUID, underlying: String)
     case backupAttachmentWriteFailed(attachmentID: UUID, underlying: String)
     case backupManifestWriteFailed(underlying: String)
+    case backupManifestReadFailed(underlying: String)
+    case backupCoreGraphMissing(filename: String)
+    case backupCoreGraphInvalid(underlying: String)
+    case invalidBackupFormat
+    case unsupportedBackupVersion(found: Int)
+    case fullBackupImportNotAvailable
 
     // Validation
     case invalidFormat
@@ -54,6 +60,18 @@ extension GraphTransferError: LocalizedError {
             return "Ein Anhang konnte nicht in das Full Backup geschrieben werden."
         case .backupManifestWriteFailed:
             return "Das Full-Backup-Manifest konnte nicht geschrieben werden."
+        case .backupManifestReadFailed:
+            return "Das Full-Backup-Manifest konnte nicht gelesen werden."
+        case .backupCoreGraphMissing:
+            return "Die Graph-Struktur fehlt im Full Backup."
+        case .backupCoreGraphInvalid:
+            return "Die Graph-Struktur im Full Backup konnte nicht geprüft werden."
+        case .invalidBackupFormat:
+            return "Diese Datei ist kein gültiges BrainMesh-Full-Backup."
+        case .unsupportedBackupVersion:
+            return "Dieses Full Backup wurde mit einer neueren BrainMesh-Version erstellt."
+        case .fullBackupImportNotAvailable:
+            return "Full-Backup-Import ist in dieser Version noch nicht verfügbar."
 
         case .invalidFormat:
             return "Diese Datei ist keine gültige BrainMesh-.bmgraph-Datei."

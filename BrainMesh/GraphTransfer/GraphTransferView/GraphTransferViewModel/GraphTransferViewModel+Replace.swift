@@ -38,6 +38,10 @@ extension GraphTransferViewModel {
     ) async {
         guard isBusy == false else { return }
         guard selectedImportURL != nil else { return }
+        guard selectedPreviewAllowsImport else {
+            showFullBackupImportUnavailable()
+            return
+        }
 
         do {
             let activeID = UUID(uuidString: currentActiveGraphIDString)

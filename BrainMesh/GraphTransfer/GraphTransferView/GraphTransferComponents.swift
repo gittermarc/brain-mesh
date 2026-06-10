@@ -81,43 +81,164 @@ struct GraphTransferImportPreviewCard: View {
 
     var body: some View {
         GraphTransferCard {
-            VStack(alignment: .leading, spacing: 8) {
-                Text(preview.graphName.isEmpty ? "Graph" : preview.graphName)
-                    .font(.headline)
-
-                Text("Exportiert am \(preview.exportedAt.formatted(date: .abbreviated, time: .omitted)) · Version \(preview.version)")
-                    .font(.footnote)
-                    .foregroundStyle(.secondary)
-
-                VStack(alignment: .leading, spacing: 4) {
-                    LabeledContent("Entitäten", value: "\(preview.counts.entities)")
-                    LabeledContent("Attribute", value: "\(preview.counts.attributes)")
-                    LabeledContent("Links", value: "\(preview.counts.links)")
-                    LabeledContent("Details-Felder", value: "\(preview.counts.detailFieldDefinitions)")
-                    LabeledContent("Details-Werte", value: "\(preview.counts.detailFieldValues)")
+            VStack(alignment: .leading, spacing: 10) {
+                header
+                counts
+                if preview.isFullBackup {
+                    backupMetrics
+                    GraphTransferFullBackupScopeView()
+                } else {
+                    GraphTransferGraphStructureScopeView()
                 }
-                .font(.footnote)
-
-                Divider()
-
-                VStack(alignment: .leading, spacing: 6) {
-                    GraphTransferScopeBullet(
-                        title: "Importiert",
-                        detail: "Graph-Struktur, Entitäten, Attribute, Links, Details-Felder und Details-Werte aus dieser Datei."
-                    )
-                    GraphTransferScopeBullet(
-                        title: "Möglich",
-                        detail: "Notizen, Icons und Headerbilder, wenn sie in diesem Export enthalten sind."
-                    )
-                    GraphTransferScopeBullet(
-                        title: "Nicht dabei",
-                        detail: "Separate Anhänge, Dateien, Videos, Galerie-Bilder, Graph-Schutz und Pro-Status."
-                    )
-                }
-                .font(.footnote)
-                .foregroundStyle(.secondary)
+                GraphTransferPreviewIssuesBlock(title: "Probleme", items: preview.blockingProblems)
+                GraphTransferPreviewIssuesBlock(title: "Hinweise", items: preview.warnings)
             }
         }
+    }
+
+    private var header: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            Label(preview.kind.title, systemImage: preview.isFullBackup ? "shippingbox" : "doc.text")
+                .font(.caption.weight(.semibold))
+                .foregroundStyle(.secondary)
+
+            Text(preview.graphName.isEmpty ? "Graph" : preview.graphName)
+                .font(.headline)
+
+            Text("Exportiert am \(preview.exportedAt.formatted(date: .abbreviated, time: .omitted)) · Version \(preview.version)")
+                .font(.footnote)
+                .foregroundStyle(.secondary)
+        }
+    }
+
+    private var counts: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            LabeledContent("Entitäten", value: "\(preview.counts.entities)")
+            LabeledContent("Attribute", value: "\(preview.counts.attributes)")
+            LabeledContent("Links", value: "\(preview.counts.links)")
+            LabeledContent("Details-Felder", value: "\(preview.counts.detailFieldDefinitions)")
+            LabeledContent("Details-Werte", value: "\(preview.counts.detailFieldValues)")
+        }
+        .font(.footnote)
+    }
+
+    private var backupMetrics: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            LabeledContent("Anhänge", value: "\(preview.attachmentCount)")
+            LabeledContent("Anhang-Größe", value: preview.attachmentBytesText)
+        }
+        .font(.footnote)
+    }
+}
+
+struct GraphTransferImportUnavailableCard: View {
+    let preview: ImportPreview
+
+    var body: some View {
+        GraphTransferCard {
+            HStack(alignment: .top, spacing: 10) {
+                Image(systemName: preview.blockingProblems.isEmpty ? "clock" : "exclamationmark.triangle")
+                    .foregroundStyle(preview.blockingProblems.isEmpty ? Color.secondary : Color.orange)
+                VStack(alignment: .leading, spacing: 4) {
+                    Text(title)
+                        .font(.headline)
+                    Text(message)
+                        .font(.footnote)
+                        .foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+            }
+        }
+    }
+
+    private var title: String {
+        if preview.isFullBackup { return "Import kommt im nächsten Schritt" }
+        return "Import aktuell nicht möglich"
+    }
+
+    private var message: String {
+        if preview.isFullBackup {
+            return "BrainMesh kann dieses Full Backup jetzt bereits prüfen. Der vollständige Import mit Anhängen folgt in PR 20."
+        }
+        return "Die Vorschau enthält blockierende Probleme. Wähle eine andere Datei oder exportiere den Graph erneut."
+    }
+}
+
+private struct GraphTransferPreviewIssuesBlock: View {
+    let title: String
+    let items: [GraphBackupPreviewWarning]
+
+    var body: some View {
+        if items.isEmpty == false {
+            Divider()
+            VStack(alignment: .leading, spacing: 6) {
+                Text(title)
+                    .font(.footnote.weight(.semibold))
+                ForEach(items, id: \.stableID) { item in
+                    GraphTransferPreviewIssueRow(item: item)
+                }
+            }
+        }
+    }
+}
+
+private struct GraphTransferPreviewIssueRow: View {
+    let item: GraphBackupPreviewWarning
+
+    var body: some View {
+        HStack(alignment: .top, spacing: 8) {
+            Image(systemName: item.severity == .blocking ? "xmark.octagon.fill" : "exclamationmark.triangle.fill")
+                .font(.caption)
+                .foregroundStyle(item.severity == .blocking ? .red : .orange)
+            Text(item.message)
+                .font(.footnote)
+                .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+    }
+}
+
+private struct GraphTransferGraphStructureScopeView: View {
+    var body: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Divider()
+            GraphTransferScopeBullet(
+                title: "Importiert",
+                detail: "Graph-Struktur, Entitäten, Attribute, Links, Details-Felder und Details-Werte aus dieser Datei."
+            )
+            GraphTransferScopeBullet(
+                title: "Möglich",
+                detail: "Notizen, Icons und Headerbilder, wenn sie in diesem Export enthalten sind."
+            )
+            GraphTransferScopeBullet(
+                title: "Nicht dabei",
+                detail: "Separate Anhänge, Dateien, Videos, Galerie-Bilder, Graph-Schutz und Pro-Status."
+            )
+        }
+        .font(.footnote)
+        .foregroundStyle(.secondary)
+    }
+}
+
+private struct GraphTransferFullBackupScopeView: View {
+    var body: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Divider()
+            GraphTransferScopeBullet(
+                title: "Enthalten",
+                detail: "Graph-Struktur plus separate Anhang-Dateien aus dem Backup-Paket."
+            )
+            GraphTransferScopeBullet(
+                title: "Geprüft",
+                detail: "Manifest, eingebettete Graph-Datei, Anhang-Pfade, Dateigrößen und vorhandene Prüfsummen."
+            )
+            GraphTransferScopeBullet(
+                title: "Nicht enthalten",
+                detail: "Graph-Schutz, Passwörter, Biometrie-Einstellungen und Pro-Status."
+            )
+        }
+        .font(.footnote)
+        .foregroundStyle(.secondary)
     }
 }
 
@@ -167,21 +288,8 @@ struct GraphTransferScopeInfoCard: View {
                     .foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
 
-                VStack(alignment: .leading, spacing: 6) {
-                    GraphTransferScopeBullet(
-                        title: "Enthalten",
-                        detail: "Graph-Struktur, Entitäten, Attribute, Links, Details-Felder und Details-Werte."
-                    )
-                    GraphTransferScopeBullet(
-                        title: "Optional",
-                        detail: "Notizen, Icons und Headerbilder von Entitäten oder Attributen, wenn sie beim Export ausgewählt wurden."
-                    )
-                    GraphTransferScopeBullet(
-                        title: "Nicht enthalten",
-                        detail: "Separate Anhänge, Dateien, Videos, Galerie-Bilder, Graph-Schutz, Passwörter, Biometrie-Einstellungen und Pro-Status."
-                    )
-                }
-                .font(.footnote)
+                scopeBullets
+                    .font(.footnote)
             }
         }
     }
@@ -209,7 +317,43 @@ struct GraphTransferScopeInfoCard: View {
         case .exportScope:
             return ".bmgraph ist ein Graph-Struktur-Export. Er ist ideal zum Umziehen, Teilen oder Wiederherstellen der Graph-Struktur, aber kein vollständiges Medien-Backup."
         case .importScope:
-            return "BrainMesh prüft die .bmgraph-Datei vor dem Import und legt daraus einen neuen Graph an. Bestehende Graphen bleiben unverändert, solange du keinen Graph ersetzt."
+            return "BrainMesh prüft .bmgraph-Struktur-Exporte und .bmbackup-Full-Backups. Full Backups werden in diesem Schritt nur geprüft; der Import mit Anhängen folgt danach."
+        }
+    }
+
+    @ViewBuilder
+    private var scopeBullets: some View {
+        switch mode {
+        case .exportScope:
+            VStack(alignment: .leading, spacing: 6) {
+                GraphTransferScopeBullet(
+                    title: "Enthalten",
+                    detail: "Graph-Struktur, Entitäten, Attribute, Links, Details-Felder und Details-Werte."
+                )
+                GraphTransferScopeBullet(
+                    title: "Optional",
+                    detail: "Notizen, Icons und Headerbilder von Entitäten oder Attributen, wenn sie beim Export ausgewählt wurden."
+                )
+                GraphTransferScopeBullet(
+                    title: "Nicht enthalten",
+                    detail: "Separate Anhänge, Dateien, Videos, Galerie-Bilder, Graph-Schutz, Passwörter, Biometrie-Einstellungen und Pro-Status."
+                )
+            }
+        case .importScope:
+            VStack(alignment: .leading, spacing: 6) {
+                GraphTransferScopeBullet(
+                    title: ".bmgraph",
+                    detail: "Struktur-Exporte können wie bisher als neuer Graph importiert werden."
+                )
+                GraphTransferScopeBullet(
+                    title: ".bmbackup",
+                    detail: "Full Backups werden geprüft und mit Anhängen angezeigt. Der vollständige Import kommt im nächsten Schritt."
+                )
+                GraphTransferScopeBullet(
+                    title: "Nicht enthalten",
+                    detail: "Graph-Schutz, Passwörter, Biometrie-Einstellungen und Pro-Status werden nicht aus Transferdateien übernommen."
+                )
+            }
         }
     }
 }

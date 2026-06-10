@@ -11,14 +11,7 @@ extension GraphTransferService {
 
     func inspectFileImpl(url: URL) async throws -> ImportPreview {
         guard container != nil else { throw GraphTransferError.notConfigured }
-
-        let file = try Self.decodeValidatedImportFile(url: url)
-        return ImportPreview(
-            graphName: file.graph.name,
-            exportedAt: file.exportedAt,
-            version: file.version,
-            counts: file.counts
-        )
+        return try GraphTransferFileInspection.inspect(url: url)
     }
 
     func importGraphImpl(

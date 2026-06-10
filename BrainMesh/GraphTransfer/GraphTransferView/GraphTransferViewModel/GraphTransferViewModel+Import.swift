@@ -57,6 +57,10 @@ extension GraphTransferViewModel {
     func attemptStartImport(using modelContext: ModelContext, isProActive: Bool) async {
         guard isBusy == false else { return }
         guard selectedImportURL != nil else { return }
+        guard selectedPreviewAllowsImport else {
+            showFullBackupImportUnavailable()
+            return
+        }
 
         isShowingFileImporter = false
 
@@ -70,9 +74,25 @@ extension GraphTransferViewModel {
         }
     }
 
+    var selectedPreviewAllowsImport: Bool {
+        if case .ready(let preview) = importState {
+            return preview.canStartImport
+        }
+        return true
+    }
+
+    func showFullBackupImportUnavailable() {
+        let message = userFacingMessage(for: GraphTransferError.fullBackupImportNotAvailable)
+        alertState = AlertState(title: "Full Backup", message: message)
+    }
+
     func performImport() async {
         guard isBusy == false else { return }
         guard let url = selectedImportURL else { return }
+        guard selectedPreviewAllowsImport else {
+            showFullBackupImportUnavailable()
+            return
+        }
 
         isShowingFileImporter = false
 

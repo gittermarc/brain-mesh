@@ -17,7 +17,7 @@ extension GraphTransferViewModel {
             case .fileAccessDenied:
                 return "BrainMesh hat keinen Zugriff auf die ausgewählte Datei. Wähle sie direkt aus der Dateien-App oder teile sie erneut in BrainMesh."
             case .invalidFormat:
-                return "Diese Datei ist keine gültige BrainMesh-.bmgraph-Datei. Wähle bitte einen Export aus BrainMesh."
+                return "Diese Datei ist keine gültige BrainMesh-.bmgraph-Datei. Wähle bitte einen Struktur-Export aus BrainMesh."
             case .unsupportedVersion:
                 return "Diese .bmgraph-Datei wurde mit einer neueren BrainMesh-Version erstellt. Aktualisiere BrainMesh und versuche es danach erneut."
             case .decodeFailed:
@@ -36,6 +36,18 @@ extension GraphTransferViewModel {
                 return "Ein Anhang konnte nicht in das Full Backup geschrieben werden. Prüfe deinen freien Speicherplatz und versuche es erneut."
             case .backupManifestWriteFailed:
                 return "Das Full-Backup-Manifest konnte nicht geschrieben werden. Prüfe deinen freien Speicherplatz und versuche es erneut."
+            case .backupManifestReadFailed:
+                return "Das Full-Backup-Manifest konnte nicht gelesen werden. Wähle ein vollständiges .bmbackup-Paket aus BrainMesh."
+            case .backupCoreGraphMissing:
+                return "Im Full Backup fehlt die Graph-Struktur. Dieses Paket kann so nicht importiert werden."
+            case .backupCoreGraphInvalid:
+                return "Die Graph-Struktur im Full Backup konnte nicht geprüft werden. Das Paket ist möglicherweise beschädigt."
+            case .invalidBackupFormat:
+                return "Diese Datei ist kein gültiges BrainMesh-Full-Backup. Wähle bitte ein .bmbackup-Paket aus BrainMesh."
+            case .unsupportedBackupVersion:
+                return "Dieses Full Backup wurde mit einer neueren BrainMesh-Version erstellt. Aktualisiere BrainMesh und versuche es danach erneut."
+            case .fullBackupImportNotAvailable:
+                return "Full-Backup-Import kommt im nächsten Schritt. Du kannst das Backup hier bereits prüfen, aber noch nicht importieren."
             case .graphNotFound:
                 return "Der gewählte Graph wurde nicht gefunden. Wähle einen vorhandenen Graph aus und starte den Export erneut."
             case .notConfigured:

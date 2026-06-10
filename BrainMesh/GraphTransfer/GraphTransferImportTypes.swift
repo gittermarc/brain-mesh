@@ -11,11 +11,113 @@ nonisolated enum ImportMode: Sendable {
     case asNewGraphRemap
 }
 
+nonisolated enum GraphTransferPreviewKind: String, Codable, Equatable, Sendable {
+    case graphStructure
+    case fullBackup
+
+    var title: String {
+        switch self {
+        case .graphStructure:
+            return "Struktur-Export"
+        case .fullBackup:
+            return "Full Backup"
+        }
+    }
+
+    var filenameExtension: String {
+        switch self {
+        case .graphStructure:
+            return "bmgraph"
+        case .fullBackup:
+            return GraphBackupFormat.filenameExtension
+        }
+    }
+}
+
+nonisolated enum GraphBackupPreviewWarningSeverity: String, Codable, Equatable, Sendable {
+    case warning
+    case blocking
+
+    var title: String {
+        switch self {
+        case .warning:
+            return "Hinweis"
+        case .blocking:
+            return "Problem"
+        }
+    }
+}
+
+nonisolated struct GraphBackupPreviewWarning: Codable, Equatable, Sendable {
+    var severity: GraphBackupPreviewWarningSeverity
+    var code: String
+    var message: String
+
+    init(severity: GraphBackupPreviewWarningSeverity, code: String, message: String) {
+        self.severity = severity
+        self.code = code
+        self.message = message
+    }
+
+    static func warning(code: String, message: String) -> GraphBackupPreviewWarning {
+        GraphBackupPreviewWarning(severity: .warning, code: code, message: message)
+    }
+
+    static func blocking(code: String, message: String) -> GraphBackupPreviewWarning {
+        GraphBackupPreviewWarning(severity: .blocking, code: code, message: message)
+    }
+
+    var stableID: String {
+        "\(severity.rawValue)-\(code)-\(message)"
+    }
+}
+
 nonisolated struct ImportPreview: Sendable {
+    var kind: GraphTransferPreviewKind
     var graphName: String
     var exportedAt: Date
     var version: Int
     var counts: CountsDTO
+    var attachmentCount: Int
+    var attachmentBytes: Int64
+    var warnings: [GraphBackupPreviewWarning]
+    var blockingProblems: [GraphBackupPreviewWarning]
+
+    init(
+        kind: GraphTransferPreviewKind = .graphStructure,
+        graphName: String,
+        exportedAt: Date,
+        version: Int,
+        counts: CountsDTO,
+        attachmentCount: Int = 0,
+        attachmentBytes: Int64 = 0,
+        warnings: [GraphBackupPreviewWarning] = [],
+        blockingProblems: [GraphBackupPreviewWarning] = []
+    ) {
+        self.kind = kind
+        self.graphName = graphName
+        self.exportedAt = exportedAt
+        self.version = version
+        self.counts = counts
+        self.attachmentCount = attachmentCount
+        self.attachmentBytes = attachmentBytes
+        self.warnings = warnings
+        self.blockingProblems = blockingProblems
+    }
+
+    var canStartImport: Bool {
+        kind == .graphStructure && blockingProblems.isEmpty
+    }
+
+    var isFullBackup: Bool {
+        kind == .fullBackup
+    }
+
+    var attachmentBytesText: String {
+        let formatter = ByteCountFormatter()
+        formatter.countStyle = .file
+        return formatter.string(fromByteCount: attachmentBytes)
+    }
 }
 
 nonisolated struct ImportResult: Sendable {

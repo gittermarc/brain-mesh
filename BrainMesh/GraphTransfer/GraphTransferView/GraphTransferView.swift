@@ -41,7 +41,7 @@ struct GraphTransferView: View {
         }
         .fileImporter(
             isPresented: $model.isShowingFileImporter,
-            allowedContentTypes: [.brainMeshGraph],
+            allowedContentTypes: [.brainMeshGraph, .brainMeshBackup],
             allowsMultipleSelection: false
         ) { result in
             Task { @MainActor in

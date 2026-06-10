@@ -123,6 +123,36 @@ nonisolated enum GraphBackupPackageIO {
             .map { String(format: "%02x", $0) }
             .joined()
     }
+
+    static func sha256Hex(forFileAt url: URL, chunkSize: Int = 1_048_576) throws -> String {
+        guard chunkSize > 0 else {
+            throw GraphTransferError.readFailed(underlying: "Invalid checksum chunk size.")
+        }
+        guard let stream = InputStream(url: url) else {
+            throw GraphTransferError.readFailed(underlying: "File stream could not be opened.")
+        }
+
+        stream.open()
+        defer { stream.close() }
+
+        let buffer = UnsafeMutablePointer<UInt8>.allocate(capacity: chunkSize)
+        defer { buffer.deallocate() }
+
+        var hasher = SHA256()
+        while true {
+            let readCount = stream.read(buffer, maxLength: chunkSize)
+            if readCount < 0 {
+                let detail = stream.streamError.map(String.init(describing:)) ?? "Unknown stream error."
+                throw GraphTransferError.readFailed(underlying: detail)
+            }
+            if readCount == 0 { break }
+            hasher.update(data: Data(bytes: buffer, count: readCount))
+        }
+
+        return hasher.finalize()
+            .map { String(format: "%02x", $0) }
+            .joined()
+    }
 }
 
 private extension GraphBackupPackageIO {
