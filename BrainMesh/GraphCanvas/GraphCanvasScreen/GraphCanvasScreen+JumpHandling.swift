@@ -51,8 +51,15 @@ extension GraphCanvasScreen {
         case .entity:
             if let e = fetchEntity(id: jump.nodeKey.uuid) {
                 if focusEntity?.id != e.id {
-                    focusEntity = e
-                    hops = 1
+                    setFocusEntity(
+                        e,
+                        recordInHistory: true,
+                        selectFocus: false,
+                        resetHops: true,
+                        resetLayout: true,
+                        centerAfterLoad: false,
+                        scheduleReload: false
+                    )
                 }
             }
     
@@ -62,8 +69,15 @@ extension GraphCanvasScreen {
     
             if let a = fetchAttribute(id: jump.nodeKey.uuid), let owner = a.owner {
                 if focusEntity?.id != owner.id {
-                    focusEntity = owner
-                    hops = 1
+                    setFocusEntity(
+                        owner,
+                        recordInHistory: true,
+                        selectFocus: false,
+                        resetHops: true,
+                        resetLayout: true,
+                        centerAfterLoad: false,
+                        scheduleReload: false
+                    )
                 }
             }
         }

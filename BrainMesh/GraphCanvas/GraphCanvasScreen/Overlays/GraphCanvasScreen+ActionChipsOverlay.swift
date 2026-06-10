@@ -81,9 +81,15 @@ extension GraphCanvasScreen {
         guard node.key.kind == .entity else { return }
         guard let entity = fetchEntity(id: node.key.uuid) else { return }
 
-        focusEntity = entity
-        scheduleLoadGraph(resetLayout: true)
-        cameraCommand = CameraCommand(kind: .center(node.key))
+        setFocusEntity(
+            entity,
+            recordInHistory: true,
+            selectFocus: true,
+            resetHops: true,
+            resetLayout: true,
+            centerAfterLoad: true,
+            scheduleReload: true
+        )
     }
 
     @ViewBuilder

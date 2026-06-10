@@ -70,13 +70,15 @@ extension GraphCanvasScreen {
                     }
 
                     Button(role: .destructive) {
-                        focusEntity = nil
-                        selection = nil
-                        scheduleLoadGraph(resetLayout: true)
+                        clearFocusEntity(scheduleReload: true)
                     } label: {
                         Label("Fokus löschen", systemImage: "xmark.circle")
                     }
                     .disabled(focusEntity == nil)
+                }
+
+                Section("Fokus-Verlauf") {
+                    focusHistorySectionContent
                 }
 
                 Section("Neighborhood") {
@@ -255,11 +257,99 @@ extension GraphCanvasScreen {
         .presentationDetents([.medium, .large])
     }
 
+    @ViewBuilder
+    var focusHistorySectionContent: some View {
+        let recentItems = focusHistoryItemsForActiveGraph(limit: 8)
+        let previousItem = previousFocusHistoryItem()
+
+        if let previousItem {
+            Button {
+                applyFocusHistoryItem(previousItem)
+            } label: {
+                Label("Vorherigen Fokus anwenden", systemImage: "arrow.uturn.backward.circle")
+            }
+            .accessibilityLabel("Vorherigen Fokus anwenden")
+        } else {
+            Text("Noch kein vorheriger Fokus für diesen Graph vorhanden.")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+        }
+
+        if recentItems.isEmpty {
+            Text("Sobald du eine Entität fokussierst, landet sie hier lokal auf diesem Gerät.")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+        } else {
+            ForEach(recentItems) { item in
+                Button {
+                    applyFocusHistoryItem(item)
+                } label: {
+                    GraphCanvasFocusHistoryRow(
+                        item: item,
+                        isCurrent: item.entityID == focusEntity?.id
+                    )
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel(focusHistoryAccessibilityLabel(for: item))
+            }
+
+            Button(role: .destructive) {
+                clearFocusHistoryForActiveGraph()
+            } label: {
+                Label("Verlauf für diesen Graph löschen", systemImage: "trash")
+            }
+        }
+    }
+
+    func focusHistoryAccessibilityLabel(for item: GraphCanvasFocusHistoryItem) -> String {
+        if item.entityID == focusEntity?.id {
+            return "Aktueller Fokus: \(item.label)"
+        }
+        return "Fokus anwenden: \(item.label)"
+    }
+
     func stabilizeLayout() {
         let all = Set(nodes.map(\.key))
         pinned = all
         for k in all {
             velocities[k] = .zero
         }
+    }
+}
+
+private struct GraphCanvasFocusHistoryRow: View {
+    let item: GraphCanvasFocusHistoryItem
+    let isCurrent: Bool
+
+    var body: some View {
+        HStack(spacing: 10) {
+            Image(systemName: isCurrent ? "scope" : "clock.arrow.circlepath")
+                .foregroundStyle(isCurrent ? Color.accentColor : Color.secondary)
+                .frame(width: 24)
+
+            VStack(alignment: .leading, spacing: 2) {
+                Text(verbatim: item.label)
+                    .font(.subheadline.weight(.semibold))
+                    .foregroundStyle(.primary)
+                    .lineLimit(1)
+
+                Text(item.focusedAt, style: .relative)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+
+            Spacer(minLength: 8)
+
+            if isCurrent {
+                Text("Aktuell")
+                    .font(.caption2.weight(.semibold))
+                    .foregroundStyle(.secondary)
+                    .padding(.horizontal, 8)
+                    .padding(.vertical, 4)
+                    .background(.thinMaterial, in: Capsule())
+            }
+        }
+        .contentShape(Rectangle())
+        .padding(.vertical, 4)
     }
 }

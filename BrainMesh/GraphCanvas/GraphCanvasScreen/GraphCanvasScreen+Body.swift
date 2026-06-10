@@ -101,10 +101,16 @@ extension GraphCanvasScreen {
             .sheet(isPresented: $showFocusPicker) {
                 NodePickerView(kind: .entity) { picked in
                     if let entity = fetchEntity(id: picked.id) {
-                        focusEntity = entity
-                        selection = NodeKey(kind: .entity, uuid: entity.id)
                         showFocusPicker = false
-                        scheduleLoadGraph(resetLayout: true)
+                        setFocusEntity(
+                            entity,
+                            recordInHistory: true,
+                            selectFocus: true,
+                            resetHops: true,
+                            resetLayout: true,
+                            centerAfterLoad: true,
+                            scheduleReload: true
+                        )
                     } else {
                         showFocusPicker = false
                     }
@@ -167,8 +173,7 @@ extension GraphCanvasScreen {
             // ✅ Graph change => reset view state + reload
             .onChange(of: activeGraphIDString) { _, _ in
                 // Reset anything that is graph-scoped.
-                focusEntity = nil
-                selection = nil
+                clearFocusEntity(scheduleReload: false)
                 pinned.removeAll()
                 detailsFocusState = nil
                 detailsFocusPreparedState = .empty

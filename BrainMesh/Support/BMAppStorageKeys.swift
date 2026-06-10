@@ -38,6 +38,7 @@ enum BMAppStorageKeys {
     // MARK: - Local recents
 
     static let recentNodesV1 = "BMRecentNodesV1"
+    static let graphCanvasFocusHistoryV1 = "BMGraphCanvasFocusHistoryV1"
 
     // MARK: - Appearance
 

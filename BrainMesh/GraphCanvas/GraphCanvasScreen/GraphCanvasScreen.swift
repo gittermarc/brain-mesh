@@ -39,6 +39,7 @@ struct GraphCanvasScreen: View {
     @State var showFocusPicker = false
     @State var hops: Int = 1
     @State var workMode: WorkMode = .explore
+    @StateObject var focusHistoryStore = GraphCanvasFocusHistoryStore()
 
     // Toggles
     @State var showAttributes: Bool = true
@@ -154,5 +155,8 @@ struct GraphCanvasScreen: View {
     @State var stagedJumpGraphID: UUID?
     @State var stagedSelectAfterLoad: NodeKey?
     @State var stagedCenterAfterLoad: NodeKey?
+
+    // ✅ Focus-history navigation (PR 10)
+    @State var pendingCenterAfterLoad: NodeKey?
 
 }
