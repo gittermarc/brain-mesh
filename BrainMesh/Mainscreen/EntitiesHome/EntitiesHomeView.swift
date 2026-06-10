@@ -13,6 +13,7 @@ struct EntitiesHomeView: View {
     @EnvironmentObject var onboarding: OnboardingCoordinator
     @EnvironmentObject var appearance: AppearanceStore
     @EnvironmentObject var displaySettings: DisplaySettingsStore
+    @EnvironmentObject var commandCenter: CommandCenterCoordinator
 
     @AppStorage(BMAppStorageKeys.activeGraphID) var activeGraphIDString: String = ""
     var activeGraphID: UUID? { UUID(uuidString: activeGraphIDString) }

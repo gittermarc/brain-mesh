@@ -11,6 +11,7 @@ import SwiftUI
 
 struct ContentView: View {
     @EnvironmentObject private var tabRouter: RootTabRouter
+    @EnvironmentObject private var commandCenter: CommandCenterCoordinator
 
     var body: some View {
         TabView(selection: $tabRouter.selection) {
@@ -31,6 +32,14 @@ struct ContentView: View {
             }
             .tabItem { Label("Einstellungen", systemImage: "gearshape") }
             .tag(RootTab.settings)
+        }
+        .sheet(isPresented: $commandCenter.isPresented) {
+            CommandCenterView(initialQuery: commandCenter.initialQuery)
+        }
+        .sheet(item: $commandCenter.destination, onDismiss: {
+            commandCenter.clearDestination()
+        }) { destination in
+            CommandCenterDestinationSheet(destination: destination)
         }
     }
 }

@@ -11,6 +11,7 @@ import SwiftData
 struct EntityDetailView: View {
     @Environment(\.modelContext) var modelContext
     @EnvironmentObject var display: DisplaySettingsStore
+    @EnvironmentObject var recentNodeStore: RecentNodeStore
 
     @Bindable var entity: MetaEntity
 
@@ -83,6 +84,9 @@ struct EntityDetailView: View {
                     .task(id: linksTaskKey) {
                         await reloadLinksPreview()
                     }
+                    .onAppear {
+                        recordRecentOpen()
+                    }
                     .onChange(of: showAddLink) { _, isPresented in
                         handleLinkSheetPresentationChanged(isPresented)
                     }
@@ -92,5 +96,15 @@ struct EntityDetailView: View {
                 }
             )
         }
+    }
+
+    private func recordRecentOpen() {
+        recentNodeStore.recordOpen(
+            graphID: entity.graphID,
+            nodeKind: .entity,
+            nodeID: entity.id,
+            label: entity.name,
+            iconSymbolName: entity.iconSymbolName
+        )
     }
 }

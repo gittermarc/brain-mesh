@@ -14,6 +14,7 @@ struct AttributeDetailView: View {
 
     // NOTE: Must not be `private` because AttributeDetailView is split across multiple files via extensions.
     @EnvironmentObject var display: DisplaySettingsStore
+    @EnvironmentObject var recentNodeStore: RecentNodeStore
 
     @Bindable var attribute: MetaAttribute
 
@@ -105,6 +106,7 @@ struct AttributeDetailView: View {
                         await applyFocusModeIfNeeded(proxy)
                     }
                     .onAppear {
+                        recordRecentOpen()
                         Task { @MainActor in
                             await reloadLinksPreview()
                         }
@@ -126,6 +128,16 @@ struct AttributeDetailView: View {
                 }
             )
         }
+    }
+
+    private func recordRecentOpen() {
+        recentNodeStore.recordOpen(
+            graphID: attribute.graphID,
+            nodeKind: .attribute,
+            nodeID: attribute.id,
+            label: attribute.displayName,
+            iconSymbolName: attribute.iconSymbolName
+        )
     }
 
     // MARK: - Links Preview (P0.1)

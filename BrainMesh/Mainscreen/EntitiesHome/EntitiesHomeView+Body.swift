@@ -124,7 +124,8 @@ extension EntitiesHomeView {
                     showViewOptions: $showViewOptions,
                     sortSelection: sortBinding,
                     showAddEntity: $showAddEntity,
-                    preferExpandedActions: preferExpandedToolbarActions
+                    preferExpandedActions: preferExpandedToolbarActions,
+                    openCommandCenter: { commandCenter.present() }
                 )
             }
             .sheet(isPresented: $showViewOptions) {

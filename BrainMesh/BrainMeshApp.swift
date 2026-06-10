@@ -19,6 +19,8 @@ struct BrainMeshApp: App {
     @StateObject private var proStore = ProEntitlementStore()
     @StateObject private var tabRouter = RootTabRouter()
     @StateObject private var graphJump = GraphJumpCoordinator()
+    @StateObject private var commandCenter = CommandCenterCoordinator()
+    @StateObject private var recentNodeStore = RecentNodeStore()
 
     private let sharedModelContainer: ModelContainer
 
@@ -76,6 +78,8 @@ struct BrainMeshApp: App {
                 .environmentObject(proStore)
                 .environmentObject(tabRouter)
                 .environmentObject(graphJump)
+                .environmentObject(commandCenter)
+                .environmentObject(recentNodeStore)
         }
         .modelContainer(sharedModelContainer)
     }

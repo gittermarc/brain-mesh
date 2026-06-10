@@ -14,6 +14,7 @@ struct EntitiesHomeToolbar: ToolbarContent {
     @Binding var sortSelection: EntitiesHomeSortOption
     @Binding var showAddEntity: Bool
     let preferExpandedActions: Bool
+    let openCommandCenter: () -> Void
 
     private var isPad: Bool {
         UIDevice.current.userInterfaceIdiom == .pad
@@ -23,7 +24,7 @@ struct EntitiesHomeToolbar: ToolbarContent {
         guard isPad else { return nil }
         // In compact iPad widths (e.g. iPad mini Portrait) the top bar can become very tight because
         // searchable() injects its own trailing search button. If our leading graph label grows too wide,
-        // iPadOS moves our trailing items into the system overflow ("...") which adds an extra tap.
+        // iPadOS moves our trailing items into the system overflow button which adds an extra tap.
         // We keep the leading label noticeably narrower in compact mode to ensure our own menu is
         // directly tappable in the top bar.
         return preferExpandedActions ? 220 : 140
@@ -44,6 +45,8 @@ struct EntitiesHomeToolbar: ToolbarContent {
         if isPad {
             if preferExpandedActions {
                 ToolbarItemGroup(placement: .topBarTrailing) {
+                    commandCenterButton
+
                     Button { showViewOptions = true } label: {
                         Image(systemName: "eye")
                     }
@@ -72,9 +75,15 @@ struct EntitiesHomeToolbar: ToolbarContent {
                 // When SwiftUI collapses trailing toolbar items, icon-only buttons without an explicit label can
                 // become effectively undiscoverable. We consolidate "Ansicht" + "Sortieren" into a single menu
                 // and put creation inside the same menu. This keeps the number of trailing items low enough
-                // that iPadOS won't move our menu into the system overflow ("...") — avoiding a double tap.
+                // that iPadOS won't move our menu into the system overflow button — avoiding a double tap.
                 ToolbarItem(placement: .topBarTrailing) {
                     Menu {
+                        Button {
+                            openCommandCenter()
+                        } label: {
+                            Label("Command Center", systemImage: "command.circle")
+                        }
+
                         Button {
                             showAddEntity = true
                         } label: {
@@ -106,12 +115,25 @@ struct EntitiesHomeToolbar: ToolbarContent {
             }
         } else {
             ToolbarItemGroup(placement: .topBarTrailing) {
-                Button { showViewOptions = true } label: {
-                    Image(systemName: "eye")
-                }
-                .accessibilityLabel("Ansicht")
+                commandCenterButton
 
                 Menu {
+                    Button {
+                        showAddEntity = true
+                    } label: {
+                        Label("Entität anlegen", systemImage: "plus")
+                    }
+
+                    Divider()
+
+                    Button {
+                        showViewOptions = true
+                    } label: {
+                        Label("Ansicht", systemImage: "eye")
+                    }
+
+                    Divider()
+
                     Picker("Sortieren", selection: $sortSelection) {
                         ForEach(EntitiesHomeSortOption.allCases) { opt in
                             Label(opt.title, systemImage: opt.systemImage)
@@ -120,15 +142,23 @@ struct EntitiesHomeToolbar: ToolbarContent {
                     }
                     .pickerStyle(.inline)
                 } label: {
-                    Image(systemName: "arrow.up.arrow.down")
+                    Image(systemName: "ellipsis.circle")
                 }
-                .accessibilityLabel("Sortieren")
-
-                Button { showAddEntity = true } label: {
-                    Image(systemName: "plus")
-                }
-                .accessibilityLabel("Entität anlegen")
+                .accessibilityLabel("Mehr")
             }
         }
     }
+
+
+    private var commandCenterButton: some View {
+        Button {
+            openCommandCenter()
+        } label: {
+            Image(systemName: "command.circle")
+        }
+        .keyboardShortcut("k", modifiers: [.command])
+        .accessibilityLabel("Command Center")
+        .accessibilityHint("Suche, zuletzt geöffnete Nodes und Schnellaktionen öffnen")
+    }
+
 }

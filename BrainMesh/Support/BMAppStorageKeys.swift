@@ -35,6 +35,10 @@ enum BMAppStorageKeys {
 
     static let recentSymbolNames = "BMRecentSymbolNames"
 
+    // MARK: - Local recents
+
+    static let recentNodesV1 = "BMRecentNodesV1"
+
     // MARK: - Appearance
 
     static let appearanceSettingsV1 = "BMAppearanceSettingsV1"
