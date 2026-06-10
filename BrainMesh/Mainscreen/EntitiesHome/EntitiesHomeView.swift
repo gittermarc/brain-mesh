@@ -14,6 +14,9 @@ struct EntitiesHomeView: View {
     @EnvironmentObject var appearance: AppearanceStore
     @EnvironmentObject var displaySettings: DisplaySettingsStore
     @EnvironmentObject var commandCenter: CommandCenterCoordinator
+    @EnvironmentObject var recentNodeStore: RecentNodeStore
+    @EnvironmentObject var tabRouter: RootTabRouter
+    @EnvironmentObject var graphJump: GraphJumpCoordinator
 
     @AppStorage(BMAppStorageKeys.activeGraphID) var activeGraphIDString: String = ""
     var activeGraphID: UUID? { UUID(uuidString: activeGraphIDString) }
@@ -36,6 +39,11 @@ struct EntitiesHomeView: View {
     @State var rows: [EntitiesHomeRow] = []
     @State var isLoading = false
     @State var loadError: String?
+
+    @State var cockpitSnapshot: EntitiesHomeCockpitSnapshot = .empty
+    @State var isCockpitLoading = false
+    @State var cockpitErrorMessage: String?
+    @State var selectedQuickFilter: EntitiesHomeQuickFilter = .all
 
     var activeGraphName: String {
         if let id = activeGraphID, let g = graphs.first(where: { $0.id == id }) { return g.name }
@@ -78,4 +86,53 @@ struct EntitiesHomeView: View {
             set: { entitiesHomeSortRaw = $0.rawValue }
         )
     }
+
+    var isSearchActive: Bool {
+        BMSearch.fold(searchText).isEmpty == false
+    }
+
+    var shouldShowCockpit: Bool {
+        displaySettings.entitiesHome.showCockpit && !isSearchActive && activeGraphID != nil
+    }
+
+    var quickFiltersAreActive: Bool {
+        shouldShowCockpit && cockpitSnapshot.graphID == activeGraphID
+    }
+
+    var effectiveQuickFilter: EntitiesHomeQuickFilter {
+        guard quickFiltersAreActive else { return .all }
+        return EntitiesHomeQuickFilterEngine.effectiveFilter(
+            selectedFilter: selectedQuickFilter,
+            isSearchActive: false
+        )
+    }
+
+    var visibleRows: [EntitiesHomeRow] {
+        EntitiesHomeQuickFilterEngine.filteredRows(
+            rows,
+            selectedFilter: effectiveQuickFilter,
+            snapshot: cockpitSnapshot,
+            isSearchActive: false
+        )
+    }
+
+    var shouldShowQuickFilterEmptyState: Bool {
+        EntitiesHomeQuickFilterEngine.shouldShowFilterEmptyState(
+            allRows: rows,
+            filteredRows: visibleRows,
+            selectedFilter: effectiveQuickFilter,
+            isSearchActive: false
+        )
+    }
+
+    var cockpitTaskToken: String {
+        let recentSignature = recentNodeStore
+            .recentItems(graphID: activeGraphID, limit: 8)
+            .map { item in
+                "\(item.id)|\(item.openedAt.timeIntervalSince1970)"
+            }
+            .joined(separator: ";")
+        return "\(activeGraphIDString)|\(displaySettings.entitiesHome.showCockpit)|\(recentSignature)"
+    }
+
 }

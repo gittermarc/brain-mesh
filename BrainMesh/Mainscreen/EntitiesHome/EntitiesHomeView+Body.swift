@@ -10,157 +10,229 @@ import SwiftUI
 extension EntitiesHomeView {
     var body: some View {
         NavigationStack {
-            Group {
-                if let loadError {
-                    VStack(spacing: 12) {
-                        Image(systemName: "exclamationmark.triangle")
-                            .font(.system(size: 36))
-                            .foregroundStyle(.secondary)
-                        Text("Fehler").font(.headline)
-                        Text(loadError)
-                            .foregroundStyle(.secondary)
-                            .multilineTextAlignment(.center)
-                        Button("Erneut versuchen") {
-                            Task { await reload(forFolded: BMSearch.fold(searchText)) }
-                        }
-                        .buttonStyle(.borderedProminent)
-                    }
-                    .padding()
-                } else if isLoading && rows.isEmpty {
-                    VStack(spacing: 10) {
-                        ProgressView()
-                        Text("Lade Entitäten…")
-                            .foregroundStyle(.secondary)
-                    }
-                    .padding()
-                } else if rows.isEmpty {
-                    if searchText.isEmpty {
-                        ScrollView {
-                            VStack(spacing: 16) {
-                                ContentUnavailableView {
-                                    Label("Noch keine Entitäten", systemImage: "cube.transparent")
-                                } description: {
-                                    Text("Lege deine ersten Entitäten an und gib ihnen Attribute. Danach wird dein Graph lebendig.")
-                                }
+            content
+                .navigationTitle("Entitäten")
+                .searchable(text: $searchText, prompt: "Entität, Attribut, Notiz suchen")
+                .background(toolbarWidthProbe)
+                .toolbar {
+                    EntitiesHomeToolbar(
+                        activeGraphName: activeGraphName,
+                        showGraphPicker: $showGraphPicker,
+                        showViewOptions: $showViewOptions,
+                        sortSelection: sortBinding,
+                        showAddEntity: $showAddEntity,
+                        preferExpandedActions: preferExpandedToolbarActions,
+                        openCommandCenter: { commandCenter.present() }
+                    )
+                }
+                .sheet(isPresented: $showViewOptions) {
+                    EntitiesHomeDisplaySheet(isPresented: $showViewOptions)
+                }
+                .sheet(isPresented: $showAddEntity) {
+                    AddEntityView()
+                }
+                .sheet(isPresented: $showGraphPicker) {
+                    GraphPickerSheet()
+                }
+                .task(id: taskToken) {
+                    let folded = BMSearch.fold(searchText)
+                    isLoading = true
+                    loadError = nil
 
-                                HStack(spacing: 12) {
-                                    Button {
-                                        showAddEntity = true
-                                    } label: {
-                                        Label("Entität anlegen", systemImage: "plus")
-                                    }
-                                    .buttonStyle(.borderedProminent)
+                    // Debounce typing + fast graph switching
+                    try? await Task.sleep(nanoseconds: debounceNanos)
+                    if Task.isCancelled { return }
 
-                                    if !onboardingHidden {
-                                        Button {
-                                            onboarding.isPresented = true
-                                        } label: {
-                                            Label(onboardingCompleted ? "Onboarding" : "Onboarding starten", systemImage: onboardingCompleted ? "questionmark.circle" : "sparkles")
-                                        }
-                                        .buttonStyle(.bordered)
-                                    }
-                                }
-                                .padding(.top, 4)
-
-                                if !onboardingHidden {
-                                    OnboardingMiniExplainerView()
-                                }
-                            }
-                            .padding(.horizontal, 18)
-                            .padding(.top, 20)
-                        }
-                    } else {
-                        ContentUnavailableView {
-                            Label("Keine Treffer", systemImage: "magnifyingglass")
-                        } description: {
-                            Text("Deine Suche hat keine Entität oder kein Attribut gefunden.")
-                        }
-                    }
-                } else {
-                    if resolvedEntitiesHomeAppearance.layout == .grid {
-                        EntitiesHomeGrid(
-                            rows: rows,
-                            isLoading: isLoading,
-                            settings: resolvedEntitiesHomeAppearance,
-                            display: displaySettings.entitiesHome,
-                            onDelete: { id in
-                                deleteEntityIDs([id])
-                            }
-                        )
-                    } else {
-                        EntitiesHomeList(
-                            rows: rows,
-                            isLoading: isLoading,
-                            settings: resolvedEntitiesHomeAppearance,
-                            display: displaySettings.entitiesHome,
-                            onDelete: deleteEntities,
-                            onDeleteID: { id in
-                                deleteEntityIDs([id])
-                            }
-                        )
+                    await reload(forFolded: folded)
+                }
+                .task(id: cockpitTaskToken) {
+                    await loadCockpitIfNeeded()
+                }
+                .onChange(of: entitiesHomeSortRaw) { _, _ in
+                    // Apply sorting instantly without waiting for a reload.
+                    rows = sortOption.apply(to: rows)
+                }
+                .onChange(of: searchText) { _, newValue in
+                    if BMSearch.fold(newValue).isEmpty == false {
+                        selectedQuickFilter = .all
                     }
                 }
+                .onChange(of: activeGraphIDString) { _, _ in
+                    selectedQuickFilter = .all
+                }
+                .onChange(of: showAddEntity) { _, newValue in
+                    // Ensure newly created entities show up even without @Query driving this list.
+                    if newValue == false {
+                        Task {
+                            await EntitiesHomeLoader.shared.invalidateCache(for: activeGraphID)
+                            await reload(forFolded: BMSearch.fold(searchText))
+                            await loadCockpitIfNeeded()
+                        }
+                    }
+                }
+        }
+    }
+
+    @ViewBuilder private var content: some View {
+        if let loadError {
+            loadErrorView(loadError)
+        } else if isLoading && rows.isEmpty {
+            loadingView
+        } else if rows.isEmpty {
+            emptyRowsView
+        } else if shouldShowQuickFilterEmptyState {
+            quickFilterEmptyContent
+        } else {
+            rowsContent
+        }
+    }
+
+    private var toolbarWidthProbe: some View {
+        GeometryReader { proxy in
+            Color.clear
+                .onAppear {
+                    // On iPad mini in Portrait, toolbar space is tight and SwiftUI may drop trailing
+                    // icon-only items. We switch to a compact, menu-based toolbar when the available
+                    // width is below a safe threshold.
+                    preferExpandedToolbarActions = proxy.size.width >= 820
+                }
+                .onChange(of: proxy.size) { _, newSize in
+                    preferExpandedToolbarActions = newSize.width >= 820
+                }
+        }
+    }
+
+    private func loadErrorView(_ message: String) -> some View {
+        VStack(spacing: 12) {
+            Image(systemName: "exclamationmark.triangle")
+                .font(.system(size: 36))
+                .foregroundStyle(.secondary)
+            Text("Fehler").font(.headline)
+            Text(message)
+                .foregroundStyle(.secondary)
+                .multilineTextAlignment(.center)
+            Button("Erneut versuchen") {
+                Task { await reload(forFolded: BMSearch.fold(searchText)) }
             }
-            .navigationTitle("Entitäten")
-            .searchable(text: $searchText, prompt: "Entität, Attribut, Notiz suchen…")
-            .background(
-                GeometryReader { proxy in
-                    Color.clear
-                        .onAppear {
-                            // On iPad mini in Portrait, toolbar space is tight and SwiftUI may drop trailing
-                            // icon-only items. We switch to a compact, menu-based toolbar when the available
-                            // width is below a safe threshold.
-                            preferExpandedToolbarActions = proxy.size.width >= 820
-                        }
-                        .onChange(of: proxy.size) { _, newSize in
-                            preferExpandedToolbarActions = newSize.width >= 820
-                        }
+            .buttonStyle(.borderedProminent)
+        }
+        .padding()
+    }
+
+    private var loadingView: some View {
+        VStack(spacing: 10) {
+            ProgressView()
+            Text("Lade Entitäten")
+                .foregroundStyle(.secondary)
+        }
+        .padding()
+    }
+
+    @ViewBuilder private var emptyRowsView: some View {
+        if searchText.isEmpty {
+            EntitiesHomeCockpitEmptyState(
+                hasGraphs: graphs.isEmpty == false,
+                showsOnboardingAction: !onboardingHidden,
+                onboardingTitle: onboardingCompleted ? "Onboarding" : "Onboarding starten",
+                onAddEntity: { showAddEntity = true },
+                onOpenGraphPicker: { showGraphPicker = true },
+                onOpenOnboarding: { onboarding.isPresented = true },
+                onOpenCommandCenter: { commandCenter.present() },
+                onOpenGuide: {
+                    Task { @MainActor in
+                        commandCenter.presentDestination(.guide)
+                    }
                 }
             )
-            .toolbar {
-                EntitiesHomeToolbar(
-                    activeGraphName: activeGraphName,
-                    showGraphPicker: $showGraphPicker,
-                    showViewOptions: $showViewOptions,
-                    sortSelection: sortBinding,
-                    showAddEntity: $showAddEntity,
-                    preferExpandedActions: preferExpandedToolbarActions,
-                    openCommandCenter: { commandCenter.present() }
+        } else {
+            EntitiesHomeSearchEmptyStateView(
+                searchText: searchText,
+                onOpenCommandCenter: { query in
+                    commandCenter.present(initialQuery: query)
+                }
+            )
+        }
+    }
+
+    private var quickFilterEmptyContent: some View {
+        ScrollView {
+            VStack(spacing: 12) {
+                if let cockpitHeader {
+                    cockpitHeader
+                }
+
+                EntitiesHomeQuickFilterEmptyStateView(
+                    filter: effectiveQuickFilter,
+                    onReset: { selectedQuickFilter = .all }
                 )
             }
-            .sheet(isPresented: $showViewOptions) {
-                EntitiesHomeDisplaySheet(isPresented: $showViewOptions)
-            }
-            .sheet(isPresented: $showAddEntity) {
-                AddEntityView()
-            }
-            .sheet(isPresented: $showGraphPicker) {
-                GraphPickerSheet()
-            }
-            .task(id: taskToken) {
-                let folded = BMSearch.fold(searchText)
-                isLoading = true
-                loadError = nil
+        }
+    }
 
-                // Debounce typing + fast graph switching
-                try? await Task.sleep(nanoseconds: debounceNanos)
-                if Task.isCancelled { return }
+    @ViewBuilder private var rowsContent: some View {
+        if resolvedEntitiesHomeAppearance.layout == .grid {
+            EntitiesHomeGrid(
+                rows: visibleRows,
+                isLoading: isLoading,
+                settings: resolvedEntitiesHomeAppearance,
+                display: displaySettings.entitiesHome,
+                header: cockpitHeader,
+                onDelete: { id in
+                    deleteEntityIDs([id])
+                }
+            )
+        } else {
+            EntitiesHomeList(
+                rows: visibleRows,
+                isLoading: isLoading,
+                settings: resolvedEntitiesHomeAppearance,
+                display: displaySettings.entitiesHome,
+                header: cockpitHeader,
+                onDelete: { offsets in
+                    deleteEntities(at: offsets, from: visibleRows)
+                },
+                onDeleteID: { id in
+                    deleteEntityIDs([id])
+                }
+            )
+        }
+    }
 
-                await reload(forFolded: folded)
-            }
-            .onChange(of: entitiesHomeSortRaw) { _, _ in
-                // Apply sorting instantly without waiting for a reload.
-                rows = sortOption.apply(to: rows)
-            }
-            .onChange(of: showAddEntity) { _, newValue in
-                // Ensure newly created entities show up even without @Query driving this list.
-                if newValue == false {
-                    Task {
-                        await EntitiesHomeLoader.shared.invalidateCache(for: activeGraphID)
-                        await reload(forFolded: BMSearch.fold(searchText))
+    private var cockpitHeader: AnyView? {
+        guard shouldShowCockpit else { return nil }
+        return AnyView(
+            EntitiesHomeCockpitView(
+                activeGraphName: activeGraphName,
+                snapshot: cockpitSnapshot,
+                isLoading: isCockpitLoading,
+                errorMessage: cockpitErrorMessage,
+                selectedFilter: effectiveQuickFilter,
+                onSelectFilter: { filter in
+                    selectedQuickFilter = filter
+                },
+                onOpenRecent: openRecentNode,
+                onJumpRecentToGraph: jumpRecentNodeToGraph,
+                onOpenStats: {
+                    Task { @MainActor in
+                        tabRouter.select(.stats)
                     }
                 }
-            }
+            )
+        )
+    }
+
+    private func openRecentNode(_ item: EntitiesHomeCockpitRecentNode) {
+        guard let nodeKind = item.nodeKind else { return }
+        Task { @MainActor in
+            commandCenter.presentDestination(.nodeDetail(kind: nodeKind, id: item.nodeID))
+        }
+    }
+
+    private func jumpRecentNodeToGraph(_ item: EntitiesHomeCockpitRecentNode) {
+        guard let graphID = item.graphID, let nodeKey = item.nodeKey else { return }
+        Task { @MainActor in
+            graphJump.requestJump(to: nodeKey, in: graphID, centerOnArrival: true)
+            tabRouter.select(.graph)
         }
     }
 }

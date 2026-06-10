@@ -1,6 +1,6 @@
 import Foundation
 
-struct GraphDetailsPreparedField: Equatable, Sendable {
+nonisolated struct GraphDetailsPreparedField: Equatable, Sendable {
     let id: UUID
     let entityID: UUID
     let name: String
@@ -30,7 +30,7 @@ struct GraphDetailsPreparedField: Equatable, Sendable {
         self.options = options
     }
 
-    init(field: MetaDetailFieldDefinition) {
+    nonisolated init(field: MetaDetailFieldDefinition) {
         self.id = field.id
         self.entityID = field.entityID
         self.name = field.name
@@ -42,7 +42,7 @@ struct GraphDetailsPreparedField: Equatable, Sendable {
     }
 }
 
-struct GraphDetailsPreparedValue: Equatable, Sendable {
+nonisolated struct GraphDetailsPreparedValue: Equatable, Sendable {
     let stringValue: String?
     let intValue: Int?
     let doubleValue: Double?
@@ -63,7 +63,7 @@ struct GraphDetailsPreparedValue: Equatable, Sendable {
         self.boolValue = boolValue
     }
 
-    init(value: MetaDetailFieldValue) {
+    nonisolated init(value: MetaDetailFieldValue) {
         self.stringValue = value.stringValue
         self.intValue = value.intValue
         self.doubleValue = value.doubleValue
@@ -72,32 +72,52 @@ struct GraphDetailsPreparedValue: Equatable, Sendable {
     }
 }
 
-struct GraphDetailsPreparedAttribute: Equatable, Sendable {
+nonisolated struct GraphDetailsPreparedAttribute: Equatable, Sendable {
     let nodeKey: NodeKey
     let attributeID: UUID
     let entityID: UUID
     let valuesByFieldID: [UUID: GraphDetailsPreparedValue]
+
+    nonisolated init(
+        nodeKey: NodeKey,
+        attributeID: UUID,
+        entityID: UUID,
+        valuesByFieldID: [UUID: GraphDetailsPreparedValue]
+    ) {
+        self.nodeKey = nodeKey
+        self.attributeID = attributeID
+        self.entityID = entityID
+        self.valuesByFieldID = valuesByFieldID
+    }
 }
 
-struct GraphDetailsPreparedState: Equatable, Sendable {
+nonisolated struct GraphDetailsPreparedState: Equatable, Sendable {
     let attributes: [GraphDetailsPreparedAttribute]
     let fieldsByEntityID: [UUID: [GraphDetailsPreparedField]]
 
-    static let empty = GraphDetailsPreparedState(attributes: [], fieldsByEntityID: [:])
+    nonisolated static let empty = GraphDetailsPreparedState(attributes: [], fieldsByEntityID: [:])
 
-    var visibleAttributeNodeKeys: Set<NodeKey> {
+    nonisolated init(
+        attributes: [GraphDetailsPreparedAttribute],
+        fieldsByEntityID: [UUID: [GraphDetailsPreparedField]]
+    ) {
+        self.attributes = attributes
+        self.fieldsByEntityID = fieldsByEntityID
+    }
+
+    nonisolated var visibleAttributeNodeKeys: Set<NodeKey> {
         Set(attributes.map(\.nodeKey))
     }
 
-    func fields(for entityID: UUID) -> [GraphDetailsPreparedField] {
+    nonisolated func fields(for entityID: UUID) -> [GraphDetailsPreparedField] {
         fieldsByEntityID[entityID] ?? []
     }
 
-    func field(entityID: UUID, fieldID: UUID) -> GraphDetailsPreparedField? {
+    nonisolated func field(entityID: UUID, fieldID: UUID) -> GraphDetailsPreparedField? {
         fields(for: entityID).first(where: { $0.id == fieldID })
     }
 
-    static func build(
+    nonisolated static func build(
         entities: [MetaEntity],
         attributes: [MetaAttribute]
     ) -> GraphDetailsPreparedState {

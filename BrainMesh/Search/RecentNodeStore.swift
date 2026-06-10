@@ -154,7 +154,7 @@ final class RecentNodeStore: ObservableObject {
         }
     }
 
-    private static func loadItems(
+    nonisolated private static func loadItems(
         defaults: UserDefaults,
         storageKey: String,
         maxItemsPerGraph: Int
@@ -169,7 +169,7 @@ final class RecentNodeStore: ObservableObject {
         }
     }
 
-    private static func prunedAndSorted(_ source: [RecentNodeItem], maxItemsPerGraph: Int) -> [RecentNodeItem] {
+    nonisolated private static func prunedAndSorted(_ source: [RecentNodeItem], maxItemsPerGraph: Int) -> [RecentNodeItem] {
         var deduped: [RecentNodeIdentity: RecentNodeItem] = [:]
         for item in source where item.nodeKind != nil {
             let existing = deduped[item.identity]
@@ -194,7 +194,7 @@ final class RecentNodeStore: ObservableObject {
         return output
     }
 
-    private static func sortItems(_ lhs: RecentNodeItem, _ rhs: RecentNodeItem) -> Bool {
+    nonisolated private static func sortItems(_ lhs: RecentNodeItem, _ rhs: RecentNodeItem) -> Bool {
         if lhs.openedAt != rhs.openedAt {
             return lhs.openedAt > rhs.openedAt
         }

@@ -12,6 +12,7 @@ struct EntitiesHomeList: View {
     let isLoading: Bool
     let settings: EntitiesHomeAppearanceSettings
     let display: EntitiesHomeDisplaySettings
+    let header: AnyView?
     let onDelete: (IndexSet) -> Void
     let onDeleteID: (UUID) -> Void
 
@@ -23,6 +24,7 @@ struct EntitiesHomeList: View {
                     isLoading: isLoading,
                     settings: settings,
                     display: display,
+                    header: header,
                     onDeleteID: onDeleteID
                 )
             } else {
@@ -46,6 +48,13 @@ struct EntitiesHomeList: View {
     }
 
     @ViewBuilder private var listContent: some View {
+        if let header {
+            header
+                .listRowInsets(EdgeInsets())
+                .listRowSeparator(.hidden)
+                .listRowBackground(Color.clear)
+        }
+
         if isLoading {
             HStack {
                 ProgressView()
@@ -72,11 +81,16 @@ private struct EntitiesHomeCardList: View {
     let isLoading: Bool
     let settings: EntitiesHomeAppearanceSettings
     let display: EntitiesHomeDisplaySettings
+    let header: AnyView?
     let onDeleteID: (UUID) -> Void
 
     var body: some View {
         ScrollView {
             LazyVStack(spacing: max(8, settings.density.gridSpacing)) {
+                if let header {
+                    header
+                }
+
                 if isLoading {
                     HStack(spacing: 10) {
                         ProgressView()

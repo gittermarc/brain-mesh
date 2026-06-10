@@ -43,4 +43,41 @@ extension EntitiesHomeView {
             loadError = error.localizedDescription
         }
     }
+
+    @MainActor func loadCockpitIfNeeded() async {
+        guard shouldShowCockpit else {
+            cockpitSnapshot = .empty
+            isCockpitLoading = false
+            cockpitErrorMessage = nil
+            return
+        }
+
+        let graphID = activeGraphID
+        let recentItems = recentNodeStore.recentItems(graphID: graphID, limit: 8)
+        isCockpitLoading = true
+        cockpitErrorMessage = nil
+
+        do {
+            let snapshot = try await EntitiesHomeCockpitLoader.shared.loadSnapshot(
+                graphID: graphID,
+                recentItems: recentItems,
+                limit: 8
+            )
+            if Task.isCancelled { return }
+            cockpitSnapshot = snapshot
+            isCockpitLoading = false
+            cockpitErrorMessage = nil
+
+            if selectedQuickFilter != .all, snapshot.quickFilterSnapshot(for: selectedQuickFilter) == nil {
+                selectedQuickFilter = .all
+            }
+        } catch is CancellationError {
+            return
+        } catch {
+            if Task.isCancelled { return }
+            isCockpitLoading = false
+            cockpitErrorMessage = "Die Cockpit-Hinweise konnten gerade nicht geladen werden. Die Entitätenliste bleibt nutzbar."
+        }
+    }
+
 }

@@ -59,6 +59,8 @@ struct DisplaySettingsEntitiesHomeSection: View {
                 }
             }
 
+            Toggle("Home Cockpit anzeigen", isOn: display.entitiesHomeBinding(\.showCockpit))
+
             SettingsInlineHeaderRow(title: "Meta")
 
             Toggle("Attribut-Count anzeigen", isOn: display.entitiesHomeBinding(\.showAttributeCount))
@@ -74,7 +76,7 @@ struct DisplaySettingsEntitiesHomeSection: View {
         } header: {
             DisplaySettingsSectionHeader(title: "Entitäten-Übersicht", isCustomized: display.state.entitiesHomeOverride != nil)
         } footer: {
-            Text("Diese Einstellungen betreffen die Übersichtsliste/-grid. Hinweis: Counts und Thumbnails können bei sehr großen Graphen minimal teurer sein.")
+            Text("Diese Einstellungen betreffen die Übersichtsliste/-grid. Das Home Cockpit lädt kompakte Hinweise für den aktiven Graph; Counts und Thumbnails können bei sehr großen Graphen minimal teurer sein.")
         }
     }
 

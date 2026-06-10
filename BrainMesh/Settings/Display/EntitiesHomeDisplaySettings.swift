@@ -66,6 +66,7 @@ struct EntitiesHomeDisplaySettings: Codable, Equatable {
     var showSeparators: Bool
     var badgeStyle: EntitiesHomeBadgeStyle
     var metaLine: EntitiesHomeMetaLine
+    var showCockpit: Bool
 
     // MARK: - Existing knobs (currently still sourced from Appearance; included here as foundation)
 
@@ -87,6 +88,7 @@ struct EntitiesHomeDisplaySettings: Codable, Equatable {
                 showSeparators: true,
                 badgeStyle: .none,
                 metaLine: .none,
+                showCockpit: true,
                 showAttributeCount: false,
                 showLinkCount: false,
                 showNotesPreview: false,
@@ -101,6 +103,7 @@ struct EntitiesHomeDisplaySettings: Codable, Equatable {
                 showSeparators: false,
                 badgeStyle: .smallCounter,
                 metaLine: .none,
+                showCockpit: false,
                 showAttributeCount: true,
                 showLinkCount: true,
                 showNotesPreview: false,
@@ -115,6 +118,7 @@ struct EntitiesHomeDisplaySettings: Codable, Equatable {
                 showSeparators: false,
                 badgeStyle: .pills,
                 metaLine: .notesPreview,
+                showCockpit: true,
                 showAttributeCount: false,
                 showLinkCount: false,
                 showNotesPreview: true,
@@ -129,6 +133,7 @@ struct EntitiesHomeDisplaySettings: Codable, Equatable {
                 showSeparators: true,
                 badgeStyle: .pills,
                 metaLine: .counts,
+                showCockpit: true,
                 showAttributeCount: true,
                 showLinkCount: true,
                 showNotesPreview: true,
@@ -149,6 +154,7 @@ struct EntitiesHomeDisplaySettings: Codable, Equatable {
         case showSeparators
         case badgeStyle
         case metaLine
+        case showCockpit
         case showAttributeCount
         case showLinkCount
         case showNotesPreview
@@ -163,6 +169,7 @@ struct EntitiesHomeDisplaySettings: Codable, Equatable {
         .showSeparators: DisplayOptionMeta(impact: .none),
         .badgeStyle: DisplayOptionMeta(impact: .none),
         .metaLine: DisplayOptionMeta(impact: .low),
+        .showCockpit: DisplayOptionMeta(impact: .medium, note: "Lädt kompakte Home-Hinweise und Quick-Filter für den aktiven Graph."),
         .showAttributeCount: DisplayOptionMeta(impact: .high, note: "Kann zusätzliche Zähl-Queries auslösen."),
         .showLinkCount: DisplayOptionMeta(impact: .medium, note: "Kann zusätzliche Zähl-Queries auslösen."),
         .showNotesPreview: DisplayOptionMeta(impact: .low, note: "Mehr Text kann das Rendering/Scrolling etwas belasten."),
@@ -179,6 +186,7 @@ struct EntitiesHomeDisplaySettings: Codable, Equatable {
         case showSeparators
         case badgeStyle
         case metaLine
+        case showCockpit
         case showAttributeCount
         case showLinkCount
         case showNotesPreview
@@ -193,6 +201,7 @@ struct EntitiesHomeDisplaySettings: Codable, Equatable {
         showSeparators: Bool,
         badgeStyle: EntitiesHomeBadgeStyle,
         metaLine: EntitiesHomeMetaLine,
+        showCockpit: Bool,
         showAttributeCount: Bool,
         showLinkCount: Bool,
         showNotesPreview: Bool,
@@ -205,6 +214,7 @@ struct EntitiesHomeDisplaySettings: Codable, Equatable {
         self.showSeparators = showSeparators
         self.badgeStyle = badgeStyle
         self.metaLine = metaLine
+        self.showCockpit = showCockpit
         self.showAttributeCount = showAttributeCount
         self.showLinkCount = showLinkCount
         self.showNotesPreview = showNotesPreview
@@ -223,6 +233,7 @@ struct EntitiesHomeDisplaySettings: Codable, Equatable {
         self.showSeparators = try container.decodeIfPresent(Bool.self, forKey: .showSeparators) ?? fallback.showSeparators
         self.badgeStyle = try container.decodeIfPresent(EntitiesHomeBadgeStyle.self, forKey: .badgeStyle) ?? fallback.badgeStyle
         self.metaLine = try container.decodeIfPresent(EntitiesHomeMetaLine.self, forKey: .metaLine) ?? fallback.metaLine
+        self.showCockpit = try container.decodeIfPresent(Bool.self, forKey: .showCockpit) ?? fallback.showCockpit
 
         self.showAttributeCount = try container.decodeIfPresent(Bool.self, forKey: .showAttributeCount) ?? fallback.showAttributeCount
         self.showLinkCount = try container.decodeIfPresent(Bool.self, forKey: .showLinkCount) ?? fallback.showLinkCount

@@ -10,9 +10,13 @@ import SwiftData
 
 extension EntitiesHomeView {
     func deleteEntities(at offsets: IndexSet) {
+        deleteEntities(at: offsets, from: rows)
+    }
+
+    func deleteEntities(at offsets: IndexSet, from sourceRows: [EntitiesHomeRow]) {
         let idsToDelete: [UUID] = offsets.compactMap { idx in
-            guard rows.indices.contains(idx) else { return nil }
-            return rows[idx].id
+            guard sourceRows.indices.contains(idx) else { return nil }
+            return sourceRows[idx].id
         }
         deleteEntityIDs(idsToDelete)
     }
@@ -40,6 +44,7 @@ extension EntitiesHomeView {
         Task {
             await EntitiesHomeLoader.shared.invalidateCache(for: activeGraphID)
             await reload(forFolded: BMSearch.fold(searchText))
+            await loadCockpitIfNeeded()
         }
     }
 

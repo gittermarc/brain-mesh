@@ -369,11 +369,11 @@ private extension BrainMeshSearchService {
                 graphID: attachment.graphID,
                 title: title,
                 subtitle: subtitle,
-                iconSymbolName: attachment.contentKind.searchIconSymbolName,
+                iconSymbolName: AttachmentContentKind.searchIconSymbolName(for: attachment.contentKindRaw),
                 matchReason: match.matchReason,
                 nodeKindRaw: nil,
                 nodeID: nil,
-                ownerKindRaw: attachment.ownerKind.rawValue,
+                ownerKindRaw: (NodeKind(rawValue: attachment.ownerKindRaw) ?? .entity).rawValue,
                 ownerID: attachment.ownerID
             )
             return BrainMeshSearchCandidate(result: result, score: match.score)
@@ -479,8 +479,9 @@ private extension BrainMeshSearchService {
 }
 
 private extension AttachmentContentKind {
-    var searchIconSymbolName: String {
-        switch self {
+    nonisolated static func searchIconSymbolName(for rawValue: Int) -> String {
+        let contentKind = AttachmentContentKind(rawValue: rawValue) ?? .file
+        switch contentKind {
         case .file:
             return "paperclip"
         case .video:

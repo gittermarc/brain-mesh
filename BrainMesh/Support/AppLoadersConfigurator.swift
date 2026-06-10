@@ -52,6 +52,10 @@ enum AppLoadersConfigurator {
             await EntitiesHomeLoader.shared.configure(container: anyContainer)
             if Task.isCancelled { return }
 
+            // EntitiesHome Cockpit builds graph-health snippets and quick-filter IDs off-main.
+            await EntitiesHomeCockpitLoader.shared.configure(container: anyContainer)
+            if Task.isCancelled { return }
+
             // Global search spans entities, attributes, links, details and attachment metadata.
             await BrainMeshSearchService.shared.configure(container: anyContainer)
             if Task.isCancelled { return }

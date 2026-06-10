@@ -12,6 +12,7 @@ struct EntitiesHomeGrid: View {
     let isLoading: Bool
     let settings: EntitiesHomeAppearanceSettings
     let display: EntitiesHomeDisplaySettings
+    let header: AnyView?
     let onDelete: (UUID) -> Void
 
     @Environment(\.horizontalSizeClass) private var hSizeClass
@@ -24,6 +25,10 @@ struct EntitiesHomeGrid: View {
     var body: some View {
         ScrollView {
             VStack(spacing: 12) {
+                if let header {
+                    header
+                }
+
                 if isLoading {
                     HStack(spacing: 10) {
                         ProgressView()
