@@ -29,6 +29,9 @@ nonisolated struct GraphTransferProgress: Sendable {
     nonisolated enum Phase: Sendable, Equatable {
         case inspecting
         case creatingGraph
+        case exportingGraph
+        case backupAttachments
+        case backupManifest
         case entities
         case fields
         case attributes
@@ -55,6 +58,34 @@ nonisolated struct GraphTransferProgress: Sendable {
         } else {
             self.fraction = nil
         }
+    }
+}
+
+nonisolated enum GraphTransferExportProgressFactory {
+
+    static func exportingGraph() -> GraphTransferProgress {
+        GraphTransferProgress(phase: .exportingGraph, completed: 0, label: "Graph-Struktur wird exportiert")
+    }
+
+    static func backupAttachmentsStart(total: Int) -> GraphTransferProgress {
+        GraphTransferProgress(phase: .backupAttachments, completed: 0, total: total, label: "Anhänge werden exportiert")
+    }
+
+    static func backupAttachmentStep(completed: Int, total: Int) -> GraphTransferProgress {
+        GraphTransferProgress(
+            phase: .backupAttachments,
+            completed: completed,
+            total: total,
+            label: "Anhänge: \(completed)/\(total)"
+        )
+    }
+
+    static func writingBackupManifest() -> GraphTransferProgress {
+        GraphTransferProgress(phase: .backupManifest, completed: 0, label: "Backup-Manifest wird geschrieben")
+    }
+
+    static func done() -> GraphTransferProgress {
+        GraphTransferProgress(phase: .done, completed: 1, total: 1, label: "Fertig")
     }
 }
 

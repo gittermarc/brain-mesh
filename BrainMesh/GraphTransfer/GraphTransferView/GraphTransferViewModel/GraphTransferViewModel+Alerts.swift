@@ -28,6 +28,14 @@ extension GraphTransferViewModel {
                 return "Der Import konnte nicht gespeichert werden. Prüfe deinen freien Speicherplatz und versuche es erneut."
             case .writeFailed:
                 return "Die Exportdatei konnte nicht erstellt werden. Prüfe deinen freien Speicherplatz und versuche es erneut."
+            case .backupPackageWriteFailed:
+                return "Das Full-Backup-Paket konnte nicht erstellt werden. Prüfe deinen freien Speicherplatz und versuche es erneut."
+            case .backupAttachmentReadFailed:
+                return "Ein Anhang konnte nicht für das Full Backup gelesen werden. Prüfe, ob die Daten vollständig synchronisiert sind, und versuche es erneut."
+            case .backupAttachmentWriteFailed:
+                return "Ein Anhang konnte nicht in das Full Backup geschrieben werden. Prüfe deinen freien Speicherplatz und versuche es erneut."
+            case .backupManifestWriteFailed:
+                return "Das Full-Backup-Manifest konnte nicht geschrieben werden. Prüfe deinen freien Speicherplatz und versuche es erneut."
             case .graphNotFound:
                 return "Der gewählte Graph wurde nicht gefunden. Wähle einen vorhandenen Graph aus und starte den Export erneut."
             case .notConfigured:
