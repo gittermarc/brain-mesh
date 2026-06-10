@@ -141,7 +141,7 @@ private extension BrainMeshGuideView {
                 Label("Offline verfügbar", systemImage: "checkmark.seal")
                 Text("·")
                     .foregroundStyle(.tertiary)
-                Text("Stand: März 2026")
+                Text("Stand: Juni 2026")
             }
             .font(.footnote)
             .foregroundStyle(.secondary)
@@ -186,10 +186,10 @@ private extension BrainMeshGuideView {
                 GuideStep("Attribute hinzufügen", detail: "Öffne eine Entität und lege Einträge an (z.B. Dune unter Bücher).")
                 GuideStep("Notizen nutzen", detail: "In Entität oder Attribut gibt’s ein Notizfeld (Markdown‑fähig).")
                 GuideStep("Links setzen", detail: "Verknüpfe Dinge (Projekt X ↔ Person Y) und nutze Link‑Notizen für den Kontext.")
-                GuideStep("Details‑Felder definieren", detail: "Pro Entität ein Schema (Status, Datum, Zahl …), pro Attribut die Werte.")
+                GuideStep("Details‑Felder definieren", detail: "Pro Entität ein Schema (Status, Datum, Zahl, Auswahl), pro Attribut die Werte.")
                 GuideStep("Graph ansehen", detail: "Tab „Graph“ → Node antippen → Action‑Chip unten nutzen (z.B. + für Expand).")
                 GuideStep("Fokus setzen", detail: "Auf Entitäts‑Nodes kannst du Fokus aktivieren, um nur das Umfeld zu sehen.")
-                GuideStep("Graph-Struktur sichern", detail: "Einstellungen → Export & Import → .bmgraph exportieren. Wichtig: Das ist ein Struktur-Export, kein vollständiges Medien-Backup aller Anhänge.")
+                GuideStep("Sicherung bewusst wählen", detail: "Einstellungen → Export & Import: .bmgraph für kleine Struktur-Exporte, .bmbackup für Vollbackups mit Anhängen.")
             }
 
             GuideCallout(systemImage: "sparkles", title: "Kleiner Geheimtipp") {
@@ -244,7 +244,7 @@ private extension BrainMeshGuideView {
             GuideCard(title: "Details‑Felder anlegen", systemImage: "slider.horizontal.3") {
                 GuideBullets {
                     GuideBullet("Entität öffnen (z.B. Bücher).")
-                    GuideBullet("Unter Details‑Felder Felder anlegen (Text, Zahl, Datum, Auswahl …).")
+                    GuideBullet("Unter Details‑Felder Felder anlegen, zum Beispiel Text, Zahl, Datum oder Auswahl.")
                     GuideBullet("Wichtige Felder pinnen (werden oft prominenter gezeigt).")
                 }
             }
@@ -295,8 +295,8 @@ private extension BrainMeshGuideView {
                 Text("Anhänge können deinen iCloud‑Speicher beeinflussen. Viele große Videos bedeuten oft: langsamerer Sync.")
             }
 
-            GuideCallout(systemImage: "externaldrive", title: ".bmgraph ist kein vollständiges Medien-Backup") {
-                Text("Export & Import sichert die Graph-Struktur. Separate Anhänge, Dateien, Videos und Galerie-Bilder aus dem Anhangsbereich sind aktuell nicht Teil der .bmgraph-Datei.")
+            GuideCallout(systemImage: "externaldrive", title: ".bmgraph und .bmbackup bewusst unterscheiden") {
+                Text(".bmgraph ist der kleine Struktur-Export. .bmbackup ist das Vollbackup-Paket mit Anhängen. Für wichtige Medien ist .bmbackup die richtige Wahl.")
             }
         }
     }
@@ -351,7 +351,7 @@ private extension BrainMeshGuideView {
 
             GuideGrid {
                 GuideMiniCard(title: "Anzeige", detail: "Layouts, Dichte, Counts und Darstellung.")
-                GuideMiniCard(title: "Export & Import", detail: "Graph-Struktur als .bmgraph exportieren und später wieder importieren.")
+                GuideMiniCard(title: "Export & Import", detail: ".bmgraph für Struktur, .bmbackup für Vollbackup mit Anhängen.")
                 GuideMiniCard(title: "Import", detail: "Optionen zur Bild-/Video‑Kompression beim Import.")
                 GuideMiniCard(title: "Sync & Wartung", detail: "iCloud, Speicherstatus und sichere Cache-Reparatur.")
             }
@@ -379,13 +379,14 @@ private extension BrainMeshGuideView {
             GuideCard(title: "Export & Backup richtig verstehen", systemImage: "externaldrive") {
                 GuideBullets {
                     GuideBullet(".bmgraph ist ein Graph-Struktur-Export: Graph, Entitäten, Attribute, Links, Details-Felder und Details-Werte.")
-                    GuideBullet("Optional können Notizen, Icons und Headerbilder von Entitäten oder Attributen enthalten sein.")
-                    GuideBullet("Nicht enthalten sind separate Anhänge, Dateien, Videos, Galerie-Bilder, Graph-Schutz, Passwörter, Biometrie-Einstellungen und Pro-Status.")
+                    GuideBullet(".bmbackup ist ein Vollbackup-Paket: Graph-Struktur plus separate Anhang-Dateien aus dem aktiven Graph.")
+                    GuideBullet("Optional steuerst du Notizen, Icons, Headerbilder und beim Vollbackup auch Anhänge.")
+                    GuideBullet("Nicht enthalten sind Graph-Schutz, Passwörter, Biometrie-Einstellungen und Pro-Status.")
                 }
             }
 
-            GuideCallout(systemImage: "exclamationmark.triangle", title: "Reality-Check") {
-                Text("Wenn dir dein Wissen wichtig ist, exportiere regelmäßig die Graph-Struktur. Für ein vollständiges Medien-Backup mit separaten Anhängen braucht es ein eigenes Paketformat; das ist aktuell nicht Teil der .bmgraph-Datei.")
+            GuideCallout(systemImage: "exclamationmark.triangle", title: "Sync ist kein Backup") {
+                Text("iCloud-Sync hält Geräte abgleichbar, ersetzt aber keine bewusst gespeicherte Sicherungsdatei. Erstelle regelmäßig ein .bmbackup, wenn Anhänge und Medien wichtig sind.")
             }
         }
     }
@@ -435,13 +436,13 @@ private extension BrainMeshGuideView {
                     Text("Ja: Im Tab Entitäten kannst du suchen. Tipp: Suchbegriffe dürfen auch in Notizen vorkommen. Prüfe außerdem, ob du im richtigen Graph bist.")
                 }
                 GuideDisclosure(title: "Kann ich BrainMesh als Backup exportieren?") {
-                    Text("Ja, aber bitte mit der richtigen Erwartung: .bmgraph ist ein Graph-Struktur-Export. Enthalten sind Graph, Entitäten, Attribute, Links, Details-Felder und Details-Werte. Optional können Notizen, Icons und Headerbilder enthalten sein. Separate Anhänge, Dateien, Videos, Galerie-Bilder, Graph-Schutz und Pro-Status sind nicht enthalten.")
+                    Text("Ja. Nutze .bmgraph für einen kleinen Struktur-Export und .bmbackup für ein Vollbackup mit Anhängen. Weder .bmgraph noch .bmbackup übernehmen Graph-Schutz, Passwörter, Biometrie-Einstellungen oder Pro-Status.")
                 }
                 GuideDisclosure(title: "Beim Import fehlen Bilder oder Anhänge – ist etwas kaputt?") {
-                    Text("Headerbilder erscheinen nur, wenn sie beim Export mit ausgewählt wurden. Separate Anhänge, Dateien, Videos und Galerie-Bilder sind nicht Teil der .bmgraph-Datei. Wenn vorhandene Vorschaubilder nur nicht angezeigt werden, hilft oft Sync & Wartung mit Bildcache neu aufbauen oder Anhänge-Cache bereinigen.")
+                    Text("Nicht unbedingt. .bmgraph enthält keine separaten Anhänge. Für Dateien, Videos und Galerie-Bilder brauchst du ein .bmbackup mit aktivierter Anhang-Option. Wenn vorhandene Vorschaubilder nur nicht angezeigt werden, hilft oft Sync & Wartung mit Bildcache neu aufbauen oder Anhänge-Cache bereinigen.")
                 }
-                GuideDisclosure(title: "Warum dauert Sync länger?") {
-                    Text("Viele große Anhänge, besonders Videos, können Sync bremsen und iCloud-Speicher belegen. Die Cache-Wartung kann Vorschauen reparieren, macht daraus aber kein Backup. Export & Import als .bmgraph sichert nur die Graph-Struktur; große Anhänge solltest du zusätzlich bewusst sichern, wenn sie wichtig sind.")
+                GuideDisclosure(title: "Warum dauert Sync oder Backup länger?") {
+                    Text("Viele große Anhänge, besonders Videos, können Sync bremsen, iCloud-Speicher belegen und .bmbackup-Pakete groß machen. Die Cache-Wartung kann Vorschauen reparieren, macht daraus aber kein Backup. Für wichtige Medien ist ein regelmäßiges .bmbackup sinnvoll.")
                 }
                 GuideDisclosure(title: "Wie kann ich einen Graph schützen?") {
                     Text("Im Graph‑Picker pro Graph Schutz aktivieren (Face ID/Touch ID oder Passwort).")

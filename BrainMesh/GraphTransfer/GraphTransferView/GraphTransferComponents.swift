@@ -3,6 +3,7 @@
 //  BrainMesh
 //
 
+import Foundation
 import SwiftUI
 import UniformTypeIdentifiers
 import UIKit
@@ -26,6 +27,7 @@ struct GraphTransferCard<Content: View>: View {
 
 struct GraphTransferExportReadyCard: View {
     let fileURL: URL
+    let kind: GraphTransferExportKind
     let summaryText: String?
     let onShare: () -> Void
     let onSaveToFiles: () -> Void
@@ -34,9 +36,14 @@ struct GraphTransferExportReadyCard: View {
     var body: some View {
         // Keep this as a plain List row (no card background) to preserve the original UI.
         VStack(alignment: .leading, spacing: 10) {
-            VStack(alignment: .leading, spacing: 2) {
-                Text("Export bereit")
+            VStack(alignment: .leading, spacing: 4) {
+                Label("Export bereit", systemImage: kind.systemImage)
                     .font(.headline)
+
+                Text("\(kind.title) · \(kind.shortTitle)")
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(.secondary)
+
                 Text(fileURL.lastPathComponent)
                     .font(.footnote)
                     .foregroundStyle(.secondary)
@@ -47,16 +54,16 @@ struct GraphTransferExportReadyCard: View {
                     Button {
                         onShare()
                     } label: {
-                        Label("Teilen…", systemImage: "square.and.arrow.up")
+                        Label("Teilen", systemImage: "square.and.arrow.up")
                     }
 
                     Button {
                         onSaveToFiles()
                     } label: {
-                        Label("In Dateien speichern…", systemImage: "folder")
+                        Label("In Dateien speichern", systemImage: "folder")
                     }
                 } label: {
-                    Label("Teilen / Speichern…", systemImage: "square.and.arrow.up")
+                    Label("Teilen / Speichern", systemImage: "square.and.arrow.up")
                 }
 
                 Spacer()
@@ -71,10 +78,86 @@ struct GraphTransferExportReadyCard: View {
                 Text(summaryText)
                     .font(.footnote)
                     .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
             }
         }
     }
 }
+
+
+struct GraphTransferExportKindInfoCard: View {
+    let kind: GraphTransferExportKind
+    let attachmentEstimate: GraphTransferAttachmentEstimate
+
+    var body: some View {
+        GraphTransferCard {
+            VStack(alignment: .leading, spacing: 8) {
+                Label(kind.title, systemImage: kind.systemImage)
+                    .font(.headline)
+
+                Text(message)
+                    .font(.footnote)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+
+                if kind == .fullBackup {
+                    Text(attachmentEstimate.compactSummary)
+                        .font(.footnote.weight(.semibold))
+                        .foregroundStyle(.secondary)
+
+                    if attachmentEstimate.isLargeBackup {
+                        Label("Große Backups können länger dauern und viel Speicher benötigen.", systemImage: "exclamationmark.triangle")
+                            .font(.footnote)
+                            .foregroundStyle(.orange)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+                }
+            }
+        }
+    }
+
+    private var message: String {
+        switch kind {
+        case .graphStructure:
+            return ".bmgraph ist schnell und klein. Es enthält die Graph-Struktur, aber keine separaten Anhänge wie Dateien, Videos oder Galerie-Bilder."
+        case .fullBackup:
+            return ".bmbackup ist für vollständige Sicherungen gedacht. Es enthält die Graph-Struktur plus separate Anhang-Dateien aus MetaAttachment."
+        }
+    }
+}
+
+struct GraphTransferAttachmentExportOptionView: View {
+    @Binding var includeAttachments: Bool
+    let estimate: GraphTransferAttachmentEstimate
+    let isDisabled: Bool
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Toggle("Anhänge ins Vollbackup aufnehmen", isOn: $includeAttachments)
+                .disabled(isDisabled)
+
+            Text(helpText)
+                .font(.footnote)
+                .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+
+            if includeAttachments, estimate.isLargeBackup {
+                Label("Dieses Vollbackup wird voraussichtlich groß. Plane für Export und Import etwas Zeit ein.", systemImage: "externaldrive.badge.exclamationmark")
+                    .font(.footnote)
+                    .foregroundStyle(.orange)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+        }
+    }
+
+    private var helpText: String {
+        if estimate.hasAttachments == false {
+            return "Im aktiven Graph wurden keine Anhänge gefunden. Die Option bleibt verfügbar, falls vor dem Export noch Anhänge hinzukommen."
+        }
+        return "Geschätzt: \(estimate.compactSummary). Die Schätzung nutzt gespeicherte Metadaten und lädt keine großen Dateien nur für diese Anzeige."
+    }
+}
+
 
 struct GraphTransferImportPreviewCard: View {
     let preview: ImportPreview
@@ -448,20 +531,39 @@ final class ExportActivityItemSource: NSObject, UIActivityItemSource {
 
 // MARK: - File Export Document
 
-struct BMGraphFileDocument: FileDocument {
-    static var readableContentTypes: [UTType] { [.brainMeshGraph] }
+struct BMGraphFileDocument: FileDocument, @unchecked Sendable {
+    static var readableContentTypes: [UTType] { [.brainMeshGraph, .brainMeshBackup] }
 
-    var data: Data
+    private var wrapper: FileWrapper
 
     init(data: Data) {
-        self.data = data
+        self.wrapper = FileWrapper(regularFileWithContents: data)
+    }
+
+    init(data: Data, contentType: UTType) {
+        self.wrapper = FileWrapper(regularFileWithContents: data)
+        let fallbackExtension = Self.fallbackFilenameExtension(for: contentType)
+        let filenameExtension = contentType.preferredFilenameExtension ?? fallbackExtension
+        self.wrapper.preferredFilename = "Export.\(filenameExtension)"
+    }
+
+    init(fileURL: URL, contentType: UTType) throws {
+        self.wrapper = try FileWrapper(url: fileURL, options: [])
+        self.wrapper.preferredFilename = fileURL.lastPathComponent
     }
 
     init(configuration: ReadConfiguration) throws {
-        self.data = configuration.file.regularFileContents ?? Data()
+        self.wrapper = configuration.file
     }
 
     func fileWrapper(configuration: WriteConfiguration) throws -> FileWrapper {
-        FileWrapper(regularFileWithContents: data)
+        wrapper
+    }
+
+    private static func fallbackFilenameExtension(for contentType: UTType) -> String {
+        if contentType == UTType.brainMeshBackup {
+            return UTType.brainMeshBackupFilenameExtension
+        }
+        return UTType.brainMeshGraphFilenameExtension
     }
 }

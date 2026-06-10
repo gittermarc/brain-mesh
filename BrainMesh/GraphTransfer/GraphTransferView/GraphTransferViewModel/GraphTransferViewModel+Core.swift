@@ -5,6 +5,7 @@
 
 import Foundation
 import SwiftData
+import UniformTypeIdentifiers
 
 extension GraphTransferViewModel {
 
@@ -17,27 +18,18 @@ extension GraphTransferViewModel {
     }
 
     func refreshActiveGraphName(using modelContext: ModelContext, activeGraphIDString: String) {
+        refreshActiveGraphMetadata(using: modelContext, activeGraphIDString: activeGraphIDString)
+    }
+
+    func refreshActiveGraphMetadata(using modelContext: ModelContext, activeGraphIDString: String) {
         guard let id = UUID(uuidString: activeGraphIDString) else {
             activeGraphName = "—"
+            activeGraphAttachmentEstimate = .empty
             return
         }
 
-        let gid = id
-        var fd = FetchDescriptor<MetaGraph>(predicate: #Predicate { graph in
-            graph.id == gid
-        })
-        fd.fetchLimit = 1
-
-        do {
-            if let graph = try modelContext.fetch(fd).first {
-                let name = graph.name.trimmingCharacters(in: .whitespacesAndNewlines)
-                activeGraphName = name.isEmpty ? "Graph" : name
-            } else {
-                activeGraphName = "—"
-            }
-        } catch {
-            activeGraphName = "—"
-        }
+        activeGraphName = fetchActiveGraphName(for: id, using: modelContext)
+        activeGraphAttachmentEstimate = fetchAttachmentEstimate(for: id, using: modelContext)
     }
 
     func requestExportConfirm() {
@@ -46,23 +38,15 @@ extension GraphTransferViewModel {
     }
 
     func exportConfirmMessage(activeGraphName: String) -> String {
-        var parts: [String] = []
-        parts.append("Aktiver Graph: \(activeGraphName)")
-        parts.append("Immer enthalten: Graph-Struktur, Entitäten, Attribute, Links, Details-Felder und Details-Werte.")
-
-        var selectedOptions: [String] = []
-        if includeNotes { selectedOptions.append("Notizen") }
-        if includeIcons { selectedOptions.append("Icons") }
-        if includeImages { selectedOptions.append("Headerbilder von Entitäten/Attributen") }
-
-        if selectedOptions.isEmpty {
-            parts.append("Keine Zusatzoptionen ausgewählt.")
-        } else {
-            parts.append("Zusätzlich ausgewählt: \(selectedOptions.joined(separator: ", ")).")
-        }
-
-        parts.append("Nicht enthalten: separate Anhänge, Dateien, Videos, Galerie-Bilder, Graph-Schutz und Pro-Status.")
-        return parts.joined(separator: "\n")
+        GraphTransferExportCopy.confirmMessage(
+            kind: exportKind,
+            activeGraphName: activeGraphName,
+            includeNotes: includeNotes,
+            includeIcons: includeIcons,
+            includeHeaderImages: includeImages,
+            includeAttachments: includeAttachments,
+            attachmentEstimate: activeGraphAttachmentEstimate
+        )
     }
 
     func resetExport() {
@@ -75,9 +59,19 @@ extension GraphTransferViewModel {
         selectedImportURL = nil
     }
 
+    var exportContentType: UTType {
+        guard let url = exportedFileURL else {
+            return exportKind.contentType
+        }
+        if url.pathExtension.lowercased() == GraphBackupFormat.filenameExtension {
+            return .brainMeshBackup
+        }
+        return .brainMeshGraph
+    }
+
     func fetchUniqueGraphs(using modelContext: ModelContext) -> [MetaGraph] {
         var fd = FetchDescriptor<MetaGraph>()
-        fd.sortBy = [SortDescriptor(\MetaGraph.createdAt, order: .forward)]
+        fd.sortBy = [SortDescriptor(\.createdAt, order: .forward)]
         do {
             let graphs = try modelContext.fetch(fd)
             var seen = Set<UUID>()
@@ -97,5 +91,43 @@ extension GraphTransferViewModel {
             return graph
         }
         throw GraphTransferError.graphNotFound(graphID: id)
+    }
+}
+
+private extension GraphTransferViewModel {
+
+    func fetchActiveGraphName(for id: UUID, using modelContext: ModelContext) -> String {
+        let gid = id
+        var fd = FetchDescriptor<MetaGraph>(predicate: #Predicate { graph in
+            graph.id == gid
+        })
+        fd.fetchLimit = 1
+
+        do {
+            if let graph = try modelContext.fetch(fd).first {
+                let name = graph.name.trimmingCharacters(in: .whitespacesAndNewlines)
+                return name.isEmpty ? "Graph" : name
+            }
+            return "—"
+        } catch {
+            return "—"
+        }
+    }
+
+    func fetchAttachmentEstimate(for id: UUID, using modelContext: ModelContext) -> GraphTransferAttachmentEstimate {
+        let gid = id
+        let fd = FetchDescriptor<MetaAttachment>(predicate: #Predicate { attachment in
+            attachment.graphID == gid
+        })
+
+        do {
+            let attachments = try modelContext.fetch(fd)
+            let totalBytes = attachments.reduce(Int64(0)) { partialResult, attachment in
+                partialResult + Int64(max(0, attachment.byteCount))
+            }
+            return GraphTransferAttachmentEstimate(count: attachments.count, byteCount: totalBytes)
+        } catch {
+            return .empty
+        }
     }
 }

@@ -6,6 +6,7 @@
 import Foundation
 import Combine
 import SwiftData
+import UniformTypeIdentifiers
 
 @MainActor
 final class GraphTransferViewModel: ObservableObject, @unchecked Sendable {
@@ -27,18 +28,34 @@ final class GraphTransferViewModel: ObservableObject, @unchecked Sendable {
     }
 
     struct ExportSummary {
+        var kind: GraphTransferExportKind
         var counts: CountsDTO
+        var attachmentCount: Int
+        var attachmentBytes: Int64
+        var warningCount: Int
+
+        init(
+            kind: GraphTransferExportKind,
+            counts: CountsDTO,
+            attachmentCount: Int = 0,
+            attachmentBytes: Int64 = 0,
+            warningCount: Int = 0
+        ) {
+            self.kind = kind
+            self.counts = counts
+            self.attachmentCount = attachmentCount
+            self.attachmentBytes = attachmentBytes
+            self.warningCount = warningCount
+        }
 
         var summaryText: String? {
-            [
-                "Graph-Struktur-Export",
-                "\(counts.entities) Entitäten",
-                "\(counts.attributes) Attribute",
-                "\(counts.links) Links",
-                "\(counts.detailFieldDefinitions) Details-Felder",
-                "\(counts.detailFieldValues) Details-Werte",
-                "keine separaten Anhänge"
-            ].joined(separator: " · ")
+            GraphTransferExportCopy.readySummary(
+                kind: kind,
+                counts: counts,
+                attachmentCount: attachmentCount,
+                attachmentBytes: attachmentBytes,
+                warningCount: warningCount
+            )
         }
     }
 
@@ -55,10 +72,13 @@ final class GraphTransferViewModel: ObservableObject, @unchecked Sendable {
     }
 
     @Published var activeGraphName: String = "—"
+    @Published var activeGraphAttachmentEstimate: GraphTransferAttachmentEstimate = .empty
 
+    @Published var exportKind: GraphTransferExportKind = .graphStructure
     @Published var includeNotes: Bool = true
     @Published var includeIcons: Bool = true
     @Published var includeImages: Bool = false
+    @Published var includeAttachments: Bool = true
 
     @Published var exportState: ExportState = .idle
     @Published var importState: ImportState = .idle
@@ -72,7 +92,7 @@ final class GraphTransferViewModel: ObservableObject, @unchecked Sendable {
     @Published var isShowingProPaywall: Bool = false
 
     @Published var isShowingFileExporter: Bool = false
-    @Published var exportDocument: BMGraphFileDocument = BMGraphFileDocument(data: Data())
+    @Published var exportDocument: BMGraphFileDocument = BMGraphFileDocument(data: Data(), contentType: UTType.brainMeshGraph)
 
     @Published var exportedFileURL: URL? = nil
     @Published var selectedImportURL: URL? = nil

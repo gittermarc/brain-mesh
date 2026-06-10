@@ -92,7 +92,7 @@ struct GraphTransferView: View {
         .fileExporter(
             isPresented: $model.isShowingFileExporter,
             document: model.exportDocument,
-            contentType: .brainMeshGraph,
+            contentType: model.exportContentType,
             defaultFilename: model.exportDefaultFilename
         ) { result in
             Task { @MainActor in
