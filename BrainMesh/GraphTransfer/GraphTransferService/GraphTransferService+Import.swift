@@ -22,6 +22,10 @@ extension GraphTransferService {
         guard let container else { throw GraphTransferError.notConfigured }
 
         progress?(GraphTransferImportProgressFactory.inspecting())
+        if GraphTransferFileInspection.isBackupTransfer(url: url) {
+            return try await importFullBackupImpl(from: url, mode: mode, progress: progress)
+        }
+
         let file = try Self.decodeValidatedImportFile(url: url)
 
         switch mode {

@@ -39,7 +39,7 @@ extension GraphTransferViewModel {
         guard isBusy == false else { return }
         guard selectedImportURL != nil else { return }
         guard selectedPreviewAllowsImport else {
-            showFullBackupImportUnavailable()
+            showSelectedPreviewCannotImport()
             return
         }
 

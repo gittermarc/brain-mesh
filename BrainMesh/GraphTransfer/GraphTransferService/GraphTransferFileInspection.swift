@@ -10,16 +10,16 @@ import Foundation
 nonisolated enum GraphTransferFileInspection {
 
     static func inspect(url: URL, fileManager: FileManager = .default) throws -> ImportPreview {
-        if isBackupPackage(url: url, fileManager: fileManager) {
+        if isBackupTransfer(url: url, fileManager: fileManager) {
             return try GraphBackupPreviewInspection.makePreview(packageURL: url, fileManager: fileManager)
         }
         return try makeGraphStructurePreview(url: url)
     }
 }
 
-private extension GraphTransferFileInspection {
+extension GraphTransferFileInspection {
 
-    static func isBackupPackage(url: URL, fileManager: FileManager) -> Bool {
+    nonisolated static func isBackupTransfer(url: URL, fileManager: FileManager = .default) -> Bool {
         if url.pathExtension.lowercased() == GraphBackupFormat.filenameExtension {
             return true
         }
@@ -29,6 +29,10 @@ private extension GraphTransferFileInspection {
         guard exists, isDirectory.boolValue else { return false }
         return fileManager.fileExists(atPath: GraphBackupPackageLayout.manifestURL(in: url).path)
     }
+
+}
+
+private nonisolated extension GraphTransferFileInspection {
 
     static func makeGraphStructurePreview(url: URL) throws -> ImportPreview {
         let file = try GraphTransferService.decodeValidatedImportFile(url: url)

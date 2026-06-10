@@ -58,7 +58,7 @@ extension GraphTransferViewModel {
         guard isBusy == false else { return }
         guard selectedImportURL != nil else { return }
         guard selectedPreviewAllowsImport else {
-            showFullBackupImportUnavailable()
+            showSelectedPreviewCannotImport()
             return
         }
 
@@ -81,16 +81,16 @@ extension GraphTransferViewModel {
         return true
     }
 
-    func showFullBackupImportUnavailable() {
-        let message = userFacingMessage(for: GraphTransferError.fullBackupImportNotAvailable)
-        alertState = AlertState(title: "Full Backup", message: message)
+    func showSelectedPreviewCannotImport() {
+        let message = "Diese Datei enthält blockierende Probleme. Wähle eine andere Datei oder erstelle das Backup erneut."
+        alertState = AlertState(title: "Import nicht möglich", message: message)
     }
 
     func performImport() async {
         guard isBusy == false else { return }
         guard let url = selectedImportURL else { return }
         guard selectedPreviewAllowsImport else {
-            showFullBackupImportUnavailable()
+            showSelectedPreviewCannotImport()
             return
         }
 

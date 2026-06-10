@@ -39,12 +39,35 @@ nonisolated final class GraphTransferImportCoordinator {
     }
 
     func runAsNewGraphRemap() async throws -> ImportResult {
+        _ = try await runCoreAsNewGraphRemap()
+        return try finalizeImport()
+    }
+
+    func runCoreAsNewGraphRemap() async throws -> GraphTransferCoreImportResult {
         createGraph()
         try await importEntities()
         try await importFieldDefinitions()
         try await importAttributes()
         try await importDetailFieldValues()
         try await importLinks()
-        return try finalizeImport()
+
+        return GraphTransferCoreImportResult(
+            newGraphID: newGraphID,
+            entityIDMap: entityIDMap,
+            attributeIDMap: attributeIDMap,
+            insertedCounts: coreInsertedCounts,
+            skippedLinks: skippedLinks
+        )
+    }
+
+    var coreInsertedCounts: CountsDTO {
+        CountsDTO(
+            graphs: 1,
+            entities: entitiesByNewID.count,
+            attributes: attributesByNewID.count,
+            detailFieldDefinitions: fieldIDMap.count,
+            detailFieldValues: importedValues,
+            links: importedLinks
+        )
     }
 }

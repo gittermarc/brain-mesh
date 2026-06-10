@@ -129,7 +129,7 @@ nonisolated enum GraphBackupAttachmentAssetExporter {
     }
 }
 
-private extension GraphBackupAttachmentAssetExporter {
+private nonisolated extension GraphBackupAttachmentAssetExporter {
 
     static func writtenSize(of url: URL, attachmentID: UUID, fileManager: FileManager) throws -> Int64 {
         do {

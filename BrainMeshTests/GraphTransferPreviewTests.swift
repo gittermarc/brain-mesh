@@ -26,7 +26,7 @@ struct GraphTransferPreviewTests {
     }
 
     @Test
-    func fullBackupPreviewDoesNotAllowImportYet() {
+    func fullBackupPreviewAllowsImportWhenNoBlockingProblems() {
         let preview = ImportPreview(
             kind: .fullBackup,
             graphName: "Backup",
@@ -38,7 +38,7 @@ struct GraphTransferPreviewTests {
         )
 
         #expect(preview.kind == .fullBackup)
-        #expect(preview.canStartImport == false)
+        #expect(preview.canStartImport)
         #expect(preview.isFullBackup)
         #expect(preview.attachmentBytesText.isEmpty == false)
     }

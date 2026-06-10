@@ -27,7 +27,7 @@ struct GraphFullBackupInspectTests {
         #expect(preview.attachmentBytes == 3)
         #expect(preview.warnings.isEmpty)
         #expect(preview.blockingProblems.isEmpty)
-        #expect(preview.canStartImport == false)
+        #expect(preview.canStartImport)
     }
 
     @Test

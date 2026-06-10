@@ -106,7 +106,7 @@ nonisolated struct ImportPreview: Sendable {
     }
 
     var canStartImport: Bool {
-        kind == .graphStructure && blockingProblems.isEmpty
+        blockingProblems.isEmpty
     }
 
     var isFullBackup: Bool {
@@ -124,6 +124,33 @@ nonisolated struct ImportResult: Sendable {
     var newGraphID: UUID
     var insertedCounts: CountsDTO
     var skippedLinks: Int
+    var importedAttachments: Int
+    var skippedAttachments: Int
+    var warnings: [String]
+
+    init(
+        newGraphID: UUID,
+        insertedCounts: CountsDTO,
+        skippedLinks: Int,
+        importedAttachments: Int = 0,
+        skippedAttachments: Int = 0,
+        warnings: [String] = []
+    ) {
+        self.newGraphID = newGraphID
+        self.insertedCounts = insertedCounts
+        self.skippedLinks = skippedLinks
+        self.importedAttachments = importedAttachments
+        self.skippedAttachments = skippedAttachments
+        self.warnings = warnings
+    }
+}
+
+nonisolated struct GraphTransferCoreImportResult: Sendable {
+    var newGraphID: UUID
+    var entityIDMap: [UUID: UUID]
+    var attributeIDMap: [UUID: UUID]
+    var insertedCounts: CountsDTO
+    var skippedLinks: Int
 }
 
 nonisolated struct GraphTransferProgress: Sendable {
@@ -134,6 +161,7 @@ nonisolated struct GraphTransferProgress: Sendable {
         case exportingGraph
         case backupAttachments
         case backupManifest
+        case attachments
         case entities
         case fields
         case attributes
@@ -220,6 +248,19 @@ nonisolated enum GraphTransferImportProgressFactory {
             completed: completed,
             total: total,
             label: "\(noun): \(completed)/\(total)"
+        )
+    }
+
+    static func importingAttachmentsStart(total: Int) -> GraphTransferProgress {
+        GraphTransferProgress(phase: .attachments, completed: 0, total: total, label: "Anhänge werden importiert…")
+    }
+
+    static func importingAttachmentStep(completed: Int, total: Int) -> GraphTransferProgress {
+        GraphTransferProgress(
+            phase: .attachments,
+            completed: completed,
+            total: total,
+            label: "Anhänge: \(completed)/\(total)"
         )
     }
 

@@ -73,7 +73,7 @@ nonisolated enum GraphBackupPreviewInspection {
     }
 }
 
-private extension GraphBackupPreviewInspection {
+private nonisolated extension GraphBackupPreviewInspection {
 
     static func readSupportedManifest(
         from packageURL: URL,
@@ -301,7 +301,7 @@ private extension GraphBackupPreviewInspection {
     }
 }
 
-private extension CountsDTO {
+private nonisolated extension CountsDTO {
     func matches(_ other: CountsDTO) -> Bool {
         graphs == other.graphs
             && entities == other.entities
@@ -312,7 +312,7 @@ private extension CountsDTO {
     }
 }
 
-private extension GraphBackupAttachmentManifestEntry {
+private nonisolated extension GraphBackupAttachmentManifestEntry {
     var displayTitle: String {
         let trimmedTitle = title.trimmingCharacters(in: .whitespacesAndNewlines)
         if trimmedTitle.isEmpty == false { return trimmedTitle }

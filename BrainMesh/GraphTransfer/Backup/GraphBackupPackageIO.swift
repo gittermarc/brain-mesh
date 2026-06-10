@@ -155,7 +155,7 @@ nonisolated enum GraphBackupPackageIO {
     }
 }
 
-private extension GraphBackupPackageIO {
+private nonisolated extension GraphBackupPackageIO {
     static func exportDateString(_ date: Date) -> String {
         let formatter = DateFormatter()
         formatter.locale = Locale(identifier: "en_US_POSIX")

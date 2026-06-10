@@ -152,13 +152,12 @@ struct GraphTransferImportUnavailableCard: View {
     }
 
     private var title: String {
-        if preview.isFullBackup { return "Import kommt im nächsten Schritt" }
-        return "Import aktuell nicht möglich"
+        "Import aktuell nicht möglich"
     }
 
     private var message: String {
         if preview.isFullBackup {
-            return "BrainMesh kann dieses Full Backup jetzt bereits prüfen. Der vollständige Import mit Anhängen folgt in PR 20."
+            return "Dieses Full Backup enthält blockierende Probleme. Erstelle das Backup erneut oder wähle eine andere Datei."
         }
         return "Die Vorschau enthält blockierende Probleme. Wähle eine andere Datei oder exportiere den Graph erneut."
     }
@@ -260,9 +259,32 @@ struct GraphTransferImportResultCard: View {
                     if result.skippedLinks > 0 {
                         LabeledContent("Übersprungene Links", value: "\(result.skippedLinks)")
                     }
+                    if result.importedAttachments > 0 {
+                        LabeledContent("Anhänge", value: "\(result.importedAttachments)")
+                    }
+                    if result.skippedAttachments > 0 {
+                        LabeledContent("Übersprungene Anhänge", value: "\(result.skippedAttachments)")
+                    }
+                    if result.warnings.isEmpty == false {
+                        LabeledContent("Hinweise", value: "\(result.warnings.count)")
+                    }
                 }
                 .font(.footnote)
                 .foregroundStyle(.secondary)
+
+                if result.warnings.isEmpty == false {
+                    Divider()
+                    VStack(alignment: .leading, spacing: 4) {
+                        Text("Hinweise")
+                            .font(.footnote.weight(.semibold))
+                        ForEach(result.warnings, id: \.self) { warning in
+                            Text("• \(warning)")
+                                .font(.footnote)
+                                .foregroundStyle(.secondary)
+                                .fixedSize(horizontal: false, vertical: true)
+                        }
+                    }
+                }
             }
         }
     }
@@ -317,7 +339,7 @@ struct GraphTransferScopeInfoCard: View {
         case .exportScope:
             return ".bmgraph ist ein Graph-Struktur-Export. Er ist ideal zum Umziehen, Teilen oder Wiederherstellen der Graph-Struktur, aber kein vollständiges Medien-Backup."
         case .importScope:
-            return "BrainMesh prüft .bmgraph-Struktur-Exporte und .bmbackup-Full-Backups. Full Backups werden in diesem Schritt nur geprüft; der Import mit Anhängen folgt danach."
+            return "BrainMesh importiert .bmgraph-Struktur-Exporte und .bmbackup-Full-Backups als neuen Graph. Full Backups stellen zusätzlich Anhänge wieder her, soweit die Paketdateien vollständig sind."
         }
     }
 
@@ -347,7 +369,7 @@ struct GraphTransferScopeInfoCard: View {
                 )
                 GraphTransferScopeBullet(
                     title: ".bmbackup",
-                    detail: "Full Backups werden geprüft und mit Anhängen angezeigt. Der vollständige Import kommt im nächsten Schritt."
+                    detail: "Full Backups werden als neuer Graph importiert und stellen Anhänge inklusive Datei-, Video- und Galerie-Daten wieder her."
                 )
                 GraphTransferScopeBullet(
                     title: "Nicht enthalten",
@@ -417,7 +439,10 @@ final class ExportActivityItemSource: NSObject, UIActivityItemSource {
         _ activityViewController: UIActivityViewController,
         dataTypeIdentifierForActivityType activityType: UIActivity.ActivityType?
     ) -> String {
-        UTType.brainMeshGraph.identifier
+        if fileURL.pathExtension.lowercased() == GraphBackupFormat.filenameExtension {
+            return UTType.brainMeshBackup.identifier
+        }
+        return UTType.brainMeshGraph.identifier
     }
 }
 

@@ -19,22 +19,22 @@ nonisolated extension GraphTransferImportCoordinator {
         context.insert(graph)
     }
 
-    func finalizeImport() throws -> ImportResult {
+    func finalizeImport(
+        importedAttachments: Int = 0,
+        skippedAttachments: Int = 0,
+        warnings: [String] = []
+    ) throws -> ImportResult {
         progress?(GraphTransferImportProgressFactory.saving())
         try saveContext()
         progress?(GraphTransferImportProgressFactory.done())
 
         return ImportResult(
             newGraphID: newGraphID,
-            insertedCounts: CountsDTO(
-                graphs: 1,
-                entities: entitiesByNewID.count,
-                attributes: attributesByNewID.count,
-                detailFieldDefinitions: fieldIDMap.count,
-                detailFieldValues: importedValues,
-                links: importedLinks
-            ),
-            skippedLinks: skippedLinks
+            insertedCounts: coreInsertedCounts,
+            skippedLinks: skippedLinks,
+            importedAttachments: importedAttachments,
+            skippedAttachments: skippedAttachments,
+            warnings: warnings
         )
     }
 }
