@@ -12,6 +12,7 @@ struct SyncMaintenanceView: View {
     // Not `private`, so the extracted section files can access it.
     @ObservedObject var syncRuntime = SyncRuntime.shared
 
+    @State var isCheckingICloudStatus: Bool = false
     @State var isRebuildingImageCache: Bool = false
     @State var isClearingAttachmentCache: Bool = false
 
@@ -19,6 +20,10 @@ struct SyncMaintenanceView: View {
     @State var attachmentCacheSizeText: String = "—"
 
     @State var alertState: AlertState? = nil
+
+    var isMaintenanceBusy: Bool {
+        isRebuildingImageCache || isClearingAttachmentCache
+    }
 
     var body: some View {
         List {
@@ -29,6 +34,7 @@ struct SyncMaintenanceView: View {
         .navigationBarTitleDisplayMode(.inline)
         .task {
             refreshCacheSizes()
+            await refreshICloudStatus()
         }
         .alert(item: $alertState) { state in
             Alert(
@@ -61,6 +67,14 @@ struct SyncMaintenanceView: View {
                 attachmentCacheSizeText = attachmentText
             }
         }
+    }
+
+    @MainActor
+    func refreshICloudStatus() async {
+        guard isCheckingICloudStatus == false else { return }
+        isCheckingICloudStatus = true
+        defer { isCheckingICloudStatus = false }
+        await syncRuntime.refreshAccountStatus()
     }
 }
 

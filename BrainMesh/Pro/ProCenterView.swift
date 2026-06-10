@@ -21,11 +21,8 @@ struct ProCenterView: View {
                 actions
                 features
 
-                if let e = proStore.lastError {
-                    Text(e)
-                        .font(.footnote)
-                        .foregroundStyle(.secondary)
-                        .padding(.top, 4)
+                if let errorMessage = proStore.lastError {
+                    ProStatusMessageCard(message: errorMessage)
                 }
             }
             .padding(16)
@@ -77,9 +74,10 @@ struct ProCenterView: View {
                 statusBadge
             }
 
-            Text("Pro schaltet mehr Graphen frei und lässt dich Graphen schützen. Verwalten und Wiederherstellen geht hier – kaufen (falls nötig) direkt per Paywall.")
+            Text("Pro erweitert BrainMesh um mehr Arbeitsbereiche und Graph-Schutz. Deine vorhandenen Daten bleiben erhalten; Kauf, Wiederherstellung und Verwaltung laufen sicher über den App Store.")
                 .font(.footnote)
                 .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
         }
         .frame(maxWidth: .infinity, alignment: .leading)
         .padding(16)
@@ -104,7 +102,7 @@ struct ProCenterView: View {
                         .frame(maxWidth: .infinity)
                 }
                 .buttonStyle(.borderedProminent)
-                .disabled(proStore.isPurchasing)
+                .disabled(proStore.isPurchasing || proStore.isLoadingProducts)
             }
 
             HStack(spacing: 12) {
@@ -128,12 +126,17 @@ struct ProCenterView: View {
             if proStore.isPurchasing {
                 HStack(spacing: 10) {
                     ProgressView()
-                    Text("Kauf läuft …")
+                    Text("Kauf wird verarbeitet")
                         .foregroundStyle(.secondary)
                 }
                 .font(.footnote)
                 .padding(.top, 2)
             }
+
+            Text("Abos verwaltest du jederzeit über deine Apple-ID. BrainMesh speichert keine Zahlungsdaten in der App.")
+                .font(.footnote)
+                .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
         }
         .frame(maxWidth: .infinity, alignment: .leading)
         .padding(16)
@@ -170,7 +173,7 @@ struct ProCenterView: View {
     private var statusSubtitle: String {
         switch proStore.entitlement {
         case .unknown:
-            return "Status wird geprüft …"
+            return "Status wird geprüft"
         case .pro:
             return "Status: Aktiv"
         case .free:
@@ -185,7 +188,7 @@ struct ProCenterView: View {
             HStack(spacing: 8) {
                 ProgressView()
                     .scaleEffect(0.85)
-                Text("Prüfe …")
+                Text("Prüfung")
             }
             .statusCapsule()
         case .pro:
@@ -209,6 +212,41 @@ struct ProCenterView: View {
         guard !proStore.isProActive else { return }
         selectedFeature = feature
         showPaywall = true
+    }
+}
+
+
+private struct ProStatusMessageCard: View {
+    let message: String
+
+    var body: some View {
+        HStack(alignment: .top, spacing: 10) {
+            Image(systemName: "exclamationmark.triangle")
+                .symbolRenderingMode(.hierarchical)
+                .foregroundStyle(.secondary)
+                .accessibilityHidden(true)
+
+            VStack(alignment: .leading, spacing: 4) {
+                Text("Store-Status")
+                    .font(.headline)
+                    .foregroundStyle(.primary)
+
+                Text(message)
+                    .font(.footnote)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+
+            Spacer(minLength: 0)
+        }
+        .padding(14)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(Color(.secondarySystemGroupedBackground))
+        .clipShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
+        .overlay {
+            RoundedRectangle(cornerRadius: 18, style: .continuous)
+                .strokeBorder(Color(.separator).opacity(0.25), lineWidth: 0.5)
+        }
     }
 }
 

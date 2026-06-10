@@ -38,7 +38,7 @@ struct SettingsView: View {
                     SettingsHubTile(
                         systemImage: "square.and.arrow.down",
                         title: "Import",
-                        subtitle: "Bild- und Video-Kompression",
+                        subtitle: "Kompression für neue Medien",
                         showsAccessoryIndicator: true
                     )
                 }
@@ -50,7 +50,7 @@ struct SettingsView: View {
                     SettingsHubTile(
                         systemImage: "arrow.triangle.2.circlepath",
                         title: "Sync & Wartung",
-                        subtitle: "iCloud-Status und lokale Caches",
+                        subtitle: "iCloud, Speicherstatus und sichere Cache-Wartung",
                         showsAccessoryIndicator: false
                     )
                 }
@@ -62,7 +62,7 @@ struct SettingsView: View {
                     SettingsHubTile(
                         systemImage: "lifepreserver",
                         title: "Hilfe & Support",
-                        subtitle: "Onboarding, Version & Infos",
+                        subtitle: "Anleitung, Onboarding und App-Infos",
                         showsAccessoryIndicator: false
                     )
                 }

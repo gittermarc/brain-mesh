@@ -13,13 +13,13 @@ extension HelpSupportView {
             Button {
                 onboarding.isPresented = true
             } label: {
-                Label("Onboarding anzeigen", systemImage: "questionmark.circle")
+                Label("Onboarding erneut anzeigen", systemImage: "questionmark.circle")
             }
 
             Button {
                 sheet = .detailsIntro
             } label: {
-                Label("Neu: Details-Felder", systemImage: "sparkles")
+                Label("Details-Felder erklärt", systemImage: "list.bullet.rectangle")
             }
         }
     }

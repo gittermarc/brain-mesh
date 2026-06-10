@@ -11,22 +11,48 @@ extension SyncMaintenanceView {
 
     var syncSection: some View {
         Section {
-            LabeledContent("Status", value: syncRuntime.storageMode.title)
+            VStack(alignment: .leading, spacing: 10) {
+                LabeledContent("Speicherstatus", value: syncRuntime.storageMode.title)
 
-            VStack(alignment: .leading, spacing: 4) {
-                LabeledContent("iCloud", value: syncRuntime.iCloudAccountStatusText)
+                Text(syncRuntime.storageMode.detail)
+                    .font(.footnote)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+
+                Label(syncRuntime.storageMode.trustHint, systemImage: "checkmark.shield")
+                    .font(.footnote)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            .padding(.vertical, 2)
+
+            VStack(alignment: .leading, spacing: 10) {
+                HStack(alignment: .firstTextBaseline) {
+                    LabeledContent("iCloud-Konto", value: syncRuntime.iCloudAccountStatusText)
+
+                    if isCheckingICloudStatus {
+                        ProgressView()
+                            .controlSize(.small)
+                    }
+                }
+
+                Text(syncRuntime.iCloudAccountStatusDetail)
+                    .font(.footnote)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
 
                 Button {
                     Task { @MainActor in
-                        await syncRuntime.refreshAccountStatus()
+                        await refreshICloudStatus()
                     }
                 } label: {
                     Label("iCloud-Status prüfen", systemImage: "arrow.clockwise")
                 }
                 .font(.subheadline)
                 .buttonStyle(.plain)
-                .padding(.leading, 2)
+                .disabled(isCheckingICloudStatus)
             }
+            .padding(.vertical, 2)
 
 #if DEBUG
             LabeledContent("Container", value: SyncRuntime.containerIdentifier)
@@ -37,9 +63,9 @@ extension SyncMaintenanceView {
             Text("Sync")
         } footer: {
 #if DEBUG
-            Text("Debug-Builds nutzen die CloudKit-Development-Umgebung. Wenn iPhone und iPad unterschiedliche Build-Konfigurationen (Debug vs. Release/TestFlight) verwenden, werden Daten nicht gegenseitig sichtbar.")
+            Text("Debug-Builds nutzen die CloudKit-Development-Umgebung. Wenn iPhone und iPad unterschiedliche Build-Konfigurationen wie Debug, Release oder TestFlight verwenden, werden Daten nicht gegenseitig sichtbar.")
 #else
-            Text("Sync läuft über iCloud. Wenn du mehrere Geräte nutzt, stelle sicher, dass du überall mit derselben Apple‑ID angemeldet bist.")
+            Text("Sync läuft über iCloud, wenn CloudKit verfügbar ist. Nutze auf allen Geräten dieselbe Apple-ID und sichere wichtige Graphen zusätzlich bewusst per Export.")
 #endif
         }
     }

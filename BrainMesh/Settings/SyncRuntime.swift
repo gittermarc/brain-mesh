@@ -23,17 +23,35 @@ final class SyncRuntime: ObservableObject {
 
         var title: String {
             switch self {
-            case .cloudKit: return "iCloud aktiv"
-            case .localOnly: return "Nur lokal"
+            case .cloudKit:
+                return "iCloud aktiv"
+            case .localOnly:
+                return "Nur lokal"
             }
         }
 
         var detail: String {
             switch self {
-            case .cloudKit: return "SwiftData sync über CloudKit (Private DB)."
-            case .localOnly: return "SwiftData ohne CloudKit (kein Sync)."
+            case .cloudKit:
+                return "BrainMesh nutzt SwiftData mit CloudKit in deiner privaten iCloud-Datenbank. Änderungen können auf deinen Geräten abgeglichen werden."
+            case .localOnly:
+                return "BrainMesh nutzt den lokalen Speicher dieses Geräts. Änderungen erscheinen nicht automatisch auf anderen Geräten."
             }
         }
+
+        var trustHint: String {
+            switch self {
+            case .cloudKit:
+                return "iCloud-Sync hält Geräte auf dem gleichen Stand, ersetzt aber kein bewusst gespeichertes Backup oder einen Export."
+            case .localOnly:
+                return "Lokaler Speicher ist kein Fehlerzustand: Deine Daten bleiben auf diesem Gerät erhalten, bis iCloud wieder verfügbar ist oder die App wieder mit CloudKit startet."
+            }
+        }
+    }
+
+    struct AccountStatusDescription: Equatable, Sendable {
+        let title: String
+        let detail: String
     }
 
     static let shared = SyncRuntime()
@@ -43,7 +61,8 @@ final class SyncRuntime: ObservableObject {
 
     @Published private(set) var storageMode: StorageMode = .cloudKit
 
-    @Published private(set) var iCloudAccountStatusText: String = "—"
+    @Published private(set) var iCloudAccountStatusText: String = "Noch nicht geprüft"
+    @Published private(set) var iCloudAccountStatusDetail: String = "Tippe auf Status prüfen oder öffne diesen Bereich erneut, um den iCloud-Kontostatus zu aktualisieren."
 
     private init() {}
 
@@ -59,20 +78,50 @@ final class SyncRuntime: ObservableObject {
         let container = CKContainer(identifier: Self.containerIdentifier)
         do {
             let status = try await container.accountStatus()
-            iCloudAccountStatusText = Self.describe(status)
+            let description = Self.describe(status)
+            iCloudAccountStatusText = description.title
+            iCloudAccountStatusDetail = description.detail
         } catch {
-            iCloudAccountStatusText = "Fehler: \(error.localizedDescription)"
+#if DEBUG
+            print("iCloud account status check failed: \(error)")
+#endif
+            iCloudAccountStatusText = "Prüfung fehlgeschlagen"
+            iCloudAccountStatusDetail = "Der iCloud-Status konnte gerade nicht geprüft werden. Deine lokalen Daten bleiben unverändert. Prüfe Verbindung, Apple-ID und iCloud-Einstellungen und versuche es erneut."
         }
     }
 
-    private static func describe(_ status: CKAccountStatus) -> String {
+    static func describe(_ status: CKAccountStatus) -> AccountStatusDescription {
         switch status {
-        case .available: return "Verfügbar"
-        case .noAccount: return "Kein iCloud-Account"
-        case .restricted: return "Eingeschränkt"
-        case .couldNotDetermine: return "Unklar"
-        case .temporarilyUnavailable: return "Vorübergehend nicht verfügbar"
-        @unknown default: return "Unbekannt"
+        case .available:
+            return AccountStatusDescription(
+                title: "Verfügbar",
+                detail: "Dieses Gerät ist mit iCloud verbunden. Wenn BrainMesh im iCloud-Modus läuft, können Änderungen über deine private iCloud synchronisiert werden."
+            )
+        case .noAccount:
+            return AccountStatusDescription(
+                title: "Kein iCloud-Account",
+                detail: "Auf diesem Gerät ist kein iCloud-Account aktiv. BrainMesh kann lokal weiter genutzt werden, aber Änderungen werden nicht automatisch mit anderen Geräten abgeglichen."
+            )
+        case .restricted:
+            return AccountStatusDescription(
+                title: "Eingeschränkt",
+                detail: "iCloud ist auf diesem Gerät durch Einstellungen, Familienfreigabe, Geräteverwaltung oder Bildschirmzeit eingeschränkt. Prüfe die iOS-Einstellungen."
+            )
+        case .couldNotDetermine:
+            return AccountStatusDescription(
+                title: "Unklar",
+                detail: "Der iCloud-Status konnte gerade nicht eindeutig bestimmt werden. Prüfe später erneut, wenn die Verbindung stabil ist."
+            )
+        case .temporarilyUnavailable:
+            return AccountStatusDescription(
+                title: "Vorübergehend nicht verfügbar",
+                detail: "iCloud ist aktuell nicht erreichbar. Deine lokalen Daten bleiben erhalten; der Abgleich kann später weiterlaufen."
+            )
+        @unknown default:
+            return AccountStatusDescription(
+                title: "Unbekannt",
+                detail: "iCloud hat einen unbekannten Status gemeldet. Deine lokalen Daten bleiben erhalten. Prüfe die iOS-Einstellungen und versuche es erneut."
+            )
         }
     }
 }

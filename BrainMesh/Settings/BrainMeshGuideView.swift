@@ -353,26 +353,26 @@ private extension BrainMeshGuideView {
                 GuideMiniCard(title: "Anzeige", detail: "Layouts, Dichte, Counts und Darstellung.")
                 GuideMiniCard(title: "Export & Import", detail: "Graph-Struktur als .bmgraph exportieren und später wieder importieren.")
                 GuideMiniCard(title: "Import", detail: "Optionen zur Bild-/Video‑Kompression beim Import.")
-                GuideMiniCard(title: "Sync & Wartung", detail: "iCloud‑Status und lokale Caches.")
+                GuideMiniCard(title: "Sync & Wartung", detail: "iCloud, Speicherstatus und sichere Cache-Reparatur.")
             }
         }
     }
 
     var sectionSync: some View {
         GuideSection(anchor: .sync, title: GuideAnchor.sync.title) {
-            Text("Wenn iCloud aktiv ist, synchronisiert BrainMesh deine Daten über dein iCloud‑Konto. Den Status findest du unter Einstellungen → Sync & Wartung.")
+            Text("Wenn iCloud aktiv ist, synchronisiert BrainMesh deine Daten über dein iCloud‑Konto. Unter Einstellungen → Sync & Wartung siehst du Speicherstatus, iCloud-Konto und lokale Cache-Werkzeuge.")
                 .fixedSize(horizontal: false, vertical: true)
 
             GuideCard(title: "Was Sync leistet", systemImage: "arrow.triangle.2.circlepath") {
                 GuideBullets {
                     GuideBullet("Graphen, Entitäten, Attribute, Links, Details und Anhänge bleiben über deine Geräte hinweg verfügbar, wenn iCloud sauber eingerichtet ist.")
-                    GuideBullet("Bei iCloud-Problemen kann BrainMesh im Release-Betrieb lokal weiterlaufen. Prüfe dann den Status in Sync & Wartung.")
+                    GuideBullet("Bei iCloud-Problemen kann BrainMesh im Release-Betrieb lokal weiterlaufen. Das schützt die Nutzung auf diesem Gerät, bedeutet aber: Andere Geräte sehen Änderungen erst wieder nach erfolgreichem Sync.")
                     GuideBullet("Sync ist Komfort und Geräteabgleich, aber kein Ersatz für eine bewusst gespeicherte Exportdatei.")
                 }
             }
 
             GuideCard(title: "Lokale Caches", systemImage: "bolt.horizontal") {
-                Text("Bilder und Anhänge werden lokal zwischengespeichert, damit alles flott bleibt. Wenn Vorschaubilder fehlen, kannst du den Bildcache neu aufbauen oder den Anhänge-Cache bereinigen. Die eigentlichen SwiftData-Daten werden dadurch nicht als Graph-Inhalt gelöscht.")
+                Text("Bilder und Anhänge werden lokal zwischengespeichert, damit alles flott bleibt. Wenn Vorschaubilder fehlen, kannst du den Bildcache neu aufbauen oder den Anhänge-Cache bereinigen. Diese Wartung betrifft nur lokale Cache-Dateien; Graph-Daten, Bilder und Anhänge in SwiftData bleiben erhalten.")
                     .fixedSize(horizontal: false, vertical: true)
             }
 
@@ -423,10 +423,10 @@ private extension BrainMeshGuideView {
         GuideSection(anchor: .faq, title: GuideAnchor.faq.title) {
             VStack(alignment: .leading, spacing: 10) {
                 GuideDisclosure(title: "Wo sind meine Daten gespeichert?") {
-                    Text("BrainMesh speichert lokal auf deinem Gerät und synchronisiert (wenn aktiv) über iCloud. Den Sync‑Status findest du in Einstellungen → Sync & Wartung.")
+                    Text("BrainMesh speichert lokal auf deinem Gerät und synchronisiert, wenn CloudKit aktiv ist, über iCloud. Den Speicher- und iCloud-Status findest du in Einstellungen → Sync & Wartung.")
                 }
                 GuideDisclosure(title: "Warum sehe ich auf iPad andere Daten als auf iPhone?") {
-                    Text("Meistens: unterschiedliche Apple‑IDs oder iCloud ist auf einem Gerät deaktiviert. Prüfe iOS‑Einstellungen und in BrainMesh den Sync‑Status.")
+                    Text("Meistens liegt es an unterschiedlichen Apple‑IDs, deaktivierter iCloud oder daran, dass BrainMesh auf einem Gerät lokal weiterläuft. Prüfe iOS-Einstellungen und in BrainMesh den Bereich Sync & Wartung.")
                 }
                 GuideDisclosure(title: "Der Graph wirkt unruhig – was kann ich tun?") {
                     Text("Im Inspector: Layout stabilisieren, wichtige Nodes pinnen oder Collisions etwas reduzieren.")
@@ -441,7 +441,7 @@ private extension BrainMeshGuideView {
                     Text("Headerbilder erscheinen nur, wenn sie beim Export mit ausgewählt wurden. Separate Anhänge, Dateien, Videos und Galerie-Bilder sind nicht Teil der .bmgraph-Datei. Wenn vorhandene Vorschaubilder nur nicht angezeigt werden, hilft oft Sync & Wartung mit Bildcache neu aufbauen oder Anhänge-Cache bereinigen.")
                 }
                 GuideDisclosure(title: "Warum dauert Sync länger?") {
-                    Text("Viele große Anhänge, besonders Videos, können Sync bremsen und iCloud-Speicher belegen. Export & Import als .bmgraph macht daraus kein vollständiges Medien-Backup; große Anhänge solltest du zusätzlich bewusst sichern, wenn sie wichtig sind.")
+                    Text("Viele große Anhänge, besonders Videos, können Sync bremsen und iCloud-Speicher belegen. Die Cache-Wartung kann Vorschauen reparieren, macht daraus aber kein Backup. Export & Import als .bmgraph sichert nur die Graph-Struktur; große Anhänge solltest du zusätzlich bewusst sichern, wenn sie wichtig sind.")
                 }
                 GuideDisclosure(title: "Wie kann ich einen Graph schützen?") {
                     Text("Im Graph‑Picker pro Graph Schutz aktivieren (Face ID/Touch ID oder Passwort).")

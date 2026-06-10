@@ -9,18 +9,19 @@ import SwiftUI
 
 extension SyncMaintenanceView {
     var maintenanceSection: some View {
-        Section("Wartung") {
-            VStack(alignment: .leading, spacing: 4) {
+        Section {
+            VStack(alignment: .leading, spacing: 6) {
                 Button {
                     Task { @MainActor in
-                        guard isRebuildingImageCache == false else { return }
+                        guard isMaintenanceBusy == false else { return }
                         isRebuildingImageCache = true
+                        defer { isRebuildingImageCache = false }
+
                         await ImageHydrator.shared.forceRebuild()
-                        isRebuildingImageCache = false
                         refreshCacheSizes()
                         alertState = AlertState(
                             title: "Bildcache aktualisiert",
-                            message: "Der lokale Bildcache wurde neu aufgebaut. Wenn du gerade Bilder geändert hast, sollte alles sofort korrekt angezeigt werden."
+                            message: "Der lokale Bildcache wurde neu aufgebaut. Originalbilder und Graph-Daten bleiben erhalten. Wenn Vorschaubilder gefehlt haben, sollten sie nach und nach wieder erscheinen."
                         )
                     }
                 } label: {
@@ -32,18 +33,24 @@ extension SyncMaintenanceView {
                         }
                     }
                 }
-                .disabled(isRebuildingImageCache)
+                .disabled(isMaintenanceBusy)
 
                 Text("Aktuell: \(imageCacheSizeText)")
                     .font(.caption)
                     .foregroundStyle(.secondary)
                     .padding(.leading, 30)
+
+                Text("Erstellt lokale Vorschaudateien neu. Die in BrainMesh gespeicherten Bilder werden dadurch nicht gelöscht.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .padding(.leading, 30)
             }
 
-            VStack(alignment: .leading, spacing: 4) {
+            VStack(alignment: .leading, spacing: 6) {
                 Button {
                     Task { @MainActor in
-                        guard isClearingAttachmentCache == false else { return }
+                        guard isMaintenanceBusy == false else { return }
                         isClearingAttachmentCache = true
                         defer { isClearingAttachmentCache = false }
 
@@ -52,12 +59,15 @@ extension SyncMaintenanceView {
                             refreshCacheSizes()
                             alertState = AlertState(
                                 title: "Anhänge-Cache bereinigt",
-                                message: "Der lokale Anhänge-Cache wurde gelöscht. Deine Anhänge bleiben in der Datenbank und werden bei Bedarf wieder lokal für die Vorschau erstellt."
+                                message: "Der lokale Anhänge-Cache wurde gelöscht. Deine Anhänge bleiben in SwiftData erhalten und werden bei Bedarf wieder lokal für die Vorschau erstellt."
                             )
                         } catch {
+#if DEBUG
+                            print("Attachment cache clear failed: \(error)")
+#endif
                             alertState = AlertState(
                                 title: "Anhänge-Cache",
-                                message: "Der Cache konnte nicht gelöscht werden: \(error.localizedDescription)"
+                                message: "Der lokale Cache konnte gerade nicht bereinigt werden. Deine Anhänge bleiben erhalten. Prüfe den freien Speicher und versuche es erneut."
                             )
                         }
                     }
@@ -70,13 +80,23 @@ extension SyncMaintenanceView {
                         }
                     }
                 }
-                .disabled(isClearingAttachmentCache)
+                .disabled(isMaintenanceBusy)
 
                 Text("Aktuell: \(attachmentCacheSizeText)")
                     .font(.caption)
                     .foregroundStyle(.secondary)
                     .padding(.leading, 30)
+
+                Text("Löscht nur lokale Vorschau- und Arbeitsdateien. Die eigentlichen Anhänge bleiben in der Datenbank und können erneut vorbereitet werden.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .padding(.leading, 30)
             }
+        } header: {
+            Text("Wartung")
+        } footer: {
+            Text("Diese Werkzeuge reparieren lokale Cache-Dateien. Sie verändern keine Graph-Struktur und ersetzen kein Backup.")
         }
     }
 }

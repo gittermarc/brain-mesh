@@ -15,7 +15,7 @@ extension SettingsView {
             SettingsHubTile(
                 systemImage: "paintpalette",
                 title: "Darstellung",
-                subtitle: "Look, Presets & Performance",
+                subtitle: "Layout, Lesbarkeit und Performance",
                 showsAccessoryIndicator: false
             )
         }

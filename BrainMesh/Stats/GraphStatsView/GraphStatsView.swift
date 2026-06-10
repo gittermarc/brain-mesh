@@ -28,12 +28,12 @@ struct GraphStatsView: View {
     @State var activeStructure: GraphStructureSnapshot? = nil
     @State var activeTrends: GraphTrendsSnapshot? = nil
     @State var dashboardGraphID: UUID? = nil
-    @State var loadError: String? = nil
+    @State var loadError: GraphStatsUserFacingErrorMessage? = nil
     @State var loadTask: Task<Void, Never>? = nil
 
     /// Lazy per-graph counts state ("Pro Graph").
     @State var isLoadingPerGraphCounts: Bool = false
-    @State var perGraphLoadError: String? = nil
+    @State var perGraphLoadError: GraphStatsUserFacingErrorMessage? = nil
     @State var perGraphLoadTask: Task<Void, Never>? = nil
 
     /// Soft refresh state: keep the last snapshot on screen while recomputing.
@@ -100,18 +100,11 @@ struct GraphStatsView: View {
 
                     if let loadError {
                         StatsCard {
-                            VStack(alignment: .leading, spacing: 8) {
-                                HStack(spacing: 10) {
-                                    Image(systemName: "exclamationmark.triangle")
-                                        .foregroundStyle(.secondary)
-                                    Text("Fehler")
-                                        .font(.headline)
-                                    Spacer()
-                                }
-                                Text(loadError)
-                                    .font(.footnote)
-                                    .foregroundStyle(.secondary)
-                            }
+                            GraphStatsErrorNotice(
+                                message: loadError,
+                                actionTitle: "Erneut laden",
+                                action: retryStatsLoad
+                            )
                         }
                     }
 
@@ -147,6 +140,17 @@ struct GraphStatsView: View {
                 }
             }
         }
+    }
+
+
+    @MainActor
+    func retryStatsLoad() {
+        _ = triggerReload(for: statsLoadKey, force: true)
+    }
+
+    @MainActor
+    func retryPerGraphCountsLoad() {
+        _ = triggerPerGraphCountsReload(for: perGraphCountsLoadKey, force: true)
     }
 
     // MARK: - Loading
@@ -228,14 +232,14 @@ struct GraphStatsView: View {
                     _ = triggerPerGraphCountsReload(for: perGraphCountsLoadKey, force: force)
                 }
             } catch {
-                if Task.isCancelled {
+                if Task.isCancelled || error is CancellationError {
                     if currentLoadToken == token {
                         isRefreshing = false
                     }
                     return
                 }
                 guard currentLoadToken == token else { return }
-                loadError = error.localizedDescription
+                loadError = GraphStatsUserFacingErrorMessage.make(for: error, context: .dashboard)
                 isRefreshing = false
             }
         }
@@ -285,14 +289,14 @@ struct GraphStatsView: View {
                 prunePerGraphCounts(allowedGraphIDs: Set(key.graphIDs))
                 isLoadingPerGraphCounts = false
             } catch {
-                if Task.isCancelled {
+                if Task.isCancelled || error is CancellationError {
                     if currentPerGraphLoadToken == token {
                         isLoadingPerGraphCounts = false
                     }
                     return
                 }
                 guard currentPerGraphLoadToken == token else { return }
-                perGraphLoadError = error.localizedDescription
+                perGraphLoadError = GraphStatsUserFacingErrorMessage.make(for: error, context: .perGraph)
                 isLoadingPerGraphCounts = false
             }
         }

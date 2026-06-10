@@ -43,7 +43,7 @@ private struct SettingsProHubTile: View {
     private var subtitle: String {
         switch proStore.entitlement {
         case .unknown:
-            return "Status wird geprüft …"
+            return "Status wird geprüft"
         case .pro:
             return "Abo verwalten & Wiederherstellen"
         case .free:
@@ -56,7 +56,7 @@ private struct SettingsProHubTile: View {
         let (text, symbol): (String, String) = {
             switch proStore.entitlement {
             case .unknown:
-                return ("Prüfe …", "hourglass")
+                return ("Prüfung", "hourglass")
             case .pro:
                 return ("Aktiv", "checkmark.seal.fill")
             case .free:

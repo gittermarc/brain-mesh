@@ -15,7 +15,7 @@ extension SettingsView {
             SettingsHubTile(
                 systemImage: "square.and.arrow.up.on.square",
                 title: "Export & Import",
-                subtitle: "Graph sichern & übertragen",
+                subtitle: "Graph-Struktur sichern und übertragen",
                 showsAccessoryIndicator: false
             )
         }

@@ -43,14 +43,11 @@ extension GraphStatsView {
                 DisclosureGroup(isExpanded: $showPerGraph) {
                     VStack(spacing: 12) {
                         if let perGraphLoadError {
-                            HStack(spacing: 10) {
-                                Image(systemName: "exclamationmark.triangle")
-                                    .foregroundStyle(.secondary)
-                                Text(perGraphLoadError)
-                                    .font(.footnote)
-                                    .foregroundStyle(.secondary)
-                                Spacer()
-                            }
+                            GraphStatsErrorNotice(
+                                message: perGraphLoadError,
+                                actionTitle: "Erneut laden",
+                                action: retryPerGraphCountsLoad
+                            )
                             .padding(.bottom, 4)
                         }
 

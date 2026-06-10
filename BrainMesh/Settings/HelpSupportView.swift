@@ -14,6 +14,7 @@ struct HelpSupportView: View {
 
     var body: some View {
         List {
+            supportIntroSection
             helpSection
             infoSection
             SettingsAboutSection {
@@ -32,6 +33,31 @@ struct HelpSupportView: View {
                     BrainMeshGuideView()
                 }
             }
+        }
+    }
+}
+
+
+extension HelpSupportView {
+    var supportIntroSection: some View {
+        Section {
+            VStack(alignment: .leading, spacing: 8) {
+                HStack(spacing: 10) {
+                    Image(systemName: "lifepreserver")
+                        .symbolRenderingMode(.hierarchical)
+                        .foregroundStyle(.tint)
+                        .accessibilityHidden(true)
+
+                    Text("Hilfe, Sicherheit und Orientierung")
+                        .font(.headline)
+                }
+
+                Text("Hier findest du den Einstieg, die ausführliche Anleitung, Versionsinfos und rechtliche Hinweise. Für Sync- oder Cache-Fragen ist der Bereich Sync & Wartung der richtige Ort.")
+                    .font(.footnote)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            .padding(.vertical, 4)
         }
     }
 }
