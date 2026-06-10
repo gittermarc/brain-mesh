@@ -45,6 +45,46 @@ actor NodePickerLoader {
         try await load(kindRaw: NodeKind.attribute.rawValue, graphID: graphID, foldedSearch: foldedSearch, limit: limit)
     }
 
+    func loadExistingRows(graphID: UUID?, kind: NodeKind, ids: [UUID]) async throws -> [NodePickerRowDTO] {
+        try await loadExistingRows(kindRaw: kind.rawValue, graphID: graphID, ids: ids)
+    }
+
+    private func loadExistingRows(kindRaw: Int, graphID: UUID?, ids: [UUID]) async throws -> [NodePickerRowDTO] {
+        let uniqueIDs = NodePickerLoader.uniqueIDsPreservingOrder(ids)
+        guard uniqueIDs.isEmpty == false else { return [] }
+
+        let configuredContainer = self.container
+        guard let configuredContainer else {
+            throw NSError(
+                domain: "BrainMesh.NodePickerLoader",
+                code: 1,
+                userInfo: [NSLocalizedDescriptionKey: "NodePickerLoader not configured"]
+            )
+        }
+
+        let k = kindRaw
+        let gid = graphID
+
+        return try await Task.detached(priority: .utility) { [configuredContainer, k, gid, uniqueIDs] in
+            let context = ModelContext(configuredContainer.container)
+            context.autosaveEnabled = false
+
+            if k == NodeKind.entity.rawValue {
+                return try NodePickerLoader.fetchEntityRows(
+                    context: context,
+                    graphID: gid,
+                    ids: uniqueIDs
+                )
+            } else {
+                return try NodePickerLoader.fetchAttributeRows(
+                    context: context,
+                    graphID: gid,
+                    ids: uniqueIDs
+                )
+            }
+        }.value
+    }
+
     private func load(kindRaw: Int, graphID: UUID?, foldedSearch: String, limit: Int) async throws -> [NodePickerRowDTO] {
         let configuredContainer = self.container
         guard let configuredContainer else {
@@ -134,6 +174,40 @@ actor NodePickerLoader {
         }
     }
 
+    private static func fetchEntityRows(
+        context: ModelContext,
+        graphID: UUID?,
+        ids: [UUID]
+    ) throws -> [NodePickerRowDTO] {
+        guard ids.isEmpty == false else { return [] }
+        let entityIDs = ids
+        let fd: FetchDescriptor<MetaEntity>
+        if let graphID {
+            fd = FetchDescriptor<MetaEntity>(predicate: #Predicate<MetaEntity> { entity in
+                entityIDs.contains(entity.id) && entity.graphID == graphID
+            })
+        } else {
+            fd = FetchDescriptor<MetaEntity>(predicate: #Predicate<MetaEntity> { entity in
+                entityIDs.contains(entity.id)
+            })
+        }
+
+        let fetched = try context.fetch(fd)
+        let rowsByID = Dictionary(uniqueKeysWithValues: fetched.map { entity in
+            (
+                entity.id,
+                NodePickerRowDTO(
+                    kindRaw: NodeKind.entity.rawValue,
+                    id: entity.id,
+                    label: entity.name,
+                    iconSymbolName: entity.iconSymbolName
+                )
+            )
+        })
+
+        return ids.compactMap { rowsByID[$0] }
+    }
+
     private static func fetchAttributeRows(
         context: ModelContext,
         graphID: UUID?,
@@ -184,5 +258,51 @@ actor NodePickerLoader {
                 iconSymbolName: a.iconSymbolName
             )
         }
+    }
+
+    private static func fetchAttributeRows(
+        context: ModelContext,
+        graphID: UUID?,
+        ids: [UUID]
+    ) throws -> [NodePickerRowDTO] {
+        guard ids.isEmpty == false else { return [] }
+        let attributeIDs = ids
+        let fd: FetchDescriptor<MetaAttribute>
+        if let graphID {
+            fd = FetchDescriptor<MetaAttribute>(predicate: #Predicate<MetaAttribute> { attribute in
+                attributeIDs.contains(attribute.id) && attribute.graphID == graphID
+            })
+        } else {
+            fd = FetchDescriptor<MetaAttribute>(predicate: #Predicate<MetaAttribute> { attribute in
+                attributeIDs.contains(attribute.id)
+            })
+        }
+
+        let fetched = try context.fetch(fd)
+        let rowsByID = Dictionary(uniqueKeysWithValues: fetched.map { attribute in
+            (
+                attribute.id,
+                NodePickerRowDTO(
+                    kindRaw: NodeKind.attribute.rawValue,
+                    id: attribute.id,
+                    label: attribute.displayName,
+                    iconSymbolName: attribute.iconSymbolName
+                )
+            )
+        })
+
+        return ids.compactMap { rowsByID[$0] }
+    }
+
+    private static func uniqueIDsPreservingOrder(_ ids: [UUID]) -> [UUID] {
+        var seen: Set<UUID> = []
+        var output: [UUID] = []
+        output.reserveCapacity(ids.count)
+
+        for id in ids where seen.insert(id).inserted {
+            output.append(id)
+        }
+
+        return output
     }
 }
