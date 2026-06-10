@@ -68,6 +68,7 @@ struct GraphTransferViewModelLogicTests {
     @Test
     func exportSummaryText_mentionsGraphStructureDetailsAndAttachmentBoundary() {
         let summary = GraphTransferViewModel.ExportSummary(
+            kind: .graphStructure,
             counts: CountsDTO(
                 graphs: 1,
                 entities: 2,
