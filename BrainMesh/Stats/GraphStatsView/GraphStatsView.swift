@@ -113,6 +113,7 @@ struct GraphStatsView: View {
                     }
 
                     dashboardKPIGrid
+                    graphHealthCenterSection
                     trendsBreakdown
                     mediaBreakdown
                     structureBreakdown
