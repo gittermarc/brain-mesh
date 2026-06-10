@@ -28,8 +28,9 @@ extension GraphTransferViewModel {
             let summary = ExportSummary(counts: preview.counts)
             exportState = .ready(url: url, summary: summary)
         } catch {
-            exportState = .failed(message: "Export fehlgeschlagen")
-            alertState = AlertState(title: "Export fehlgeschlagen", message: userFacingMessage(for: error))
+            let message = userFacingMessage(for: error)
+            exportState = .failed(message: message)
+            alertState = AlertState(title: "Export fehlgeschlagen", message: message)
         }
     }
 
@@ -53,7 +54,7 @@ extension GraphTransferViewModel {
             isShowingFileExporter = true
             return true
         } catch {
-            alertState = AlertState(title: "Export", message: "Datei konnte nicht geladen werden.")
+            alertState = AlertState(title: "Export", message: "Die Exportdatei konnte nicht geladen werden. Erstelle den Export bitte erneut.")
             return false
         }
     }
@@ -67,7 +68,7 @@ extension GraphTransferViewModel {
             if ns.domain == NSCocoaErrorDomain, ns.code == 3072 {
                 return
             }
-            alertState = AlertState(title: "Export", message: "Speichern fehlgeschlagen.")
+            alertState = AlertState(title: "Export", message: "Die Datei konnte nicht gespeichert werden. Prüfe den Speicherort und versuche es erneut.")
         }
     }
 }

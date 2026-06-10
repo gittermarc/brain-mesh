@@ -28,28 +28,28 @@ extension GraphTransferError: LocalizedError {
     var errorDescription: String? {
         switch self {
         case .notConfigured:
-            return "GraphTransferService is not configured"
+            return "Export & Import ist noch nicht bereit."
         case .notImplemented:
-            return "Graph transfer is not implemented yet"
+            return "Diese Transfer-Funktion ist in dieser Version nicht verfügbar."
 
         case .fileAccessDenied:
-            return "File access denied"
-        case .readFailed(let underlying):
-            return "Failed to read import file (\(underlying))"
-        case .writeFailed(let underlying):
-            return "Failed to write export file (\(underlying))"
-        case .decodeFailed(let underlying):
-            return "Failed to decode export file (\(underlying))"
-        case .saveFailed(let underlying):
-            return "Failed to save imported records (\(underlying))"
+            return "BrainMesh hat keinen Zugriff auf die ausgewählte Datei."
+        case .readFailed:
+            return "Die Datei konnte nicht gelesen werden."
+        case .writeFailed:
+            return "Die Exportdatei konnte nicht erstellt werden."
+        case .decodeFailed:
+            return "Die .bmgraph-Datei konnte nicht gelesen werden."
+        case .saveFailed:
+            return "Der Import konnte nicht gespeichert werden."
 
         case .invalidFormat:
-            return "Invalid export format"
-        case .unsupportedVersion(let found):
-            return "Unsupported export version (found \(found))"
+            return "Diese Datei ist keine gültige BrainMesh-.bmgraph-Datei."
+        case .unsupportedVersion:
+            return "Diese .bmgraph-Datei wurde mit einer neueren BrainMesh-Version erstellt."
 
-        case .graphNotFound(let graphID):
-            return "Graph not found (\(graphID.uuidString))"
+        case .graphNotFound:
+            return "Der gewählte Graph wurde nicht gefunden."
         }
     }
 }

@@ -9,6 +9,7 @@ extension GraphTransferView {
 
     var importSection: some View {
         Section {
+            GraphTransferScopeInfoCard(mode: .importScope)
             importActionRows
         } header: {
             Text("Import")

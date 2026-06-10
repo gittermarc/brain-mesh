@@ -189,7 +189,7 @@ private extension BrainMeshGuideView {
                 GuideStep("Details‑Felder definieren", detail: "Pro Entität ein Schema (Status, Datum, Zahl …), pro Attribut die Werte.")
                 GuideStep("Graph ansehen", detail: "Tab „Graph“ → Node antippen → Action‑Chip unten nutzen (z.B. + für Expand).")
                 GuideStep("Fokus setzen", detail: "Auf Entitäts‑Nodes kannst du Fokus aktivieren, um nur das Umfeld zu sehen.")
-                GuideStep("Backup machen", detail: "Einstellungen → Export & Import → Graph als .bmgraph exportieren.")
+                GuideStep("Graph-Struktur sichern", detail: "Einstellungen → Export & Import → .bmgraph exportieren. Wichtig: Das ist ein Struktur-Export, kein vollständiges Medien-Backup aller Anhänge.")
             }
 
             GuideCallout(systemImage: "sparkles", title: "Kleiner Geheimtipp") {
@@ -294,6 +294,10 @@ private extension BrainMeshGuideView {
             GuideCallout(systemImage: "icloud", title: "Wichtig") {
                 Text("Anhänge können deinen iCloud‑Speicher beeinflussen. Viele große Videos bedeuten oft: langsamerer Sync.")
             }
+
+            GuideCallout(systemImage: "externaldrive", title: ".bmgraph ist kein vollständiges Medien-Backup") {
+                Text("Export & Import sichert die Graph-Struktur. Separate Anhänge, Dateien, Videos und Galerie-Bilder aus dem Anhangsbereich sind aktuell nicht Teil der .bmgraph-Datei.")
+            }
         }
     }
 
@@ -347,7 +351,7 @@ private extension BrainMeshGuideView {
 
             GuideGrid {
                 GuideMiniCard(title: "Anzeige", detail: "Layouts, Dichte, Counts und Darstellung.")
-                GuideMiniCard(title: "Export & Import", detail: "Graph als .bmgraph sichern und später wieder importieren.")
+                GuideMiniCard(title: "Export & Import", detail: "Graph-Struktur als .bmgraph exportieren und später wieder importieren.")
                 GuideMiniCard(title: "Import", detail: "Optionen zur Bild-/Video‑Kompression beim Import.")
                 GuideMiniCard(title: "Sync & Wartung", detail: "iCloud‑Status und lokale Caches.")
             }
@@ -359,13 +363,29 @@ private extension BrainMeshGuideView {
             Text("Wenn iCloud aktiv ist, synchronisiert BrainMesh deine Daten über dein iCloud‑Konto. Den Status findest du unter Einstellungen → Sync & Wartung.")
                 .fixedSize(horizontal: false, vertical: true)
 
+            GuideCard(title: "Was Sync leistet", systemImage: "arrow.triangle.2.circlepath") {
+                GuideBullets {
+                    GuideBullet("Graphen, Entitäten, Attribute, Links, Details und Anhänge bleiben über deine Geräte hinweg verfügbar, wenn iCloud sauber eingerichtet ist.")
+                    GuideBullet("Bei iCloud-Problemen kann BrainMesh im Release-Betrieb lokal weiterlaufen. Prüfe dann den Status in Sync & Wartung.")
+                    GuideBullet("Sync ist Komfort und Geräteabgleich, aber kein Ersatz für eine bewusst gespeicherte Exportdatei.")
+                }
+            }
+
             GuideCard(title: "Lokale Caches", systemImage: "bolt.horizontal") {
-                Text("Bilder/Anhänge werden lokal zwischengespeichert, damit alles flott bleibt. Wenn Vorschaubilder spinnen: Cache neu aufbauen oder bereinigen.")
+                Text("Bilder und Anhänge werden lokal zwischengespeichert, damit alles flott bleibt. Wenn Vorschaubilder fehlen, kannst du den Bildcache neu aufbauen oder den Anhänge-Cache bereinigen. Die eigentlichen SwiftData-Daten werden dadurch nicht als Graph-Inhalt gelöscht.")
                     .fixedSize(horizontal: false, vertical: true)
             }
 
-            GuideCallout(systemImage: "externaldrive", title: "Reality‑Check") {
-                Text("Sync ist super – aber kein Ersatz für Backups. Wenn dir dein Wissen wichtig ist (Spoiler: ist es), exportiere ab und zu.")
+            GuideCard(title: "Export & Backup richtig verstehen", systemImage: "externaldrive") {
+                GuideBullets {
+                    GuideBullet(".bmgraph ist ein Graph-Struktur-Export: Graph, Entitäten, Attribute, Links, Details-Felder und Details-Werte.")
+                    GuideBullet("Optional können Notizen, Icons und Headerbilder von Entitäten oder Attributen enthalten sein.")
+                    GuideBullet("Nicht enthalten sind separate Anhänge, Dateien, Videos, Galerie-Bilder, Graph-Schutz, Passwörter, Biometrie-Einstellungen und Pro-Status.")
+                }
+            }
+
+            GuideCallout(systemImage: "exclamationmark.triangle", title: "Reality-Check") {
+                Text("Wenn dir dein Wissen wichtig ist, exportiere regelmäßig die Graph-Struktur. Für ein vollständiges Medien-Backup mit separaten Anhängen braucht es ein eigenes Paketformat; das ist aktuell nicht Teil der .bmgraph-Datei.")
             }
         }
     }
@@ -415,13 +435,13 @@ private extension BrainMeshGuideView {
                     Text("Ja: Im Tab Entitäten kannst du suchen. Tipp: Suchbegriffe dürfen auch in Notizen vorkommen. Prüfe außerdem, ob du im richtigen Graph bist.")
                 }
                 GuideDisclosure(title: "Kann ich BrainMesh als Backup exportieren?") {
-                    Text("Ja: Einstellungen → Export & Import. Export als .bmgraph sichern und später wieder importieren.")
+                    Text("Ja, aber bitte mit der richtigen Erwartung: .bmgraph ist ein Graph-Struktur-Export. Enthalten sind Graph, Entitäten, Attribute, Links, Details-Felder und Details-Werte. Optional können Notizen, Icons und Headerbilder enthalten sein. Separate Anhänge, Dateien, Videos, Galerie-Bilder, Graph-Schutz und Pro-Status sind nicht enthalten.")
                 }
-                GuideDisclosure(title: "Beim Import fehlen Bilder/Thumbnails – ist etwas kaputt?") {
-                    Text("Oft ist nur der lokale Cache „hinterher“. In Sync & Wartung kannst du den Bildcache neu aufbauen oder den Anhänge‑Cache bereinigen.")
+                GuideDisclosure(title: "Beim Import fehlen Bilder oder Anhänge – ist etwas kaputt?") {
+                    Text("Headerbilder erscheinen nur, wenn sie beim Export mit ausgewählt wurden. Separate Anhänge, Dateien, Videos und Galerie-Bilder sind nicht Teil der .bmgraph-Datei. Wenn vorhandene Vorschaubilder nur nicht angezeigt werden, hilft oft Sync & Wartung mit Bildcache neu aufbauen oder Anhänge-Cache bereinigen.")
                 }
                 GuideDisclosure(title: "Warum dauert Sync länger?") {
-                    Text("Viele große Anhänge (besonders Videos) können Sync bremsen. Wenn du Speicher sparen willst: nutze Kompressions‑Optionen beim Import.")
+                    Text("Viele große Anhänge, besonders Videos, können Sync bremsen und iCloud-Speicher belegen. Export & Import als .bmgraph macht daraus kein vollständiges Medien-Backup; große Anhänge solltest du zusätzlich bewusst sichern, wenn sie wichtig sind.")
                 }
                 GuideDisclosure(title: "Wie kann ich einen Graph schützen?") {
                     Text("Im Graph‑Picker pro Graph Schutz aktivieren (Face ID/Touch ID oder Passwort).")

@@ -30,7 +30,15 @@ final class GraphTransferViewModel: ObservableObject, @unchecked Sendable {
         var counts: CountsDTO
 
         var summaryText: String? {
-            "\(counts.entities) Entitäten · \(counts.attributes) Attribute · \(counts.links) Links"
+            [
+                "Graph-Struktur-Export",
+                "\(counts.entities) Entitäten",
+                "\(counts.attributes) Attribute",
+                "\(counts.links) Links",
+                "\(counts.detailFieldDefinitions) Details-Felder",
+                "\(counts.detailFieldValues) Details-Werte",
+                "keine separaten Anhänge"
+            ].joined(separator: " · ")
         }
     }
 

@@ -97,6 +97,25 @@ struct GraphTransferImportPreviewCard: View {
                     LabeledContent("Details-Werte", value: "\(preview.counts.detailFieldValues)")
                 }
                 .font(.footnote)
+
+                Divider()
+
+                VStack(alignment: .leading, spacing: 6) {
+                    GraphTransferScopeBullet(
+                        title: "Importiert",
+                        detail: "Graph-Struktur, Entitäten, Attribute, Links, Details-Felder und Details-Werte aus dieser Datei."
+                    )
+                    GraphTransferScopeBullet(
+                        title: "Möglich",
+                        detail: "Notizen, Icons und Headerbilder, wenn sie in diesem Export enthalten sind."
+                    )
+                    GraphTransferScopeBullet(
+                        title: "Nicht dabei",
+                        detail: "Separate Anhänge, Dateien, Videos, Galerie-Bilder, Graph-Schutz und Pro-Status."
+                    )
+                }
+                .font(.footnote)
+                .foregroundStyle(.secondary)
             }
         }
     }
@@ -115,6 +134,8 @@ struct GraphTransferImportResultCard: View {
                     LabeledContent("Entitäten", value: "\(result.insertedCounts.entities)")
                     LabeledContent("Attribute", value: "\(result.insertedCounts.attributes)")
                     LabeledContent("Links", value: "\(result.insertedCounts.links)")
+                    LabeledContent("Details-Felder", value: "\(result.insertedCounts.detailFieldDefinitions)")
+                    LabeledContent("Details-Werte", value: "\(result.insertedCounts.detailFieldValues)")
                     if result.skippedLinks > 0 {
                         LabeledContent("Übersprungene Links", value: "\(result.skippedLinks)")
                     }
@@ -123,6 +144,93 @@ struct GraphTransferImportResultCard: View {
                 .foregroundStyle(.secondary)
             }
         }
+    }
+}
+
+
+struct GraphTransferScopeInfoCard: View {
+    enum Mode {
+        case exportScope
+        case importScope
+    }
+
+    let mode: Mode
+
+    var body: some View {
+        GraphTransferCard {
+            VStack(alignment: .leading, spacing: 10) {
+                Label(title, systemImage: systemImage)
+                    .font(.headline)
+
+                Text(intro)
+                    .font(.footnote)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+
+                VStack(alignment: .leading, spacing: 6) {
+                    GraphTransferScopeBullet(
+                        title: "Enthalten",
+                        detail: "Graph-Struktur, Entitäten, Attribute, Links, Details-Felder und Details-Werte."
+                    )
+                    GraphTransferScopeBullet(
+                        title: "Optional",
+                        detail: "Notizen, Icons und Headerbilder von Entitäten oder Attributen, wenn sie beim Export ausgewählt wurden."
+                    )
+                    GraphTransferScopeBullet(
+                        title: "Nicht enthalten",
+                        detail: "Separate Anhänge, Dateien, Videos, Galerie-Bilder, Graph-Schutz, Passwörter, Biometrie-Einstellungen und Pro-Status."
+                    )
+                }
+                .font(.footnote)
+            }
+        }
+    }
+
+    private var title: String {
+        switch mode {
+        case .exportScope:
+            return "Was wird exportiert?"
+        case .importScope:
+            return "Was wird importiert?"
+        }
+    }
+
+    private var systemImage: String {
+        switch mode {
+        case .exportScope:
+            return "square.and.arrow.up"
+        case .importScope:
+            return "tray.and.arrow.down"
+        }
+    }
+
+    private var intro: String {
+        switch mode {
+        case .exportScope:
+            return ".bmgraph ist ein Graph-Struktur-Export. Er ist ideal zum Umziehen, Teilen oder Wiederherstellen der Graph-Struktur, aber kein vollständiges Medien-Backup."
+        case .importScope:
+            return "BrainMesh prüft die .bmgraph-Datei vor dem Import und legt daraus einen neuen Graph an. Bestehende Graphen bleiben unverändert, solange du keinen Graph ersetzt."
+        }
+    }
+}
+
+private struct GraphTransferScopeBullet: View {
+    let title: String
+    let detail: String
+
+    var body: some View {
+        HStack(alignment: .top, spacing: 8) {
+            Image(systemName: "circle.fill")
+                .font(.system(size: 5, weight: .semibold))
+                .foregroundStyle(.secondary)
+                .padding(.top, 6)
+            VStack(alignment: .leading, spacing: 2) {
+                Text(title)
+                    .fontWeight(.semibold)
+                Text(detail)
+            }
+        }
+        .fixedSize(horizontal: false, vertical: true)
     }
 }
 

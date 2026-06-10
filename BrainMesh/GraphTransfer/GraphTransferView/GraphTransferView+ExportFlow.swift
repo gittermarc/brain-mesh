@@ -14,6 +14,8 @@ extension GraphTransferView {
                     .foregroundStyle(.secondary)
             }
 
+            GraphTransferScopeInfoCard(mode: .exportScope)
+
             Toggle("Notizen exportieren", isOn: $model.includeNotes)
                 .disabled(model.isBusy)
 
@@ -21,9 +23,9 @@ extension GraphTransferView {
                 .disabled(model.isBusy)
 
             VStack(alignment: .leading, spacing: 4) {
-                Toggle("Bilder exportieren", isOn: $model.includeImages)
+                Toggle("Headerbilder exportieren", isOn: $model.includeImages)
                     .disabled(model.isBusy)
-                Text("Hinweis: Bilder machen die Datei deutlich größer.")
+                Text("Exportiert nur Titelbilder von Entitäten und Attributen. Separate Anhänge, Dateien, Videos und Galerie-Bilder bleiben außerhalb der .bmgraph-Datei.")
                     .font(.footnote)
                     .foregroundStyle(.secondary)
             }

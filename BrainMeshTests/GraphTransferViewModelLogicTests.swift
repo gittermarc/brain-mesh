@@ -31,7 +31,7 @@ struct GraphTransferViewModelLogicTests {
     }
 
     @Test
-    func exportConfirmMessage_reflectsSelectedOptions() {
+    func exportConfirmMessage_reflectsSelectedOptionsAndTransferScope() {
         let model = GraphTransferViewModel()
         model.includeNotes = true
         model.includeIcons = false
@@ -40,23 +40,67 @@ struct GraphTransferViewModelLogicTests {
         let message = model.exportConfirmMessage(activeGraphName: "Reiseplanung")
 
         #expect(message.contains("Aktiver Graph: Reiseplanung"))
+        #expect(message.contains("Graph-Struktur"))
         #expect(message.contains("Notizen"))
-        #expect(message.contains("Bilder"))
+        #expect(message.contains("Headerbilder von Entitäten/Attributen"))
         #expect(message.contains("Icons") == false)
+        #expect(message.contains("separate Anhänge"))
+        #expect(message.contains("Graph-Schutz"))
+        #expect(message.contains("Pro-Status"))
+    }
+
+    @Test
+    func exportConfirmMessage_describesNoOptionsClearly() {
+        let model = GraphTransferViewModel()
+        model.includeNotes = false
+        model.includeIcons = false
+        model.includeImages = false
+
+        let message = model.exportConfirmMessage(activeGraphName: "Minimal")
+
+        #expect(message.contains("Aktiver Graph: Minimal"))
+        #expect(message.contains("Keine Zusatzoptionen ausgewählt."))
+        #expect(message.contains("Graph-Struktur"))
+        #expect(message.contains("separate Anhänge"))
+        #expect(message.contains("Headerbilder") == false)
+    }
+
+    @Test
+    func exportSummaryText_mentionsGraphStructureDetailsAndAttachmentBoundary() {
+        let summary = GraphTransferViewModel.ExportSummary(
+            counts: CountsDTO(
+                graphs: 1,
+                entities: 2,
+                attributes: 3,
+                detailFieldDefinitions: 4,
+                detailFieldValues: 5,
+                links: 6
+            )
+        )
+
+        let text = summary.summaryText ?? ""
+
+        #expect(text.contains("Graph-Struktur-Export"))
+        #expect(text.contains("2 Entitäten"))
+        #expect(text.contains("3 Attribute"))
+        #expect(text.contains("6 Links"))
+        #expect(text.contains("4 Details-Felder"))
+        #expect(text.contains("5 Details-Werte"))
+        #expect(text.contains("keine separaten Anhänge"))
     }
 
     @Test
     func userFacingMessage_mapsTransferErrorsAndCocoaAccessErrors() {
         let model = GraphTransferViewModel()
 
-        #expect(model.userFacingMessage(for: GraphTransferError.invalidFormat) == "Diese Datei ist keine BrainMesh-Exportdatei.")
-        #expect(model.userFacingMessage(for: GraphTransferError.unsupportedVersion(found: 99)) == "Diese Exportdatei wurde mit einer neueren Version erstellt und kann aktuell nicht importiert werden.")
-        #expect(model.userFacingMessage(for: GraphTransferError.graphNotFound(graphID: UUID())) == "Der gewählte Graph wurde nicht gefunden.")
+        #expect(model.userFacingMessage(for: GraphTransferError.invalidFormat) == "Diese Datei ist keine gültige BrainMesh-.bmgraph-Datei. Wähle bitte einen Export aus BrainMesh.")
+        #expect(model.userFacingMessage(for: GraphTransferError.unsupportedVersion(found: 99)) == "Diese .bmgraph-Datei wurde mit einer neueren BrainMesh-Version erstellt. Aktualisiere BrainMesh und versuche es danach erneut.")
+        #expect(model.userFacingMessage(for: GraphTransferError.graphNotFound(graphID: UUID())) == "Der gewählte Graph wurde nicht gefunden. Wähle einen vorhandenen Graph aus und starte den Export erneut.")
 
         let accessError = NSError(domain: NSCocoaErrorDomain, code: 257)
-        #expect(model.userFacingMessage(for: accessError) == "Kein Zugriff auf die ausgewählte Datei.")
+        #expect(model.userFacingMessage(for: accessError) == "BrainMesh hat keinen Zugriff auf die ausgewählte Datei. Wähle sie direkt aus der Dateien-App oder teile sie erneut in BrainMesh.")
 
         let unknownError = NSError(domain: "Example", code: 1)
-        #expect(model.userFacingMessage(for: unknownError) == "Es ist ein unerwarteter Fehler aufgetreten.")
+        #expect(model.userFacingMessage(for: unknownError) == "Es ist ein unerwarteter Fehler aufgetreten. Bitte versuche es erneut.")
     }
 }

@@ -98,6 +98,48 @@ struct GraphTransferRoundtripTests {
     }
 
     @Test
+    func exportImport_doesNotTransferMetaAttachments() async throws {
+        let testStore = try BrainMeshTestContainer.makeInMemoryStore()
+        let context = testStore.context
+        let fixtures = BrainMeshFixtureBuilder(context: context)
+
+        let graph = fixtures.makeGraph(name: "Attachment Boundary")
+        let entity = fixtures.makeEntity(name: "Dokumente", in: graph)
+        let _ = fixtures.makeAttachment(
+            owner: .entity(entity),
+            contentKind: .file,
+            title: "Vertrag",
+            originalFilename: "vertrag.pdf",
+            contentTypeIdentifier: "com.adobe.pdf",
+            fileExtension: "pdf",
+            byteCount: 3,
+            fileData: Data([1, 2, 3]),
+            localPath: nil
+        )
+
+        try fixtures.save()
+
+        let service = GraphTransferService()
+        await service.configure(container: AnyModelContainer(testStore.container))
+
+        let exportURL = try await service.exportGraph(
+            graphID: graph.id,
+            options: .init(includeNotes: true, includeIcons: true, includeImages: true)
+        )
+        defer { try? FileManager.default.removeItem(at: exportURL) }
+
+        let result = try await service.importGraph(from: exportURL, mode: .asNewGraphRemap, progress: nil)
+        #expect(result.newGraphID != graph.id)
+        let importedGraphID = result.newGraphID
+
+        let importedAttachments = try context.fetch(FetchDescriptor<MetaAttachment>(predicate: #Predicate { attachment in
+            attachment.graphID == importedGraphID
+        }))
+
+        #expect(importedAttachments.isEmpty)
+    }
+
+    @Test
     func importGraph_skipsLinksWithUnmappedTargets() async throws {
         let testStore = try BrainMeshTestContainer.makeInMemoryStore()
         let context = testStore.context

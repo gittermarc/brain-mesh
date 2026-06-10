@@ -27,8 +27,9 @@ extension GraphTransferViewModel {
             if ns.domain == NSCocoaErrorDomain, ns.code == 3072 {
                 return
             }
-            importState = .failed(message: "Datei konnte nicht geöffnet werden")
-            alertState = AlertState(title: "Import", message: userFacingMessage(for: error))
+            let message = userFacingMessage(for: error)
+            importState = .failed(message: message)
+            alertState = AlertState(title: "Import", message: message)
         }
     }
 
@@ -38,8 +39,9 @@ extension GraphTransferViewModel {
             let preview = try await GraphTransferService.shared.inspectFile(url: url)
             importState = .ready(preview: preview)
         } catch {
-            importState = .failed(message: "Datei ist ungültig")
-            alertState = AlertState(title: "Import", message: userFacingMessage(for: error))
+            let message = userFacingMessage(for: error)
+            importState = .failed(message: message)
+            alertState = AlertState(title: "Import", message: message)
         }
     }
 
@@ -87,8 +89,9 @@ extension GraphTransferViewModel {
             let result = try await GraphTransferService.shared.importGraph(from: url, mode: .asNewGraphRemap, progress: progressHandler)
             importState = .finished(result: result)
         } catch {
-            importState = .failed(message: "Import fehlgeschlagen")
-            alertState = AlertState(title: "Import fehlgeschlagen", message: userFacingMessage(for: error))
+            let message = userFacingMessage(for: error)
+            importState = .failed(message: message)
+            alertState = AlertState(title: "Import fehlgeschlagen", message: message)
         }
     }
 }

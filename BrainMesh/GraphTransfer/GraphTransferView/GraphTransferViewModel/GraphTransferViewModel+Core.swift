@@ -48,18 +48,20 @@ extension GraphTransferViewModel {
     func exportConfirmMessage(activeGraphName: String) -> String {
         var parts: [String] = []
         parts.append("Aktiver Graph: \(activeGraphName)")
+        parts.append("Immer enthalten: Graph-Struktur, Entitäten, Attribute, Links, Details-Felder und Details-Werte.")
 
-        var options: [String] = []
-        if includeNotes { options.append("Notizen") }
-        if includeIcons { options.append("Icons") }
-        if includeImages { options.append("Bilder") }
+        var selectedOptions: [String] = []
+        if includeNotes { selectedOptions.append("Notizen") }
+        if includeIcons { selectedOptions.append("Icons") }
+        if includeImages { selectedOptions.append("Headerbilder von Entitäten/Attributen") }
 
-        if options.isEmpty {
-            parts.append("Export ohne Zusatzdaten.")
+        if selectedOptions.isEmpty {
+            parts.append("Keine Zusatzoptionen ausgewählt.")
         } else {
-            parts.append("Enthält: \(options.joined(separator: ", ")).")
+            parts.append("Zusätzlich ausgewählt: \(selectedOptions.joined(separator: ", ")).")
         }
 
+        parts.append("Nicht enthalten: separate Anhänge, Dateien, Videos, Galerie-Bilder, Graph-Schutz und Pro-Status.")
         return parts.joined(separator: "\n")
     }
 

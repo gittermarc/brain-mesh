@@ -15,33 +15,33 @@ extension GraphTransferViewModel {
         if let error = error as? GraphTransferError {
             switch error {
             case .fileAccessDenied:
-                return "Kein Zugriff auf die ausgewählte Datei. Bitte wähle eine Datei aus der Dateien-App oder teile sie erneut in BrainMesh."
+                return "BrainMesh hat keinen Zugriff auf die ausgewählte Datei. Wähle sie direkt aus der Dateien-App oder teile sie erneut in BrainMesh."
             case .invalidFormat:
-                return "Diese Datei ist keine BrainMesh-Exportdatei."
+                return "Diese Datei ist keine gültige BrainMesh-.bmgraph-Datei. Wähle bitte einen Export aus BrainMesh."
             case .unsupportedVersion:
-                return "Diese Exportdatei wurde mit einer neueren Version erstellt und kann aktuell nicht importiert werden."
+                return "Diese .bmgraph-Datei wurde mit einer neueren BrainMesh-Version erstellt. Aktualisiere BrainMesh und versuche es danach erneut."
             case .decodeFailed:
-                return "Die Exportdatei ist beschädigt oder kann nicht gelesen werden."
+                return "Die .bmgraph-Datei konnte nicht gelesen werden. Sie ist möglicherweise unvollständig oder beschädigt."
             case .readFailed:
-                return "Die Datei konnte nicht gelesen werden."
+                return "Die Datei konnte nicht gelesen werden. Prüfe, ob sie noch vorhanden ist und BrainMesh Zugriff darauf hat."
             case .saveFailed:
-                return "Beim Speichern der importierten Daten ist ein Fehler aufgetreten."
+                return "Der Import konnte nicht gespeichert werden. Prüfe deinen freien Speicherplatz und versuche es erneut."
             case .writeFailed:
-                return "Die Exportdatei konnte nicht geschrieben werden."
+                return "Die Exportdatei konnte nicht erstellt werden. Prüfe deinen freien Speicherplatz und versuche es erneut."
             case .graphNotFound:
-                return "Der gewählte Graph wurde nicht gefunden."
+                return "Der gewählte Graph wurde nicht gefunden. Wähle einen vorhandenen Graph aus und starte den Export erneut."
             case .notConfigured:
-                return "Export/Import ist noch nicht bereit. Bitte starte die App neu und versuche es erneut."
+                return "Export & Import ist noch nicht bereit. Starte BrainMesh neu und versuche es danach erneut."
             case .notImplemented:
-                return "Diese Funktion ist noch nicht verfügbar."
+                return "Diese Transfer-Funktion ist in dieser Version nicht verfügbar."
             }
         }
 
         let ns = error as NSError
         if ns.domain == NSCocoaErrorDomain, (ns.code == 257 || ns.code == 513) {
-            return "Kein Zugriff auf die ausgewählte Datei."
+            return "BrainMesh hat keinen Zugriff auf die ausgewählte Datei. Wähle sie direkt aus der Dateien-App oder teile sie erneut in BrainMesh."
         }
 
-        return "Es ist ein unerwarteter Fehler aufgetreten."
+        return "Es ist ein unerwarteter Fehler aufgetreten. Bitte versuche es erneut."
     }
 }
