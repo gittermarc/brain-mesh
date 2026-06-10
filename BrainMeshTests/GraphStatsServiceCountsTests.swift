@@ -188,6 +188,147 @@ struct GraphStatsServiceCountsTests {
     }
 
     @Test
+    func attachmentAggregateForScopes_returnsCountAndByteSumsWithoutCrossGraphMixing() throws {
+        let store = try BrainMeshTestContainer.makeInMemoryStore()
+        let builder = BrainMeshFixtureBuilder(context: store.context)
+
+        let graph = builder.makeGraph(name: "Aggregate")
+        let otherGraph = builder.makeGraph(name: "Other")
+
+        let entity = builder.makeEntity(name: "Scoped Entity", in: graph)
+        let attribute = builder.makeAttribute(name: "Scoped Attribute", owner: entity)
+        _ = builder.makeAttachment(
+            owner: .entity(entity),
+            contentKind: .file,
+            title: "Scoped File",
+            originalFilename: "scoped.pdf",
+            contentTypeIdentifier: "application/pdf",
+            fileExtension: "pdf",
+            byteCount: 120,
+            fileData: Data([0x01])
+        )
+        _ = builder.makeAttachment(
+            owner: .attribute(attribute),
+            contentKind: .galleryImage,
+            title: "Scoped Gallery",
+            originalFilename: "scoped.jpg",
+            contentTypeIdentifier: "image/jpeg",
+            fileExtension: "jpg",
+            byteCount: 30,
+            fileData: Data([0x02, 0x03])
+        )
+
+        let otherEntity = builder.makeEntity(name: "Other Entity", in: otherGraph)
+        _ = builder.makeAttachment(
+            owner: .entity(otherEntity),
+            contentKind: .video,
+            title: "Other Video",
+            originalFilename: "other.mov",
+            contentTypeIdentifier: "video/quicktime",
+            fileExtension: "mov",
+            byteCount: 900,
+            fileData: Data([0x04])
+        )
+
+        let legacyEntity = builder.makeEntity(name: "Legacy Entity")
+        _ = builder.makeAttachment(
+            owner: .entity(legacyEntity),
+            contentKind: .file,
+            title: "Legacy File",
+            originalFilename: "legacy.txt",
+            contentTypeIdentifier: "text/plain",
+            fileExtension: "txt",
+            byteCount: 75,
+            fileData: Data([0x05])
+        )
+
+        try builder.save()
+
+        let service = GraphStatsService(context: store.context)
+        let scoped = try service.attachmentAggregate(for: .graph(graph.id))
+        let other = try service.attachmentAggregate(for: .graph(otherGraph.id))
+        let legacy = try service.attachmentAggregate(for: .graph(nil))
+        let total = try service.attachmentAggregate(for: .total)
+
+        #expect(scoped == GraphStatsAttachmentAggregate(count: 2, bytes: 150))
+        #expect(other == GraphStatsAttachmentAggregate(count: 1, bytes: 900))
+        #expect(legacy == GraphStatsAttachmentAggregate(count: 1, bytes: 75))
+        #expect(total == GraphStatsAttachmentAggregate(count: 4, bytes: 1_125))
+    }
+
+    @Test
+    func mediaSnapshot_countsAttachmentKindsGraphScoped() throws {
+        let store = try BrainMeshTestContainer.makeInMemoryStore()
+        let builder = BrainMeshFixtureBuilder(context: store.context)
+
+        let graph = builder.makeGraph(name: "Media")
+        let otherGraph = builder.makeGraph(name: "Other")
+
+        let entity = builder.makeEntity(name: "Media Entity", in: graph)
+        let attribute = builder.makeAttribute(name: "Media Attribute", owner: entity)
+        _ = builder.makeAttachment(
+            owner: .entity(entity),
+            contentKind: .file,
+            title: "Spec",
+            originalFilename: "spec.pdf",
+            contentTypeIdentifier: "application/pdf",
+            fileExtension: ".PDF",
+            byteCount: 10
+        )
+        _ = builder.makeAttachment(
+            owner: .entity(entity),
+            contentKind: .video,
+            title: "Clip",
+            originalFilename: "clip.mov",
+            contentTypeIdentifier: "video/quicktime",
+            fileExtension: "mov",
+            byteCount: 20
+        )
+        _ = builder.makeAttachment(
+            owner: .attribute(attribute),
+            contentKind: .galleryImage,
+            title: "Gallery",
+            originalFilename: "gallery.jpg",
+            contentTypeIdentifier: "image/jpeg",
+            fileExtension: "jpg",
+            byteCount: 30
+        )
+
+        let otherEntity = builder.makeEntity(name: "Other Entity", in: otherGraph)
+        _ = builder.makeAttachment(
+            owner: .entity(otherEntity),
+            contentKind: .file,
+            title: "Other Spec",
+            originalFilename: "other.pdf",
+            contentTypeIdentifier: "application/pdf",
+            fileExtension: "pdf",
+            byteCount: 40
+        )
+
+        let legacyEntity = builder.makeEntity(name: "Legacy Entity")
+        _ = builder.makeAttachment(
+            owner: .entity(legacyEntity),
+            contentKind: .video,
+            title: "Legacy Clip",
+            originalFilename: "legacy.mov",
+            contentTypeIdentifier: "video/quicktime",
+            fileExtension: "mov",
+            byteCount: 50
+        )
+
+        try builder.save()
+
+        let service = GraphStatsService(context: store.context)
+        let snapshot = try service.mediaSnapshot(for: graph.id)
+
+        #expect(snapshot.attachmentsTotal == 3)
+        #expect(snapshot.attachmentsFile == 1)
+        #expect(snapshot.attachmentsVideo == 1)
+        #expect(snapshot.attachmentsGalleryImages == 1)
+        #expect(snapshot.topFileExtensions == [GraphTopItem(label: "pdf", count: 1)])
+    }
+
+    @Test
     func repeatedCountQueries_reusePerServiceCache() throws {
         let store = try BrainMeshTestContainer.makeInMemoryStore()
         let builder = BrainMeshFixtureBuilder(context: store.context)
