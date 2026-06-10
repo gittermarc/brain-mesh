@@ -30,6 +30,7 @@ struct GraphStatsView: View {
     @State var activeMedia: GraphMediaSnapshot? = nil
     @State var activeStructure: GraphStructureSnapshot? = nil
     @State var activeTrends: GraphTrendsSnapshot? = nil
+    @State var activeHealth: GraphHealthSnapshot? = nil
     @State var dashboardGraphID: UUID? = nil
     @State var loadError: GraphStatsUserFacingErrorMessage? = nil
     @State var loadTask: Task<Void, Never>? = nil
@@ -223,6 +224,7 @@ struct GraphStatsView: View {
             activeMedia = nil
             activeStructure = nil
             activeTrends = nil
+            activeHealth = nil
         }
 
         // If the graph list changed, prune stale per-graph entries.
@@ -255,6 +257,7 @@ struct GraphStatsView: View {
                 activeMedia = snapshot.activeMedia
                 activeStructure = snapshot.activeStructure
                 activeTrends = snapshot.activeTrends
+                activeHealth = snapshot.activeHealth
                 isRefreshing = false
 
                 // If "Pro Graph" is currently expanded, ensure per-graph counts exist.

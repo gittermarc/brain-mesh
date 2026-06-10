@@ -26,6 +26,7 @@ struct GraphStatsSnapshot: @unchecked Sendable {
     let activeMedia: GraphMediaSnapshot?
     let activeStructure: GraphStructureSnapshot?
     let activeTrends: GraphTrendsSnapshot?
+    let activeHealth: GraphHealthSnapshot?
 }
 
 /// Dashboard snapshot DTO returned to the UI.
@@ -46,6 +47,7 @@ struct GraphStatsDashboardSnapshot: @unchecked Sendable {
     let activeMedia: GraphMediaSnapshot?
     let activeStructure: GraphStructureSnapshot?
     let activeTrends: GraphTrendsSnapshot?
+    let activeHealth: GraphHealthSnapshot?
 }
 
 private nonisolated struct GraphStatsDashboardCacheKey: Hashable, Sendable {
@@ -189,7 +191,8 @@ actor GraphStatsLoader {
             dashboardGraphID: dashboard.dashboardGraphID,
             activeMedia: dashboard.activeMedia,
             activeStructure: dashboard.activeStructure,
-            activeTrends: dashboard.activeTrends
+            activeTrends: dashboard.activeTrends,
+            activeHealth: dashboard.activeHealth
         )
     }
 
@@ -260,6 +263,15 @@ actor GraphStatsLoader {
             let media = try service.mediaSnapshot(for: pickedGraphID)
             let structure = try service.structureSnapshot(for: pickedGraphID)
             let trends = try service.trendsSnapshot(for: pickedGraphID, days: normalizedDays)
+            try Task.checkCancellation()
+
+            let activeCounts = state.activeRevision.counts
+            let health = try service.healthSnapshot(
+                for: pickedGraphID,
+                counts: activeCounts,
+                structure: structure,
+                media: media
+            )
 
             return GraphStatsDashboardSnapshot(
                 total: state.totalRevision.counts,
@@ -267,7 +279,8 @@ actor GraphStatsLoader {
                 dashboardGraphID: pickedGraphID,
                 activeMedia: media,
                 activeStructure: structure,
-                activeTrends: trends
+                activeTrends: trends,
+                activeHealth: health
             )
         }.value
 

@@ -44,6 +44,7 @@ struct GraphStatsLoaderTests {
         #expect(first.activeMedia == second.activeMedia)
         #expect(first.activeStructure == second.activeStructure)
         #expect(first.activeTrends == second.activeTrends)
+        #expect(first.activeHealth == second.activeHealth)
         #expect(await loader.dashboardCacheEntryCountForTesting() == 1)
         #expect(await loader.dashboardCacheHitsForTesting() == 1)
     }

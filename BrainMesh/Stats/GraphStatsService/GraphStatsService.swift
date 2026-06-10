@@ -78,6 +78,7 @@ nonisolated struct GraphStatsBaseCounts: Equatable, Sendable {
 
 nonisolated struct GraphStatsScopeRevision: Equatable, Sendable {
     let counts: GraphCounts
+    let detailFieldCount: Int
     let newestEntityCreatedAt: Date?
     let newestLinkCreatedAt: Date?
     let newestAttachmentCreatedAt: Date?
@@ -248,6 +249,13 @@ nonisolated extension GraphStatsService {
         }
         return #Predicate<MetaAttachment> { $0.graphID == nil }
     }
+
+    func detailFieldGraphPredicate(for graphID: UUID?) -> Predicate<MetaDetailFieldDefinition> {
+        if let graphID {
+            return #Predicate<MetaDetailFieldDefinition> { $0.graphID == graphID }
+        }
+        return #Predicate<MetaDetailFieldDefinition> { $0.graphID == nil }
+    }
 }
 
 // MARK: - Notes predicates
@@ -300,6 +308,7 @@ nonisolated extension GraphStatsService {
     func totalRevision() throws -> GraphStatsScopeRevision {
         GraphStatsScopeRevision(
             counts: try totalCounts(),
+            detailFieldCount: try detailFieldCount(for: nil, scoped: false),
             newestEntityCreatedAt: try newestEntityCreatedAt(),
             newestLinkCreatedAt: try newestLinkCreatedAt(for: nil, scoped: false),
             newestAttachmentCreatedAt: try newestAttachmentCreatedAt(for: nil, scoped: false)
@@ -309,6 +318,7 @@ nonisolated extension GraphStatsService {
     func revision(for graphID: UUID?) throws -> GraphStatsScopeRevision {
         GraphStatsScopeRevision(
             counts: try counts(for: graphID),
+            detailFieldCount: try detailFieldCount(for: graphID, scoped: true),
             newestEntityCreatedAt: try newestEntityCreatedAt(for: graphID),
             newestLinkCreatedAt: try newestLinkCreatedAt(for: graphID, scoped: true),
             newestAttachmentCreatedAt: try newestAttachmentCreatedAt(for: graphID, scoped: true)
@@ -317,6 +327,16 @@ nonisolated extension GraphStatsService {
 }
 
 private nonisolated extension GraphStatsService {
+
+    func detailFieldCount(for graphID: UUID?, scoped: Bool) throws -> Int {
+        if scoped {
+            return try context.fetchCount(
+                FetchDescriptor<MetaDetailFieldDefinition>(predicate: detailFieldGraphPredicate(for: graphID))
+            )
+        }
+        return try context.fetchCount(FetchDescriptor<MetaDetailFieldDefinition>())
+    }
+
     func newestEntityCreatedAt() throws -> Date? {
         var descriptor = FetchDescriptor<MetaEntity>(sortBy: [SortDescriptor(\MetaEntity.createdAt, order: .reverse)])
         descriptor.fetchLimit = 1
