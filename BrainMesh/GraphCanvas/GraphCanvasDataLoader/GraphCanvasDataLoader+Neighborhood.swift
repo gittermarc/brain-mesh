@@ -255,6 +255,15 @@ extension GraphCanvasDataLoader {
             entities: ents,
             attributes: attrs
         )
+        let loadSummary = GraphCanvasLoadSummary(
+            mode: .neighborhood,
+            focusEntityID: centerID,
+            nodesLoaded: newNodes.count,
+            edgesLoaded: uniqueEdges.count,
+            maxNodes: maxNodes,
+            maxLinks: maxLinks,
+            includeAttributes: includeAttributes
+        )
 
         return GraphCanvasSnapshot(
             nodes: newNodes,
@@ -263,7 +272,8 @@ extension GraphCanvasDataLoader {
             labelCache: caches.labelCache,
             imagePathCache: caches.imagePathCache,
             iconSymbolCache: caches.iconSymbolCache,
-            detailsFocusPreparedState: detailsFocusPreparedState
+            detailsFocusPreparedState: detailsFocusPreparedState,
+            loadSummary: loadSummary
         )
     }
 

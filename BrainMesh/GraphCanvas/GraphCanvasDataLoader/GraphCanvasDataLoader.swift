@@ -22,6 +22,7 @@ struct GraphCanvasSnapshot: @unchecked Sendable {
     let imagePathCache: [NodeKey: String]
     let iconSymbolCache: [NodeKey: String]
     let detailsFocusPreparedState: GraphDetailsPreparedState
+    let loadSummary: GraphCanvasLoadSummary
 }
 
 actor GraphCanvasDataLoader {

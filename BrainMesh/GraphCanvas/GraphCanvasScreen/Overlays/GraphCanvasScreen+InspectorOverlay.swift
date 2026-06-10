@@ -156,10 +156,18 @@ extension GraphCanvasScreen {
                 }
 
                 Section("Limits") {
+                    limitsInspectorExplanation
+                    limitsInspectorCurrentStatus
+
                     VStack(alignment: .leading, spacing: 6) {
-                        Text("Max Nodes: \(maxNodes)")
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
+                        HStack {
+                            Text("Max Nodes")
+                            Spacer()
+                            Text("\(maxNodes)")
+                                .foregroundStyle(.secondary)
+                                .monospacedDigit()
+                        }
+                        .font(.caption)
 
                         Slider(
                             value: Binding(get: { Double(maxNodes) }, set: { maxNodes = Int($0) }),
@@ -169,9 +177,14 @@ extension GraphCanvasScreen {
                     }
 
                     VStack(alignment: .leading, spacing: 6) {
-                        Text("Max Links: \(maxLinks)")
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
+                        HStack {
+                            Text("Max Links")
+                            Spacer()
+                            Text("\(maxLinks)")
+                                .foregroundStyle(.secondary)
+                                .monospacedDigit()
+                        }
+                        .font(.caption)
 
                         Slider(
                             value: Binding(get: { Double(maxLinks) }, set: { maxLinks = Int($0) }),

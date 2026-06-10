@@ -51,6 +51,7 @@ extension GraphCanvasScreen {
                 if !GraphCanvasModePolicy.policy(for: workMode).usesQuietChrome {
                     sideStatusOverlay
                     miniMapOverlay(drawEdges: drawEdgesCache)
+                    limitNoticeOverlay
                 }
     
                 // Action rail for selection
@@ -179,6 +180,8 @@ extension GraphCanvasScreen {
                 detailsFocusPreparedState = .empty
                 detailsFocusSummaryCache = .empty
                 detailsFocusRenderPlanCache = .empty
+                loadSummary = nil
+                dismissedLimitNoticeFingerprint = nil
     
                 // If a cross-screen jump is pending, prepare the graph state so the next load can include the node.
                 if let jump = graphJump.pendingJump {

@@ -39,6 +39,7 @@ extension GraphCanvasScreen {
 
         isLoading = true
         loadError = nil
+        loadSummary = nil
 
         do {
             let focusUUID = focusEntity?.id
@@ -80,6 +81,7 @@ extension GraphCanvasScreen {
             imagePathCache = snapshot.imagePathCache
             iconSymbolCache = snapshot.iconSymbolCache
             detailsFocusPreparedState = snapshot.detailsFocusPreparedState
+            loadSummary = snapshot.loadSummary
             pinned = newPinned
             selection = newSelection
             directedEdgeNotes = newDirectedNotes
@@ -114,6 +116,7 @@ extension GraphCanvasScreen {
 
             isLoading = false
             loadError = error.localizedDescription
+            loadSummary = nil
 
             BMLog.load.error(
                 "loadGraph failed mode=\(mode, privacy: .public) focus=\(focusID, privacy: .public) hops=\(hopsValue, privacy: .public) attrs=\(includeAttrs, privacy: .public) ms=\(t.millisecondsElapsed, format: .fixed(precision: 2)) error=\(String(describing: error), privacy: .public)"

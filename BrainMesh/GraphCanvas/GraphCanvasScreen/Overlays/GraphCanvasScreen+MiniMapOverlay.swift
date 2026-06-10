@@ -80,6 +80,9 @@ extension GraphCanvasScreen {
         if detailsFocusSummaryCache.hasActiveFocus {
             parts.append("Treffer \(detailsFocusSummaryCache.matchCount)")
         }
+        if let compactStatusText = GraphCanvasLimitNoticeModel.compactStatusText(summary: loadSummary) {
+            parts.append(compactStatusText)
+        }
         return parts.joined(separator: " · ")
     }
 

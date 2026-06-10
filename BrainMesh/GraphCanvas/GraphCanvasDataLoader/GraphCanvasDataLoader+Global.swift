@@ -72,6 +72,15 @@ extension GraphCanvasDataLoader {
         }.unique()
 
         let caches = try GraphCanvasDataLoader.buildRenderCaches(entities: ents, attributes: [])
+        let loadSummary = GraphCanvasLoadSummary(
+            mode: .global,
+            focusEntityID: nil,
+            nodesLoaded: newNodes.count,
+            edgesLoaded: newEdges.count,
+            maxNodes: maxNodes,
+            maxLinks: maxLinks,
+            includeAttributes: false
+        )
 
         return GraphCanvasSnapshot(
             nodes: newNodes,
@@ -80,7 +89,8 @@ extension GraphCanvasDataLoader {
             labelCache: caches.labelCache,
             imagePathCache: caches.imagePathCache,
             iconSymbolCache: caches.iconSymbolCache,
-            detailsFocusPreparedState: GraphDetailsPreparedState(attributes: [], fieldsByEntityID: [:])
+            detailsFocusPreparedState: GraphDetailsPreparedState(attributes: [], fieldsByEntityID: [:]),
+            loadSummary: loadSummary
         )
     }
 }

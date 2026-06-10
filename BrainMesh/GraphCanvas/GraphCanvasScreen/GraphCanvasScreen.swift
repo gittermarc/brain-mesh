@@ -123,6 +123,8 @@ struct GraphCanvasScreen: View {
     @State var isLoading = false
     @State var loadError: String?
     @State var showInspector = false
+    @State var loadSummary: GraphCanvasLoadSummary?
+    @State var dismissedLimitNoticeFingerprint: String?
 
     // ✅ Visibility gate for physics timer (P0.2)
     @State var isScreenVisible: Bool = false
