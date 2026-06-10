@@ -52,6 +52,10 @@ enum AppLoadersConfigurator {
             await EntitiesHomeLoader.shared.configure(container: anyContainer)
             if Task.isCancelled { return }
 
+            // Global search spans entities, attributes, links, details and attachment metadata.
+            await BrainMeshSearchService.shared.configure(container: anyContainer)
+            if Task.isCancelled { return }
+
             // "Alle" connections screen can include hundreds of links; loading off-main avoids UI stalls.
             await NodeConnectionsLoader.shared.configure(container: anyContainer)
             if Task.isCancelled { return }
