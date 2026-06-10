@@ -251,7 +251,7 @@ extension GraphCanvasDataLoader {
 
         let uniqueEdges = newEdges.unique()
         let caches = try GraphCanvasDataLoader.buildRenderCaches(entities: ents, attributes: attrs)
-        let detailsFocusPreparedState = buildDetailsFocusPreparedState(
+        let detailsFocusPreparedState = GraphDetailsPreparedState.build(
             entities: ents,
             attributes: attrs
         )
@@ -267,69 +267,4 @@ extension GraphCanvasDataLoader {
         )
     }
 
-    private static func buildDetailsFocusPreparedState(
-        entities: [MetaEntity],
-        attributes: [MetaAttribute]
-    ) -> GraphDetailsPreparedState {
-        guard !attributes.isEmpty else {
-            return GraphDetailsPreparedState(attributes: [], fieldsByEntityID: [:])
-        }
-
-        let visibleEntityIDs = Set(attributes.compactMap { $0.owner?.id })
-
-        var fieldsByEntityID: [UUID: [GraphDetailsPreparedField]] = [:]
-        for entity in entities where visibleEntityIDs.contains(entity.id) {
-            let fields = entity.detailFieldsList
-                .filter { $0.type.supportsGraphDetailsFocus }
-                .map {
-                    GraphDetailsPreparedField(
-                        id: $0.id,
-                        entityID: $0.entityID,
-                        name: $0.name,
-                        type: $0.type,
-                        sortIndex: $0.sortIndex,
-                        isPinned: $0.isPinned,
-                        unit: $0.unit,
-                        options: $0.options
-                    )
-                }
-            if !fields.isEmpty {
-                fieldsByEntityID[entity.id] = fields
-            }
-        }
-
-        let preparedAttributes = attributes
-            .compactMap { attribute -> GraphDetailsPreparedAttribute? in
-                guard let ownerID = attribute.owner?.id else { return nil }
-
-                var valuesByFieldID: [UUID: GraphDetailsPreparedValue] = [:]
-                valuesByFieldID.reserveCapacity(attribute.detailValuesList.count)
-                for value in attribute.detailValuesList where valuesByFieldID[value.fieldID] == nil {
-                    valuesByFieldID[value.fieldID] = GraphDetailsPreparedValue(
-                        stringValue: value.stringValue,
-                        intValue: value.intValue,
-                        doubleValue: value.doubleValue,
-                        dateValue: value.dateValue,
-                        boolValue: value.boolValue
-                    )
-                }
-
-                return GraphDetailsPreparedAttribute(
-                    nodeKey: NodeKey(kind: .attribute, uuid: attribute.id),
-                    attributeID: attribute.id,
-                    entityID: ownerID,
-                    valuesByFieldID: valuesByFieldID
-                )
-            }
-            .sorted { $0.nodeKey.identifier < $1.nodeKey.identifier }
-
-        guard !preparedAttributes.isEmpty else {
-            return GraphDetailsPreparedState(attributes: [], fieldsByEntityID: [:])
-        }
-
-        return GraphDetailsPreparedState(
-            attributes: preparedAttributes,
-            fieldsByEntityID: fieldsByEntityID
-        )
-    }
 }
