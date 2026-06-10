@@ -158,7 +158,7 @@ nonisolated enum GraphTransferExportCopy {
         warningCount: Int
     ) -> String {
         var parts: [String] = []
-        parts.append(kind == .graphStructure ? "Struktur-Export" : "Vollbackup")
+        parts.append(kind == .graphStructure ? "Graph-Struktur-Export" : "Vollbackup")
         parts.append("\(counts.entities) Entitäten")
         parts.append("\(counts.attributes) Attribute")
         parts.append("\(counts.links) Links")
