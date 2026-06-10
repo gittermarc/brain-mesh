@@ -10,24 +10,69 @@ import CoreGraphics
 
 // MARK: - Work Mode
 
-enum WorkMode: String, CaseIterable, Identifiable {
+enum WorkMode: String, CaseIterable, Identifiable, Sendable {
     case explore
-    case edit
+    case organize
+    case present
 
     var id: String { rawValue }
 
     var title: String {
         switch self {
-        case .explore: return "Explore"
-        case .edit: return "Edit"
+        case .explore: return "Erkunden"
+        case .organize: return "Aufräumen"
+        case .present: return "Präsentieren"
         }
     }
 
     var icon: String {
         switch self {
         case .explore: return "hand.draw"
-        case .edit: return "pencil.tip"
+        case .organize: return "arrow.up.and.down.and.arrow.left.and.right"
+        case .present: return "rectangle.on.rectangle.angled"
         }
+    }
+
+    var inspectorDescription: String {
+        switch self {
+        case .explore:
+            return "Pan, Zoom und Auswahl. Layout und Pins bleiben unverändert."
+        case .organize:
+            return "Layout bearbeiten, Nodes ziehen und Pins setzen."
+        case .present:
+            return "Ruhiger Canvas für Übersicht und Screenshots. Keine Layout-Bearbeitung."
+        }
+    }
+
+    static func canonical(rawValue: String) -> WorkMode {
+        if rawValue == "edit" {
+            return .organize
+        }
+        return WorkMode(rawValue: rawValue) ?? .explore
+    }
+}
+
+struct GraphCanvasModePolicy: Equatable, Sendable {
+    let mode: WorkMode
+
+    var allowsNodeDragging: Bool {
+        mode == .organize
+    }
+
+    var allowsDoubleTapPinning: Bool {
+        mode == .organize
+    }
+
+    var allowsLayoutEditing: Bool {
+        allowsNodeDragging || allowsDoubleTapPinning
+    }
+
+    var usesQuietChrome: Bool {
+        mode == .present
+    }
+
+    static func policy(for mode: WorkMode) -> GraphCanvasModePolicy {
+        GraphCanvasModePolicy(mode: mode)
     }
 }
 

@@ -29,20 +29,38 @@ extension GraphCanvasScreen {
                     }
                 }
 
-                Section("Modus") {
+                Section("Canvas-Modus") {
+                    Picker("Modus", selection: $workMode) {
+                        ForEach(WorkMode.allCases) { mode in
+                            Text(mode.title).tag(mode)
+                        }
+                    }
+                    .pickerStyle(.segmented)
+
+                    HStack(alignment: .top, spacing: 10) {
+                        Image(systemName: workMode.icon)
+                            .foregroundStyle(.tint)
+                            .frame(width: 22)
+
+                        VStack(alignment: .leading, spacing: 3) {
+                            Text(workMode.title)
+                                .font(.subheadline.weight(.semibold))
+
+                            Text(workMode.inspectorDescription)
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                        }
+                    }
+                    .padding(.vertical, 2)
+                }
+
+                Section("Fokus") {
                     HStack {
-                        Text("Fokus")
+                        Text("Aktuell")
                         Spacer()
                         Text(focusEntity?.name ?? "Keiner")
                             .foregroundStyle(.secondary)
                             .lineLimit(1)
-
-                        Picker("Arbeitsmodus", selection: $workMode) {
-                            ForEach(WorkMode.allCases) { mode in
-                                Text(mode.title).tag(mode)
-                            }
-                        }
-                        .pickerStyle(.segmented)
                     }
 
                     Button {

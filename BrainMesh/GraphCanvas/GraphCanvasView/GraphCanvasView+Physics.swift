@@ -56,7 +56,8 @@ extension GraphCanvasView {
     }
 
     private func isFixed(_ key: NodeKey) -> Bool {
-        pinned.contains(key) || (workMode == .edit && draggingKey == key)
+        let modePolicy = GraphCanvasModePolicy.policy(for: workMode)
+        return pinned.contains(key) || (modePolicy.allowsNodeDragging && draggingKey == key)
     }
 
     private func addVelocity(_ key: NodeKey, dx: CGFloat, dy: CGFloat, vel: inout [NodeKey: CGVector]) {

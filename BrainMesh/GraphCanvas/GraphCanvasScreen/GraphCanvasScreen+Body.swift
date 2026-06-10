@@ -47,10 +47,13 @@ extension GraphCanvasScreen {
                 }
     
                 loadingChipOverlay
-                sideStatusOverlay
-                miniMapOverlay(drawEdges: drawEdgesCache)
+
+                if !GraphCanvasModePolicy.policy(for: workMode).usesQuietChrome {
+                    sideStatusOverlay
+                    miniMapOverlay(drawEdges: drawEdgesCache)
+                }
     
-                // Action chip for selection
+                // Action rail for selection
                 if let key = selection, let selected = nodeForKey(key) {
                     actionChip(for: selected)
                         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottomLeading)
@@ -65,7 +68,7 @@ extension GraphCanvasScreen {
             .onDisappear { isScreenVisible = false }
             .toolbar {
                 // NOTE:
-                // SwiftUI will collapse overflowing toolbar items into a system “…” overflow button.
+                // SwiftUI will collapse overflowing toolbar items into a system overflow button.
                 // On some devices / layouts this overflow button can become non-interactive.
                 // We avoid the overflow entirely by keeping the top bar intentionally small:
                 // - Graph Picker (leading)

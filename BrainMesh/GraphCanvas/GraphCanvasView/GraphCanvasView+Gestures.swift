@@ -21,7 +21,7 @@ extension GraphCanvasView {
     func doubleTapPinGesture(in size: CGSize) -> some Gesture {
         SpatialTapGesture(count: 2)
             .onEnded { value in
-                guard workMode == .edit else { return }
+                guard GraphCanvasModePolicy.policy(for: workMode).allowsDoubleTapPinning else { return }
 
                 let center = CGPoint(x: size.width / 2 + pan.width, y: size.height / 2 + pan.height)
                 let worldTap = toWorld(value.location, center: center)
@@ -41,7 +41,8 @@ extension GraphCanvasView {
             .onChanged { value in
                 let center = CGPoint(x: size.width / 2 + pan.width, y: size.height / 2 + pan.height)
 
-                if workMode == .explore {
+                let modePolicy = GraphCanvasModePolicy.policy(for: workMode)
+                if !modePolicy.allowsNodeDragging {
                     if draggingKey != nil { draggingKey = nil }
                     pan = CGSize(width: panStart.width + value.translation.width,
                                  height: panStart.height + value.translation.height)
@@ -71,7 +72,8 @@ extension GraphCanvasView {
                 }
             }
             .onEnded { _ in
-                if workMode == .explore {
+                let modePolicy = GraphCanvasModePolicy.policy(for: workMode)
+                if !modePolicy.allowsNodeDragging {
                     panStart = pan
                     draggingKey = nil
                     return
