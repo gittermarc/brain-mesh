@@ -47,7 +47,7 @@ struct CommandCenterRecentRow: View {
             .buttonStyle(.plain)
             .accessibilityHint("Öffnet den Detailbereich")
 
-            if item.graphID != nil, item.nodeKey != nil {
+            if CommandCenterActionResolver.graphActionPlan(for: item) != nil {
                 Button(action: onJumpToGraph) {
                     Image(systemName: "scope")
                         .font(.body.weight(.semibold))
@@ -69,7 +69,7 @@ struct CommandCenterResultRow: View {
     let onJumpToGraph: () -> Void
 
     private var canJumpToGraph: Bool {
-        result.graphID != nil && (result.nodeKey != nil || result.ownerNodeKey != nil)
+        CommandCenterActionResolver.graphActionPlan(for: result) != nil
     }
 
     var body: some View {

@@ -63,6 +63,17 @@ struct LargestAttachmentRow: View {
 struct HubRow: View {
     let rank: Int
     let hub: GraphHubItem
+    let onShowInGraph: (() -> Void)?
+
+    init(
+        rank: Int,
+        hub: GraphHubItem,
+        onShowInGraph: (() -> Void)? = nil
+    ) {
+        self.rank = rank
+        self.hub = hub
+        self.onShowInGraph = onShowInGraph
+    }
 
     var body: some View {
         HStack(spacing: 10) {
@@ -87,6 +98,10 @@ struct HubRow: View {
             }
 
             Spacer()
+
+            if let onShowInGraph {
+                StatsGraphJumpButton(action: onShowInGraph)
+            }
         }
         .padding(.vertical, 2)
     }
@@ -102,6 +117,17 @@ struct HubRow: View {
 struct MediaNodeRow: View {
     let rank: Int
     let item: GraphMediaNodeItem
+    let onShowInGraph: (() -> Void)?
+
+    init(
+        rank: Int,
+        item: GraphMediaNodeItem,
+        onShowInGraph: (() -> Void)? = nil
+    ) {
+        self.rank = rank
+        self.item = item
+        self.onShowInGraph = onShowInGraph
+    }
 
     var body: some View {
         HStack(spacing: 10) {
@@ -132,6 +158,10 @@ struct MediaNodeRow: View {
                 .fontWeight(.semibold)
                 .foregroundStyle(.secondary)
                 .monospacedDigit()
+
+            if let onShowInGraph {
+                StatsGraphJumpButton(action: onShowInGraph)
+            }
         }
         .padding(.vertical, 2)
     }
@@ -146,6 +176,24 @@ struct MediaNodeRow: View {
         case .entity: return "cube"
         case .attribute: return "tag"
         }
+    }
+}
+
+
+private struct StatsGraphJumpButton: View {
+    let action: () -> Void
+
+    var body: some View {
+        Button(action: action) {
+            ViewThatFits(in: .horizontal) {
+                Label("Im Graph zeigen", systemImage: "scope")
+                Image(systemName: "scope")
+                    .frame(width: 18)
+            }
+        }
+        .buttonStyle(.bordered)
+        .controlSize(.small)
+        .accessibilityLabel("Im Graph anzeigen")
     }
 }
 

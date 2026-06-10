@@ -69,6 +69,10 @@ enum CommandCenterResolvedAction: Equatable, Sendable {
 }
 
 enum CommandCenterActionResolver {
+    static func action(for plan: GraphCanvasJumpActionPlan) -> CommandCenterResolvedAction {
+        .jumpToGraph(graphID: plan.graphID, nodeKey: plan.nodeKey)
+    }
+
     static func action(for quickAction: CommandCenterQuickAction) -> CommandCenterResolvedAction {
         switch quickAction {
         case .addEntity:
@@ -97,9 +101,15 @@ enum CommandCenterActionResolver {
     }
 
     static func graphAction(for result: BrainMeshSearchResult) -> CommandCenterResolvedAction? {
-        guard let graphID = result.graphID else { return nil }
-        guard let nodeKey = result.nodeKey ?? result.ownerNodeKey else { return nil }
-        return .jumpToGraph(graphID: graphID, nodeKey: nodeKey)
+        guard let plan = graphActionPlan(for: result) else { return nil }
+        return action(for: plan)
+    }
+
+    static func graphActionPlan(for result: BrainMeshSearchResult) -> GraphCanvasJumpActionPlan? {
+        GraphCanvasJumpActionResolver.resolve(
+            graphID: result.graphID,
+            nodeKey: result.nodeKey ?? result.ownerNodeKey
+        )
     }
 
     static func primaryAction(for recentItem: RecentNodeItem) -> CommandCenterResolvedAction? {
@@ -108,7 +118,14 @@ enum CommandCenterActionResolver {
     }
 
     static func graphAction(for recentItem: RecentNodeItem) -> CommandCenterResolvedAction? {
-        guard let graphID = recentItem.graphID, let nodeKey = recentItem.nodeKey else { return nil }
-        return .jumpToGraph(graphID: graphID, nodeKey: nodeKey)
+        guard let plan = graphActionPlan(for: recentItem) else { return nil }
+        return action(for: plan)
+    }
+
+    static func graphActionPlan(for recentItem: RecentNodeItem) -> GraphCanvasJumpActionPlan? {
+        GraphCanvasJumpActionResolver.resolve(
+            graphID: recentItem.graphID,
+            nodeKey: recentItem.nodeKey
+        )
     }
 }

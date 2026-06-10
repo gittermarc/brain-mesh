@@ -96,6 +96,74 @@ struct CommandCenterActionTests {
         #expect(action == .jumpToGraph(graphID: graphID, nodeKey: NodeKey(kind: .attribute, uuid: attributeID)))
     }
 
+
+    @Test
+    func resultGraphActionUsesOwnerNodeWhenDirectNodeIsMissing() {
+        let graphID = UUID()
+        let detailID = UUID()
+        let ownerID = UUID()
+        let result = BrainMeshSearchResult(
+            kind: .detail,
+            id: detailID,
+            graphID: graphID,
+            title: "Status: Gold",
+            subtitle: "Atlas Plan",
+            iconSymbolName: "text.badge.checkmark",
+            matchReason: "Detailwert",
+            nodeKindRaw: nil,
+            nodeID: nil,
+            ownerKindRaw: NodeKind.entity.rawValue,
+            ownerID: ownerID
+        )
+
+        let action = CommandCenterActionResolver.graphAction(for: result)
+
+        #expect(action == .jumpToGraph(graphID: graphID, nodeKey: NodeKey(kind: .entity, uuid: ownerID)))
+    }
+
+    @Test
+    func resultWithoutGraphIDBuildsNoGraphAction() {
+        let entityID = UUID()
+        let result = BrainMeshSearchResult(
+            kind: .entity,
+            id: entityID,
+            graphID: nil,
+            title: "Atlas",
+            subtitle: "Entität",
+            iconSymbolName: "cube",
+            matchReason: "Name",
+            nodeKindRaw: NodeKind.entity.rawValue,
+            nodeID: entityID,
+            ownerKindRaw: nil,
+            ownerID: nil
+        )
+
+        let action = CommandCenterActionResolver.graphAction(for: result)
+
+        #expect(action == nil)
+    }
+
+    @Test
+    func linkResultWithoutConcreteOwnerBuildsNoGraphAction() {
+        let result = BrainMeshSearchResult(
+            kind: .link,
+            id: UUID(),
+            graphID: UUID(),
+            title: "Atlas verknüpft Apollo",
+            subtitle: "Link",
+            iconSymbolName: "arrow.triangle.swap",
+            matchReason: "Linknotiz",
+            nodeKindRaw: nil,
+            nodeID: nil,
+            ownerKindRaw: nil,
+            ownerID: nil
+        )
+
+        let action = CommandCenterActionResolver.graphAction(for: result)
+
+        #expect(action == nil)
+    }
+
     @Test
     func recentItemOpensNodeDetail() {
         let graphID = UUID()

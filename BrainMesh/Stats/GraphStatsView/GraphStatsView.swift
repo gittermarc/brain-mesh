@@ -15,6 +15,9 @@ import SwiftData
 /// UI sections are split into separate files (GraphStatsView+*.swift) to keep compile
 /// times stable and responsibilities small.
 struct GraphStatsView: View {
+    @EnvironmentObject private var tabRouter: RootTabRouter
+    @EnvironmentObject private var graphJump: GraphJumpCoordinator
+
     @AppStorage(BMAppStorageKeys.activeGraphID) private var activeGraphIDString: String = ""
     var activeGraphID: UUID? { UUID(uuidString: activeGraphIDString) }
 
@@ -151,6 +154,33 @@ struct GraphStatsView: View {
     @MainActor
     func retryPerGraphCountsLoad() {
         _ = triggerPerGraphCountsReload(for: perGraphCountsLoadKey, force: true)
+    }
+
+    @MainActor
+    func openDashboardGraph() {
+        guard let graphID = dashboardGraphID else { return }
+        if activeGraphIDString != graphID.uuidString {
+            activeGraphIDString = graphID.uuidString
+        }
+        tabRouter.select(.graph)
+    }
+
+    @MainActor
+    func showHubInGraph(_ hub: GraphHubItem) {
+        guard let plan = GraphStatsJumpActionResolver.action(graphID: dashboardGraphID, hub: hub) else { return }
+        performGraphJump(plan)
+    }
+
+    @MainActor
+    func showMediaNodeInGraph(_ item: GraphMediaNodeItem) {
+        guard let plan = GraphStatsJumpActionResolver.action(graphID: dashboardGraphID, mediaNode: item) else { return }
+        performGraphJump(plan)
+    }
+
+    @MainActor
+    private func performGraphJump(_ plan: GraphCanvasJumpActionPlan) {
+        graphJump.requestJump(to: plan.nodeKey, in: plan.graphID, centerOnArrival: plan.centerOnArrival)
+        tabRouter.select(plan.tab)
     }
 
     // MARK: - Loading

@@ -105,7 +105,11 @@ extension GraphStatsView {
                             } else {
                                 VStack(spacing: 8) {
                                     ForEach(Array(m.topMediaNodes.enumerated()), id: \.element.id) { index, item in
-                                        MediaNodeRow(rank: index + 1, item: item)
+                                        MediaNodeRow(
+                                            rank: index + 1,
+                                            item: item,
+                                            onShowInGraph: showInGraphAction(for: item)
+                                        )
                                     }
                                 }
                             }
@@ -117,4 +121,13 @@ extension GraphStatsView {
             }
         }
     }
+    func showInGraphAction(for item: GraphMediaNodeItem) -> (() -> Void)? {
+        guard dashboardGraphID != nil else { return nil }
+        return {
+            Task { @MainActor in
+                showMediaNodeInGraph(item)
+            }
+        }
+    }
+
 }

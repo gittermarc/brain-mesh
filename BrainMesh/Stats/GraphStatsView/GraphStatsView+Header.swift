@@ -47,6 +47,19 @@ extension GraphStatsView {
 
                     Spacer()
 
+                    if dashboardGraphID != nil {
+                        Button {
+                            Task { @MainActor in
+                                openDashboardGraph()
+                            }
+                        } label: {
+                            Label("Graph öffnen", systemImage: "circle.grid.cross")
+                        }
+                        .buttonStyle(.bordered)
+                        .controlSize(.small)
+                        .accessibilityLabel("Graph öffnen")
+                    }
+
                     if isLoading || isRefreshing {
                         ProgressView()
                             .controlSize(.small)

@@ -57,7 +57,11 @@ extension GraphStatsView {
                             } else {
                                 VStack(spacing: 8) {
                                     ForEach(Array(s.topHubs.enumerated()), id: \.element.id) { index, hub in
-                                        HubRow(rank: index + 1, hub: hub)
+                                        HubRow(
+                                            rank: index + 1,
+                                            hub: hub,
+                                            onShowInGraph: showInGraphAction(for: hub)
+                                        )
                                     }
                                 }
                             }
@@ -69,4 +73,13 @@ extension GraphStatsView {
             }
         }
     }
+    func showInGraphAction(for hub: GraphHubItem) -> (() -> Void)? {
+        guard dashboardGraphID != nil else { return nil }
+        return {
+            Task { @MainActor in
+                showHubInGraph(hub)
+            }
+        }
+    }
+
 }

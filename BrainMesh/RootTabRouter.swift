@@ -12,7 +12,7 @@ import SwiftUI
 ///
 /// Using an `Int` raw value keeps tab selection stable and works nicely with
 /// `TabView(selection:)`.
-enum RootTab: Int, Hashable, Sendable {
+nonisolated enum RootTab: Int, Hashable, Sendable {
     case entities = 0
     case graph = 1
     case stats = 2
