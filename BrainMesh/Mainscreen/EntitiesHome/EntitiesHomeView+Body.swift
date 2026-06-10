@@ -58,7 +58,15 @@ extension EntitiesHomeView {
                     }
                 }
                 .onChange(of: activeGraphIDString) { _, _ in
-                    selectedQuickFilter = .all
+                    if entitiesHomeRouting.pendingQuickFilterRoute == nil {
+                        selectedQuickFilter = .all
+                    }
+                }
+                .onChange(of: entitiesHomeRouting.pendingQuickFilterRoute?.id) { _, _ in
+                    applyPendingQuickFilterRoute()
+                }
+                .onAppear {
+                    applyPendingQuickFilterRoute()
                 }
                 .onChange(of: showAddEntity) { _, newValue in
                     // Ensure newly created entities show up even without @Query driving this list.
@@ -219,6 +227,21 @@ extension EntitiesHomeView {
                 }
             )
         )
+    }
+
+
+
+    @MainActor
+    private func applyPendingQuickFilterRoute() {
+        guard let route = entitiesHomeRouting.pendingQuickFilterRoute else { return }
+
+        if let graphID = route.graphID, activeGraphIDString != graphID.uuidString {
+            activeGraphIDString = graphID.uuidString
+        }
+
+        searchText = ""
+        selectedQuickFilter = route.filter
+        _ = entitiesHomeRouting.consumeQuickFilterRoute(id: route.id)
     }
 
     private func openRecentNode(_ item: EntitiesHomeCockpitRecentNode) {

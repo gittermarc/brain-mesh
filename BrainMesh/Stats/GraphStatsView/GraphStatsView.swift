@@ -17,6 +17,8 @@ import SwiftData
 struct GraphStatsView: View {
     @EnvironmentObject private var tabRouter: RootTabRouter
     @EnvironmentObject private var graphJump: GraphJumpCoordinator
+    @EnvironmentObject private var commandCenter: CommandCenterCoordinator
+    @EnvironmentObject private var entitiesHomeRouting: EntitiesHomeRoutingCoordinator
 
     @AppStorage(BMAppStorageKeys.activeGraphID) private var activeGraphIDString: String = ""
     var activeGraphID: UUID? { UUID(uuidString: activeGraphIDString) }
@@ -56,6 +58,7 @@ struct GraphStatsView: View {
     @State private var lastPerGraphKey: PerGraphCountsLoadKey? = nil
 
     @State var showPerGraph = false
+    @State var selectedHealthIssue: GraphHealthIssue? = nil
 
     private struct StatsLoadKey: Hashable {
         let graphIDs: [UUID]
@@ -144,9 +147,15 @@ struct GraphStatsView: View {
                     await perGraphLoadTask?.value
                 }
             }
+            .sheet(item: $selectedHealthIssue) { issue in
+                GraphHealthIssueListSheet(
+                    issue: issue,
+                    dashboardGraphID: dashboardGraphID,
+                    onAction: performHealthResolvedAction
+                )
+            }
         }
     }
-
 
     @MainActor
     func retryStatsLoad() {
@@ -156,6 +165,61 @@ struct GraphStatsView: View {
     @MainActor
     func retryPerGraphCountsLoad() {
         _ = triggerPerGraphCountsReload(for: perGraphCountsLoadKey, force: true)
+    }
+
+    @MainActor
+    func handleHealthIssuePrimaryAction(_ issue: GraphHealthIssue) {
+        let action = GraphHealthActionResolver.primaryAction(
+            for: issue,
+            dashboardGraphID: dashboardGraphID
+        )
+
+        if case .showIssueList = action {
+            selectedHealthIssue = issue
+            return
+        }
+
+        performHealthResolvedAction(action)
+    }
+
+    @MainActor
+    func performHealthResolvedAction(_ action: GraphHealthResolvedAction) {
+        switch action {
+        case .openEntitiesQuickFilter(let graphID, let filter):
+            openEntitiesQuickFilter(graphID: graphID, filter: filter)
+
+        case .openNodeDetail(let kind, let id):
+            presentNodeDetail(kind: kind, id: id)
+
+        case .jumpToGraph(let plan):
+            selectedHealthIssue = nil
+            performGraphJump(plan)
+
+        case .showIssueList(let issueID):
+            selectedHealthIssue = activeHealth?.issues.first { $0.id == issueID }
+
+        case .none:
+            break
+        }
+    }
+
+    @MainActor
+    private func openEntitiesQuickFilter(graphID: UUID, filter: EntitiesHomeQuickFilter) {
+        selectedHealthIssue = nil
+        if activeGraphIDString != graphID.uuidString {
+            activeGraphIDString = graphID.uuidString
+        }
+        entitiesHomeRouting.requestQuickFilter(filter, graphID: graphID)
+        tabRouter.select(.entities)
+    }
+
+    @MainActor
+    private func presentNodeDetail(kind: NodeKind, id: UUID) {
+        selectedHealthIssue = nil
+        Task { @MainActor in
+            try? await Task.sleep(nanoseconds: 180_000_000)
+            commandCenter.presentDestination(.nodeDetail(kind: kind, id: id))
+        }
     }
 
     @MainActor

@@ -13,7 +13,10 @@ extension GraphStatsView {
     @ViewBuilder
     var graphHealthCenterSection: some View {
         if let activeHealth {
-            GraphHealthCenterCard(snapshot: activeHealth)
+            GraphHealthCenterCard(
+                snapshot: activeHealth,
+                onIssueAction: handleHealthIssuePrimaryAction
+            )
         }
     }
 }

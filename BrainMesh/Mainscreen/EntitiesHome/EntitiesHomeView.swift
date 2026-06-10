@@ -17,6 +17,7 @@ struct EntitiesHomeView: View {
     @EnvironmentObject var recentNodeStore: RecentNodeStore
     @EnvironmentObject var tabRouter: RootTabRouter
     @EnvironmentObject var graphJump: GraphJumpCoordinator
+    @EnvironmentObject var entitiesHomeRouting: EntitiesHomeRoutingCoordinator
 
     @AppStorage(BMAppStorageKeys.activeGraphID) var activeGraphIDString: String = ""
     var activeGraphID: UUID? { UUID(uuidString: activeGraphIDString) }

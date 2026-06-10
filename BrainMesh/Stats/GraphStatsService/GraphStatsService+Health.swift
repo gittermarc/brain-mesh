@@ -29,7 +29,8 @@ nonisolated extension GraphStatsService {
         let attributes = try healthAttributes(for: graphID)
         let links = try healthLinks(for: graphID)
         let detailSchemas = try healthDetailSchemas(for: graphID)
-        let attachments = try healthAttachments(for: graphID)
+        let ownerLabelsByID = healthOwnerLabelsByID(entities: entities, attributes: attributes)
+        let attachments = try healthAttachments(for: graphID, ownerLabelsByID: ownerLabelsByID)
 
         return GraphHealthIssueEngine.makeSnapshot(
             graphID: graphID,
@@ -104,12 +105,16 @@ private nonisolated extension GraphStatsService {
         }
     }
 
-    func healthAttachments(for graphID: UUID?) throws -> [GraphHealthAttachmentMetadataInput] {
+    func healthAttachments(
+        for graphID: UUID?,
+        ownerLabelsByID: [UUID: String]
+    ) throws -> [GraphHealthAttachmentMetadataInput] {
         let descriptor = FetchDescriptor<MetaAttachment>(
             predicate: attachmentGraphPredicate(for: graphID),
             sortBy: [SortDescriptor(\MetaAttachment.byteCount, order: .reverse)]
         )
         let attachments = try context.fetch(descriptor)
+
         return attachments.map { attachment in
             GraphHealthAttachmentMetadataInput(
                 id: attachment.id,
@@ -117,8 +122,26 @@ private nonisolated extension GraphStatsService {
                 originalFilename: attachment.originalFilename,
                 ownerKindRaw: attachment.ownerKindRaw,
                 ownerID: attachment.ownerID,
+                ownerLabel: ownerLabelsByID[attachment.ownerID],
                 byteCount: attachment.byteCount
             )
         }
+    }
+
+    func healthOwnerLabelsByID(
+        entities: [GraphHealthEntityNodeInput],
+        attributes: [GraphHealthAttributeNodeInput]
+    ) -> [UUID: String] {
+        var labels: [UUID: String] = [:]
+        labels.reserveCapacity(entities.count + attributes.count)
+
+        for entity in entities {
+            labels[entity.id] = entity.label
+        }
+        for attribute in attributes {
+            labels[attribute.id] = attribute.label
+        }
+
+        return labels
     }
 }

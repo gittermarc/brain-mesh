@@ -21,6 +21,7 @@ struct BrainMeshApp: App {
     @StateObject private var graphJump = GraphJumpCoordinator()
     @StateObject private var commandCenter = CommandCenterCoordinator()
     @StateObject private var recentNodeStore = RecentNodeStore()
+    @StateObject private var entitiesHomeRouting = EntitiesHomeRoutingCoordinator()
 
     private let sharedModelContainer: ModelContainer
 
@@ -80,6 +81,7 @@ struct BrainMeshApp: App {
                 .environmentObject(graphJump)
                 .environmentObject(commandCenter)
                 .environmentObject(recentNodeStore)
+                .environmentObject(entitiesHomeRouting)
         }
         .modelContainer(sharedModelContainer)
     }

@@ -6,13 +6,24 @@
 import SwiftUI
 
 struct GraphHealthIssueCard: View {
+    let issue: GraphHealthIssue
     let presentation: GraphHealthIssuePresentation
+    let dashboardGraphID: UUID?
+    let onAction: () -> Void
+
+    private var resolvedAction: GraphHealthResolvedAction {
+        GraphHealthActionResolver.primaryAction(for: issue, dashboardGraphID: dashboardGraphID)
+    }
+
+    private var callToActionTitle: String? {
+        GraphHealthActionResolver.callToActionTitle(for: issue, action: resolvedAction)
+    }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
             header
             explanation
-            actionHint
+            actionArea
         }
         .padding(12)
         .background(cardBackground)
@@ -47,6 +58,32 @@ struct GraphHealthIssueCard: View {
                 .font(.footnote)
                 .foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
+        }
+    }
+
+    @ViewBuilder
+    private var actionArea: some View {
+        if let callToActionTitle {
+            Button(action: onAction) {
+                HStack(alignment: .center, spacing: 8) {
+                    Image(systemName: presentation.actionSystemImage)
+                        .frame(width: 18)
+                    Text(callToActionTitle)
+                        .font(.caption.weight(.semibold))
+                    Spacer(minLength: 0)
+                    Image(systemName: "chevron.right")
+                        .font(.caption.weight(.semibold))
+                        .foregroundStyle(.secondary)
+                }
+                .padding(.horizontal, 10)
+                .padding(.vertical, 8)
+                .frame(maxWidth: .infinity, alignment: .leading)
+            }
+            .buttonStyle(.plain)
+            .background(actionBackground)
+            .accessibilityLabel(callToActionTitle)
+        } else {
+            actionHint
         }
     }
 

@@ -7,9 +7,14 @@ import SwiftUI
 
 struct GraphHealthCenterCard: View {
     let snapshot: GraphHealthSnapshot
+    let onIssueAction: (GraphHealthIssue) -> Void
 
     private var presentation: GraphHealthCenterPresentation {
         GraphHealthCenterPresentation.make(snapshot: snapshot)
+    }
+
+    private var visibleIssues: [GraphHealthIssue] {
+        Array(GraphHealthCenterPresentation.sortedIssues(snapshot.issues).prefix(5))
     }
 
     var body: some View {
@@ -17,7 +22,12 @@ struct GraphHealthCenterCard: View {
             VStack(alignment: .leading, spacing: 14) {
                 header
                 statusCopy
-                GraphHealthIssueSection(presentation: presentation)
+                GraphHealthIssueSection(
+                    presentation: presentation,
+                    issues: visibleIssues,
+                    dashboardGraphID: snapshot.graphID,
+                    onIssueAction: onIssueAction
+                )
             }
         }
     }

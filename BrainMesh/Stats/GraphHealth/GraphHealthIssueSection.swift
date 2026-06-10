@@ -7,12 +7,15 @@ import SwiftUI
 
 struct GraphHealthIssueSection: View {
     let presentation: GraphHealthCenterPresentation
+    let issues: [GraphHealthIssue]
+    let dashboardGraphID: UUID?
+    let onIssueAction: (GraphHealthIssue) -> Void
 
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
             sectionHeader
 
-            if presentation.visibleIssues.isEmpty {
+            if issues.isEmpty {
                 goodStateCard
             } else {
                 issueList
@@ -38,8 +41,15 @@ struct GraphHealthIssueSection: View {
 
     private var issueList: some View {
         VStack(spacing: 8) {
-            ForEach(presentation.visibleIssues) { issue in
-                GraphHealthIssueCard(presentation: issue)
+            ForEach(issues) { issue in
+                GraphHealthIssueCard(
+                    issue: issue,
+                    presentation: GraphHealthIssuePresentation.make(issue: issue),
+                    dashboardGraphID: dashboardGraphID,
+                    onAction: {
+                        onIssueAction(issue)
+                    }
+                )
             }
         }
     }

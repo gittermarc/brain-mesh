@@ -33,6 +33,7 @@ nonisolated struct GraphHealthAttachmentMetadataInput: Equatable, Sendable {
     let originalFilename: String
     let ownerKindRaw: Int
     let ownerID: UUID
+    let ownerLabel: String?
     let byteCount: Int
 }
 
@@ -243,6 +244,7 @@ private nonisolated extension GraphHealthIssueEngine {
                 label: attachmentDisplayTitle(attachment),
                 ownerKindRaw: attachment.ownerKindRaw,
                 ownerID: attachment.ownerID,
+                ownerLabel: attachment.ownerLabel,
                 byteCount: Int64(attachment.byteCount)
             )
         }

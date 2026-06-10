@@ -106,6 +106,7 @@ nonisolated struct GraphHealthAffectedItem: Identifiable, Equatable, Codable, Se
     let nodeID: UUID?
     let ownerKindRaw: Int?
     let ownerID: UUID?
+    let ownerLabel: String?
     let count: Int?
     let byteCount: Int64?
 
@@ -122,6 +123,7 @@ nonisolated struct GraphHealthAffectedItem: Identifiable, Equatable, Codable, Se
             nodeID: id,
             ownerKindRaw: nil,
             ownerID: nil,
+            ownerLabel: nil,
             count: count,
             byteCount: nil
         )
@@ -132,6 +134,7 @@ nonisolated struct GraphHealthAffectedItem: Identifiable, Equatable, Codable, Se
         label: String,
         ownerKindRaw: Int,
         ownerID: UUID,
+        ownerLabel: String? = nil,
         byteCount: Int64
     ) -> GraphHealthAffectedItem {
         GraphHealthAffectedItem(
@@ -141,6 +144,7 @@ nonisolated struct GraphHealthAffectedItem: Identifiable, Equatable, Codable, Se
             nodeID: nil,
             ownerKindRaw: ownerKindRaw,
             ownerID: ownerID,
+            ownerLabel: ownerLabel,
             count: nil,
             byteCount: byteCount
         )

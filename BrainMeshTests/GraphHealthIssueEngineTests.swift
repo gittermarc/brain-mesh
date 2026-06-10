@@ -80,6 +80,7 @@ struct GraphHealthIssueEngineTests {
         #expect(item.id == attachment.id)
         #expect(item.ownerKindRaw == NodeKind.entity.rawValue)
         #expect(item.ownerID == entity.id)
+        #expect(item.ownerLabel == "Media Owner")
         #expect(item.byteCount == Int64(largeByteCount))
     }
 
