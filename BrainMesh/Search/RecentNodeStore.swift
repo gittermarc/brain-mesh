@@ -213,7 +213,7 @@ final class RecentNodeStore: ObservableObject {
     }
 }
 
-private extension RecentNodeItem {
+private nonisolated extension RecentNodeItem {
     var identity: RecentNodeIdentity {
         RecentNodeIdentity(graphID: graphID, nodeKindRaw: nodeKindRaw, nodeID: nodeID)
     }

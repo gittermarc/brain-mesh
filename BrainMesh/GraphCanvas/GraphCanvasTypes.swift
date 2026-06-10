@@ -10,7 +10,7 @@ import CoreGraphics
 
 // MARK: - Work Mode
 
-enum WorkMode: String, CaseIterable, Identifiable, Sendable {
+nonisolated enum WorkMode: String, CaseIterable, Identifiable, Sendable {
     case explore
     case organize
     case present
