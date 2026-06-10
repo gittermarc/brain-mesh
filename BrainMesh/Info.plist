@@ -34,6 +34,27 @@
 				</array>
 			</dict>
 		</dict>
+		<dict>
+			<key>UTTypeConformsTo</key>
+			<array>
+				<string>com.apple.package</string>
+			</array>
+			<key>UTTypeDescription</key>
+			<string>BrainMesh Full Backup</string>
+			<key>UTTypeIdentifier</key>
+			<string>de.marcfechner.brainmesh.backup</string>
+			<key>UTTypeTagSpecification</key>
+			<dict>
+				<key>public.filename-extension</key>
+				<array>
+					<string>bmbackup</string>
+				</array>
+				<key>public.mime-type</key>
+				<array>
+					<string>application/vnd.brainmesh.backup</string>
+				</array>
+			</dict>
+		</dict>
 	</array>
 </dict>
 </plist>

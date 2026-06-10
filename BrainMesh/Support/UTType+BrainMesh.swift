@@ -2,7 +2,7 @@
 //  UTType+BrainMesh.swift
 //  BrainMesh
 //
-//  Graph transfer: exported file type for graph exports (.bmgraph)
+//  Graph transfer: exported file types for graph exports (.bmgraph) and full backups (.bmbackup)
 //
 
 import Foundation
@@ -18,4 +18,13 @@ extension UTType {
     }
 
     nonisolated static let brainMeshGraphFilenameExtension: String = "bmgraph"
+
+    /// BrainMesh Full Backup package.
+    ///
+    /// Backed by Info.plist `UTExportedTypeDeclarations`.
+    nonisolated static var brainMeshBackup: UTType {
+        UTType(exportedAs: GraphBackupFormat.exportedTypeIdentifier, conformingTo: .package)
+    }
+
+    nonisolated static let brainMeshBackupFilenameExtension: String = GraphBackupFormat.filenameExtension
 }
