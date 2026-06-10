@@ -57,6 +57,7 @@ struct GraphTransferRoundtripTests {
         #expect(result.skippedLinks == 0)
         #expect(result.insertedCounts.entities >= 2)
         #expect(result.insertedCounts.attributes >= 2)
+        #expect(result.insertedCounts.detailFieldValues >= 1)
 
         let newGraphID = result.newGraphID
         var graphDescriptor = FetchDescriptor<MetaGraph>(predicate: #Predicate { graph in
@@ -95,4 +96,91 @@ struct GraphTransferRoundtripTests {
             }
         }
     }
+
+    @Test
+    func importGraph_skipsLinksWithUnmappedTargets() async throws {
+        let testStore = try BrainMeshTestContainer.makeInMemoryStore()
+        let context = testStore.context
+
+        let originalGraphID = UUID()
+        let entityID = UUID()
+        let missingTargetID = UUID()
+        let now = Date(timeIntervalSince1970: 0)
+
+        let exportFile = GraphExportFileV1(
+            exportedAt: now,
+            appVersion: nil,
+            appBuild: nil,
+            counts: CountsDTO(
+                graphs: 1,
+                entities: 1,
+                attributes: 0,
+                detailFieldDefinitions: 0,
+                detailFieldValues: 0,
+                links: 1
+            ),
+            graph: GraphDTO(
+                id: originalGraphID,
+                createdAt: now,
+                name: "Graph mit defektem Link"
+            ),
+            entities: [
+                EntityDTO(
+                    id: entityID,
+                    createdAt: now,
+                    graphID: originalGraphID,
+                    name: "Quelle",
+                    notes: "",
+                    iconSymbolName: nil,
+                    imageData: nil
+                )
+            ],
+            attributes: [],
+            detailFieldDefinitions: [],
+            detailFieldValues: [],
+            links: [
+                LinkDTO(
+                    id: UUID(),
+                    createdAt: now,
+                    graphID: originalGraphID,
+                    note: "zeigt auf fehlenden Zielknoten",
+                    sourceLabel: "Quelle",
+                    targetLabel: "Fehlt",
+                    sourceKindRaw: NodeKind.entity.rawValue,
+                    sourceID: entityID,
+                    targetKindRaw: NodeKind.entity.rawValue,
+                    targetID: missingTargetID
+                )
+            ]
+        )
+
+        let importURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent("BrainMesh-Invalid-Link-Import-Test-\(UUID().uuidString).bmgraph")
+        defer { try? FileManager.default.removeItem(at: importURL) }
+
+        let data = try GraphTransferCodec.encode(exportFile)
+        try data.write(to: importURL, options: [.atomic])
+
+        let service = GraphTransferService()
+        await service.configure(container: AnyModelContainer(testStore.container))
+
+        let result = try await service.importGraph(from: importURL, mode: .asNewGraphRemap, progress: nil)
+
+        #expect(result.insertedCounts.graphs == 1)
+        #expect(result.insertedCounts.entities == 1)
+        #expect(result.insertedCounts.links == 0)
+        #expect(result.skippedLinks == 1)
+
+        let newGraphID = result.newGraphID
+        let importedEntities = try context.fetch(FetchDescriptor<MetaEntity>(predicate: #Predicate { entity in
+            entity.graphID == newGraphID
+        }))
+        let importedLinks = try context.fetch(FetchDescriptor<MetaLink>(predicate: #Predicate { link in
+            link.graphID == newGraphID
+        }))
+
+        #expect(importedEntities.count == 1)
+        #expect(importedLinks.isEmpty)
+    }
+
 }
