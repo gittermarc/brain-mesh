@@ -6,6 +6,7 @@
 //
 
 import SwiftUI
+import SwiftData
 
 struct GraphPickerListView: View {
     let uniqueGraphs: [MetaGraph]

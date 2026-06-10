@@ -13,68 +13,95 @@ nonisolated extension GraphStatsService {
     /// - Attachment kinds are derived from `contentKindRaw`.
     func mediaSnapshot(for graphID: UUID?) throws -> GraphMediaSnapshot {
         let headerImages = try headerImagesCount(for: graphID)
+        let attachmentCounts = try mediaAttachmentCounts(for: graphID)
 
-        let attachments = try context.fetch(
-            FetchDescriptor<MetaAttachment>(predicate: attachmentGraphPredicate(for: graphID))
-        )
-
-        var fileCount = 0
-        var videoCount = 0
-        var galleryCount = 0
-
-        var fileExtCounts: [String: Int] = [:]
-
-        for a in attachments {
-            switch a.contentKind {
-            case .file:
-                fileCount += 1
-                let ext = normalizeFileExtension(a.fileExtension)
-                fileExtCounts[ext, default: 0] += 1
-            case .video:
-                videoCount += 1
-            case .galleryImage:
-                galleryCount += 1
-            }
+        guard attachmentCounts.total > 0 || headerImages > 0 else {
+            return GraphMediaSnapshot(
+                headerImages: 0,
+                attachmentsTotal: 0,
+                attachmentsFile: 0,
+                attachmentsVideo: 0,
+                attachmentsGalleryImages: 0,
+                topFileExtensions: [],
+                largestAttachments: [],
+                topMediaNodes: []
+            )
         }
 
-        let topFileExtensions = fileExtCounts
-            .map { GraphTopItem(label: $0.key, count: $0.value) }
-            .sorted { lhs, rhs in
-                if lhs.count != rhs.count { return lhs.count > rhs.count }
-                return lhs.label < rhs.label
-            }
-            .prefix(8)
-            .map { $0 }
+        let attachmentItems: [GraphStatsMediaAttachmentItem]
+        let largestAttachmentItems: [GraphLargestAttachment]
+        if attachmentCounts.total > 0 {
+            attachmentItems = try mediaAttachmentItems(for: graphID)
+            largestAttachmentItems = try largestAttachments(for: graphID)
+        } else {
+            attachmentItems = []
+            largestAttachmentItems = []
+        }
 
-        let largestAttachments = attachments
-            .sorted { $0.byteCount > $1.byteCount }
-            .prefix(8)
-            .map {
-                GraphLargestAttachment(
-                    id: $0.id,
-                    title: bestAttachmentTitle($0),
-                    byteCount: $0.byteCount,
-                    contentKind: $0.contentKind,
-                    fileExtension: normalizeFileExtension($0.fileExtension)
-                )
-            }
-
-        let topMediaNodes = try topMediaNodes(for: graphID, attachments: attachments)
+        let topFileExtensions = makeTopFileExtensions(from: attachmentItems)
+        let topMediaNodes = try topMediaNodes(for: graphID, attachmentItems: attachmentItems)
 
         return GraphMediaSnapshot(
             headerImages: headerImages,
-            attachmentsTotal: attachments.count,
-            attachmentsFile: fileCount,
-            attachmentsVideo: videoCount,
-            attachmentsGalleryImages: galleryCount,
+            attachmentsTotal: attachmentCounts.total,
+            attachmentsFile: attachmentCounts.files,
+            attachmentsVideo: attachmentCounts.videos,
+            attachmentsGalleryImages: attachmentCounts.galleryImages,
             topFileExtensions: topFileExtensions,
-            largestAttachments: largestAttachments,
+            largestAttachments: largestAttachmentItems,
             topMediaNodes: topMediaNodes
         )
     }
 }
 
+private nonisolated struct GraphStatsMediaAttachmentCounts: Equatable, Sendable {
+    let total: Int
+    let files: Int
+    let videos: Int
+    let galleryImages: Int
+}
+
+private nonisolated struct GraphStatsMediaAttachmentItem: Equatable, Sendable {
+    let ownerID: UUID
+    let ownerKind: NodeKind
+    let contentKind: AttachmentContentKind
+    let fileExtension: String
+}
+
+private nonisolated struct GraphStatsLargestAttachmentCandidate: Equatable, Sendable {
+    let id: UUID
+    let title: String
+    let originalFilename: String
+    let byteCount: Int
+    let contentKind: AttachmentContentKind
+    let fileExtension: String
+}
+
 private nonisolated extension GraphStatsService {
+    func mediaAttachmentCounts(for graphID: UUID?) throws -> GraphStatsMediaAttachmentCounts {
+        GraphStatsMediaAttachmentCounts(
+            total: try attachmentCount(for: .graph(graphID)),
+            files: try attachmentCount(for: graphID, contentKind: .file),
+            videos: try attachmentCount(for: graphID, contentKind: .video),
+            galleryImages: try attachmentCount(for: graphID, contentKind: .galleryImage)
+        )
+    }
+
+    func mediaAttachmentItems(for graphID: UUID?) throws -> [GraphStatsMediaAttachmentItem] {
+        let attachments = try context.fetch(
+            FetchDescriptor<MetaAttachment>(predicate: attachmentGraphPredicate(for: graphID))
+        )
+
+        return attachments.map { attachment in
+            GraphStatsMediaAttachmentItem(
+                ownerID: attachment.ownerID,
+                ownerKind: attachment.ownerKind,
+                contentKind: attachment.contentKind,
+                fileExtension: normalizeFileExtension(attachment.fileExtension)
+            )
+        }
+    }
+
     func headerImagesCount(for graphID: UUID?) throws -> Int {
         let entityImages = try context.fetchCount(
             FetchDescriptor<MetaEntity>(predicate: entityImageDataPredicate(for: graphID))
@@ -95,56 +122,110 @@ private nonisolated extension GraphStatsService {
         return trimmed.lowercased()
     }
 
-    func bestAttachmentTitle(_ a: MetaAttachment) -> String {
-        let t = a.title.trimmingCharacters(in: .whitespacesAndNewlines)
-        if t.isEmpty == false { return t }
+    func bestAttachmentTitle(_ item: GraphStatsLargestAttachmentCandidate) -> String {
+        let title = item.title.trimmingCharacters(in: .whitespacesAndNewlines)
+        if title.isEmpty == false { return title }
 
-        let n = a.originalFilename.trimmingCharacters(in: .whitespacesAndNewlines)
-        if n.isEmpty == false { return n }
+        let filename = item.originalFilename.trimmingCharacters(in: .whitespacesAndNewlines)
+        if filename.isEmpty == false { return filename }
 
-        let ext = normalizeFileExtension(a.fileExtension)
-        if ext == "?" { return "Anhang" }
-        return "Anhang .\(ext)"
+        if item.fileExtension == "?" { return "Anhang" }
+        return "Anhang .\(item.fileExtension)"
     }
 
-    func topMediaNodes(for graphID: UUID?, attachments: [MetaAttachment]) throws -> [GraphMediaNodeItem] {
-        var attachmentCountByID: [UUID: Int] = [:]
-        var kindByID: [UUID: NodeKind] = [:]
-
-        for a in attachments {
-            attachmentCountByID[a.ownerID, default: 0] += 1
-            kindByID[a.ownerID] = a.ownerKind
+    func makeTopFileExtensions(from items: [GraphStatsMediaAttachmentItem]) -> [GraphTopItem] {
+        let fileExtCounts = items.reduce(into: [String: Int]()) { partialResult, item in
+            guard item.contentKind == .file else { return }
+            partialResult[item.fileExtension, default: 0] += 1
         }
 
-        // Fetch nodes (for labels + header image presence).
-        let entities = try context.fetch(
-            FetchDescriptor<MetaEntity>(predicate: entityGraphPredicate(for: graphID))
+        return fileExtCounts
+            .map { GraphTopItem(label: $0.key, count: $0.value) }
+            .sorted { lhs, rhs in
+                if lhs.count != rhs.count { return lhs.count > rhs.count }
+                return lhs.label < rhs.label
+            }
+            .prefix(8)
+            .map { $0 }
+    }
+
+    func largestAttachments(for graphID: UUID?) throws -> [GraphLargestAttachment] {
+        var descriptor = FetchDescriptor<MetaAttachment>(
+            predicate: attachmentGraphPredicate(for: graphID),
+            sortBy: [SortDescriptor(\MetaAttachment.byteCount, order: .reverse)]
         )
-        let attributes = try context.fetch(
-            FetchDescriptor<MetaAttribute>(predicate: attributeGraphPredicate(for: graphID))
-        )
+        descriptor.fetchLimit = 8
+
+        let candidates = try context.fetch(descriptor).map { attachment in
+            GraphStatsLargestAttachmentCandidate(
+                id: attachment.id,
+                title: attachment.title,
+                originalFilename: attachment.originalFilename,
+                byteCount: attachment.byteCount,
+                contentKind: attachment.contentKind,
+                fileExtension: normalizeFileExtension(attachment.fileExtension)
+            )
+        }
+
+        return candidates.map { item in
+            GraphLargestAttachment(
+                id: item.id,
+                title: bestAttachmentTitle(item),
+                byteCount: item.byteCount,
+                contentKind: item.contentKind,
+                fileExtension: item.fileExtension
+            )
+        }
+    }
+
+    func topMediaNodes(
+        for graphID: UUID?,
+        attachmentItems: [GraphStatsMediaAttachmentItem]
+    ) throws -> [GraphMediaNodeItem] {
+        var attachmentCountByID: [UUID: Int] = [:]
+        var kindByID: [UUID: NodeKind] = [:]
+        var attachmentEntityIDs = Set<UUID>()
+        var attachmentAttributeIDs = Set<UUID>()
+
+        for item in attachmentItems {
+            attachmentCountByID[item.ownerID, default: 0] += 1
+            kindByID[item.ownerID] = item.ownerKind
+            switch item.ownerKind {
+            case .entity:
+                attachmentEntityIDs.insert(item.ownerID)
+            case .attribute:
+                attachmentAttributeIDs.insert(item.ownerID)
+            }
+        }
 
         var labelByID: [UUID: String] = [:]
         var headerImageCountByID: [UUID: Int] = [:]
 
-        for e in entities {
-            let hasAttachment = attachmentCountByID[e.id] != nil
-            let hasHeader = (e.imageData != nil)
-            if hasAttachment || hasHeader {
-                labelByID[e.id] = e.name
-                headerImageCountByID[e.id] = hasHeader ? 1 : 0
-                kindByID[e.id] = .entity
-            }
+        let attachmentOwnerEntities = try entities(for: graphID, ids: attachmentEntityIDs)
+        let attachmentOwnerAttributes = try attributes(for: graphID, ids: attachmentAttributeIDs)
+        let headerImageEntities = try headerImageEntities(for: graphID)
+        let headerImageAttributes = try headerImageAttributes(for: graphID)
+
+        for entity in attachmentOwnerEntities {
+            labelByID[entity.id] = entity.name
+            kindByID[entity.id] = .entity
         }
 
-        for a in attributes {
-            let hasAttachment = attachmentCountByID[a.id] != nil
-            let hasHeader = (a.imageData != nil)
-            if hasAttachment || hasHeader {
-                labelByID[a.id] = a.displayName
-                headerImageCountByID[a.id] = hasHeader ? 1 : 0
-                kindByID[a.id] = .attribute
-            }
+        for attribute in attachmentOwnerAttributes {
+            labelByID[attribute.id] = attribute.displayName
+            kindByID[attribute.id] = .attribute
+        }
+
+        for entity in headerImageEntities {
+            labelByID[entity.id] = entity.name
+            headerImageCountByID[entity.id] = 1
+            kindByID[entity.id] = .entity
+        }
+
+        for attribute in headerImageAttributes {
+            labelByID[attribute.id] = attribute.displayName
+            headerImageCountByID[attribute.id] = 1
+            kindByID[attribute.id] = .attribute
         }
 
         let candidateIDs = Set(attachmentCountByID.keys).union(headerImageCountByID.keys)
@@ -171,5 +252,45 @@ private nonisolated extension GraphStatsService {
             }
 
         return Array(items.prefix(10))
+    }
+
+    func entities(for graphID: UUID?, ids: Set<UUID>) throws -> [MetaEntity] {
+        guard ids.isEmpty == false else { return [] }
+        let entityIDs = Array(ids)
+        let descriptor: FetchDescriptor<MetaEntity>
+        if let graphID {
+            descriptor = FetchDescriptor<MetaEntity>(predicate: #Predicate<MetaEntity> { entity in
+                entityIDs.contains(entity.id) && entity.graphID == graphID
+            })
+        } else {
+            descriptor = FetchDescriptor<MetaEntity>(predicate: #Predicate<MetaEntity> { entity in
+                entityIDs.contains(entity.id) && entity.graphID == nil
+            })
+        }
+        return try context.fetch(descriptor)
+    }
+
+    func attributes(for graphID: UUID?, ids: Set<UUID>) throws -> [MetaAttribute] {
+        guard ids.isEmpty == false else { return [] }
+        let attributeIDs = Array(ids)
+        let descriptor: FetchDescriptor<MetaAttribute>
+        if let graphID {
+            descriptor = FetchDescriptor<MetaAttribute>(predicate: #Predicate<MetaAttribute> { attribute in
+                attributeIDs.contains(attribute.id) && attribute.graphID == graphID
+            })
+        } else {
+            descriptor = FetchDescriptor<MetaAttribute>(predicate: #Predicate<MetaAttribute> { attribute in
+                attributeIDs.contains(attribute.id) && attribute.graphID == nil
+            })
+        }
+        return try context.fetch(descriptor)
+    }
+
+    func headerImageEntities(for graphID: UUID?) throws -> [MetaEntity] {
+        try context.fetch(FetchDescriptor<MetaEntity>(predicate: entityImageDataPredicate(for: graphID)))
+    }
+
+    func headerImageAttributes(for graphID: UUID?) throws -> [MetaAttribute] {
+        try context.fetch(FetchDescriptor<MetaAttribute>(predicate: attributeImageDataPredicate(for: graphID)))
     }
 }

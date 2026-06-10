@@ -329,6 +329,134 @@ struct GraphStatsServiceCountsTests {
     }
 
     @Test
+    func emptyStats_returnZeroCountsAndEmptyMediaSnapshot() throws {
+        let store = try BrainMeshTestContainer.makeInMemoryStore()
+        let builder = BrainMeshFixtureBuilder(context: store.context)
+        let graph = builder.makeGraph(name: "Empty")
+        try builder.save()
+
+        let service = GraphStatsService(context: store.context)
+        let counts = try service.counts(for: graph.id)
+        let snapshot = try service.mediaSnapshot(for: graph.id)
+
+        #expect(counts == GraphCounts.zero)
+        #expect(snapshot == GraphMediaSnapshot(
+            headerImages: 0,
+            attachmentsTotal: 0,
+            attachmentsFile: 0,
+            attachmentsVideo: 0,
+            attachmentsGalleryImages: 0,
+            topFileExtensions: [],
+            largestAttachments: [],
+            topMediaNodes: []
+        ))
+    }
+
+    @Test
+    func mediaSnapshot_ranksLargestAttachmentsAndTopMediaNodesGraphScoped() throws {
+        let store = try BrainMeshTestContainer.makeInMemoryStore()
+        let builder = BrainMeshFixtureBuilder(context: store.context)
+
+        let graph = builder.makeGraph(name: "Ranked Media")
+        let otherGraph = builder.makeGraph(name: "Other")
+
+        let entity = builder.makeEntity(
+            name: "Media Entity",
+            in: graph,
+            imageData: Data([0x01])
+        )
+        let attribute = builder.makeAttribute(
+            name: "Media Attribute",
+            owner: entity,
+            imageData: Data([0x02])
+        )
+        let secondEntity = builder.makeEntity(name: "Second Entity", in: graph)
+
+        _ = builder.makeAttachment(
+            owner: .entity(entity),
+            contentKind: .file,
+            title: "Entity Spec",
+            originalFilename: "entity-spec.pdf",
+            contentTypeIdentifier: "application/pdf",
+            fileExtension: "pdf",
+            byteCount: 100
+        )
+        _ = builder.makeAttachment(
+            owner: .entity(entity),
+            contentKind: .file,
+            title: "Entity Notes",
+            originalFilename: "entity-notes.TXT",
+            contentTypeIdentifier: "text/plain",
+            fileExtension: ".TXT",
+            byteCount: 50
+        )
+        _ = builder.makeAttachment(
+            owner: .attribute(attribute),
+            contentKind: .video,
+            title: "Attribute Clip",
+            originalFilename: "attribute.mov",
+            contentTypeIdentifier: "video/quicktime",
+            fileExtension: "mov",
+            byteCount: 300
+        )
+        _ = builder.makeAttachment(
+            owner: .entity(secondEntity),
+            contentKind: .galleryImage,
+            title: "Gallery Photo",
+            originalFilename: "photo.jpg",
+            contentTypeIdentifier: "image/jpeg",
+            fileExtension: "jpg",
+            byteCount: 200
+        )
+
+        let otherEntity = builder.makeEntity(name: "Other Entity", in: otherGraph, imageData: Data([0x03]))
+        _ = builder.makeAttachment(
+            owner: .entity(otherEntity),
+            contentKind: .file,
+            title: "Other Huge File",
+            originalFilename: "other.pdf",
+            contentTypeIdentifier: "application/pdf",
+            fileExtension: "pdf",
+            byteCount: 9_000
+        )
+
+        let legacyEntity = builder.makeEntity(name: "Legacy Entity")
+        _ = builder.makeAttachment(
+            owner: .entity(legacyEntity),
+            contentKind: .video,
+            title: "Legacy Huge Clip",
+            originalFilename: "legacy.mov",
+            contentTypeIdentifier: "video/quicktime",
+            fileExtension: "mov",
+            byteCount: 8_000
+        )
+
+        try builder.save()
+
+        let service = GraphStatsService(context: store.context)
+        let snapshot = try service.mediaSnapshot(for: graph.id)
+
+        #expect(snapshot.headerImages == 2)
+        #expect(snapshot.attachmentsTotal == 4)
+        #expect(snapshot.attachmentsFile == 2)
+        #expect(snapshot.attachmentsVideo == 1)
+        #expect(snapshot.attachmentsGalleryImages == 1)
+        #expect(snapshot.topFileExtensions == [
+            GraphTopItem(label: "pdf", count: 1),
+            GraphTopItem(label: "txt", count: 1)
+        ])
+        #expect(snapshot.largestAttachments.map { $0.title } == [
+            "Attribute Clip",
+            "Gallery Photo",
+            "Entity Spec",
+            "Entity Notes"
+        ])
+        #expect(snapshot.largestAttachments.map { $0.byteCount } == [300, 200, 100, 50])
+        #expect(snapshot.topMediaNodes.map { $0.id } == [entity.id, attribute.id, secondEntity.id])
+        #expect(snapshot.topMediaNodes.map { $0.mediaCount } == [3, 2, 1])
+    }
+
+    @Test
     func repeatedCountQueries_reusePerServiceCache() throws {
         let store = try BrainMeshTestContainer.makeInMemoryStore()
         let builder = BrainMeshFixtureBuilder(context: store.context)
