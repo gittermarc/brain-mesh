@@ -99,6 +99,7 @@ extension GraphCanvasScreen {
             // ✅ Jump handling: after nodes + layout are committed, select + center if a staged jump is waiting.
             applyStagedJumpAfterLoadIfNeeded(availableKeys: nodeKeys)
             applyPendingFocusCenterAfterLoadIfNeeded(availableKeys: nodeKeys)
+            applyPendingViewPresetAfterLoadIfNeeded(availableKeys: nodeKeys)
             isLoading = false
 
             BMLog.load.info(

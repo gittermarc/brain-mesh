@@ -182,6 +182,9 @@ extension GraphCanvasScreen {
                 detailsFocusRenderPlanCache = .empty
                 loadSummary = nil
                 dismissedLimitNoticeFingerprint = nil
+                viewPresetMessage = nil
+                pendingViewPresetSelectionAfterLoad = nil
+                pendingViewPresetCenterAfterLoad = nil
     
                 // If a cross-screen jump is pending, prepare the graph state so the next load can include the node.
                 if let jump = graphJump.pendingJump {

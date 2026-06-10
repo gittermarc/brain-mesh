@@ -81,6 +81,10 @@ extension GraphCanvasScreen {
                     focusHistorySectionContent
                 }
 
+                Section("Gespeicherte Ansichten") {
+                    viewPresetsSectionContent
+                }
+
                 Section("Neighborhood") {
                     Stepper("Hops: \(hops)", value: $hops, in: 1...3)
                         .disabled(focusEntity == nil)
@@ -321,12 +325,98 @@ extension GraphCanvasScreen {
         return "Fokus anwenden: \(item.label)"
     }
 
+    @ViewBuilder
+    var viewPresetsSectionContent: some View {
+        let presets = viewPresetsForActiveGraph(limit: 20)
+
+        Button {
+            saveCurrentViewPreset()
+        } label: {
+            Label("Aktuelle Ansicht speichern", systemImage: "bookmark")
+        }
+        .disabled(activeGraphID == nil)
+        .accessibilityLabel("Aktuelle Canvas-Ansicht speichern")
+
+        if let viewPresetMessage {
+            Text(viewPresetMessage)
+                .font(.caption)
+                .foregroundStyle(.secondary)
+        }
+
+        if presets.isEmpty {
+            Text("Noch keine gespeicherten Ansichten für diesen Graph. Speichere Fokus, Lens, Limits und Kamera, wenn du eine Perspektive häufiger brauchst.")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+        } else {
+            ForEach(presets) { preset in
+                GraphCanvasViewPresetRow(
+                    preset: preset,
+                    subtitle: viewPresetSubtitle(for: preset),
+                    onApply: { applyViewPreset(preset) },
+                    onDelete: { deleteViewPreset(preset) }
+                )
+                .accessibilityLabel(viewPresetAccessibilityLabel(for: preset))
+            }
+        }
+    }
+
     func stabilizeLayout() {
         let all = Set(nodes.map(\.key))
         pinned = all
         for k in all {
             velocities[k] = .zero
         }
+    }
+}
+
+
+private struct GraphCanvasViewPresetRow: View {
+    let preset: GraphCanvasViewPreset
+    let subtitle: String
+    let onApply: () -> Void
+    let onDelete: () -> Void
+
+    var body: some View {
+        HStack(alignment: .center, spacing: 10) {
+            Button(action: onApply) {
+                HStack(spacing: 10) {
+                    Image(systemName: iconName)
+                        .foregroundStyle(.tint)
+                        .frame(width: 24)
+
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text(verbatim: preset.name)
+                            .font(.subheadline.weight(.semibold))
+                            .foregroundStyle(.primary)
+                            .lineLimit(1)
+
+                        Text(verbatim: subtitle)
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                            .lineLimit(2)
+
+                        Text(preset.updatedAt, style: .relative)
+                            .font(.caption2)
+                            .foregroundStyle(.tertiary)
+                    }
+                }
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+
+            Spacer(minLength: 8)
+
+            Button(role: .destructive, action: onDelete) {
+                Image(systemName: "trash")
+            }
+            .buttonStyle(.borderless)
+            .accessibilityLabel("Gespeicherte Ansicht löschen")
+        }
+        .padding(.vertical, 4)
+    }
+
+    private var iconName: String {
+        preset.focusEntityID == nil ? "globe" : "scope"
     }
 }
 

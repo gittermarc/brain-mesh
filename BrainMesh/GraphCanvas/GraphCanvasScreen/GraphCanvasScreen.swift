@@ -40,6 +40,7 @@ struct GraphCanvasScreen: View {
     @State var hops: Int = 1
     @State var workMode: WorkMode = .explore
     @StateObject var focusHistoryStore = GraphCanvasFocusHistoryStore()
+    @StateObject var viewPresetStore = GraphCanvasViewPresetStore()
 
     // Toggles
     @State var showAttributes: Bool = true
@@ -125,6 +126,7 @@ struct GraphCanvasScreen: View {
     @State var showInspector = false
     @State var loadSummary: GraphCanvasLoadSummary?
     @State var dismissedLimitNoticeFingerprint: String?
+    @State var viewPresetMessage: String?
 
     // ✅ Visibility gate for physics timer (P0.2)
     @State var isScreenVisible: Bool = false
@@ -160,5 +162,9 @@ struct GraphCanvasScreen: View {
 
     // ✅ Focus-history navigation (PR 10)
     @State var pendingCenterAfterLoad: NodeKey?
+
+    // ✅ Local view presets (PR 12)
+    @State var pendingViewPresetSelectionAfterLoad: NodeKey?
+    @State var pendingViewPresetCenterAfterLoad: NodeKey?
 
 }
