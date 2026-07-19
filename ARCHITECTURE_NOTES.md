@@ -656,16 +656,23 @@ Ziel: Storage- und Medienpfade entkoppeln.
 
 #### Mutation Events
 
-- Vorschlag:
-  - `GraphMutationEventBus` oder MainActor Store.
-  - Events: `.entityCreated`, `.entityDeleted`, `.attributeDeleted`, `.linkChanged`, `.attachmentChanged`, `.detailsChanged`, `.graphImported`.
-- Verbraucher:
+- Umgesetzt unter `BrainMesh/DataAccess/Mutations/`:
+  - `GraphMutationEvent` und `GraphMutationBatch` sind graph-scoped, value-only, `Hashable` und `Sendable`; sie enthalten ausschließlich IDs, technische Referenzen, Mutation-Art und Zeitpunkte.
+  - `GraphMutationEventBus` ist ein actor-sicherer Multicast-Bus mit unabhängigen `AsyncStream`-Subscriptions, deterministischen Sequenznummern und expliziter Buffering-Policy.
+  - Die Publisher-API heißt bewusst `publishCommitted(_:)`; `saveAndPublish(_:save:)` führt den Commit zuerst aus und publiziert bei einem Save-Fehler nichts. Eine Pre-Commit-Publish-API existiert nicht.
+  - Der Default-Buffer ist unbounded, da noch keine persistente Event-History existiert. Bounded Policies melden Drops im technischen Publish-Receipt; Subscriber erkennen Lücken über monotone Delivery-Sequenzen und müssen später über Reconciliation abgesichert werden.
+  - Streams werden bei Cancellation entfernt; der Bus kann beendet und für isolierte Tests deterministisch zurückgesetzt werden.
+- Noch nicht integriert:
+  - Produktive Write-Pfade publizieren in diesem Slice noch keine Events.
+  - CloudKit-Änderungen anderer Geräte benötigen weiterhin eine spätere Reconciliation.
+  - Es existieren weder persistente Event-History noch Indexer oder Cache-Invalidation-Consumer.
+- Geplante Verbraucher:
   - EntitiesHomeLoader cache invalidation.
   - GraphStatsLoader cache invalidation.
   - GraphCanvas reload scheduling.
   - Search index invalidation.
 - Nutzen:
-  - Verhindert TTL-/Reload-Zufall.
+  - Schafft die getestete Infrastruktur gegen TTL-/Reload-Zufall, ohne Write-Pfade vorzeitig umzubauen.
 
 #### Sheet Coordinators
 
@@ -729,7 +736,7 @@ Ziel: Storage- und Medienpfade entkoppeln.
 ### Vorhanden
 
 - `BrainMesh/Observability/BMObservability.swift`
-  - `BMLog.load`, `BMLog.expand`, `BMLog.physics`.
+  - `BMLog.load`, `BMLog.expand`, `BMLog.physics`, `BMLog.mutationEvents`.
   - `BMDuration` für Timing.
 - `GraphCanvasView+Physics.swift`
   - rollierendes Physics-Timing alle 60 Ticks.

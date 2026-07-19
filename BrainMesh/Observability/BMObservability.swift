@@ -9,7 +9,7 @@ import Foundation
 import Dispatch
 import os
 
-enum BMLog {
+nonisolated enum BMLog {
     private static let subsystem: String = {
         if let id = Bundle.main.bundleIdentifier, !id.isEmpty { return id }
         return "BrainMesh"
@@ -18,6 +18,10 @@ enum BMLog {
     static let load = Logger(subsystem: subsystem, category: "load")
     static let expand = Logger(subsystem: subsystem, category: "expand")
     static let physics = Logger(subsystem: subsystem, category: "physics")
+    static let mutationEvents = Logger(
+        subsystem: subsystem,
+        category: "mutation-events"
+    )
 }
 
 /// Tiny timer helper (DispatchTime based) for cheap duration measurement.
