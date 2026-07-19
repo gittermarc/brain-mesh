@@ -40,6 +40,7 @@ struct EntitiesHomeView: View {
     @State var rows: [EntitiesHomeRow] = []
     @State var isLoading = false
     @State var loadError: String?
+    @State var deletionErrorMessage: String?
 
     @State var cockpitSnapshot: EntitiesHomeCockpitSnapshot = .empty
     @State var isCockpitLoading = false

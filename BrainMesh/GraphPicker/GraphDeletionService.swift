@@ -26,102 +26,130 @@ enum GraphDeletionService {
         modelContext: ModelContext,
         graphLock: GraphLockCoordinator
     ) async throws -> Result {
-
+        try Task.checkCancellation()
         let gid = graphToDelete.id
 
         // IMPORTANT: There can be multiple MetaGraph records with the same `id` (UUID) in the store.
         // We treat them as duplicates of the same user-visible graph and delete them all.
-        let graphFD = FetchDescriptor<MetaGraph>(predicate: #Predicate { g in
-            g.id == gid
-        })
-        let graphRecordsToDelete = (try? modelContext.fetch(graphFD)) ?? [graphToDelete]
-
-        // 1) Determine a fallback active graph if we delete the currently active one.
-        // Important: do not save early here, to avoid intermediate List updates while deleting.
-        let deletingIsActive = (currentActiveGraphID == gid)
-
-        var newActive: UUID? = nil
-        if deletingIsActive {
-            let remaining = uniqueGraphs
-                .filter { $0.id != gid }
-                .sorted { $0.createdAt < $1.createdAt }
-
-            if let first = remaining.first {
-                newActive = first.id
-            } else {
-                // Last graph -> create a new default graph so the app is never "without a graph".
-                // Persist together with the delete in a single save.
-                let fresh = MetaGraph(name: "Default")
-                modelContext.insert(fresh)
-                newActive = fresh.id
+        let graphDescriptor = FetchDescriptor<MetaGraph>(
+            predicate: #Predicate { graph in
+                graph.id == gid
             }
-        }
-
-        // Lock state for the graph we are deleting.
-        graphLock.lock(graphID: gid)
-
-        // 2) Fetch affected objects.
-        let entsFD = FetchDescriptor<MetaEntity>(
-            predicate: #Predicate { e in e.graphID == gid }
         )
-        let entities = try modelContext.fetch(entsFD)
+        let fetchedGraphRecords = try modelContext.fetch(graphDescriptor)
+        let graphRecordsToDelete = fetchedGraphRecords.isEmpty
+            ? [graphToDelete]
+            : fetchedGraphRecords
 
-        let linksFD = FetchDescriptor<MetaLink>(
-            predicate: #Predicate { l in l.graphID == gid }
+        // Determine a fallback active graph without mutating the context yet.
+        let deletingIsActive = currentActiveGraphID == gid
+        let remainingGraphs = uniqueGraphs
+            .filter { $0.id != gid }
+            .sorted { $0.createdAt < $1.createdAt }
+        let needsReplacementGraph = deletingIsActive && remainingGraphs.isEmpty
+        let replacementGraph = needsReplacementGraph ? MetaGraph(name: "Default") : nil
+        let newActiveGraphID: UUID? = {
+            guard deletingIsActive else { return nil }
+            return remainingGraphs.first?.id ?? replacementGraph?.id
+        }()
+
+        // Prepare every fetch and cleanup plan before the first context mutation.
+        let entityDescriptor = FetchDescriptor<MetaEntity>(
+            predicate: #Predicate { entity in
+                entity.graphID == gid
+            }
         )
-        let links = try modelContext.fetch(linksFD)
+        let entities = try modelContext.fetch(entityDescriptor)
 
-        let orphansFD = FetchDescriptor<MetaAttribute>(
-            predicate: #Predicate { a in a.graphID == gid && a.owner == nil }
+        let linkDescriptor = FetchDescriptor<MetaLink>(
+            predicate: #Predicate { link in
+                link.graphID == gid
+            }
         )
-        let orphans = try modelContext.fetch(orphansFD)
+        let links = try modelContext.fetch(linkDescriptor)
 
-        // 3) Collect local cached image paths before deleting objects.
+        let orphanDescriptor = FetchDescriptor<MetaAttribute>(
+            predicate: #Predicate { attribute in
+                attribute.graphID == gid && attribute.owner == nil
+            }
+        )
+        let orphanAttributes = try modelContext.fetch(orphanDescriptor)
+
         var imagePaths = Set<String>()
+        var ownerReferences = Set<NodeRefKey>()
 
-        for e in entities {
-            if let p = e.imagePath, !p.isEmpty { imagePaths.insert(p) }
-            for a in e.attributesList {
-                if let p = a.imagePath, !p.isEmpty { imagePaths.insert(p) }
+        for entity in entities {
+            ownerReferences.insert(NodeRefKey(kind: .entity, id: entity.id))
+            if let path = entity.imagePath, !path.isEmpty {
+                imagePaths.insert(path)
+            }
+
+            for attribute in entity.attributesList {
+                ownerReferences.insert(NodeRefKey(kind: .attribute, id: attribute.id))
+                if let path = attribute.imagePath, !path.isEmpty {
+                    imagePaths.insert(path)
+                }
             }
         }
 
-        for a in orphans {
-            if let p = a.imagePath, !p.isEmpty { imagePaths.insert(p) }
-        }
-
-        // 3b) Cleanup attachments (records + local cache).
-        // 1) Normal case: graphID is set.
-        AttachmentCleanup.deleteAttachments(graphID: gid, in: modelContext)
-
-        // 2) Defensive: graphID == nil, but owner is being deleted.
-        for e in entities {
-            AttachmentCleanup.deleteAttachments(ownerKind: .entity, ownerID: e.id, graphID: nil, in: modelContext)
-            for a in e.attributesList {
-                AttachmentCleanup.deleteAttachments(ownerKind: .attribute, ownerID: a.id, graphID: nil, in: modelContext)
+        for attribute in orphanAttributes {
+            ownerReferences.insert(NodeRefKey(kind: .attribute, id: attribute.id))
+            if let path = attribute.imagePath, !path.isEmpty {
+                imagePaths.insert(path)
             }
         }
-        for a in orphans {
-            AttachmentCleanup.deleteAttachments(ownerKind: .attribute, ownerID: a.id, graphID: nil, in: modelContext)
+
+        let graphAttachmentPlan = try AttachmentCleanup.prepareDeletion(
+            graphID: gid,
+            in: modelContext
+        )
+        let legacyAttachmentPlan = try AttachmentCleanup.prepareDeletion(
+            owners: ownerReferences,
+            graphID: nil,
+            in: modelContext
+        )
+        try Task.checkCancellation()
+
+        let graphAttachmentResult = AttachmentCleanup.applyDeletion(
+            graphAttachmentPlan,
+            in: modelContext
+        )
+        let legacyAttachmentResult = AttachmentCleanup.applyDeletion(
+            legacyAttachmentPlan,
+            in: modelContext
+        )
+        let attachmentResult = graphAttachmentResult.merging(legacyAttachmentResult)
+
+        for link in links {
+            modelContext.delete(link)
+        }
+        for attribute in orphanAttributes {
+            modelContext.delete(attribute)
+        }
+        for entity in entities {
+            modelContext.delete(entity)
+        }
+        for graph in graphRecordsToDelete {
+            modelContext.delete(graph)
+        }
+        if let replacementGraph {
+            modelContext.insert(replacementGraph)
         }
 
-        // 4) Delete (order: Links -> Orphans -> Entities -> Graph(s))
-        for l in links { modelContext.delete(l) }
-        for a in orphans { modelContext.delete(a) }
-        for e in entities { modelContext.delete(e) } // cascade removes owned attributes
-
-        // Delete all duplicate graph records for this UUID.
-        for g in graphRecordsToDelete {
-            modelContext.delete(g)
+        do {
+            try modelContext.save()
+        } catch {
+            modelContext.rollback()
+            throw error
         }
 
-        try modelContext.save()
-
-        // 5) Remove local cached files (device only).
-        for p in imagePaths {
-            ImageStore.delete(path: p)
+        // Non-persistent side effects happen only after the complete SwiftData commit succeeds.
+        graphLock.lock(graphID: gid)
+        AttachmentCleanup.deleteCachedFiles(for: attachmentResult)
+        for path in imagePaths {
+            ImageStore.delete(path: path)
         }
 
-        return Result(newActiveGraphID: newActive)
+        return Result(newActiveGraphID: newActiveGraphID)
     }
 }

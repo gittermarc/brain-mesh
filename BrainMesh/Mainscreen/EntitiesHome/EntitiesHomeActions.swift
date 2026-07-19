@@ -14,47 +14,54 @@ extension EntitiesHomeView {
     }
 
     func deleteEntities(at offsets: IndexSet, from sourceRows: [EntitiesHomeRow]) {
-        let idsToDelete: [UUID] = offsets.compactMap { idx in
-            guard sourceRows.indices.contains(idx) else { return nil }
-            return sourceRows[idx].id
+        let idsToDelete: [UUID] = offsets.compactMap { index in
+            guard sourceRows.indices.contains(index) else { return nil }
+            return sourceRows[index].id
         }
         deleteEntityIDs(idsToDelete)
     }
 
     func deleteEntityIDs(_ ids: [UUID]) {
-        guard !ids.isEmpty else { return }
-
-        let entitiesToDelete: [MetaEntity] = ids.compactMap { fetchEntity(by: $0) }
-        if entitiesToDelete.isEmpty { return }
-
-        for entity in entitiesToDelete {
-            // Attachments are not part of the graph rendering; they live only on detail level.
-            // They also do not cascade automatically, so we explicitly clean them up.
-            AttachmentCleanup.deleteAttachments(ownerKind: .entity, ownerID: entity.id, in: modelContext)
-            for attr in entity.attributesList {
-                AttachmentCleanup.deleteAttachments(ownerKind: .attribute, ownerID: attr.id, in: modelContext)
-            }
-
-            LinkCleanup.deleteLinks(referencing: .entity, id: entity.id, graphID: entity.graphID ?? activeGraphID, in: modelContext)
-            modelContext.delete(entity)
+        let requestedIDs = Set(ids)
+        guard !requestedIDs.isEmpty else { return }
+        guard let graphID = activeGraphID else {
+            deletionErrorMessage = GraphNodeDeletionService.DeletionError.missingGraphScope.localizedDescription
+            return
         }
 
-        // Update local list immediately and then re-fetch to stay in sync with SwiftData.
-        rows.removeAll { r in ids.contains(r.id) }
+        do {
+            let gid = graphID
+            let descriptor = FetchDescriptor<MetaEntity>(
+                predicate: #Predicate { entity in
+                    entity.graphID == gid
+                }
+            )
+            let entitiesToDelete = try modelContext.fetch(descriptor).filter { entity in
+                requestedIDs.contains(entity.id)
+            }
+
+            guard !entitiesToDelete.isEmpty else {
+                refreshAfterDeletion()
+                return
+            }
+
+            try GraphNodeDeletionService.deleteEntities(
+                entitiesToDelete,
+                in: modelContext
+            )
+
+            rows.removeAll { requestedIDs.contains($0.id) }
+            refreshAfterDeletion()
+        } catch {
+            deletionErrorMessage = error.localizedDescription
+        }
+    }
+
+    private func refreshAfterDeletion() {
         Task {
             await EntitiesHomeLoader.shared.invalidateCache(for: activeGraphID)
             await reload(forFolded: BMSearch.fold(searchText))
             await loadCockpitIfNeeded()
         }
-    }
-
-    private func fetchEntity(by id: UUID) -> MetaEntity? {
-        var fd = FetchDescriptor<MetaEntity>(
-            predicate: #Predicate { e in
-                e.id == id
-            }
-        )
-        fd.fetchLimit = 1
-        return try? modelContext.fetch(fd).first
     }
 }

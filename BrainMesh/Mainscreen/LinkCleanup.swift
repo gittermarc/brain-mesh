@@ -12,60 +12,102 @@ import os
 /// Shared cleanup helpers for MetaLink records.
 nonisolated enum LinkCleanup {
 
-    /// Deletes all links referencing the given node (as source OR target), scoped to a graph if provided.
+    nonisolated struct Result: Equatable, Sendable {
+        let deletedCount: Int
+
+        static let empty = Result(deletedCount: 0)
+    }
+
     @MainActor
+    struct DeletionPlan {
+        fileprivate let links: [MetaLink]
+
+        fileprivate init(links: [MetaLink]) {
+            self.links = links
+        }
+    }
+
+    /// Prepares a graph-scoped deletion without mutating the context.
+    /// The returned plan contains SwiftData models and must stay on the main actor.
+    @MainActor
+    static func prepareDeletion(
+        referencing nodes: Set<NodeRefKey>,
+        graphID: UUID,
+        in modelContext: ModelContext
+    ) throws -> DeletionPlan {
+        guard !nodes.isEmpty else {
+            return DeletionPlan(links: [])
+        }
+
+        let gid = graphID
+        let descriptor = FetchDescriptor<MetaLink>(
+            predicate: #Predicate { link in
+                link.graphID == gid
+            }
+        )
+
+        let matchingLinks = try modelContext.fetch(descriptor).filter { link in
+            let sourceMatches: Bool = {
+                guard let kind = NodeKind(rawValue: link.sourceKindRaw) else { return false }
+                return nodes.contains(NodeRefKey(kind: kind, id: link.sourceID))
+            }()
+
+            if sourceMatches {
+                return true
+            }
+
+            guard let kind = NodeKind(rawValue: link.targetKindRaw) else { return false }
+            return nodes.contains(NodeRefKey(kind: kind, id: link.targetID))
+        }
+
+        return DeletionPlan(links: matchingLinks)
+    }
+
+    /// Applies a prepared deletion plan. This method does not save the context.
+    @MainActor
+    @discardableResult
+    static func applyDeletion(
+        _ plan: DeletionPlan,
+        in modelContext: ModelContext
+    ) -> Result {
+        for link in plan.links {
+            modelContext.delete(link)
+        }
+        return Result(deletedCount: plan.links.count)
+    }
+
+    /// Deletes all links referencing any supplied node, restricted to one graph.
+    /// This method does not save the context.
+    @MainActor
+    @discardableResult
+    static func deleteLinks(
+        referencing nodes: Set<NodeRefKey>,
+        graphID: UUID,
+        in modelContext: ModelContext
+    ) throws -> Result {
+        let plan = try prepareDeletion(
+            referencing: nodes,
+            graphID: graphID,
+            in: modelContext
+        )
+        return applyDeletion(plan, in: modelContext)
+    }
+
+    /// Deletes all links referencing the given node, restricted to one graph.
+    /// This method does not save the context.
+    @MainActor
+    @discardableResult
     static func deleteLinks(
         referencing kind: NodeKind,
         id: UUID,
-        graphID: UUID?,
+        graphID: UUID,
         in modelContext: ModelContext
-    ) {
-        let k = kind.rawValue
-        let nodeID = id
-
-        let fdSource: FetchDescriptor<MetaLink>
-        if let gid = graphID {
-            fdSource = FetchDescriptor<MetaLink>(
-                predicate: #Predicate { l in
-                    l.sourceKindRaw == k &&
-                    l.sourceID == nodeID &&
-                    l.graphID == gid
-                }
-            )
-        } else {
-            fdSource = FetchDescriptor<MetaLink>(
-                predicate: #Predicate { l in
-                    l.sourceKindRaw == k &&
-                    l.sourceID == nodeID
-                }
-            )
-        }
-
-        if let links = try? modelContext.fetch(fdSource) {
-            for l in links { modelContext.delete(l) }
-        }
-
-        let fdTarget: FetchDescriptor<MetaLink>
-        if let gid = graphID {
-            fdTarget = FetchDescriptor<MetaLink>(
-                predicate: #Predicate { l in
-                    l.targetKindRaw == k &&
-                    l.targetID == nodeID &&
-                    l.graphID == gid
-                }
-            )
-        } else {
-            fdTarget = FetchDescriptor<MetaLink>(
-                predicate: #Predicate { l in
-                    l.targetKindRaw == k &&
-                    l.targetID == nodeID
-                }
-            )
-        }
-
-        if let links = try? modelContext.fetch(fdTarget) {
-            for l in links { modelContext.delete(l) }
-        }
+    ) throws -> Result {
+        try deleteLinks(
+            referencing: Set([NodeRefKey(kind: kind, id: id)]),
+            graphID: graphID,
+            in: modelContext
+        )
     }
 
     /// Updates denormalized `sourceLabel` / `targetLabel` on `MetaLink` for the given node.

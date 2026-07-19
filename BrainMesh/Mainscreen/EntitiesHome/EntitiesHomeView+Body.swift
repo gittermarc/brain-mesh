@@ -78,6 +78,14 @@ extension EntitiesHomeView {
                         }
                     }
                 }
+                .alert("BrainMesh", isPresented: Binding(
+                    get: { deletionErrorMessage != nil },
+                    set: { if !$0 { deletionErrorMessage = nil } }
+                )) {
+                    Button("OK", role: .cancel) {}
+                } message: {
+                    Text(deletionErrorMessage ?? "")
+                }
         }
     }
 

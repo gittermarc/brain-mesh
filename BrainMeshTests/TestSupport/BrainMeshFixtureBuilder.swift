@@ -59,9 +59,11 @@ struct BrainMeshFixtureBuilder {
         in graph: MetaGraph? = nil,
         notes: String = "",
         iconSymbolName: String? = nil,
-        imageData: Data? = nil
+        imageData: Data? = nil,
+        id: UUID = UUID()
     ) -> MetaEntity {
         let entity = MetaEntity(name: name, graphID: graph?.id, iconSymbolName: iconSymbolName)
+        entity.id = id
         entity.notes = notes
         entity.nameFolded = BMSearch.fold(entity.name)
         entity.notesFolded = BMSearch.fold(entity.notes)
@@ -76,9 +78,11 @@ struct BrainMeshFixtureBuilder {
         owner: MetaEntity,
         notes: String = "",
         iconSymbolName: String? = nil,
-        imageData: Data? = nil
+        imageData: Data? = nil,
+        id: UUID = UUID()
     ) -> MetaAttribute {
         let attribute = MetaAttribute(name: name, owner: owner, graphID: owner.graphID, iconSymbolName: iconSymbolName)
+        attribute.id = id
         attribute.notes = notes
         attribute.nameFolded = BMSearch.fold(attribute.name)
         attribute.notesFolded = BMSearch.fold(attribute.notes)

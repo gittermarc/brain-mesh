@@ -16,6 +16,7 @@ struct EntityAttributesSectionView: View {
 
     @AppStorage(BMAppStorageKeys.entityAttributeSortMode) private var sortModeRaw: String = EntityAttributeSortMode.nameAZ.rawValue
     @State private var filterText: String = ""
+    @State private var deletionErrorMessage: String?
 
     private var currentSortMode: EntityAttributeSortMode {
         EntityAttributeSortMode(rawValue: sortModeRaw) ?? .nameAZ
@@ -113,6 +114,14 @@ struct EntityAttributesSectionView: View {
                 }
             }
         }
+        .alert("BrainMesh", isPresented: Binding(
+            get: { deletionErrorMessage != nil },
+            set: { if !$0 { deletionErrorMessage = nil } }
+        )) {
+            Button("OK", role: .cancel) {}
+        } message: {
+            Text(deletionErrorMessage ?? "")
+        }
     }
 
     private var attributeSearchRow: some View {
@@ -139,17 +148,17 @@ struct EntityAttributesSectionView: View {
     }
 
     private func deleteAttributes(at offsets: IndexSet, sorted: [MetaAttribute]) {
-        for index in offsets {
-            guard sorted.indices.contains(index) else { continue }
-            let attr = sorted[index]
-
-            AttachmentCleanup.deleteAttachments(ownerKind: .attribute, ownerID: attr.id, in: modelContext)
-            LinkCleanup.deleteLinks(referencing: .attribute, id: attr.id, graphID: entity.graphID, in: modelContext)
-
-            entity.removeAttribute(attr)
-            modelContext.delete(attr)
+        let attributes: [MetaAttribute] = offsets.compactMap { index in
+            guard sorted.indices.contains(index) else { return nil }
+            return sorted[index]
         }
-        try? modelContext.save()
+        guard !attributes.isEmpty else { return }
+
+        do {
+            try GraphNodeDeletionService.deleteAttributes(attributes, in: modelContext)
+        } catch {
+            deletionErrorMessage = error.localizedDescription
+        }
     }
 }
 

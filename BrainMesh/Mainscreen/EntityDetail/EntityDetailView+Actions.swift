@@ -28,14 +28,11 @@ extension EntityDetailView {
     }
 
     func deleteEntity() {
-        AttachmentCleanup.deleteAttachments(ownerKind: .entity, ownerID: entity.id, in: modelContext)
-        for attr in entity.attributesList {
-            AttachmentCleanup.deleteAttachments(ownerKind: .attribute, ownerID: attr.id, in: modelContext)
+        do {
+            try GraphNodeDeletionService.deleteEntity(entity, in: modelContext)
+            dismiss()
+        } catch {
+            errorMessage = error.localizedDescription
         }
-
-        LinkCleanup.deleteLinks(referencing: .entity, id: entity.id, graphID: entity.graphID, in: modelContext)
-
-        modelContext.delete(entity)
-        try? modelContext.save()
     }
 }

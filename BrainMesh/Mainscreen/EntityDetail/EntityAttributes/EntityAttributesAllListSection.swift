@@ -11,6 +11,7 @@ import SwiftData
 
 struct EntityAttributesAllListSection: View {
     @Environment(\.modelContext) private var modelContext
+    @State private var deletionErrorMessage: String?
 
     @Bindable var entity: MetaEntity
     let rows: [EntityAttributesAllListModel.Row]
@@ -45,6 +46,14 @@ struct EntityAttributesAllListSection: View {
                     }
                 }
             }
+        }
+        .alert("BrainMesh", isPresented: Binding(
+            get: { deletionErrorMessage != nil },
+            set: { if !$0 { deletionErrorMessage = nil } }
+        )) {
+            Button("OK", role: .cancel) {}
+        } message: {
+            Text(deletionErrorMessage ?? "")
         }
     }
 
@@ -151,17 +160,17 @@ struct EntityAttributesAllListSection: View {
     }
 
     private func deleteAttributes(at offsets: IndexSet, rows: [EntityAttributesAllListModel.Row]) {
-        for index in offsets {
-            guard rows.indices.contains(index) else { continue }
-            let attr = rows[index].attribute
-
-            AttachmentCleanup.deleteAttachments(ownerKind: .attribute, ownerID: attr.id, in: modelContext)
-            LinkCleanup.deleteLinks(referencing: .attribute, id: attr.id, graphID: entity.graphID, in: modelContext)
-
-            entity.removeAttribute(attr)
-            modelContext.delete(attr)
+        let attributes: [MetaAttribute] = offsets.compactMap { index in
+            guard rows.indices.contains(index) else { return nil }
+            return rows[index].attribute
         }
-        try? modelContext.save()
-        onMutate()
+        guard !attributes.isEmpty else { return }
+
+        do {
+            try GraphNodeDeletionService.deleteAttributes(attributes, in: modelContext)
+            onMutate()
+        } catch {
+            deletionErrorMessage = error.localizedDescription
+        }
     }
 }

@@ -236,8 +236,11 @@ extension AttributeDetailView {
     }
 
     func deleteAttribute() {
-        modelContext.delete(attribute)
-        try? modelContext.save()
-        dismiss()
+        do {
+            try GraphNodeDeletionService.deleteAttribute(attribute, in: modelContext)
+            dismiss()
+        } catch {
+            errorMessage = error.localizedDescription
+        }
     }
 }

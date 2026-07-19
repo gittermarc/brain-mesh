@@ -10,6 +10,7 @@ import SwiftData
 
 struct EntityDetailView: View {
     @Environment(\.modelContext) var modelContext
+    @Environment(\.dismiss) var dismiss
     @EnvironmentObject var display: DisplaySettingsStore
     @EnvironmentObject var recentNodeStore: RecentNodeStore
 
