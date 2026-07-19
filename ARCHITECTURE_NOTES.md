@@ -323,19 +323,23 @@
 
 ### Global Search
 
-- Datei: `BrainMesh/Search/BrainMeshSearchService.swift`.
+- Dateien:
+  - `BrainMesh/Search/BrainMeshSearchService.swift` als Actor-Orchestrator.
+  - `BrainMesh/Search/Candidates/` mit Providern für Entity, Attribute, Link, Details und Attachments.
 - Mechanik:
-  - Actor mit `Task.detached` und Background `ModelContext`.
-  - Fetch-Kandidaten aus Entity, Attribute, Link, DetailDefinition, DetailValue, Attachment.
-  - Sortierung und Limitierung nach Ranking; Limit wird erst nach Candidate-Build wirksam.
+  - `Task.detached` erzeugt pro Suche genau einen read-only Background `ModelContext`.
+  - Ein gemeinsamer Request trägt optionalen Graph-Scope, bereits gefaltete Query, Context und Cancellation-Check.
+  - Provider liefern ausschließlich `[BrainMeshSearchCandidate]`; Detail-Definitionen und typisierte Detailwerte bleiben im gemeinsamen Detail-Provider.
+  - Provider-Reihenfolge, Ranking und Limitierung entsprechen der bisherigen Suche; das Limit wird weiterhin erst nach dem Candidate-Build wirksam.
 - Hotspot-Gründe:
-  - `fetchLinkCandidates` lädt alle Links des Graphen und filtert/rankt in Memory.
-  - `fetchDetailValueCandidates` lädt alle Detailwerte des Graphen und filtert/rankt in Memory.
-  - `fetchAttachmentCandidates` lädt alle Attachments des Graphen und filtert/rankt in Memory.
+  - `LinkSearchCandidateProvider` lädt alle Links des Graphen und filtert/rankt in Memory.
+  - `DetailSearchCandidateProvider` lädt alle Detailwerte des Graphen und filtert/rankt in Memory.
+  - `AttachmentSearchCandidateProvider` lädt Attachment-Metadaten des Graphen und filtert/rankt in Memory; `fileData` wird nicht ausgewertet.
 - Bereits vorhandene Mitigation:
-  - Background Context.
-  - `Task.checkCancellation()` zwischen Phasen.
+  - Background Context und value-only Rückgaben.
+  - Cancellation vor, zwischen und innerhalb der Provider-Phasen.
   - `safeLimit` auf maximal 100 Ergebnisse.
+  - Quellspezifische Provider-Grenze für einen späteren Index.
 - Refactor-Hebel:
   - Persistenter Search-Index pro Graph.
   - Denormalisierte SearchDocument-Records mit `ownerKind`, `ownerID`, `sourceKind`, `sourceID`, `rankBoost`.
@@ -504,19 +508,21 @@ Ziel: zentrale Typen und Planer entkoppeln.
 - Risiko: mittel, weil viele Imports/References betroffen.
 - Nutzen: bessere Testbarkeit der Derived-State- und Render-Plan-Logik.
 
-#### `BrainMesh/Search/BrainMeshSearchService.swift`
+#### `BrainMesh/Search/BrainMeshSearchService.swift` — Provider-Split umgesetzt
 
-Ziel: Candidate Fetching und Ranking trennen.
-
-- Neu: `Search/BrainMeshSearchLoader.swift`
-  - Actor-Orchestrierung, Container, Cancellation.
-- Neu: `Search/Candidates/EntitySearchCandidateProvider.swift`.
-- Neu: `Search/Candidates/AttributeSearchCandidateProvider.swift`.
-- Neu: `Search/Candidates/LinkSearchCandidateProvider.swift`.
-- Neu: `Search/Candidates/DetailSearchCandidateProvider.swift`.
-- Neu: `Search/Candidates/AttachmentSearchCandidateProvider.swift`.
-- Risiko: niedrig bis mittel, wenn providerweise Tests existieren.
-- Nutzen: Indexierung kann schrittweise eingeführt werden.
+- `BrainMeshSearchService` bleibt der öffentliche Actor-Orchestrator für Container-Konfiguration, Query-Folding, Limit, deterministische Provider-Reihenfolge, Cancellation und Ranking.
+- `Search/Candidates/BrainMeshSearchCandidateProvider.swift` definiert den gemeinsamen Request-Context mit operationslokalem `ModelContext`, optionalem `graphID`, bereits gefalteter Query und Cancellation-Prüfung.
+- Quellspezifische Provider:
+  - `EntitySearchCandidateProvider.swift`.
+  - `AttributeSearchCandidateProvider.swift`.
+  - `LinkSearchCandidateProvider.swift`.
+  - `DetailSearchCandidateProvider.swift` für Definitionen und typisierte Werte.
+  - `AttachmentSearchCandidateProvider.swift` ausschließlich für Metadaten.
+- `BrainMeshSearchDetailValueFormatter.swift` kapselt value-only Datum-, Bool- und Detailwert-Formatierung.
+- Provider geben ausschließlich `[BrainMeshSearchCandidate]` zurück; SwiftData-Modelle verbleiben im operationslokalen Context.
+- Es wurde kein persistierter Index, keine zusätzliche Datenbank und keine Schemaänderung eingeführt.
+- Providerbezogene Tests liegen in `BrainMeshTests/BrainMeshSearchCandidateProviderTests.swift`.
+- Nutzen: Ein späterer Index-Provider kann ergänzt werden, ohne Ranking, Result-DTOs oder Command Center umzubauen.
 
 #### `BrainMesh/Settings/BrainMeshGuideView.swift`
 
@@ -801,15 +807,17 @@ Ziel: Storage- und Medienpfade entkoppeln.
   - Graphweite Scans in `BrainMeshSearchService` und `EntitiesHomeLoader+Fetch` reduzieren.
 - Betroffene Dateien:
   - `BrainMesh/Search/BrainMeshSearchService.swift`
+  - `BrainMesh/Search/Candidates/`
   - `BrainMesh/Mainscreen/EntitiesHome/EntitiesHomeLoader/EntitiesHomeLoader+Fetch.swift`
   - `BrainMesh/Mainscreen/EntitiesHome/EntitiesHomeLoader/EntitiesHomeLoader+Counts.swift`
   - `BrainMesh/Mainscreen/LinkCleanup.swift`
   - `BrainMesh/Models/` für neues Indexmodell, falls SwiftData-persistent
   - `BrainMesh/GraphTransfer/` für Import/Export, falls der Index persistent wird
-- Änderung:
-  - Erst Provider-Split ohne Verhalten ändern.
-  - Dann `SearchDocument` oder lokaler Index einführen.
-  - Mutation-Events für Rename, Notes, Link, Details, Attachments.
+- Umsetzung:
+  - Der verhaltenskompatible Provider-Split ist abgeschlossen; `BrainMeshSearchService` orchestriert die deterministische Candidate-Pipeline.
+- Nächste Schritte:
+  - `SearchDocument` oder lokalen Index an der Provider-Grenze einführen.
+  - Mutation-Events für Rename, Notes, Link, Details und Attachments ergänzen.
 - Risiko:
   - Mittel.
   - Index muss mit Sync, Import/Export und lokalen Mutationen konsistent bleiben.
