@@ -123,7 +123,7 @@ actor MediaAllLoader {
     /// falling back to in-memory filtering.
     func migrateLegacyGraphIDIfNeeded(ownerKindRaw: Int, ownerID: UUID, graphID: UUID?) async {
         guard let graphID else { return }
-        guard let container else { return }
+        guard let container = await configuredContainerIfReady() else { return }
         await AttachmentGraphIDMigration.migrateIfNeeded(
             container: container,
             ownerKindRaw: ownerKindRaw,
@@ -182,13 +182,24 @@ actor MediaAllLoader {
         )
     }
 
+    private func configuredContainerIfReady() async -> AnyModelContainer? {
+        do {
+            try await AppLoadersConfigurator.waitUntilReadyIfNeeded(
+                serviceContainerID: container?.identity
+            )
+        } catch {
+            return nil
+        }
+        return container
+    }
+
     private func fetchCount(
         ownerKindRaw: Int,
         ownerID: UUID,
         graphID: UUID?,
         selection: MediaAllContentSelection
     ) async -> Int {
-        guard let container else { return 0 }
+        guard let container = await configuredContainerIfReady() else { return 0 }
 
         return await Task.detached(priority: .utility) {
             let context = ModelContext(container.container)
@@ -215,7 +226,7 @@ actor MediaAllLoader {
         limit: Int,
         selection: MediaAllContentSelection
     ) async -> [AttachmentListItem] {
-        guard let container else { return [] }
+        guard let container = await configuredContainerIfReady() else { return [] }
 
         return await Task.detached(priority: .utility) {
             let context = ModelContext(container.container)

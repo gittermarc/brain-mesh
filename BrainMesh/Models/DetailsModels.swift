@@ -10,7 +10,7 @@ import SwiftData
 
 // MARK: - Details (Schema + Werte)
 
-nonisolated enum DetailFieldType: Int, Codable, CaseIterable, Identifiable {
+nonisolated enum DetailFieldType: Int, Codable, CaseIterable, Identifiable, Sendable {
     case singleLineText = 0
     case multiLineText = 1
     case numberInt = 2

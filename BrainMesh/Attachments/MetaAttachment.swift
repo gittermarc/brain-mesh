@@ -14,7 +14,7 @@ import SwiftData
 /// - video: Video attachment (picked from Photos).
 /// - galleryImage: Additional images shown only in Entity/Attribute detail galleries.
 ///   Important: These must NOT be used in the graph.
-enum AttachmentContentKind: Int, Codable, CaseIterable {
+nonisolated enum AttachmentContentKind: Int, Codable, CaseIterable, Sendable {
     case file = 0
     case video = 1
     case galleryImage = 2

@@ -53,6 +53,31 @@ actor AttachmentHydrator {
             return await task.value
         }
 
+        do {
+            try await AppLoadersConfigurator.waitUntilReadyIfNeeded(
+                serviceContainerID: container?.identity
+            )
+        } catch {
+            #if DEBUG
+            log.debug("⚠️ attachment hydration skipped because service readiness is unavailable")
+            #endif
+            return nil
+        }
+
+        // Waiting for app-wide readiness is an actor reentrancy point. Another caller may
+        // have completed or started the same hydration while this call was suspended.
+        if let existing = AttachmentStore.existingCachedFileURL(
+            localPath: localPath,
+            attachmentID: attachmentID,
+            fileExtension: fileExtension
+        ) {
+            return existing
+        }
+
+        if let task = inFlight[attachmentID] {
+            return await task.value
+        }
+
 	        // IMPORTANT:
 	        // The closure passed to `hydrateLimiter.withPermit { ... }` executes in the limiter actor's isolation.
 	        // It must NOT access `AttachmentHydrator` actor-isolated state (like `self.container`).

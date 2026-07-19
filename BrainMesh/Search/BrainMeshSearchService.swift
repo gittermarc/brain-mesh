@@ -32,6 +32,9 @@ actor BrainMeshSearchService {
             return BrainMeshSearchSnapshot(query: query, results: [])
         }
 
+        try await AppLoadersConfigurator.waitUntilReadyIfNeeded(
+            serviceContainerID: self.container?.identity
+        )
         let configuredContainer = self.container
         guard let configuredContainer else {
             throw NSError(

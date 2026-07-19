@@ -42,7 +42,7 @@
   - Debug: CloudKit-Containerfehler ist fatal.
   - Release: CloudKit-Fehler → lokaler `ModelContainer`.
   - Startet `Task.detached(priority: .utility)` für `SyncRuntime.refreshAccountStatus()`.
-  - Ruft `AppLoadersConfigurator.configureAllLoaders(with:)` fire-and-forget auf.
+  - Startet `AppLoadersConfigurator.configureAllLoaders(with:)` nicht-blockierend; `AppRootView+Startup.swift` wartet vor serviceabhängigen Startup-Schritten auf `waitUntilReady()`.
 
 ### Root Lifecycle
 
@@ -98,7 +98,7 @@
 - `graphID == nil` wird in Kommentaren als sanfte Migration alter Daten beschrieben.
 - `GraphBootstrap.migrateLegacyRecordsIfNeeded` ordnet Legacy-Daten einem Default-Graph zu.
 - Risiko: Jede Query ohne `graphID`-Filter kann Daten aus anderen Graphen oder Legacy-Daten vermischen.
-- Refactor-Hebel: zentrale `GraphScope`/`FetchDescriptor`-Factory mit Tests für alle Feature-Loader.
+- Die neue Read-Schicht unter `BrainMesh/DataAccess/` erzwingt für ihre APIs einen nicht-optionalen `GraphScope` und stellt zentrale `GraphScopedFetches` bereit. Bestehende Feature-Loader werden in diesem Slice noch nicht vollständig migriert.
 
 ### Relationships vs. skalare Referenzen
 
@@ -443,17 +443,16 @@
 
 ### Risiken
 
-#### Fire-and-forget Loader Configuration
+#### Awaitable Loader Configuration
 
 - Datei: `BrainMesh/Support/AppLoadersConfigurator.swift`.
 - Mechanik:
-  - `configureAllLoaders(with:)` startet `Task(priority: .utility)` und kehrt sofort zurück.
-  - Views können theoretisch Loader nutzen, bevor `configure` fertig ist.
-- Symptome:
-  - Fehler wie `GraphCanvasDataLoader not configured`, `EntitiesHomeLoader not configured`, `BrainMeshSearchService not configured` sind im Code vorgesehen.
-- Hebel:
-  - Konfiguration synchron im App Init durchführen, soweit nur Actor-State gesetzt wird.
-  - Oder `LoadersReadyStore` einführen und erste Loads bis Ready blocken.
+  - `configureAllLoaders(with:)` bleibt aus `BrainMeshApp.init()` nicht-blockierend startbar.
+  - Eine Main-Actor-isolierte Zustandsmaschine hält genau eine laufende Konfiguration und behandelt denselben Container idempotent.
+  - `waitUntilReady()` gibt parallele Waiter gemeinsam frei und liefert für nicht gestartete, abgebrochene oder fehlgeschlagene Konfiguration klar testbare Zustände.
+  - `AppRootView+Startup.swift` wartet vor Bootstrap, Lock- und Hydration-Schritten auf Readiness; appweit konfigurierte Loader warten bei einem frühen Zugriff ebenfalls auf die Barriere.
+- Restrisiko:
+  - Die nicht-werfenden Legacy-Loader-APIs behalten bei Readiness-Fehlern ihre bisherigen leeren beziehungsweise `nil`-Fallbacks. Der App-Root startet in diesem Zustand nicht weiter.
 
 #### `@unchecked Sendable`
 
@@ -645,15 +644,15 @@ Ziel: Storage- und Medienpfade entkoppeln.
 
 #### Repository/Store Layer
 
-- Aktueller Zustand:
-  - Viele Feature-Loader bauen ähnliche `FetchDescriptor`-Predicates.
-- Vorschlag:
-  - `GraphScopedFetches` für Entity, Attribute, Link, Attachment, Detail.
-  - `NodeRepository` für lookup by NodeKind/UUID/graphID.
-  - `GraphMutationService` für add/rename und cache invalidation; der Delete-Slice ist bereits in `GraphNodeDeletionService` zentralisiert.
-- Nutzen:
-  - Weniger fehlende `graphID`-Filter.
-  - Konsistente Cleanup- und Invalidation-Pfade.
+- Umgesetzt unter `BrainMesh/DataAccess/`:
+  - `GraphScope` als nicht-optionaler, `Hashable` und `Sendable` Graph-Schlüssel.
+  - `GraphScopedFetches` für Graph, Entity, Attribute, Link, Attachment, Detaildefinition und Detailwert mit graph- und ID-scoped Predicates.
+  - `GraphReadRepository` für Graph-Metadaten, alle Source-DTOs und einen vollständigen indexierbaren Graph-Snapshot.
+  - `NodeRepository` für Entity-/Attribute-Lookups, Node-Summaries sowie eingehende und ausgehende direkte Nachbarschaften.
+  - DTOs sind value-only und `Sendable`; Attachment-DTOs enthalten weder `fileData` noch lokalen Dateipfad.
+- Weiterhin offen:
+  - Bestehende Feature-Loader bauen teilweise eigene `FetchDescriptor`-Predicates und können schrittweise auf die Read-Schicht migriert werden.
+  - Ein allgemeiner `GraphMutationService` für Add/Rename und Cache-Invalidation; der Delete-Slice ist bereits in `GraphNodeDeletionService` zentralisiert.
 
 #### Mutation Events
 

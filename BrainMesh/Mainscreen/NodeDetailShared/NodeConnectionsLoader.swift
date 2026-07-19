@@ -51,6 +51,9 @@ actor NodeConnectionsLoader {
     }
 
     func loadSnapshot(ownerKind: NodeKind, ownerID: UUID, graphID: UUID?) async throws -> NodeConnectionsSnapshot {
+        try await AppLoadersConfigurator.waitUntilReadyIfNeeded(
+            serviceContainerID: self.container?.identity
+        )
         let configuredContainer = self.container
         guard let configuredContainer else {
             throw NSError(

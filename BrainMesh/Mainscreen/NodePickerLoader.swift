@@ -53,6 +53,9 @@ actor NodePickerLoader {
         let uniqueIDs = NodePickerLoader.uniqueIDsPreservingOrder(ids)
         guard uniqueIDs.isEmpty == false else { return [] }
 
+        try await AppLoadersConfigurator.waitUntilReadyIfNeeded(
+            serviceContainerID: self.container?.identity
+        )
         let configuredContainer = self.container
         guard let configuredContainer else {
             throw NSError(
@@ -86,6 +89,9 @@ actor NodePickerLoader {
     }
 
     private func load(kindRaw: Int, graphID: UUID?, foldedSearch: String, limit: Int) async throws -> [NodePickerRowDTO] {
+        try await AppLoadersConfigurator.waitUntilReadyIfNeeded(
+            serviceContainerID: self.container?.identity
+        )
         let configuredContainer = self.container
         guard let configuredContainer else {
             throw NSError(

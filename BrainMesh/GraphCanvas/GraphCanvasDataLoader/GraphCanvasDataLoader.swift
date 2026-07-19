@@ -47,6 +47,9 @@ actor GraphCanvasDataLoader {
         maxNodes: Int,
         maxLinks: Int
     ) async throws -> GraphCanvasSnapshot {
+        try await AppLoadersConfigurator.waitUntilReadyIfNeeded(
+            serviceContainerID: self.container?.identity
+        )
         let configuredContainer = self.container
         guard let configuredContainer else {
             throw NSError(

@@ -4,6 +4,9 @@
 //
 
 import Foundation
+import os
+
+private let appRootStartupLog = Logger(subsystem: "BrainMesh", category: "AppRootStartup")
 
 extension AppRootView {
 
@@ -11,6 +14,25 @@ extension AppRootView {
     func runStartupIfNeeded() async {
         guard didRunStartupOnce == false else {
             await maybePresentOnboardingIfNeeded()
+            return
+        }
+        guard isRunningStartup == false else {
+            return
+        }
+
+        isRunningStartup = true
+        defer { isRunningStartup = false }
+
+        do {
+            try await AppLoadersConfigurator.waitUntilReady()
+        } catch is CancellationError {
+            appRootStartupLog.notice("startup cancelled while waiting for service readiness")
+            return
+        } catch {
+            let nsError = error as NSError
+            appRootStartupLog.error(
+                "startup readiness failed domain=\(nsError.domain, privacy: .public) code=\(nsError.code)"
+            )
             return
         }
 
@@ -27,8 +49,10 @@ extension AppRootView {
 
     @MainActor
     func handleBecameActive() async {
-        // During cold start, `.task` performs startup work already.
-        guard didRunStartupOnce else { return }
+        if didRunStartupOnce == false {
+            await runStartupIfNeeded()
+            return
+        }
 
         // Keep foreground work lightweight.
         await autoHydrateImagesIfDue()

@@ -82,6 +82,9 @@ actor NodeMediaPreviewLoader {
         galleryLimit: Int = 6,
         attachmentLimit: Int = 3
     ) async throws -> NodeMediaPreviewSnapshot {
+        try await AppLoadersConfigurator.waitUntilReadyIfNeeded(
+            serviceContainerID: container?.identity
+        )
         guard let configuredContainer = container else {
             throw NSError(
                 domain: "BrainMesh.NodeMediaPreviewLoader",

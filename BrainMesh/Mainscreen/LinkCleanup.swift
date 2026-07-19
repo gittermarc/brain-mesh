@@ -302,9 +302,27 @@ actor NodeRenameService {
             return
         }
 
+        do {
+            try await AppLoadersConfigurator.waitUntilReadyIfNeeded(
+                serviceContainerID: container?.identity
+            )
+        } catch {
+            #if DEBUG
+            log.debug("⚠️ rename relabel skipped because service readiness is unavailable")
+            #endif
+            return
+        }
+
+        // Waiting for readiness is an actor reentrancy point. Preserve the existing
+        // per-node de-duplication if another rename operation started meanwhile.
+        if let existing = inFlight[key] {
+            await existing.value
+            return
+        }
+
         guard let configuredContainer = container else {
             #if DEBUG
-            log.debug("⚠️ not configured")
+            log.debug("⚠️ not configured after service readiness")
             #endif
             return
         }

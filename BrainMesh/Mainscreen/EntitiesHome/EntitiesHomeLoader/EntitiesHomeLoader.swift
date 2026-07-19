@@ -49,6 +49,9 @@ actor EntitiesHomeLoader {
         includeLinkCounts: Bool,
         includeNotesPreview: Bool
     ) async throws -> EntitiesHomeSnapshot {
+        try await AppLoadersConfigurator.waitUntilReadyIfNeeded(
+            serviceContainerID: self.container?.identity
+        )
         let configuredContainer = self.container
         guard let configuredContainer else {
             throw NSError(

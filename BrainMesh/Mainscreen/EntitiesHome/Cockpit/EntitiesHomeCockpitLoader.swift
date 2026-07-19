@@ -27,6 +27,9 @@ actor EntitiesHomeCockpitLoader {
         recentItems: [RecentNodeItem],
         limit: Int
     ) async throws -> EntitiesHomeCockpitSnapshot {
+        try await AppLoadersConfigurator.waitUntilReadyIfNeeded(
+            serviceContainerID: self.container?.identity
+        )
         let configuredContainer = self.container
         guard let configuredContainer else {
             throw NSError(

@@ -47,8 +47,12 @@ struct BrainMeshFixtureBuilder {
     let context: ModelContext
 
     @discardableResult
-    func makeGraph(name: String = "TestGraph") -> MetaGraph {
+    func makeGraph(
+        name: String = "TestGraph",
+        id: UUID = UUID()
+    ) -> MetaGraph {
         let graph = MetaGraph(name: name)
+        graph.id = id
         context.insert(graph)
         return graph
     }
@@ -101,7 +105,8 @@ struct BrainMeshFixtureBuilder {
         sortIndex: Int,
         unit: String? = nil,
         options: [String] = [],
-        isPinned: Bool = false
+        isPinned: Bool = false,
+        id: UUID = UUID()
     ) -> MetaDetailFieldDefinition {
         let field = MetaDetailFieldDefinition(
             owner: owner,
@@ -112,6 +117,7 @@ struct BrainMeshFixtureBuilder {
             options: options,
             isPinned: isPinned
         )
+        field.id = id
         owner.addDetailField(field)
         context.insert(field)
         return field
@@ -125,9 +131,11 @@ struct BrainMeshFixtureBuilder {
         intValue: Int? = nil,
         doubleValue: Double? = nil,
         dateValue: Date? = nil,
-        boolValue: Bool? = nil
+        boolValue: Bool? = nil,
+        id: UUID = UUID()
     ) -> MetaDetailFieldValue {
         let value = MetaDetailFieldValue(attribute: attribute, fieldID: field.id)
+        value.id = id
         value.stringValue = stringValue
         value.intValue = intValue
         value.doubleValue = doubleValue
@@ -150,7 +158,8 @@ struct BrainMeshFixtureBuilder {
         source: BrainMeshFixtureNode,
         target: BrainMeshFixtureNode,
         note: String? = nil,
-        graphID: UUID? = nil
+        graphID: UUID? = nil,
+        id: UUID = UUID()
     ) -> MetaLink {
         let link = MetaLink(
             sourceKind: source.kind,
@@ -162,6 +171,7 @@ struct BrainMeshFixtureBuilder {
             note: note,
             graphID: graphID ?? source.graphID ?? target.graphID
         )
+        link.id = id
         link.noteFolded = BMSearch.fold(link.note ?? "")
         context.insert(link)
         return link
@@ -177,9 +187,11 @@ struct BrainMeshFixtureBuilder {
         fileExtension: String = "bin",
         byteCount: Int? = nil,
         fileData: Data? = nil,
-        localPath: String? = nil
+        localPath: String? = nil,
+        id: UUID = UUID()
     ) -> MetaAttachment {
         let attachment = MetaAttachment(
+            id: id,
             ownerKind: owner.kind,
             ownerID: owner.id,
             graphID: owner.graphID,

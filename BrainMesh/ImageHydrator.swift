@@ -43,6 +43,17 @@ actor ImageHydrator {
     /// Additionally, this method is guarded to run at most once per app launch by default.
     /// - Returns: `true` if a hydration pass was executed (i.e. not skipped by the run-once guard).
     func hydrateIncremental(runOncePerLaunch: Bool = true) async -> Bool {
+        do {
+            try await AppLoadersConfigurator.waitUntilReadyIfNeeded(
+                serviceContainerID: container?.identity
+            )
+        } catch {
+            #if DEBUG
+            log.debug("⚠️ skipped incremental hydration (service readiness unavailable)")
+            #endif
+            return false
+        }
+
         guard container != nil else {
             #if DEBUG
             log.debug("⚠️ skipped incremental hydration (not configured)")
@@ -62,6 +73,17 @@ actor ImageHydrator {
     /// Manual repair/rebuild: rewrites cached JPEGs for all records with `imageData != nil`.
     /// Intended to be triggered from Settings.
     func forceRebuild() async {
+        do {
+            try await AppLoadersConfigurator.waitUntilReadyIfNeeded(
+                serviceContainerID: container?.identity
+            )
+        } catch {
+            #if DEBUG
+            log.debug("⚠️ skipped rebuild (service readiness unavailable)")
+            #endif
+            return
+        }
+
         guard container != nil else {
             #if DEBUG
             log.debug("⚠️ skipped rebuild (not configured)")

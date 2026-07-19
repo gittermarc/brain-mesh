@@ -29,6 +29,7 @@ struct AppRootView: View {
     @AppStorage(BMAppStorageKeys.imageHydratorLastAutoRun) var imageHydratorLastAutoRun: Double = 0
 
     @State var didRunStartupOnce: Bool = false
+    @State var isRunningStartup: Bool = false
 
     // Track scene phase locally so delayed tasks can reliably check the latest value.
     @State var observedScenePhase: ScenePhase = .active

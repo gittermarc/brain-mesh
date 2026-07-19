@@ -14,8 +14,10 @@ import SwiftData
 /// short-lived `ModelContext` instances as needed.
 struct AnyModelContainer: @unchecked Sendable {
     let container: ModelContainer
+    let identity: ObjectIdentifier
 
     init(_ container: ModelContainer) {
         self.container = container
+        self.identity = ObjectIdentifier(container)
     }
 }

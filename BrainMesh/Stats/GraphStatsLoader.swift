@@ -205,6 +205,10 @@ actor GraphStatsLoader {
         days: Int,
         forceReload: Bool = false
     ) async throws -> GraphStatsDashboardSnapshot {
+        try await AppLoadersConfigurator.waitUntilReadyIfNeeded(
+            serviceContainerID: self.container?.identity
+        )
+
         let configuredContainer = self.container
         guard let configuredContainer else {
             throw NSError(
@@ -296,6 +300,10 @@ actor GraphStatsLoader {
         graphIDs: [UUID],
         forceReload: Bool = false
     ) async throws -> [UUID?: GraphCounts] {
+        try await AppLoadersConfigurator.waitUntilReadyIfNeeded(
+            serviceContainerID: self.container?.identity
+        )
+
         let configuredContainer = self.container
         guard let configuredContainer else {
             throw NSError(

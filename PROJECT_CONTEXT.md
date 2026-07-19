@@ -28,6 +28,7 @@ BrainMesh ist eine SwiftUI-iOS/iPadOS-App für graphbasiertes Wissens- und Entit
 - **Graph Lock**: optionaler Schutz mit Biometrie und/oder Passwort über Security-Dateien in `BrainMesh/Security/` und Lock-Felder an Graph/Entity/Attribute.
 - **Graph Transfer**: Export/Import für `.bmgraph` und `.bmbackup`, implementiert unter `BrainMesh/GraphTransfer/`.
 - **Command Center**: globale Suche/Aktionen, UI unter `BrainMesh/Search/CommandCenter/`; `BrainMeshSearchService` orchestriert quellspezifische Candidate Provider unter `BrainMesh/Search/Candidates/`.
+- **GraphScope / Read Repositories**: `BrainMesh/DataAccess/` stellt eine nicht-optionale Graph-Grenze, zentrale Fetch-Descriptor-Factories und value-only DTO-Repositories für Graph-Snapshots, Node-Lookups und direkte Nachbarschaften bereit.
 
 ## Architecture Map
 
@@ -54,6 +55,8 @@ BrainMesh ist eine SwiftUI-iOS/iPadOS-App für graphbasiertes Wissens- und Entit
   - Attachment-Modell liegt im Attachments-Modul, ist aber Teil des SwiftData-Schemas.
 - `BrainMesh/Bootstrap/`
   - Default-Graph, Legacy-GraphID-Migration, Folded-Notes-Backfill.
+- `BrainMesh/DataAccess/`
+  - `GraphScope`, graph-scoped `FetchDescriptor`-Factories, `GraphReadRepository`, `NodeRepository` und ausschließlich value-only, `Sendable` Read-DTOs.
 
 ### Storage / Sync / Caches
 
@@ -87,13 +90,16 @@ BrainMesh ist eine SwiftUI-iOS/iPadOS-App für graphbasiertes Wissens- und Entit
 
 ### Background Loaders / Services
 
-- Zentrale Konfiguration: `BrainMesh/Support/AppLoadersConfigurator.swift`.
+- Zentrale Konfiguration: `BrainMesh/Support/AppLoadersConfigurator.swift` mit genau einer laufenden Konfiguration, idempotenter Wiederholung für denselben Container und awaitbarer `waitUntilReady()`-Barriere.
+- `AppRootView+Startup.swift` wartet vor dem ersten serviceabhängigen Startup-Schritt auf diese Readiness-Barriere.
 - Gemeinsames Pattern: Actor speichert `AnyModelContainer`, erzeugt eigenen `ModelContext`, setzt oft `autosaveEnabled = false`, liefert value-only DTOs zurück.
 - Beispiele:
   - `BrainMesh/Mainscreen/EntitiesHome/EntitiesHomeLoader/EntitiesHomeLoader.swift`
   - `BrainMesh/GraphCanvas/GraphCanvasDataLoader/GraphCanvasDataLoader.swift`
   - `BrainMesh/Stats/GraphStatsLoader.swift`
   - `BrainMesh/Search/BrainMeshSearchService.swift` mit value-only Candidate Providern unter `BrainMesh/Search/Candidates/`
+  - `BrainMesh/DataAccess/GraphReadRepository.swift` für vollständige graph-scoped Source-Snapshots
+  - `BrainMesh/DataAccess/NodeRepository.swift` für graph-scoped Node-Lookups und direkte Nachbarschaften
   - `BrainMesh/Mainscreen/Deletion/GraphNodeDeletionService.swift` für graph-scoped Entity-/Attribute-Löschungen mit Link-, Attachment- und Detail-Cleanup
   - `BrainMesh/Mainscreen/LinkCleanup.swift` mit `NodeRenameService`
 
@@ -114,6 +120,7 @@ BrainMesh ist eine SwiftUI-iOS/iPadOS-App für graphbasiertes Wissens- und Entit
 | `BrainMesh/Settings/` | Settings, Sync, Appearance, Display, Guide | Sync-Diagnose und große Guide-View |
 | `BrainMesh/Attachments/` | Attachment-Modell, Store, Hydrator, Import, Thumbnails | CloudKit-Assets, lokale Cache-Dateien, 25-MB-Limit |
 | `BrainMesh/Search/` | Search-Orchestrator, Candidate Provider, Ranking, Command Center | Provider-Grenze ist vorhanden; Links, Detailwerte und Attachments werden weiterhin graphweit gescannt |
+| `BrainMesh/DataAccess/` | Graph-scoped Fetch-Factories, Read-Repositories und value-only DTOs | nicht-optionaler `GraphScope`; keine SwiftData-Modelle oder Attachment-Binärdaten über Actor-Grenzen |
 | `BrainMesh/PhotoGallery/` | Galerie-Browser/Viewer/Section | `@Query` über Attachment-Galeriebilder |
 | `BrainMesh/GraphPicker/` | Graph-Auswahl, Löschen, Sheet | Graph-Lifecycle und Pro-Limit |
 | `BrainMesh/Security/` | Graph-Lock, Unlock, Crypto | Zugriffsschutz, ScenePhase-Interaktion |
@@ -414,12 +421,12 @@ BrainMesh ist eine SwiftUI-iOS/iPadOS-App für graphbasiertes Wissens- und Entit
 
 1. Neue Entity-/Attribute-Delete-UIs konsequent an `GraphNodeDeletionService` anbinden; direkte Model-Löschungen würden die skalaren Link-/Attachment-Referenzen umgehen.
 2. `GraphCanvasDataLoader+Neighborhood.swift` `try? context.fetch` durch `do/catch` mit `BMLog.load` ersetzen, damit Fetch-Fehler nicht still zu leeren Graphen werden.
-3. Graph-scoped Fetch-Descriptor-Helfer zentralisieren, um fehlende `graphID`-Filter zu vermeiden.
+3. Bestehende Feature-Loader schrittweise auf die vorhandenen `GraphScopedFetches`, `GraphReadRepository` und `NodeRepository` migrieren, wenn dies ihren Hot Path vereinfacht.
 4. Die Provider unter `BrainMesh/Search/Candidates/` später für Links, Detailwerte und Attachments indexieren oder vorfiltern; aktuell werden diese Tabellen weiterhin graphweit geladen und danach in Memory gerankt.
 5. `EntitiesHomeLoader+Counts.swift` Counts über revisions-/eventbasierte Invalidation statt nur 8-Sekunden-TTL invalidieren.
 6. `EntitiesHomeCockpitLoader.swift` Snapshot cachen oder inkrementell machen; aktuell lädt Cockpit Entity, Attribute, Links, DetailFields und Attachments graphweit.
 7. `GraphCanvasView+Physics.swift` O(n²)-Pair-Loop durch Grid/Bucket-Approximation ersetzen, mindestens oberhalb von etwa 80 simulierten Nodes.
-8. `AppLoadersConfigurator.configureAllLoaders` entweder synchron vor erstem UI-Load abschließen oder einen LoadersReady-Status einführen.
+8. Readiness-Fehler im App-Root bei Bedarf zusätzlich als sichtbaren Recovery-Zustand darstellen; die awaitbare Konfigurationsbarriere ist vorhanden.
 9. Große UI-Dateien splitten: `BrainMeshGuideView.swift`, `GraphTransferComponents.swift`, `GraphCanvasTypes.swift`, `GraphCanvasScreen+InspectorOverlay.swift`.
 10. Sync-Debuggability erweitern: letzte Container-Initialisierung, Storage-Fallback-Grund, letzte Hydration und Cache-Fehler in `SyncMaintenanceView` anzeigen.
 
