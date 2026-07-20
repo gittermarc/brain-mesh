@@ -9,6 +9,21 @@ import Foundation
 
 nonisolated enum ImportMode: Sendable {
     case asNewGraphRemap
+    case asReplacementRemap
+
+    var completionKind: GraphTransferImportCompletionKind {
+        switch self {
+        case .asNewGraphRemap:
+            return .imported
+        case .asReplacementRemap:
+            return .replaced
+        }
+    }
+}
+
+nonisolated enum GraphTransferImportCompletionKind: Sendable {
+    case imported
+    case replaced
 }
 
 nonisolated enum GraphTransferPreviewKind: String, Codable, Equatable, Sendable {

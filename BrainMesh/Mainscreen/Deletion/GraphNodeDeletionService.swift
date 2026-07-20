@@ -11,6 +11,8 @@ import os
 
 @MainActor
 enum GraphNodeDeletionService {
+    typealias CacheFileDeletion = @MainActor (AttachmentCleanup.Result) -> Void
+    typealias HeaderImageDeletion = @MainActor ([String]) -> Void
 
     nonisolated struct Result: Equatable, Sendable {
         let requestedEntityCount: Int
@@ -32,6 +34,15 @@ enum GraphNodeDeletionService {
             deletedLinkCount: 0,
             deletedAttachmentCount: 0
         )
+
+        var hasDeletedData: Bool {
+            deletedEntityCount > 0 ||
+            deletedAttributeCount > 0 ||
+            deletedDetailFieldCount > 0 ||
+            deletedDetailValueCount > 0 ||
+            deletedLinkCount > 0 ||
+            deletedAttachmentCount > 0
+        }
     }
 
     nonisolated enum DeletionError: LocalizedError, Equatable, Sendable {
@@ -44,13 +55,11 @@ enum GraphNodeDeletionService {
         var errorDescription: String? {
             switch self {
             case .missingGraphScope:
-                return
-                    "Die Löschung wurde abgebrochen, weil der Datensatz keinem Graphen eindeutig zugeordnet ist. Bitte öffne den Graph erneut und versuche es noch einmal."
+                return "Die Löschung wurde abgebrochen, weil der Datensatz keinem Graphen eindeutig zugeordnet ist. Bitte öffne den Graph erneut und versuche es noch einmal."
             case .mixedGraphScope:
                 return "Die ausgewählten Datensätze gehören nicht zum selben Graphen und wurden nicht gelöscht."
             case .crossGraphRelationship:
-                return
-                    "Die Löschung wurde aus Sicherheitsgründen abgebrochen, weil abhängige Datensätze einem anderen Graphen zugeordnet sind."
+                return "Die Löschung wurde aus Sicherheitsgründen abgebrochen, weil abhängige Datensätze einem anderen Graphen zugeordnet sind."
             case .cancelled:
                 return "Die Löschung wurde abgebrochen. Es wurden keine Änderungen übernommen."
             case .persistenceFailure:
@@ -67,23 +76,28 @@ enum GraphNodeDeletionService {
     }
 
     private struct PreparedAttributeDeletion {
+        let graphID: UUID
         let requestedAttributeCount: Int
         let attributes: [MetaAttribute]
+        let detailValues: [MetaDetailFieldValue]
         let orphanDetailValues: [MetaDetailFieldValue]
-        let detailValueCount: Int
         let linkPlan: LinkCleanup.DeletionPlan
         let attachmentPlan: AttachmentCleanup.DeletionPlan
+        let headerImagePaths: [String]
     }
 
     private struct PreparedEntityDeletion {
+        let graphID: UUID
         let requestedEntityCount: Int
         let entities: [MetaEntity]
         let childAttributes: [MetaAttribute]
         let detailFields: [MetaDetailFieldDefinition]
+        let orphanDetailFields: [MetaDetailFieldDefinition]
+        let detailValues: [MetaDetailFieldValue]
         let orphanDetailValues: [MetaDetailFieldValue]
-        let detailValueCount: Int
         let linkPlan: LinkCleanup.DeletionPlan
         let attachmentPlan: AttachmentCleanup.DeletionPlan
+        let headerImagePaths: [String]
     }
 
     private static let log = Logger(
@@ -94,56 +108,99 @@ enum GraphNodeDeletionService {
     @discardableResult
     static func deleteAttribute(
         _ attribute: MetaAttribute,
-        in modelContext: ModelContext
-    ) throws -> Result {
-        try deleteAttributes(
+        in modelContext: ModelContext,
+        committer: GraphMutationCommitter = GraphMutationCommitter(),
+        cacheFileDeletion: CacheFileDeletion = { result in
+            AttachmentCleanup.deleteCachedFiles(for: result)
+        },
+        headerImageDeletion: HeaderImageDeletion = { paths in
+            for path in paths { ImageStore.delete(path: path) }
+        }
+    ) async throws -> Result {
+        try await deleteAttributes(
             [attribute],
             operation: .attribute,
-            in: modelContext
+            in: modelContext,
+            committer: committer,
+            cacheFileDeletion: cacheFileDeletion,
+            headerImageDeletion: headerImageDeletion
         )
     }
 
     @discardableResult
     static func deleteAttributes(
         _ attributes: [MetaAttribute],
-        in modelContext: ModelContext
-    ) throws -> Result {
-        try deleteAttributes(
+        in modelContext: ModelContext,
+        committer: GraphMutationCommitter = GraphMutationCommitter(),
+        cacheFileDeletion: CacheFileDeletion = { result in
+            AttachmentCleanup.deleteCachedFiles(for: result)
+        },
+        headerImageDeletion: HeaderImageDeletion = { paths in
+            for path in paths { ImageStore.delete(path: path) }
+        }
+    ) async throws -> Result {
+        try await deleteAttributes(
             attributes,
             operation: .attributeBatch,
-            in: modelContext
+            in: modelContext,
+            committer: committer,
+            cacheFileDeletion: cacheFileDeletion,
+            headerImageDeletion: headerImageDeletion
         )
     }
 
     @discardableResult
     static func deleteEntity(
         _ entity: MetaEntity,
-        in modelContext: ModelContext
-    ) throws -> Result {
-        try deleteEntities(
+        in modelContext: ModelContext,
+        committer: GraphMutationCommitter = GraphMutationCommitter(),
+        cacheFileDeletion: CacheFileDeletion = { result in
+            AttachmentCleanup.deleteCachedFiles(for: result)
+        },
+        headerImageDeletion: HeaderImageDeletion = { paths in
+            for path in paths { ImageStore.delete(path: path) }
+        }
+    ) async throws -> Result {
+        try await deleteEntities(
             [entity],
             operation: .entity,
-            in: modelContext
+            in: modelContext,
+            committer: committer,
+            cacheFileDeletion: cacheFileDeletion,
+            headerImageDeletion: headerImageDeletion
         )
     }
 
     @discardableResult
     static func deleteEntities(
         _ entities: [MetaEntity],
-        in modelContext: ModelContext
-    ) throws -> Result {
-        try deleteEntities(
+        in modelContext: ModelContext,
+        committer: GraphMutationCommitter = GraphMutationCommitter(),
+        cacheFileDeletion: CacheFileDeletion = { result in
+            AttachmentCleanup.deleteCachedFiles(for: result)
+        },
+        headerImageDeletion: HeaderImageDeletion = { paths in
+            for path in paths { ImageStore.delete(path: path) }
+        }
+    ) async throws -> Result {
+        try await deleteEntities(
             entities,
             operation: .entityBatch,
-            in: modelContext
+            in: modelContext,
+            committer: committer,
+            cacheFileDeletion: cacheFileDeletion,
+            headerImageDeletion: headerImageDeletion
         )
     }
 
     private static func deleteAttributes(
         _ attributes: [MetaAttribute],
         operation: Operation,
-        in modelContext: ModelContext
-    ) throws -> Result {
+        in modelContext: ModelContext,
+        committer: GraphMutationCommitter,
+        cacheFileDeletion: CacheFileDeletion,
+        headerImageDeletion: HeaderImageDeletion
+    ) async throws -> Result {
         guard !attributes.isEmpty else { return .empty }
 
         let prepared: PreparedAttributeDeletion
@@ -153,6 +210,42 @@ enum GraphNodeDeletionService {
                 attributes,
                 in: modelContext
             )
+            try Task.checkCancellation()
+        } catch {
+            throw mappedPreparationError(error, operation: operation)
+        }
+
+        let result = Result(
+            requestedEntityCount: 0,
+            requestedAttributeCount: prepared.requestedAttributeCount,
+            deletedEntityCount: 0,
+            deletedAttributeCount: prepared.attributes.count,
+            deletedDetailFieldCount: 0,
+            deletedDetailValueCount: prepared.detailValues.count,
+            deletedLinkCount: prepared.linkPlan.mutationReferences.count,
+            deletedAttachmentCount: prepared.attachmentPlan.mutationReferences.count
+        )
+        guard result.hasDeletedData else {
+            return result
+        }
+
+        let batch: GraphMutationBatch
+        do {
+            batch = try GraphMutationBatchFactory.nodeDeletion(
+                graphID: prepared.graphID,
+                links: prepared.linkPlan.mutationReferences,
+                detailValues: prepared.detailValues.map(makeDetailValueReference),
+                detailSchemas: [],
+                attachments: prepared.attachmentPlan.mutationReferences,
+                attributeIDs: prepared.attributes.map(\.id),
+                entityIDs: []
+            )
+        } catch {
+            logFailure(error, operation: operation, stage: "classification")
+            throw DeletionError.persistenceFailure
+        }
+
+        do {
             try Task.checkCancellation()
         } catch {
             throw mappedPreparationError(error, operation: operation)
@@ -176,35 +269,38 @@ enum GraphNodeDeletionService {
             modelContext.delete(attribute)
         }
 
-        let result = Result(
-            requestedEntityCount: 0,
-            requestedAttributeCount: prepared.requestedAttributeCount,
-            deletedEntityCount: 0,
-            deletedAttributeCount: prepared.attributes.count,
-            deletedDetailFieldCount: 0,
-            deletedDetailValueCount: prepared.detailValueCount,
-            deletedLinkCount: linkResult.deletedCount,
-            deletedAttachmentCount: attachmentResult.deletedCount
-        )
-
         do {
-            try modelContext.save()
+            try await committer.commit(batch, in: modelContext)
         } catch {
-            modelContext.rollback()
-            logFailure(error, operation: operation, stage: "save")
-            throw DeletionError.persistenceFailure
+            throw mappedCommitError(error, operation: operation)
         }
 
-        AttachmentCleanup.deleteCachedFiles(for: attachmentResult)
-        logSuccess(result, operation: operation)
+        cacheFileDeletion(attachmentResult)
+        headerImageDeletion(prepared.headerImagePaths)
+        logSuccess(
+            Result(
+                requestedEntityCount: result.requestedEntityCount,
+                requestedAttributeCount: result.requestedAttributeCount,
+                deletedEntityCount: result.deletedEntityCount,
+                deletedAttributeCount: result.deletedAttributeCount,
+                deletedDetailFieldCount: result.deletedDetailFieldCount,
+                deletedDetailValueCount: result.deletedDetailValueCount,
+                deletedLinkCount: linkResult.deletedCount,
+                deletedAttachmentCount: attachmentResult.deletedCount
+            ),
+            operation: operation
+        )
         return result
     }
 
     private static func deleteEntities(
         _ entities: [MetaEntity],
         operation: Operation,
-        in modelContext: ModelContext
-    ) throws -> Result {
+        in modelContext: ModelContext,
+        committer: GraphMutationCommitter,
+        cacheFileDeletion: CacheFileDeletion,
+        headerImageDeletion: HeaderImageDeletion
+    ) async throws -> Result {
         guard !entities.isEmpty else { return .empty }
 
         let prepared: PreparedEntityDeletion
@@ -214,6 +310,49 @@ enum GraphNodeDeletionService {
                 entities,
                 in: modelContext
             )
+            try Task.checkCancellation()
+        } catch {
+            throw mappedPreparationError(error, operation: operation)
+        }
+
+        let detailSchemas = Dictionary(grouping: prepared.detailFields, by: \.entityID)
+            .map { ownerEntityID, definitions in
+                GraphMutationDetailSchemaCleanupReference(
+                    ownerEntityID: ownerEntityID,
+                    definitionIDs: definitions.map(\.id)
+                )
+            }
+        let result = Result(
+            requestedEntityCount: prepared.requestedEntityCount,
+            requestedAttributeCount: 0,
+            deletedEntityCount: prepared.entities.count,
+            deletedAttributeCount: prepared.childAttributes.count,
+            deletedDetailFieldCount: prepared.detailFields.count,
+            deletedDetailValueCount: prepared.detailValues.count,
+            deletedLinkCount: prepared.linkPlan.mutationReferences.count,
+            deletedAttachmentCount: prepared.attachmentPlan.mutationReferences.count
+        )
+        guard result.hasDeletedData else {
+            return result
+        }
+
+        let batch: GraphMutationBatch
+        do {
+            batch = try GraphMutationBatchFactory.nodeDeletion(
+                graphID: prepared.graphID,
+                links: prepared.linkPlan.mutationReferences,
+                detailValues: prepared.detailValues.map(makeDetailValueReference),
+                detailSchemas: detailSchemas,
+                attachments: prepared.attachmentPlan.mutationReferences,
+                attributeIDs: prepared.childAttributes.map(\.id),
+                entityIDs: prepared.entities.map(\.id)
+            )
+        } catch {
+            logFailure(error, operation: operation, stage: "classification")
+            throw DeletionError.persistenceFailure
+        }
+
+        do {
             try Task.checkCancellation()
         } catch {
             throw mappedPreparationError(error, operation: operation)
@@ -232,31 +371,35 @@ enum GraphNodeDeletionService {
             modelContext.delete(value)
         }
 
+        for definition in prepared.orphanDetailFields {
+            modelContext.delete(definition)
+        }
+
         for entity in prepared.entities {
             modelContext.delete(entity)
         }
 
-        let result = Result(
-            requestedEntityCount: prepared.requestedEntityCount,
-            requestedAttributeCount: 0,
-            deletedEntityCount: prepared.entities.count,
-            deletedAttributeCount: prepared.childAttributes.count,
-            deletedDetailFieldCount: prepared.detailFields.count,
-            deletedDetailValueCount: prepared.detailValueCount,
-            deletedLinkCount: linkResult.deletedCount,
-            deletedAttachmentCount: attachmentResult.deletedCount
-        )
-
         do {
-            try modelContext.save()
+            try await committer.commit(batch, in: modelContext)
         } catch {
-            modelContext.rollback()
-            logFailure(error, operation: operation, stage: "save")
-            throw DeletionError.persistenceFailure
+            throw mappedCommitError(error, operation: operation)
         }
 
-        AttachmentCleanup.deleteCachedFiles(for: attachmentResult)
-        logSuccess(result, operation: operation)
+        cacheFileDeletion(attachmentResult)
+        headerImageDeletion(prepared.headerImagePaths)
+        logSuccess(
+            Result(
+                requestedEntityCount: result.requestedEntityCount,
+                requestedAttributeCount: result.requestedAttributeCount,
+                deletedEntityCount: result.deletedEntityCount,
+                deletedAttributeCount: result.deletedAttributeCount,
+                deletedDetailFieldCount: result.deletedDetailFieldCount,
+                deletedDetailValueCount: result.deletedDetailValueCount,
+                deletedLinkCount: linkResult.deletedCount,
+                deletedAttachmentCount: attachmentResult.deletedCount
+            ),
+            operation: operation
+        )
         return result
     }
 
@@ -322,12 +465,14 @@ enum GraphNodeDeletionService {
         )
 
         return PreparedAttributeDeletion(
+            graphID: graphID,
             requestedAttributeCount: requestedIDs.count,
             attributes: storedAttributes,
+            detailValues: matchingDetailValues,
             orphanDetailValues: orphanDetailValues,
-            detailValueCount: matchingDetailValues.count,
             linkPlan: linkPlan,
-            attachmentPlan: attachmentPlan
+            attachmentPlan: attachmentPlan,
+            headerImagePaths: stableImagePaths(storedAttributes.map(\.imagePath))
         )
     }
 
@@ -356,24 +501,19 @@ enum GraphNodeDeletionService {
             graphID: graphID
         )
 
-        let relationshipChildIDs = Set(
-            entityModelsForValidation
-                .flatMap(\.attributesList)
-                .map(\.id)
-        )
+        let relationshipChildren = entityModelsForValidation.flatMap(\.attributesList)
+        let relationshipChildIDs = Set(relationshipChildren.map(\.id))
 
         let attributeDescriptor = FetchDescriptor<MetaAttribute>(
             predicate: #Predicate { attribute in
                 attribute.graphID == gid
             }
         )
-        let allGraphAttributes = try modelContext.fetch(attributeDescriptor)
-        let childAttributes = uniqueModels(
-            allGraphAttributes.filter { attribute in
-                guard let ownerID = attribute.owner?.id else { return false }
-                return requestedEntityIDs.contains(ownerID)
-            }
-        )
+        let fetchedChildren = try modelContext.fetch(attributeDescriptor).filter { attribute in
+            guard let ownerID = attribute.owner?.id else { return false }
+            return requestedEntityIDs.contains(ownerID)
+        }
+        let childAttributes = uniqueModels(relationshipChildren + fetchedChildren)
 
         try validateAttributeRelationships(
             childAttributes,
@@ -383,9 +523,24 @@ enum GraphNodeDeletionService {
         var childAttributeIDs = relationshipChildIDs
         childAttributeIDs.formUnion(childAttributes.map(\.id))
 
-        let detailFields = uniqueModels(
-            storedEntities.flatMap(\.detailFieldsList)
+        let relationshipDetailFields = entityModelsForValidation.flatMap(\.detailFieldsList)
+        let detailFieldDescriptor = FetchDescriptor<MetaDetailFieldDefinition>(
+            predicate: #Predicate { definition in
+                definition.graphID == gid
+            }
         )
+        let fetchedDetailFields = try modelContext.fetch(detailFieldDescriptor).filter { definition in
+            requestedEntityIDs.contains(definition.entityID)
+        }
+        let detailFields = uniqueModels(relationshipDetailFields + fetchedDetailFields)
+        if detailFields.contains(where: { $0.graphID != graphID }) {
+            throw DeletionError.crossGraphRelationship
+        }
+        let storedEntityIDs = Set(storedEntities.map(\.id))
+        let orphanDetailFields = detailFields.filter { definition in
+            guard let owner = definition.owner else { return true }
+            return storedEntityIDs.contains(owner.id) == false
+        }
 
         let detailValueDescriptor = FetchDescriptor<MetaDetailFieldValue>(
             predicate: #Predicate { value in
@@ -431,21 +586,44 @@ enum GraphNodeDeletionService {
         )
 
         return PreparedEntityDeletion(
+            graphID: graphID,
             requestedEntityCount: requestedEntityIDs.count,
             entities: storedEntities,
             childAttributes: childAttributes,
             detailFields: detailFields,
+            orphanDetailFields: orphanDetailFields,
+            detailValues: matchingDetailValues,
             orphanDetailValues: orphanDetailValues,
-            detailValueCount: matchingDetailValues.count,
             linkPlan: linkPlan,
-            attachmentPlan: attachmentPlan
+            attachmentPlan: attachmentPlan,
+            headerImagePaths: stableImagePaths(
+                storedEntities.map(\.imagePath) + childAttributes.map(\.imagePath)
+            )
         )
+    }
+
+    private static func makeDetailValueReference(
+        _ value: MetaDetailFieldValue
+    ) -> GraphMutationDetailValueReference {
+        GraphMutationDetailValueReference(
+            id: value.id,
+            ownerAttributeID: value.attributeID,
+            fieldID: value.fieldID
+        )
+    }
+
+    private static func stableImagePaths(_ paths: [String?]) -> [String] {
+        var seen = Set<String>()
+        return paths.compactMap { path in
+            guard let path, !path.isEmpty, seen.insert(path).inserted else { return nil }
+            return path
+        }
     }
 
     private static func commonGraphID(_ graphIDs: [UUID?]) throws -> UUID {
         let concreteGraphIDs = graphIDs.compactMap { $0 }
         guard concreteGraphIDs.count == graphIDs.count,
-            let firstGraphID = concreteGraphIDs.first
+              let firstGraphID = concreteGraphIDs.first
         else {
             throw DeletionError.missingGraphScope
         }
@@ -515,6 +693,18 @@ enum GraphNodeDeletionService {
         }
 
         logFailure(error, operation: operation, stage: "prepare")
+        return DeletionError.persistenceFailure
+    }
+
+    private static func mappedCommitError(
+        _ error: Swift.Error,
+        operation: Operation
+    ) -> Swift.Error {
+        if error is CancellationError {
+            logFailure(error, operation: operation, stage: "cancelled")
+            return DeletionError.cancelled
+        }
+        logFailure(error, operation: operation, stage: "save")
         return DeletionError.persistenceFailure
     }
 

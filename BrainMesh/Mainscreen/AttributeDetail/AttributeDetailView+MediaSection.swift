@@ -42,12 +42,10 @@ extension AttributeDetailView {
             || ["mov", "mp4", "m4v"].contains(attachment.fileExtension.lowercased())
 
         if isVideo {
-            try? modelContext.save()
             videoPlayback = VideoPlaybackRequest(url: url, title: attachment.title.isEmpty ? attachment.originalFilename : attachment.title)
             return
         }
 
-        try? modelContext.save()
         attachmentPreviewSheet = NodeAttachmentPreviewSheetState(
             url: url,
             title: attachment.title.isEmpty ? attachment.originalFilename : attachment.title,
@@ -59,6 +57,13 @@ extension AttributeDetailView {
     // MARK: - Import (Files / Videos)
 
     func importFile(from url: URL) {
+        Task { @MainActor in
+            await performFileImport(from: url)
+        }
+    }
+
+    @MainActor
+    private func performFileImport(from url: URL) async {
         let scoped = url.startAccessingSecurityScopedResource()
         defer {
             if scoped { url.stopAccessingSecurityScopedResource() }
@@ -76,9 +81,14 @@ extension AttributeDetailView {
         }
 
         let attachmentID = UUID()
+        var preparedLocalPath: String?
+        defer {
+            AttachmentStore.delete(localPath: preparedLocalPath)
+        }
 
         do {
             let copiedName = try AttachmentStore.copyIntoCache(from: url, attachmentID: attachmentID, fileExtension: ext)
+            preparedLocalPath = copiedName
             guard let copiedURL = AttachmentStore.url(forLocalPath: copiedName) else {
                 errorMessage = "Lokale Datei konnte nicht erstellt werden."
                 return
@@ -121,12 +131,13 @@ extension AttributeDetailView {
                 localPath: copiedName
             )
 
-            modelContext.insert(att)
-            try? modelContext.save()
+            try await AttachmentMutationService.insert(
+                att,
+                in: modelContext
+            )
+            preparedLocalPath = nil
 
-            Task { @MainActor in
-                await reloadMediaPreview()
-            }
+            await reloadMediaPreview()
         } catch {
             errorMessage = error.localizedDescription
         }
@@ -159,6 +170,11 @@ extension AttributeDetailView {
         contentTypeIdentifier: String,
         fileExtension: String
     ) async {
+        var preparedLocalPath: String?
+        defer {
+            AttachmentStore.delete(localPath: preparedLocalPath)
+        }
+
         do {
             let fileSize = (try? url.resourceValues(forKeys: [.fileSizeKey]).fileSize) ?? 0
             if fileSize > maxBytes {
@@ -170,12 +186,11 @@ extension AttributeDetailView {
             let ext = fileExtension.trimmingCharacters(in: CharacterSet(charactersIn: ".")).isEmpty ? "mov" : fileExtension
 
             let cachedFilename = try AttachmentStore.copyIntoCache(from: url, attachmentID: attachmentID, fileExtension: ext)
+            preparedLocalPath = cachedFilename
             guard let cachedURL = AttachmentStore.url(forLocalPath: cachedFilename) else {
                 errorMessage = "Lokale Videodatei konnte nicht erstellt werden."
                 return
             }
-
-            try? FileManager.default.removeItem(at: url)
 
             let data = try Data(contentsOf: cachedURL, options: [.mappedIfSafe])
             if data.count > maxBytes {
@@ -211,8 +226,16 @@ extension AttributeDetailView {
                 localPath: cachedFilename
             )
 
-            modelContext.insert(att)
-            try? modelContext.save()
+            try await AttachmentMutationService.insert(
+                att,
+                in: modelContext
+            )
+            preparedLocalPath = nil
+            do {
+                try FileManager.default.removeItem(at: url)
+            } catch {
+                // Picker-owned temporary files are best-effort cleanup after the graph save.
+            }
 
             await reloadMediaPreview()
         } catch {

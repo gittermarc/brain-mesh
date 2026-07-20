@@ -46,34 +46,63 @@ extension AttachmentsSection {
         let itemsToDelete = offsets.compactMap { index in
             attachments.indices.contains(index) ? attachments[index] : nil
         }
+        guard itemsToDelete.isEmpty == false else { return }
 
-        for item in itemsToDelete {
-            AttachmentStore.delete(localPath: item.localPath)
-            AttachmentStore.delete(localPath: AttachmentStore.makeLocalFilename(attachmentID: item.id, fileExtension: item.fileExtension))
-            AttachmentThumbnailStore.deleteCachedThumbnail(attachmentID: item.id)
-
-            let attachmentID = item.id
-            var descriptor = FetchDescriptor<MetaAttachment>(
-                predicate: #Predicate { attachment in
-                    attachment.id == attachmentID
-                }
-            )
-            descriptor.fetchLimit = 1
-
-            let models = try? modelContext.fetch(descriptor)
-            if let model = models?.first {
-                modelContext.delete(model)
-            }
-        }
-
-        try? modelContext.save()
-
-        attachments.remove(atOffsets: offsets)
-        totalCount = max(0, totalCount - itemsToDelete.count)
-        hasMore = attachments.count < totalCount
+        let attachmentIDs = itemsToDelete.map(\.id)
+        let attachmentIDSet = Set(attachmentIDs)
 
         Task { @MainActor in
-            await refresh()
+            do {
+                var models: [MetaAttachment] = []
+                models.reserveCapacity(attachmentIDs.count)
+
+                let expectedOwnerKindRaw = ownerKind.rawValue
+                let expectedOwnerID = ownerID
+
+                for attachmentID in attachmentIDs {
+                    var descriptor: FetchDescriptor<MetaAttachment>
+                    if let expectedGraphID = graphID {
+                        descriptor = FetchDescriptor<MetaAttachment>(
+                            predicate: #Predicate { attachment in
+                                attachment.id == attachmentID &&
+                                attachment.ownerKindRaw == expectedOwnerKindRaw &&
+                                attachment.ownerID == expectedOwnerID &&
+                                attachment.graphID == expectedGraphID
+                            }
+                        )
+                    } else {
+                        descriptor = FetchDescriptor<MetaAttachment>(
+                            predicate: #Predicate { attachment in
+                                attachment.id == attachmentID &&
+                                attachment.ownerKindRaw == expectedOwnerKindRaw &&
+                                attachment.ownerID == expectedOwnerID &&
+                                attachment.graphID == nil
+                            }
+                        )
+                    }
+                    descriptor.fetchLimit = 1
+                    if let model = try modelContext.fetch(descriptor).first {
+                        models.append(model)
+                    }
+                }
+
+                guard models.isEmpty == false else {
+                    await refresh()
+                    return
+                }
+
+                try await AttachmentMutationService.delete(
+                    models,
+                    in: modelContext
+                )
+
+                attachments.removeAll { attachmentIDSet.contains($0.id) }
+                totalCount = max(0, totalCount - models.count)
+                hasMore = attachments.count < totalCount
+                await refresh()
+            } catch {
+                errorMessage = error.localizedDescription
+            }
         }
     }
 }

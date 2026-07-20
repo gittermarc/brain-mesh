@@ -166,11 +166,16 @@ struct EntityAttributesAllListSection: View {
         }
         guard !attributes.isEmpty else { return }
 
-        do {
-            try GraphNodeDeletionService.deleteAttributes(attributes, in: modelContext)
-            onMutate()
-        } catch {
-            deletionErrorMessage = error.localizedDescription
+        Task { @MainActor in
+            do {
+                try await GraphNodeDeletionService.deleteAttributes(
+                    attributes,
+                    in: modelContext
+                )
+                onMutate()
+            } catch {
+                deletionErrorMessage = error.localizedDescription
+            }
         }
     }
 }

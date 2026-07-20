@@ -9,6 +9,25 @@ import Foundation
 import SwiftData
 
 @MainActor
+struct GraphDeletionPostCommitActions {
+    let lockGraph: (GraphLockCoordinator, UUID) -> Void
+    let deleteAttachmentCaches: (AttachmentCleanup.Result) -> Void
+    let deleteImagePath: (String) -> Void
+
+    static let live = GraphDeletionPostCommitActions(
+        lockGraph: { graphLock, graphID in
+            graphLock.lock(graphID: graphID)
+        },
+        deleteAttachmentCaches: { result in
+            AttachmentCleanup.deleteCachedFiles(for: result)
+        },
+        deleteImagePath: { path in
+            ImageStore.delete(path: path)
+        }
+    )
+}
+
+@MainActor
 enum GraphDeletionService {
 
     struct Result {
@@ -24,7 +43,9 @@ enum GraphDeletionService {
         graphs _: [MetaGraph],
         uniqueGraphs: [MetaGraph],
         modelContext: ModelContext,
-        graphLock: GraphLockCoordinator
+        graphLock: GraphLockCoordinator,
+        committer: GraphMutationCommitter = GraphMutationCommitter(),
+        postCommitActions: GraphDeletionPostCommitActions = .live
     ) async throws -> Result {
         try Task.checkCancellation()
         let gid = graphToDelete.id
@@ -75,18 +96,25 @@ enum GraphDeletionService {
         )
         let orphanAttributes = try modelContext.fetch(orphanDescriptor)
 
+        let templateDescriptor = FetchDescriptor<MetaDetailsTemplate>(
+            predicate: #Predicate { template in
+                template.graphID == gid
+            }
+        )
+        let detailsTemplates = try modelContext.fetch(templateDescriptor)
+
         var imagePaths = Set<String>()
         var ownerReferences = Set<NodeRefKey>()
 
         for entity in entities {
             ownerReferences.insert(NodeRefKey(kind: .entity, id: entity.id))
-            if let path = entity.imagePath, !path.isEmpty {
+            if let path = entity.imagePath, path.isEmpty == false {
                 imagePaths.insert(path)
             }
 
             for attribute in entity.attributesList {
                 ownerReferences.insert(NodeRefKey(kind: .attribute, id: attribute.id))
-                if let path = attribute.imagePath, !path.isEmpty {
+                if let path = attribute.imagePath, path.isEmpty == false {
                     imagePaths.insert(path)
                 }
             }
@@ -94,7 +122,7 @@ enum GraphDeletionService {
 
         for attribute in orphanAttributes {
             ownerReferences.insert(NodeRefKey(kind: .attribute, id: attribute.id))
-            if let path = attribute.imagePath, !path.isEmpty {
+            if let path = attribute.imagePath, path.isEmpty == false {
                 imagePaths.insert(path)
             }
         }
@@ -108,6 +136,14 @@ enum GraphDeletionService {
             graphID: nil,
             in: modelContext
         )
+
+        var mutationBatches = [try GraphMutationBatchFactory.graphDeleted(graphID: gid)]
+        if let replacementGraph {
+            mutationBatches.append(
+                try GraphMutationBatchFactory.graphCreated(graphID: replacementGraph.id)
+            )
+        }
+
         try Task.checkCancellation()
 
         let graphAttachmentResult = AttachmentCleanup.applyDeletion(
@@ -129,6 +165,9 @@ enum GraphDeletionService {
         for entity in entities {
             modelContext.delete(entity)
         }
+        for template in detailsTemplates {
+            modelContext.delete(template)
+        }
         for graph in graphRecordsToDelete {
             modelContext.delete(graph)
         }
@@ -136,18 +175,13 @@ enum GraphDeletionService {
             modelContext.insert(replacementGraph)
         }
 
-        do {
-            try modelContext.save()
-        } catch {
-            modelContext.rollback()
-            throw error
-        }
+        _ = try await committer.commit(mutationBatches, in: modelContext)
 
         // Non-persistent side effects happen only after the complete SwiftData commit succeeds.
-        graphLock.lock(graphID: gid)
-        AttachmentCleanup.deleteCachedFiles(for: attachmentResult)
-        for path in imagePaths {
-            ImageStore.delete(path: path)
+        postCommitActions.lockGraph(graphLock, gid)
+        postCommitActions.deleteAttachmentCaches(attachmentResult)
+        for path in imagePaths.sorted() {
+            postCommitActions.deleteImagePath(path)
         }
 
         return Result(newActiveGraphID: newActiveGraphID)

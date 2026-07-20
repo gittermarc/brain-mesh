@@ -28,14 +28,14 @@ extension GraphTransferService {
 
         let file = try Self.decodeValidatedImportFile(url: url)
 
-        switch mode {
-        case .asNewGraphRemap:
-            let coordinator = GraphTransferImportCoordinator(
-                file: file,
-                container: container,
-                progress: progress
-            )
-            return try await coordinator.runAsNewGraphRemap()
-        }
+        let coordinator = GraphTransferImportCoordinator(
+            file: file,
+            container: container,
+            progress: progress,
+            mutationPublisher: mutationPublisher,
+            completionKind: mode.completionKind,
+            saveOperation: importSaveOperation
+        )
+        return try await coordinator.runAsNewGraphRemap()
     }
 }

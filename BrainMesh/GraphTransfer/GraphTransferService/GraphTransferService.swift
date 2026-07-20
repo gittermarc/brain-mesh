@@ -15,7 +15,19 @@ actor GraphTransferService {
     static let shared = GraphTransferService()
 
     private(set) var container: AnyModelContainer? = nil
+    let mutationPublisher: any GraphMutationPublishing
+    let importSaveOperation: GraphTransferImportSaveOperation
     let log = Logger(subsystem: "BrainMesh", category: "GraphTransferService")
+
+    init(
+        mutationPublisher: any GraphMutationPublishing = GraphMutationEventBus.shared,
+        importSaveOperation: @escaping GraphTransferImportSaveOperation = { context in
+            try context.save()
+        }
+    ) {
+        self.mutationPublisher = mutationPublisher
+        self.importSaveOperation = importSaveOperation
+    }
 
     func configure(container: AnyModelContainer) {
         self.container = container

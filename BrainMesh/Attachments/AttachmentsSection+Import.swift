@@ -69,8 +69,10 @@ extension AttachmentsSection {
                     localPath: prepared.localPath
                 )
 
-                modelContext.insert(att)
-                try? modelContext.save()
+                try await AttachmentMutationService.insert(
+                    att,
+                    in: modelContext
+                )
 
                 await refresh()
 
@@ -160,8 +162,16 @@ extension AttachmentsSection {
                 localPath: prepared.localPath
             )
 
-            modelContext.insert(att)
-            try? modelContext.save()
+            try await AttachmentMutationService.insert(
+                att,
+                in: modelContext
+            )
+
+            do {
+                try FileManager.default.removeItem(at: url)
+            } catch {
+                // Picker-owned temporary files are best-effort cleanup after the graph save.
+            }
 
             await refresh()
 

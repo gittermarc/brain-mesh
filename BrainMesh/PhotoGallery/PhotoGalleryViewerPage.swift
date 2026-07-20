@@ -1,10 +1,7 @@
 import SwiftUI
-import SwiftData
 import UIKit
 
 struct PhotoGalleryViewerPage: View {
-    @Environment(\.modelContext) private var modelContext
-
     let attachment: MetaAttachment
 
     @State private var uiImage: UIImage? = nil
@@ -41,9 +38,7 @@ struct PhotoGalleryViewerPage: View {
             isLoading = true
             loadToken = token
 
-            let url = AttachmentStore.ensurePreviewURL(for: attachment)
-            try? modelContext.save()
-            return url
+            return AttachmentStore.ensurePreviewURL(for: attachment)
         }
 
         guard let url else {

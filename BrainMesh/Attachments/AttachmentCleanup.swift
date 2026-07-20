@@ -11,6 +11,14 @@ import SwiftData
 @MainActor
 enum AttachmentCleanup {
 
+    nonisolated enum CleanupError: LocalizedError, Equatable, Sendable {
+        case invalidOwnerKind
+
+        var errorDescription: String? {
+            "Der technische Besitzer eines Anhangs ist ungültig."
+        }
+    }
+
     nonisolated struct CacheReference: Equatable, Hashable, Sendable {
         let attachmentID: UUID
         let localPath: String?
@@ -32,16 +40,26 @@ enum AttachmentCleanup {
     }
 
     struct DeletionPlan {
-        fileprivate let attachments: [MetaAttachment]
-        fileprivate let cacheReferences: [CacheReference]
+        let attachments: [MetaAttachment]
+        let cacheReferences: [CacheReference]
+        let mutationReferences: [GraphMutationAttachmentReference]
 
-        fileprivate init(attachments: [MetaAttachment]) {
+        fileprivate init(attachments: [MetaAttachment]) throws {
             self.attachments = attachments
             self.cacheReferences = attachments.map { attachment in
                 CacheReference(
                     attachmentID: attachment.id,
                     localPath: attachment.localPath,
                     fileExtension: attachment.fileExtension
+                )
+            }
+            self.mutationReferences = try attachments.map { attachment in
+                guard let ownerKind = NodeKind(rawValue: attachment.ownerKindRaw) else {
+                    throw CleanupError.invalidOwnerKind
+                }
+                return GraphMutationAttachmentReference(
+                    id: attachment.id,
+                    owner: NodeRefKey(kind: ownerKind, id: attachment.ownerID)
                 )
             }
         }
@@ -55,7 +73,7 @@ enum AttachmentCleanup {
         in modelContext: ModelContext
     ) throws -> DeletionPlan {
         guard !owners.isEmpty else {
-            return DeletionPlan(attachments: [])
+            return try DeletionPlan(attachments: [])
         }
 
         let gid = graphID
@@ -70,7 +88,7 @@ enum AttachmentCleanup {
             return owners.contains(NodeRefKey(kind: kind, id: attachment.ownerID))
         }
 
-        return DeletionPlan(attachments: matchingAttachments)
+        return try DeletionPlan(attachments: matchingAttachments)
     }
 
     /// Prepares deletion of all attachments in one graph without mutating the context.
@@ -84,7 +102,7 @@ enum AttachmentCleanup {
                 attachment.graphID == gid
             }
         )
-        return DeletionPlan(attachments: try modelContext.fetch(descriptor))
+        return try DeletionPlan(attachments: modelContext.fetch(descriptor))
     }
 
     /// Applies a prepared attachment deletion plan without saving the context.
@@ -148,18 +166,24 @@ enum AttachmentCleanup {
     /// Removes local cache files represented by a completed cleanup result.
     /// Call only after the SwiftData save has succeeded.
     static func deleteCachedFiles(for result: Result) {
-        for reference in Set(result.cacheReferences) {
+        deleteCachedFiles(for: result.cacheReferences)
+    }
+
+    static func deleteCachedFiles(for references: [CacheReference]) {
+        for reference in Set(references) {
             deleteCachedFiles(for: reference)
         }
     }
 
     static func deleteCachedFiles(for attachment: MetaAttachment) {
-        deleteCachedFiles(
-            for: CacheReference(
-                attachmentID: attachment.id,
-                localPath: attachment.localPath,
-                fileExtension: attachment.fileExtension
-            )
+        deleteCachedFiles(for: cacheReference(for: attachment))
+    }
+
+    static func cacheReference(for attachment: MetaAttachment) -> CacheReference {
+        CacheReference(
+            attachmentID: attachment.id,
+            localPath: attachment.localPath,
+            fileExtension: attachment.fileExtension
         )
     }
 

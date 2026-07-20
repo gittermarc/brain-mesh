@@ -8,10 +8,16 @@
 import Foundation
 import SwiftData
 
+typealias GraphTransferImportSaveOperation = @Sendable (ModelContext) throws -> Void
+
 nonisolated final class GraphTransferImportCoordinator {
     let file: GraphExportFileV1
+    let container: AnyModelContainer
     let context: ModelContext
     let progress: (@Sendable (GraphTransferProgress) -> Void)?
+    let mutationPublisher: any GraphMutationPublishing
+    let completionKind: GraphTransferImportCompletionKind
+    let saveOperation: GraphTransferImportSaveOperation
 
     let newGraphID = UUID()
 
@@ -26,21 +32,53 @@ nonisolated final class GraphTransferImportCoordinator {
     var importedLinks = 0
     var skippedLinks = 0
     var insertedSinceLastSave = 0
+    var preparedAttachmentCachePaths = Set<String>()
 
     init(
         file: GraphExportFileV1,
         container: AnyModelContainer,
-        progress: (@Sendable (GraphTransferProgress) -> Void)?
+        progress: (@Sendable (GraphTransferProgress) -> Void)?,
+        mutationPublisher: any GraphMutationPublishing,
+        completionKind: GraphTransferImportCompletionKind,
+        saveOperation: @escaping GraphTransferImportSaveOperation
     ) {
         self.file = file
+        self.container = container
         self.context = ModelContext(container.container)
         self.context.autosaveEnabled = false
         self.progress = progress
+        self.mutationPublisher = mutationPublisher
+        self.completionKind = completionKind
+        self.saveOperation = saveOperation
     }
 
     func runAsNewGraphRemap() async throws -> ImportResult {
-        _ = try await runCoreAsNewGraphRemap()
-        return try finalizeImport()
+        do {
+            _ = try await runCoreAsNewGraphRemap()
+            return try await finalizeImport()
+        } catch {
+            try cleanupAfterFailedImportPreserving(originalError: error)
+        }
+    }
+
+    func runFullBackupAsNewGraphRemap(
+        manifest: GraphBackupManifestV2,
+        packageURL: URL
+    ) async throws -> ImportResult {
+        do {
+            _ = try await runCoreAsNewGraphRemap()
+            let attachmentSummary = try await importBackupAttachments(
+                manifest: manifest,
+                packageURL: packageURL
+            )
+            return try await finalizeImport(
+                importedAttachments: attachmentSummary.importedAttachments,
+                skippedAttachments: attachmentSummary.skippedAttachments,
+                warnings: attachmentSummary.warnings
+            )
+        } catch {
+            try cleanupAfterFailedImportPreserving(originalError: error)
+        }
     }
 
     func runCoreAsNewGraphRemap() async throws -> GraphTransferCoreImportResult {

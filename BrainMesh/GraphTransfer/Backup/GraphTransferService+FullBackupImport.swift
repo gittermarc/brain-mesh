@@ -23,24 +23,18 @@ extension GraphTransferService {
 
         let package = try Self.readValidatedBackupPackage(url: url)
 
-        switch mode {
-        case .asNewGraphRemap:
-            let coordinator = GraphTransferImportCoordinator(
-                file: package.coreGraph,
-                container: container,
-                progress: progress
-            )
-            _ = try await coordinator.runCoreAsNewGraphRemap()
-            let attachmentSummary = try await coordinator.importBackupAttachments(
-                manifest: package.manifest,
-                packageURL: url
-            )
-            return try coordinator.finalizeImport(
-                importedAttachments: attachmentSummary.importedAttachments,
-                skippedAttachments: attachmentSummary.skippedAttachments,
-                warnings: attachmentSummary.warnings
-            )
-        }
+        let coordinator = GraphTransferImportCoordinator(
+            file: package.coreGraph,
+            container: container,
+            progress: progress,
+            mutationPublisher: mutationPublisher,
+            completionKind: mode.completionKind,
+            saveOperation: importSaveOperation
+        )
+        return try await coordinator.runFullBackupAsNewGraphRemap(
+            manifest: package.manifest,
+            packageURL: url
+        )
     }
 }
 

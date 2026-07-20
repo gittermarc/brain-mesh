@@ -4,81 +4,85 @@
 //
 //  Created by Marc Fechner on 16.02.26.
 //
-//  Why this exists:
-//  Some older MetaAttachment records may have `graphID == nil` (before graph scoping).
-//  Using predicates like `(gid == nil || a.graphID == gid)` can force SwiftData to
-//  fall back to in-memory filtering, which is catastrophic for externalStorage blobs.
-//
-//  Strategy:
-//  - If we are in a graph context (graphID != nil), we migrate *only the owner's* legacy
-//    attachments with graphID == nil to the current graphID.
-//  - Queries can then be expressed as a simple AND predicate with `a.graphID == gid`.
+//  Legacy attachments without a graph scope are repaired owner-locally. The repair commits through
+//  the central mutation boundary and requests a graph-scoped source rebuild only after save success.
 //
 
 import Foundation
 import SwiftData
 
+#if canImport(os)
+import os
+#endif
+
+@MainActor
 enum AttachmentGraphIDMigration {
 
-    /// Main-context migration used by detail preview loaders.
-    @MainActor
+    /// Main-context migration used by detail preview loaders and gallery actions.
+    @discardableResult
     static func migrateIfNeeded(
         context: ModelContext,
         ownerKindRaw: Int,
         ownerID: UUID,
-        graphID: UUID?
-    ) {
-        guard let graphID else { return }
+        graphID: UUID?,
+        committer: GraphMutationCommitter = GraphMutationCommitter()
+    ) async throws -> Bool {
+        guard let graphID else { return false }
 
         let kindRaw = ownerKindRaw
         let oid = ownerID
-        let gid = graphID
-
-        // Keep the predicate strictly store-translatable (no OR).
-        let fd = FetchDescriptor<MetaAttachment>(
-            predicate: #Predicate { a in
-                a.ownerKindRaw == kindRaw &&
-                a.ownerID == oid &&
-                a.graphID == nil
+        let descriptor = FetchDescriptor<MetaAttachment>(
+            predicate: #Predicate { attachment in
+                attachment.ownerKindRaw == kindRaw &&
+                attachment.ownerID == oid &&
+                attachment.graphID == nil
             }
         )
 
-        guard let legacy = try? context.fetch(fd), !legacy.isEmpty else { return }
+        let legacyAttachments = try context.fetch(descriptor)
+        guard legacyAttachments.isEmpty == false else { return false }
 
-        for att in legacy {
-            att.graphID = gid
+        let batch = try GraphMutationBatchFactory.graphIntegrityRepair(
+            graphID: graphID
+        )
+        for attachment in legacyAttachments {
+            attachment.graphID = graphID
         }
-        try? context.save()
+
+        _ = try await committer.commit(batch, in: context)
+        return true
     }
 
-    /// Background migration used by detached loaders ("Alle" screen).
+    /// Compatibility entry point used by actor-backed loaders. The owner-local repair is moved to
+    /// the MainActor so its `ModelContext` remains on the same actor as the central committer.
     static func migrateIfNeeded(
         container: AnyModelContainer,
         ownerKindRaw: Int,
         ownerID: UUID,
         graphID: UUID
     ) async {
-        let kindRaw = ownerKindRaw
-        let oid = ownerID
-        let gid = graphID
-
-        _ = await Task.detached(priority: .utility) {
+        do {
             let context = ModelContext(container.container)
             context.autosaveEnabled = false
-
-            let fd = FetchDescriptor<MetaAttachment>(
-                predicate: #Predicate { a in
-                    a.ownerKindRaw == kindRaw &&
-                    a.ownerID == oid &&
-                    a.graphID == nil
-                }
+            _ = try await migrateIfNeeded(
+                context: context,
+                ownerKindRaw: ownerKindRaw,
+                ownerID: ownerID,
+                graphID: graphID
             )
-
-            guard let legacy = try? context.fetch(fd), !legacy.isEmpty else { return }
-            for att in legacy {
-                att.graphID = gid
-            }
-            try? context.save()
-        }.value
+        } catch is CancellationError {
+            #if canImport(os)
+            BMLog.mutationEvents.debug(
+                "Attachment graph-scope migration cancelled before commit"
+            )
+            #endif
+        } catch {
+            #if canImport(os)
+            let nsError = error as NSError
+            BMLog.mutationEvents.error(
+                "Attachment graph-scope migration failed domain=\(nsError.domain, privacy: .public) code=\(nsError.code, privacy: .public)"
+            )
+            #endif
+        }
     }
 }

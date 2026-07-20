@@ -76,18 +76,30 @@ extension AppRootView {
 
     @MainActor
     func bootstrapGraphing() async {
-        let defaultGraph = GraphBootstrap.ensureAtLeastOneGraph(using: modelContext)
+        do {
+            let defaultGraph = try await GraphBootstrap.ensureAtLeastOneGraph(
+                using: modelContext
+            )
 
-        // Active graph setzen (falls leer / kaputt)
-        if UUID(uuidString: activeGraphIDString) == nil {
-            activeGraphIDString = defaultGraph.id.uuidString
+            if UUID(uuidString: activeGraphIDString) == nil {
+                activeGraphIDString = defaultGraph.id.uuidString
+            }
+
+            try await GraphBootstrap.migrateLegacyRecordsIfNeeded(
+                defaultGraphID: defaultGraph.id,
+                using: modelContext
+            )
+            try await GraphBootstrap.backfillFoldedNotesIfNeeded(
+                using: modelContext
+            )
+        } catch is CancellationError {
+            appRootStartupLog.notice("graph bootstrap cancelled")
+        } catch {
+            let nsError = error as NSError
+            appRootStartupLog.error(
+                "graph bootstrap failed domain=\(nsError.domain, privacy: .public) code=\(nsError.code)"
+            )
         }
-
-        // Legacy Records in den Default-Graph schieben
-        GraphBootstrap.migrateLegacyRecordsIfNeeded(defaultGraphID: defaultGraph.id, using: modelContext)
-
-        // Backfill stored notes search indices (notesFolded) for existing data
-        GraphBootstrap.backfillFoldedNotesIfNeeded(using: modelContext)
     }
 
     @MainActor

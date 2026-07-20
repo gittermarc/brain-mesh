@@ -21,17 +21,10 @@ struct PhotoGalleryImportResult: Sendable {
 
 /// Import pipeline for the detail-only photo gallery.
 ///
-/// This file intentionally contains all "PhotosPicker -> bytes -> JPEG -> attachment" logic,
-/// so the UI files remain small and easy to reason about.
-///
-/// Progress:
-/// If a `ImportProgressState` is passed in, it will be updated on the MainActor so the UI
-/// can show a determinate progress bar while items are imported.
+/// Every selected batch is prepared first and then committed through the shared mutation
+/// boundary in one SwiftData save and one graph-scoped mutation batch.
 enum PhotoGalleryImportController {
 
-    /// Imports the selected items into SwiftData as `MetaAttachment` with contentKind `.galleryImage`.
-    ///
-    /// - Returns: A result with imported/failed counts.
     @MainActor
     static func importPickedImages(
         _ items: [PhotosPickerItem],
@@ -39,104 +32,158 @@ enum PhotoGalleryImportController {
         ownerID: UUID,
         graphID: UUID?,
         in modelContext: ModelContext,
-        progress: ImportProgressState? = nil
-    ) async -> PhotoGalleryImportResult {
+        progress: ImportProgressState? = nil,
+        committer: GraphMutationCommitter = GraphMutationCommitter()
+    ) async throws -> PhotoGalleryImportResult {
+        guard items.isEmpty == false else {
+            progress?.cancel()
+            return PhotoGalleryImportResult(imported: 0, failed: 0)
+        }
+
+        try Task.checkCancellation()
 
         let preset = ImageGalleryImportPreferences.compressionPreset()
-        let maxDecodePixelSize = preset.maxDecodePixelSize
-        let targetBytes = preset.targetBytes
+        let maxDecodePixelSize: Int = preset.maxDecodePixelSize
+        let targetBytes: Int? = preset.targetBytes
 
-        var imported: Int = 0
-        var failed: Int = 0
+        var preparedAttachments: [MetaAttachment] = []
+        preparedAttachments.reserveCapacity(items.count)
+        var failed = 0
+        var didCommit = false
 
-        if !items.isEmpty {
-            progress?.begin(
-                title: items.count == 1 ? "Importiere Bild…" : "Importiere Bilder…",
-                subtitle: "0 von \(items.count)",
-                totalUnitCount: items.count,
-                indeterminate: false
-            )
-        }
+        progress?.begin(
+            title: items.count == 1 ? "Importiere Bild…" : "Importiere Bilder…",
+            subtitle: "0 von \(items.count)",
+            totalUnitCount: items.count,
+            indeterminate: false
+        )
 
         defer {
-            if items.isEmpty {
-                progress?.cancel()
-            } else {
-                let summary: String
-                if failed > 0 {
-                    summary = "Fertig (\(imported) ok, \(failed) fehlgeschlagen)"
-                } else {
-                    summary = "Fertig"
-                }
-                progress?.finish(finalSubtitle: summary)
+            if didCommit == false {
+                AttachmentCleanup.deleteCachedFiles(
+                    for: preparedAttachments.map(AttachmentCleanup.cacheReference)
+                )
             }
         }
 
-        for (index, item) in items.enumerated() {
-            do {
+        do {
+            for (index, item) in items.enumerated() {
+                try Task.checkCancellation()
                 progress?.updateSubtitle("Bild \(index + 1) von \(items.count)")
 
-                guard let raw = try await item.loadTransferable(type: Data.self) else {
-                    failed += 1
-                    progress?.advance(didFail: true)
-                    continue
-                }
-
-                let prepared = await Task.detached(priority: .userInitiated) { () -> (id: UUID, jpeg: Data, local: String?, ext: String)? in
-                    guard let decoded = ImageImportPipeline.decodeImageSafely(from: raw, maxPixelSize: maxDecodePixelSize) else {
-                        return nil
+                do {
+                    guard let raw = try await item.loadTransferable(type: Data.self) else {
+                        failed += 1
+                        progress?.advance(didFail: true)
+                        continue
                     }
 
-                    guard let jpeg = ImageImportPipeline.prepareJPEGForGallery(decoded, targetBytes: targetBytes) else {
-                        return nil
+                    try Task.checkCancellation()
+                    let prepared = await Task.detached(priority: .userInitiated) {
+                        prepareGalleryImage(
+                            raw,
+                            maxDecodePixelSize: maxDecodePixelSize,
+                            targetBytes: targetBytes
+                        )
+                    }.value
+
+                    guard let prepared else {
+                        failed += 1
+                        progress?.advance(didFail: true)
+                        continue
                     }
 
-                    let id = UUID()
-                    let ext = "jpg"
-                    let local = try? AttachmentStore.writeToCache(
-                        data: jpeg,
-                        attachmentID: id,
-                        fileExtension: ext
+                    preparedAttachments.append(
+                        MetaAttachment(
+                            id: prepared.id,
+                            ownerKind: ownerKind,
+                            ownerID: ownerID,
+                            graphID: graphID,
+                            contentKind: .galleryImage,
+                            title: "",
+                            originalFilename: "Foto.\(prepared.fileExtension)",
+                            contentTypeIdentifier: UTType.jpeg.identifier,
+                            fileExtension: prepared.fileExtension,
+                            byteCount: prepared.jpeg.count,
+                            fileData: prepared.jpeg,
+                            localPath: prepared.localPath
+                        )
                     )
-
-                    return (id: id, jpeg: jpeg, local: local, ext: ext)
-                }.value
-
-                guard let prepared else {
+                    progress?.advance(didFail: false)
+                } catch is CancellationError {
+                    throw CancellationError()
+                } catch {
                     failed += 1
                     progress?.advance(didFail: true)
-                    continue
                 }
-
-                let att = MetaAttachment(
-                    id: prepared.id,
-                    ownerKind: ownerKind,
-                    ownerID: ownerID,
-                    graphID: graphID,
-                    contentKind: .galleryImage,
-                    title: "",
-                    originalFilename: "Foto.\(prepared.ext)",
-                    contentTypeIdentifier: UTType.jpeg.identifier,
-                    fileExtension: prepared.ext,
-                    byteCount: prepared.jpeg.count,
-                    fileData: prepared.jpeg,
-                    localPath: prepared.local
-                )
-
-                modelContext.insert(att)
-                imported += 1
-                progress?.advance(didFail: false)
-
-            } catch {
-                failed += 1
-                progress?.advance(didFail: true)
             }
+
+            try Task.checkCancellation()
+
+            if preparedAttachments.isEmpty == false {
+                try await AttachmentMutationService.insert(
+                    preparedAttachments,
+                    in: modelContext,
+                    committer: committer
+                )
+            }
+
+            didCommit = true
+            let imported = preparedAttachments.count
+            let summary = failed > 0
+                ? "Fertig (\(imported) ok, \(failed) fehlgeschlagen)"
+                : "Fertig"
+            progress?.finish(finalSubtitle: summary)
+            return PhotoGalleryImportResult(imported: imported, failed: failed)
+        } catch {
+            progress?.finish(finalSubtitle: "Fehlgeschlagen")
+            throw error
+        }
+    }
+
+    private nonisolated struct PreparedGalleryImage: Sendable {
+        let id: UUID
+        let jpeg: Data
+        let localPath: String?
+        let fileExtension: String
+    }
+
+    private nonisolated static func prepareGalleryImage(
+        _ raw: Data,
+        maxDecodePixelSize: Int,
+        targetBytes: Int?
+    ) -> PreparedGalleryImage? {
+        guard let decoded = ImageImportPipeline.decodeImageSafely(
+            from: raw,
+            maxPixelSize: maxDecodePixelSize
+        ) else {
+            return nil
+        }
+        guard let jpeg = ImageImportPipeline.prepareJPEGForGallery(
+            decoded,
+            targetBytes: targetBytes
+        ) else {
+            return nil
         }
 
-        if imported > 0 {
-            try? modelContext.save()
+        let id = UUID()
+        let fileExtension = "jpg"
+        let localPath: String?
+        do {
+            localPath = try AttachmentStore.writeToCache(
+                data: jpeg,
+                attachmentID: id,
+                fileExtension: fileExtension
+            )
+        } catch {
+            localPath = nil
         }
 
-        return PhotoGalleryImportResult(imported: imported, failed: failed)
+        return PreparedGalleryImage(
+            id: id,
+            jpeg: jpeg,
+            localPath: localPath,
+            fileExtension: fileExtension
+        )
     }
 }

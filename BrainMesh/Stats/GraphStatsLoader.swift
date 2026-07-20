@@ -100,6 +100,20 @@ actor GraphStatsLoader {
         countsCache.removeAll()
     }
 
+    func invalidateCaches(using plan: GraphMutationCacheInvalidationPlan) {
+        if plan.invalidateGraphStatsCounts {
+            countsCache.removeValue(forKey: .graph(plan.graphID))
+        }
+        if plan.invalidateGraphStatsTotalAggregate {
+            countsCache.removeValue(forKey: .total)
+        }
+        if plan.invalidateGraphStatsDashboards {
+            // Every dashboard snapshot embeds a cross-graph total aggregate. A mutation in one
+            // graph therefore invalidates dashboard snapshots even when another graph is active.
+            dashboardCache.removeAll()
+        }
+    }
+
     private func invalidateCountsCache(for graphIDs: [UUID]) {
         let scopes = graphIDs.map { GraphStatsCountScope.graph($0) }
         invalidateCountsCache(for: scopes)
@@ -365,5 +379,52 @@ actor GraphStatsLoader {
 
     func countsCacheHitsForTesting() -> Int {
         countsCacheHits
+    }
+
+    func seedCachesForTesting(graphID: UUID) {
+        let revision = GraphStatsScopeRevision(
+            counts: .zero,
+            detailFieldCount: 0,
+            newestEntityCreatedAt: nil,
+            newestLinkCreatedAt: nil,
+            newestAttachmentCreatedAt: nil
+        )
+        countsCache[.graph(graphID)] = GraphStatsCountsCacheEntry(
+            revision: revision,
+            counts: .zero
+        )
+        countsCache[.total] = GraphStatsCountsCacheEntry(
+            revision: revision,
+            counts: .zero
+        )
+
+        let snapshot = GraphStatsDashboardSnapshot(
+            total: .zero,
+            perGraph: [graphID: .zero],
+            dashboardGraphID: graphID,
+            activeMedia: nil,
+            activeStructure: nil,
+            activeTrends: nil,
+            activeHealth: nil
+        )
+        let key = GraphStatsDashboardCacheKey(
+            graphIDs: [graphID],
+            activeGraphID: graphID,
+            days: 30
+        )
+        dashboardCache[key] = GraphStatsDashboardCacheEntry(
+            totalRevision: revision,
+            legacyRevision: revision,
+            activeRevision: revision,
+            snapshot: snapshot
+        )
+    }
+
+    func hasCountsCacheForTesting(graphID: UUID) -> Bool {
+        countsCache[.graph(graphID)] != nil
+    }
+
+    func hasTotalCountsCacheForTesting() -> Bool {
+        countsCache[.total] != nil
     }
 }

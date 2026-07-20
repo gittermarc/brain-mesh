@@ -80,8 +80,10 @@ extension NodeAttachmentsManageView {
                     localPath: prepared.localPath
                 )
 
-                modelContext.insert(att)
-                try? modelContext.save()
+                try await AttachmentMutationService.insert(
+                    att,
+                    in: modelContext
+                )
 
                 if prepared.isGalleryImage {
                     infoMessage = "Dieses Bild wurde zur Galerie einsortiert. Öffne „Bilder verwalten“, um es zu sehen."
@@ -172,8 +174,16 @@ extension NodeAttachmentsManageView {
                 localPath: prepared.localPath
             )
 
-            modelContext.insert(att)
-            try? modelContext.save()
+            try await AttachmentMutationService.insert(
+                att,
+                in: modelContext
+            )
+
+            do {
+                try FileManager.default.removeItem(at: url)
+            } catch {
+                // Picker-owned temporary files are best-effort cleanup after the graph save.
+            }
 
             importProgress.setCompleted(2)
             importProgress.finish(finalSubtitle: "Fertig")

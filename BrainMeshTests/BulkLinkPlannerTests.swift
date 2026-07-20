@@ -1,11 +1,13 @@
 import Foundation
+import SwiftData
 import Testing
 @testable import BrainMesh
 
+@MainActor
 struct BulkLinkPlannerTests {
 
     @Test
-    func makePlan_rejectsDuplicatesWhenIgnoringDisabled() {
+    func makePlanRejectsDuplicatesWhenIgnoringDisabled() {
         let source = makeNodeRef(kind: .entity, label: "Atlas")
         let target = makeNodeRef(kind: .attribute, label: "Blue")
 
@@ -29,7 +31,7 @@ struct BulkLinkPlannerTests {
     }
 
     @Test
-    func makePlan_createsBidirectionalInsertsForFreshTargets() throws {
+    func makePlanCreatesBidirectionalInsertsForFreshTargets() throws {
         let graphID = UUID()
         let source = makeNodeRef(kind: .entity, label: "Atlas")
         let target = makeNodeRef(kind: .attribute, label: "Blue")
@@ -50,20 +52,64 @@ struct BulkLinkPlannerTests {
         #expect(plan.createdReverse == 1)
         #expect(plan.skippedDuplicates == 0)
         #expect(plan.skippedSelf == 0)
-
-        let directions = Set(plan.inserts.map(\.direction))
-        let notes = Set(plan.inserts.compactMap(\.draft.note))
-        let graphIDs = Set(plan.inserts.compactMap(\.draft.graphID))
-
-        #expect(directions == Set([.forward, .reverse]))
-        #expect(notes == Set(["Kontext"]))
-        #expect(graphIDs == Set([graphID]))
+        #expect(plan.inserts.map(\.direction) == [.forward, .reverse])
+        #expect(Set(plan.inserts.compactMap(\.draft.note)) == Set(["Kontext"]))
+        #expect(Set(plan.inserts.compactMap(\.draft.graphID)) == Set([graphID]))
     }
 
     @Test
-    func makePlan_tracksSelfLinksDuplicatesAndCreatedCounts() throws {
+    func makePlanUsesStableTechnicalTargetOrder() throws {
+        let graphID = bulkUUID(1)
+        let source = makeNodeRef(
+            kind: .entity,
+            id: bulkUUID(2),
+            label: "Source"
+        )
+        let laterTarget = makeNodeRef(
+            kind: .attribute,
+            id: bulkUUID(4),
+            label: "A label that must not control order"
+        )
+        let earlierTarget = makeNodeRef(
+            kind: .attribute,
+            id: bulkUUID(3),
+            label: "Z label that must not control order"
+        )
+
+        let plan = try BulkLinkPlanner.makePlan(
+            source: source,
+            selectedTargets: Set([laterTarget, earlierTarget]),
+            note: "",
+            createBidirectional: true,
+            ignoreDuplicates: true,
+            existingOutgoingTargets: [],
+            existingIncomingSources: [],
+            graphID: graphID
+        )
+
+        #expect(
+            plan.inserts.map(\.direction)
+                == [.forward, .reverse, .forward, .reverse]
+        )
+        #expect(
+            plan.inserts.map { $0.draft.source.id }
+                == [source.id, earlierTarget.id, source.id, laterTarget.id]
+        )
+        #expect(
+            plan.inserts.map { $0.draft.target.id }
+                == [earlierTarget.id, source.id, laterTarget.id, source.id]
+        )
+    }
+
+    @Test
+    func makePlanTracksSelfLinksDuplicatesAndCreatedCounts() throws {
         let source = makeNodeRef(kind: .entity, id: UUID(), label: "Atlas")
-        let selfTarget = NodeRef(kind: source.kind, id: source.id, label: source.label, iconSymbolName: nil)
+        let selfTarget = NodeRef(
+            kind: source.kind,
+            id: source.id,
+            label: source.label,
+            iconSymbolName: nil
+        )
         let outgoingDuplicate = makeNodeRef(kind: .attribute, label: "Duplicate")
         let reverseDuplicate = makeNodeRef(kind: .attribute, label: "Reverse Duplicate")
         let freshTarget = makeNodeRef(kind: .entity, label: "Fresh")
@@ -84,57 +130,108 @@ struct BulkLinkPlannerTests {
         #expect(plan.skippedDuplicates == 2)
         #expect(plan.skippedSelf == 1)
         #expect(plan.completion.totalCreated == 3)
-
-        let insertedPairs = Set(plan.inserts.map { insert in
-            "\(insert.draft.source.label)->\(insert.draft.target.label):\(insert.direction == .forward ? "F" : "R")"
-        })
-        let expectedPairs: Set<String> = [
-            "Atlas->Reverse Duplicate:F",
-            "Atlas->Fresh:F",
-            "Fresh->Atlas:R"
-        ]
-        #expect(insertedPairs == expectedPairs)
     }
 
     @Test
-    func execute_rollsBackInsertedValuesWhenSaveFails() throws {
-        let source = makeNodeRef(kind: .entity, label: "Atlas")
-        let firstTarget = makeNodeRef(kind: .attribute, label: "Blue")
-        let secondTarget = makeNodeRef(kind: .attribute, label: "Green")
+    func executeCommitsOneBatchInFinalPlanOrder() async throws {
+        let store = try BrainMeshTestContainer.makeInMemoryStore()
+        let graphID = bulkUUID(10)
+        let source = makeNodeRef(kind: .entity, id: bulkUUID(11), label: "Source")
+        let firstTarget = makeNodeRef(kind: .attribute, id: bulkUUID(12), label: "First")
+        let secondTarget = makeNodeRef(kind: .attribute, id: bulkUUID(13), label: "Second")
         let plan = try BulkLinkPlanner.makePlan(
             source: source,
-            selectedTargets: Set([firstTarget, secondTarget]),
+            selectedTargets: Set([secondTarget, firstTarget]),
             note: "",
             createBidirectional: false,
             ignoreDuplicates: true,
             existingOutgoingTargets: [],
             existingIncomingSources: [],
-            graphID: UUID()
+            graphID: graphID
+        )
+        let publisher = GraphMutationRecordingPublisher()
+        let committer = GraphMutationCommitter(publisher: publisher)
+
+        let completion = try await BulkLinkExecutor.execute(
+            plan: plan,
+            in: store.context,
+            committer: committer
         )
 
-        var rolledBack: [String] = []
+        #expect(completion.totalCreated == 2)
+        #expect(try store.context.fetchCount(FetchDescriptor<MetaLink>()) == 2)
 
-        do {
-            _ = try BulkLinkExecutor.execute(
+        let batches = await publisher.recordedBatches
+        #expect(batches.count == 1)
+        #expect(batches.first?.events.map(\.kind) == [.linkCreated, .linkCreated])
+        let targets = batches.first?.events.compactMap { event -> UUID? in
+            guard case .link(_, _, let target) = event.references.first else { return nil }
+            return target?.id
+        }
+        #expect(targets == [firstTarget.id, secondTarget.id])
+    }
+
+    @Test
+    func executeRollsBackAndPublishesNothingWhenSaveFails() async throws {
+        let store = try BrainMeshTestContainer.makeInMemoryStore()
+        let graphID = bulkUUID(20)
+        let source = makeNodeRef(kind: .entity, id: bulkUUID(21), label: "Source")
+        let target = makeNodeRef(kind: .attribute, id: bulkUUID(22), label: "Target")
+        let plan = try BulkLinkPlanner.makePlan(
+            source: source,
+            selectedTargets: Set([target]),
+            note: "",
+            createBidirectional: false,
+            ignoreDuplicates: true,
+            existingOutgoingTargets: [],
+            existingIncomingSources: [],
+            graphID: graphID
+        )
+        let publisher = GraphMutationRecordingPublisher()
+        let committer = GraphMutationCommitter(
+            publisher: publisher,
+            saveOperation: { _ in throw BulkLinkTestError.saveFailed }
+        )
+
+        await #expect(throws: BulkLinkTestError.saveFailed) {
+            _ = try await BulkLinkExecutor.execute(
                 plan: plan,
-                insert: { draft in
-                    "\(draft.source.label)->\(draft.target.label)"
-                },
-                save: {
-                    throw BulkLinkTestError.saveFailed
-                },
-                rollback: { inserted in
-                    rolledBack = inserted
-                }
+                in: store.context,
+                committer: committer
             )
-            Issue.record("Expected save failure")
-        } catch let error as BulkLinkTestError {
-            #expect(error == .saveFailed)
-        } catch {
-            Issue.record("Unexpected error: \(error)")
         }
 
-        #expect(Set(rolledBack) == Set(["Atlas->Blue", "Atlas->Green"]))
+        #expect(await publisher.recordedBatches.isEmpty)
+        #expect(try store.context.fetchCount(FetchDescriptor<MetaLink>()) == 0)
+    }
+
+    @Test
+    func executeEmptyPlanDoesNotSaveOrPublish() async throws {
+        let store = try BrainMeshTestContainer.makeInMemoryStore()
+        let publisher = GraphMutationRecordingPublisher()
+        var saveCount = 0
+        let committer = GraphMutationCommitter(
+            publisher: publisher,
+            saveOperation: { _ in saveCount += 1 }
+        )
+        let plan = BulkLinkMutationPlan(
+            inserts: [],
+            createdForward: 0,
+            createdReverse: 0,
+            skippedDuplicates: 2,
+            skippedSelf: 1,
+            isBidirectional: true
+        )
+
+        let completion = try await BulkLinkExecutor.execute(
+            plan: plan,
+            in: store.context,
+            committer: committer
+        )
+
+        #expect(completion.totalCreated == 0)
+        #expect(saveCount == 0)
+        #expect(await publisher.recordedBatches.isEmpty)
     }
 }
 
@@ -142,6 +239,15 @@ private enum BulkLinkTestError: Error, Equatable {
     case saveFailed
 }
 
-private func makeNodeRef(kind: NodeKind, id: UUID = UUID(), label: String) -> NodeRef {
+private func makeNodeRef(
+    kind: NodeKind,
+    id: UUID = UUID(),
+    label: String
+) -> NodeRef {
     NodeRef(kind: kind, id: id, label: label, iconSymbolName: nil)
+}
+
+private func bulkUUID(_ value: Int) -> UUID {
+    let suffix = String(format: "%012X", value)
+    return UUID(uuidString: "00000000-0000-0000-0000-\(suffix)")!
 }

@@ -251,6 +251,9 @@ struct PhotoGalleryViewerView: View {
         do {
             try await PhotoGalleryActions(modelContext: modelContext).setAsMainPhoto(
                 selectedAttachment,
+                ownerKind: ownerKind,
+                ownerID: ownerID,
+                graphID: graphID,
                 mainStableID: mainStableID,
                 mainImageData: $mainImageData,
                 mainImagePath: $mainImagePath
@@ -263,15 +266,26 @@ struct PhotoGalleryViewerView: View {
     @MainActor
     private func deleteSelected() {
         guard let selectedAttachment else { return }
-
         let nextSelectionID = selectionState.nextSelectionAfterDeletingCurrent()
-        PhotoGalleryActions(modelContext: modelContext).delete(selectedAttachment)
 
-        guard let nextSelectionID else {
-            dismiss()
-            return
+        Task { @MainActor in
+            do {
+                try await PhotoGalleryActions(modelContext: modelContext)
+                    .delete(
+                        selectedAttachment,
+                        ownerKind: ownerKind,
+                        ownerID: ownerID,
+                        graphID: graphID
+                    )
+
+                guard let nextSelectionID else {
+                    dismiss()
+                    return
+                }
+                selectionState.select(nextSelectionID)
+            } catch {
+                presentation.showError(error.localizedDescription)
+            }
         }
-
-        selectionState.select(nextSelectionID)
     }
 }

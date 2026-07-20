@@ -23,9 +23,28 @@ nonisolated extension GraphTransferImportCoordinator {
         importedAttachments: Int = 0,
         skippedAttachments: Int = 0,
         warnings: [String] = []
-    ) throws -> ImportResult {
+    ) async throws -> ImportResult {
+        let batch: GraphMutationBatch
+        switch completionKind {
+        case .imported:
+            batch = try GraphMutationBatchFactory.graphImported(graphID: newGraphID)
+        case .replaced:
+            batch = try GraphMutationBatchFactory.graphReplaced(graphID: newGraphID)
+        }
+
         progress?(GraphTransferImportProgressFactory.saving())
-        try saveContext()
+        let committer = GraphMutationCommitter(publisher: mutationPublisher)
+        _ = try await committer.commitCallerIsolated(
+            batch,
+            save: {
+                try saveContext()
+            },
+            rollback: {
+                context.rollback()
+            }
+        )
+
+        preparedAttachmentCachePaths.removeAll(keepingCapacity: false)
         progress?(GraphTransferImportProgressFactory.done())
 
         return ImportResult(

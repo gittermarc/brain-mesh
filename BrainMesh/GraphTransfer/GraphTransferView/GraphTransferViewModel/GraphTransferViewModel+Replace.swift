@@ -63,7 +63,7 @@ extension GraphTransferViewModel {
                 }
             }
 
-            await performImport()
+            await performImport(mode: .asReplacementRemap)
         } catch {
             alertState = AlertState(title: "Graph ersetzen", message: "Löschen fehlgeschlagen.")
         }

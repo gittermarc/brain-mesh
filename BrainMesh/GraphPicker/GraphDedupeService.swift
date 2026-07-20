@@ -15,32 +15,54 @@ import SwiftData
 @MainActor
 enum GraphDedupeService {
 
-    struct Report {
+    struct Report: Equatable {
         let removedGraphs: Int
+        let affectedGraphIDs: [UUID]
     }
 
     /// Removes duplicate `MetaGraph` records with identical `MetaGraph.id` values.
     /// Keeps the oldest record (by `createdAt`) and deletes the rest.
     @discardableResult
-    static func removeDuplicateGraphs(using modelContext: ModelContext) -> Report {
-        let fd = FetchDescriptor<MetaGraph>(sortBy: [SortDescriptor(\MetaGraph.createdAt, order: .forward)])
-        let all = (try? modelContext.fetch(fd)) ?? []
+    static func removeDuplicateGraphs(
+        using modelContext: ModelContext,
+        committer: GraphMutationCommitter = GraphMutationCommitter()
+    ) async throws -> Report {
+        let descriptor = FetchDescriptor<MetaGraph>(
+            sortBy: [SortDescriptor(\MetaGraph.createdAt, order: .forward)]
+        )
+        let all = try modelContext.fetch(descriptor)
 
         var seen = Set<UUID>()
-        var removed = 0
+        var duplicates: [MetaGraph] = []
+        var affectedGraphIDs = Set<UUID>()
 
-        for g in all {
-            if seen.insert(g.id).inserted {
+        for graph in all {
+            if seen.insert(graph.id).inserted {
                 continue
             }
-            modelContext.delete(g)
-            removed += 1
+            duplicates.append(graph)
+            affectedGraphIDs.insert(graph.id)
         }
 
-        if removed > 0 {
-            try? modelContext.save()
+        guard duplicates.isEmpty == false else {
+            return Report(removedGraphs: 0, affectedGraphIDs: [])
         }
 
-        return Report(removedGraphs: removed)
+        let orderedGraphIDs = affectedGraphIDs.sorted { lhs, rhs in
+            lhs.uuidString < rhs.uuidString
+        }
+        let batches = try orderedGraphIDs.map { graphID in
+            try GraphMutationBatchFactory.graphIntegrityRepair(graphID: graphID)
+        }
+
+        for duplicate in duplicates {
+            modelContext.delete(duplicate)
+        }
+
+        _ = try await committer.commit(batches, in: modelContext)
+        return Report(
+            removedGraphs: duplicates.count,
+            affectedGraphIDs: orderedGraphIDs
+        )
     }
 }

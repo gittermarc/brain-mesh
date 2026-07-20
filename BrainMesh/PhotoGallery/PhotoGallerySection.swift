@@ -89,29 +89,41 @@ struct PhotoGallerySection: View {
             )
         }
         .task {
-            await PhotoGalleryActions(modelContext: modelContext)
-                .migrateLegacyImageAttachmentsIfNeeded(
-                    ownerKind: ownerKind,
-                    ownerID: ownerID,
-                    graphID: graphID
-                )
+            do {
+                try await PhotoGalleryActions(modelContext: modelContext)
+                    .migrateLegacyImageAttachmentsIfNeeded(
+                        ownerKind: ownerKind,
+                        ownerID: ownerID,
+                        graphID: graphID
+                    )
+            } catch is CancellationError {
+                return
+            } catch {
+                errorMessage = error.localizedDescription
+            }
         }
         .onChange(of: pickedItems) { _, newItems in
             guard !newItems.isEmpty else { return }
             Task { @MainActor in
-                let result = await PhotoGalleryImportController.importPickedImages(
-                    newItems,
-                    ownerKind: ownerKind,
-                    ownerID: ownerID,
-                    graphID: graphID,
-                    in: modelContext,
-                    progress: importProgress
-                )
+                defer { pickedItems = [] }
+                do {
+                    let result = try await PhotoGalleryImportController.importPickedImages(
+                        newItems,
+                        ownerKind: ownerKind,
+                        ownerID: ownerID,
+                        graphID: graphID,
+                        in: modelContext,
+                        progress: importProgress
+                    )
 
-                if result.didFailAnything {
-                    errorMessage = "Einige Bilder konnten nicht importiert werden (\(result.failed))."
+                    if result.didFailAnything {
+                        errorMessage = "Einige Bilder konnten nicht importiert werden (\(result.failed))."
+                    }
+                } catch is CancellationError {
+                    return
+                } catch {
+                    errorMessage = error.localizedDescription
                 }
-                pickedItems = []
             }
         }
         .onChange(of: isPickingPhotos) { _, isPresented in

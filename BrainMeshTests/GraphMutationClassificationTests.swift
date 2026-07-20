@@ -354,6 +354,259 @@ struct GraphMutationClassificationTests {
             ]
         )
     }
+
+    @Test
+    func classificationMatrixCoversPR05BNodeAndAttachmentMutations() throws {
+        let graphID = testUUID(400)
+        let entity = NodeRefKey(kind: .entity, id: testUUID(401))
+        let attribute = NodeRefKey(kind: .attribute, id: testUUID(402))
+        let entityAttachment = GraphMutationAttachmentReference(
+            id: testUUID(403),
+            owner: entity
+        )
+        let attributeAttachment = GraphMutationAttachmentReference(
+            id: testUUID(404),
+            owner: attribute
+        )
+
+        let matrix: [GraphMutationClassificationCase] = [
+            GraphMutationClassificationCase(
+                name: "entity-notes-or-header-update",
+                batch: try GraphMutationBatchFactory.nodeUpdated(
+                    graphID: graphID,
+                    node: entity
+                ),
+                expectedEvents: [
+                    ExpectedMutationEvent(
+                        kind: .entityUpdated,
+                        references: [.node(entity)]
+                    )
+                ]
+            ),
+            GraphMutationClassificationCase(
+                name: "attribute-notes-or-header-update",
+                batch: try GraphMutationBatchFactory.nodeUpdated(
+                    graphID: graphID,
+                    node: attribute
+                ),
+                expectedEvents: [
+                    ExpectedMutationEvent(
+                        kind: .attributeUpdated,
+                        references: [.node(attribute)]
+                    )
+                ]
+            ),
+            GraphMutationClassificationCase(
+                name: "gallery-or-attachment-create",
+                batch: try GraphMutationBatchFactory.attachmentsCreated(
+                    graphID: graphID,
+                    attachments: [entityAttachment]
+                ),
+                expectedEvents: [
+                    ExpectedMutationEvent(
+                        kind: .attachmentCreated,
+                        references: [
+                            .attachment(id: entityAttachment.id, owner: entity)
+                        ]
+                    )
+                ]
+            ),
+            GraphMutationClassificationCase(
+                name: "attachment-update",
+                batch: try GraphMutationBatchFactory.attachmentsUpdated(
+                    graphID: graphID,
+                    attachments: [attributeAttachment]
+                ),
+                expectedEvents: [
+                    ExpectedMutationEvent(
+                        kind: .attachmentUpdated,
+                        references: [
+                            .attachment(id: attributeAttachment.id, owner: attribute)
+                        ]
+                    )
+                ]
+            ),
+            GraphMutationClassificationCase(
+                name: "attachment-delete",
+                batch: try GraphMutationBatchFactory.attachmentsDeleted(
+                    graphID: graphID,
+                    attachments: [entityAttachment]
+                ),
+                expectedEvents: [
+                    ExpectedMutationEvent(
+                        kind: .attachmentDeleted,
+                        references: [
+                            .attachment(id: entityAttachment.id, owner: entity)
+                        ]
+                    )
+                ]
+            )
+        ]
+
+        for entry in matrix {
+            #expect(entry.batch.graphID == graphID, Comment(rawValue: entry.name))
+            #expect(
+                entry.batch.events.map {
+                    ExpectedMutationEvent(
+                        kind: $0.kind,
+                        references: $0.references
+                    )
+                } == entry.expectedEvents,
+                Comment(rawValue: entry.name)
+            )
+            #expect(
+                containsForbiddenUserPayload(entry.batch) == false,
+                Comment(rawValue: entry.name)
+            )
+        }
+    }
+
+    @Test
+    func renameBatchOrdersNodeBeforeRelabeledLinksSortedByTechnicalID() throws {
+        let graphID = testUUID(450)
+        let node = NodeRefKey(kind: .entity, id: testUUID(451))
+        let target = NodeRefKey(kind: .attribute, id: testUUID(452))
+        let laterLink = GraphMutationLinkReference(
+            id: testUUID(454),
+            source: node,
+            target: target
+        )
+        let earlierLink = GraphMutationLinkReference(
+            id: testUUID(453),
+            source: target,
+            target: node
+        )
+
+        let batch = try GraphMutationBatchFactory.nodeRenamed(
+            graphID: graphID,
+            node: node,
+            relabeledLinks: [laterLink, earlierLink]
+        )
+
+        #expect(batch.events.map(\.kind) == [.entityUpdated, .linkUpdated, .linkUpdated])
+        #expect(batch.events.first?.references == [.node(node)])
+        #expect(
+            batch.events.dropFirst().compactMap { event -> UUID? in
+                guard case .link(let id, _, _) = event.references.first else { return nil }
+                return id
+            } == [earlierLink.id, laterLink.id]
+        )
+        #expect(containsForbiddenUserPayload(batch) == false)
+    }
+
+    @Test
+    func classificationMatrixCoversPR05CGraphwideMutations() throws {
+        let graphID = testUUID(470)
+        let templateID = testUUID(471)
+
+        let cases: [(String, GraphMutationBatch, [GraphMutationKind], [GraphMutationReference])] = [
+            (
+                "graph-create",
+                try GraphMutationBatchFactory.graphCreated(graphID: graphID),
+                [.graphCreated],
+                [.graph]
+            ),
+            (
+                "graph-update",
+                try GraphMutationBatchFactory.graphUpdated(graphID: graphID),
+                [.graphUpdated],
+                [.graph]
+            ),
+            (
+                "graph-delete",
+                try GraphMutationBatchFactory.graphDeleted(graphID: graphID),
+                [.graphDeleted],
+                [.graph]
+            ),
+            (
+                "graph-import",
+                try GraphMutationBatchFactory.graphImported(graphID: graphID),
+                [.graphImported, .graphRequiresFullRebuild(.graphImport)],
+                [.graph, .graph]
+            ),
+            (
+                "graph-replace",
+                try GraphMutationBatchFactory.graphReplaced(graphID: graphID),
+                [.graphReplaced, .graphRequiresFullRebuild(.graphReplacement)],
+                [.graph, .graph]
+            ),
+            (
+                "integrity-repair",
+                try GraphMutationBatchFactory.graphIntegrityRepair(graphID: graphID),
+                [.graphRequiresFullRebuild(.integrityRepair)],
+                [.graph]
+            ),
+            (
+                "detail-template-create",
+                try GraphMutationBatchFactory.detailTemplateCreated(
+                    graphID: graphID,
+                    templateID: templateID
+                ),
+                [.detailTemplateCreated],
+                [.detailTemplate(id: templateID)]
+            )
+        ]
+
+        for (name, batch, expectedKinds, expectedReferences) in cases {
+            #expect(batch.graphID == graphID, Comment(rawValue: name))
+            #expect(batch.events.map(\.kind) == expectedKinds, Comment(rawValue: name))
+            #expect(
+                batch.events.flatMap(\.references) == expectedReferences,
+                Comment(rawValue: name)
+            )
+            #expect(containsForbiddenUserPayload(batch) == false, Comment(rawValue: name))
+        }
+    }
+
+    @Test
+    func nodeCleanupBatchUsesStableDependencyOrder() throws {
+        let graphID = testUUID(500)
+        let entityID = testUUID(501)
+        let attributeID = testUUID(502)
+        let fieldID = testUUID(503)
+        let value = GraphMutationDetailValueReference(
+            id: testUUID(504),
+            ownerAttributeID: attributeID,
+            fieldID: fieldID
+        )
+        let link = GraphMutationLinkReference(
+            id: testUUID(505),
+            source: NodeRefKey(kind: .entity, id: entityID),
+            target: NodeRefKey(kind: .attribute, id: attributeID)
+        )
+        let attachment = GraphMutationAttachmentReference(
+            id: testUUID(506),
+            owner: NodeRefKey(kind: .attribute, id: attributeID)
+        )
+
+        let batch = try GraphMutationBatchFactory.nodeDeletion(
+            graphID: graphID,
+            links: [link],
+            detailValues: [value],
+            detailSchemas: [
+                GraphMutationDetailSchemaCleanupReference(
+                    ownerEntityID: entityID,
+                    definitionIDs: [fieldID]
+                )
+            ],
+            attachments: [attachment],
+            attributeIDs: [attributeID],
+            entityIDs: [entityID]
+        )
+
+        #expect(
+            batch.events.map(\.kind) == [
+                .linkDeleted,
+                .detailValueDeleted,
+                .detailSchemaChanged,
+                .attachmentDeleted,
+                .attributeDeleted,
+                .entityDeleted
+            ]
+        )
+        #expect(containsForbiddenUserPayload(batch) == false)
+    }
+
 }
 
 private struct GraphMutationClassificationCase {

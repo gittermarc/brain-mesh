@@ -78,7 +78,12 @@ nonisolated extension GraphTransferImportCoordinator {
 
                 summary.importedAttachments += 1
                 try recordInsertion()
+            } catch is CancellationError {
+                throw CancellationError()
             } catch let error as GraphTransferError {
+                guard error.isSkippableBackupAttachmentFailure else {
+                    throw error
+                }
                 summary.skippedAttachments += 1
                 summary.warnings.append(importWarning(for: entry, error: error))
             } catch {
@@ -116,11 +121,13 @@ private nonisolated extension GraphTransferImportCoordinator {
         warnings: inout [String]
     ) -> String? {
         do {
-            return try AttachmentStore.writeToCache(
+            let localPath = try AttachmentStore.writeToCache(
                 data: data,
                 attachmentID: attachmentID,
                 fileExtension: fileExtension
             )
+            preparedAttachmentCachePaths.insert(localPath)
+            return localPath
         } catch {
             warnings.append("Anhang \"\(entry.importDisplayTitle)\" wurde importiert, aber die lokale Cache-Datei konnte nicht erzeugt werden.")
             return nil
@@ -143,6 +150,20 @@ private nonisolated extension GraphTransferImportCoordinator {
             return "Anhang \"\(entry.importDisplayTitle)\" konnte nicht gelesen werden und wurde übersprungen."
         default:
             return "Anhang \"\(entry.importDisplayTitle)\" wurde übersprungen."
+        }
+    }
+}
+
+private nonisolated extension GraphTransferError {
+    var isSkippableBackupAttachmentFailure: Bool {
+        switch self {
+        case .backupAttachmentMissing,
+             .backupAttachmentSizeMismatch,
+             .backupAttachmentChecksumMismatch,
+             .backupAttachmentReadFailed:
+            return true
+        default:
+            return false
         }
     }
 }

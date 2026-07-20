@@ -197,10 +197,17 @@ struct BulkLinkView: View {
         isSaving = true
         defer { isSaving = false }
 
+        do {
+            try Task.checkCancellation()
+        } catch {
+            return
+        }
+
         await refreshExistingLinkSets()
 
         let plan: BulkLinkMutationPlan
         do {
+            try Task.checkCancellation()
             plan = try BulkLinkPlanner.makePlan(
                 source: source,
                 selectedTargets: selectedTargets,
@@ -221,31 +228,14 @@ struct BulkLinkView: View {
 
         let completion: BulkLinkCompletion
         do {
-            completion = try BulkLinkExecutor.execute(
+            try Task.checkCancellation()
+            completion = try await BulkLinkExecutor.execute(
                 plan: plan,
-                insert: { draft in
-                    let link = MetaLink(
-                        sourceKind: draft.source.kind,
-                        sourceID: draft.source.id,
-                        sourceLabel: draft.source.label,
-                        targetKind: draft.target.kind,
-                        targetID: draft.target.id,
-                        targetLabel: draft.target.label,
-                        note: draft.note,
-                        graphID: draft.graphID
-                    )
-                    modelContext.insert(link)
-                    return link
-                },
-                save: {
-                    try modelContext.save()
-                },
-                rollback: { inserted in
-                    for link in inserted {
-                        modelContext.delete(link)
-                    }
-                }
+                in: modelContext
             )
+        } catch is CancellationError {
+            modelContext.rollback()
+            return
         } catch {
             errorAlert = BulkLinkError(message: "Speichern fehlgeschlagen: \(error.localizedDescription)")
             await refreshExistingLinkSets()

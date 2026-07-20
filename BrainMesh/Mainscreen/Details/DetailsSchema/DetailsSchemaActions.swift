@@ -79,22 +79,24 @@ enum DetailsSchemaActions {
 
     // MARK: - Save template
 
-    /// Saves a reusable template record. This does not change an entity's active detail schema and
-    /// therefore intentionally does not publish a graph mutation event.
+    /// Saves one reusable, graph-scoped template and publishes only its technical identifier.
     @discardableResult
     static func saveTemplate(
         from entity: MetaEntity,
         name rawName: String,
-        modelContext: ModelContext
-    ) throws -> Bool {
-        guard !entity.detailFieldsList.isEmpty else { return false }
+        modelContext: ModelContext,
+        committer: GraphMutationCommitter = GraphMutationCommitter()
+    ) async throws -> Bool {
+        guard entity.detailFieldsList.isEmpty == false else { return false }
+        guard let graphID = entity.graphID else {
+            throw ActionError.missingGraphScope
+        }
 
         let cleaned = rawName.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !cleaned.isEmpty else { return false }
+        guard cleaned.isEmpty == false else { return false }
 
         try Task.checkCancellation()
 
-        let graphID = entity.graphID
         let finalName = try makeUniqueTemplateName(
             baseName: cleaned,
             graphID: graphID,
@@ -116,15 +118,13 @@ enum DetailsSchemaActions {
             graphID: graphID,
             fields: fields
         )
+        let batch = try GraphMutationBatchFactory.detailTemplateCreated(
+            graphID: graphID,
+            templateID: template.id
+        )
         modelContext.insert(template)
-
-        do {
-            try modelContext.save()
-            return true
-        } catch {
-            modelContext.rollback()
-            throw error
-        }
+        _ = try await committer.commit(batch, in: modelContext)
+        return true
     }
 
     // MARK: - Field operations

@@ -7,9 +7,8 @@
 
 import Foundation
 import SwiftData
-import os
 
-/// Shared cleanup helpers for MetaLink records.
+/// Shared graph-scoped cleanup and relabel planning for `MetaLink` records.
 nonisolated enum LinkCleanup {
 
     nonisolated struct Result: Equatable, Sendable {
@@ -21,9 +20,60 @@ nonisolated enum LinkCleanup {
     @MainActor
     struct DeletionPlan {
         fileprivate let links: [MetaLink]
+        let mutationReferences: [GraphMutationLinkReference]
 
-        fileprivate init(links: [MetaLink]) {
+        fileprivate init(links: [MetaLink]) throws {
             self.links = links
+            self.mutationReferences = try links.map { link in
+                guard
+                    let sourceKind = NodeKind(rawValue: link.sourceKindRaw),
+                    let targetKind = NodeKind(rawValue: link.targetKindRaw)
+                else {
+                    throw RelabelError.invalidLinkEndpoint
+                }
+                return GraphMutationLinkReference(
+                    id: link.id,
+                    source: NodeRefKey(kind: sourceKind, id: link.sourceID),
+                    target: NodeRefKey(kind: targetKind, id: link.targetID)
+                )
+            }
+        }
+    }
+
+    @MainActor
+    struct RelabelTarget {
+        let node: NodeRefKey
+        let newLabel: String
+    }
+
+    @MainActor
+    struct RelabelPlan {
+        fileprivate struct Mutation {
+            let link: MetaLink
+            let newSourceLabel: String?
+            let newTargetLabel: String?
+            let reference: GraphMutationLinkReference
+        }
+
+        fileprivate let mutations: [Mutation]
+
+        var mutationReferences: [GraphMutationLinkReference] {
+            mutations.map(\.reference)
+        }
+
+        var isEmpty: Bool {
+            mutations.isEmpty
+        }
+    }
+
+    nonisolated enum RelabelError: LocalizedError, Equatable, Sendable {
+        case invalidLinkEndpoint
+
+        var errorDescription: String? {
+            switch self {
+            case .invalidLinkEndpoint:
+                return "Verknüpfungen konnten wegen ungültiger technischer Endpunkte nicht aktualisiert werden."
+            }
         }
     }
 
@@ -36,7 +86,7 @@ nonisolated enum LinkCleanup {
         in modelContext: ModelContext
     ) throws -> DeletionPlan {
         guard !nodes.isEmpty else {
-            return DeletionPlan(links: [])
+            return try DeletionPlan(links: [])
         }
 
         let gid = graphID
@@ -60,7 +110,7 @@ nonisolated enum LinkCleanup {
             return nodes.contains(NodeRefKey(kind: kind, id: link.targetID))
         }
 
-        return DeletionPlan(links: matchingLinks)
+        return try DeletionPlan(links: matchingLinks)
     }
 
     /// Applies a prepared deletion plan. This method does not save the context.
@@ -110,229 +160,229 @@ nonisolated enum LinkCleanup {
         )
     }
 
-    /// Updates denormalized `sourceLabel` / `targetLabel` on `MetaLink` for the given node.
-    ///
-    /// Why this exists:
-    /// `MetaLink` stores labels for fast rendering. Renaming entities/attributes must therefore
-    /// also update existing links, otherwise Connections may show stale labels.
-    static func relabelLinks(
-        in context: ModelContext,
-        kindRaw: Int,
-        nodeID: UUID,
-        graphID: UUID?,
-        newLabel: String
-    ) {
-        let k = kindRaw
-        let id = nodeID
-
-        // Source side
-        let fdSource: FetchDescriptor<MetaLink>
-        if let gid = graphID {
-            fdSource = FetchDescriptor<MetaLink>(predicate: #Predicate { l in
-                l.sourceKindRaw == k &&
-                l.sourceID == id &&
-                l.graphID == gid
-            })
-        } else {
-            fdSource = FetchDescriptor<MetaLink>(predicate: #Predicate { l in
-                l.sourceKindRaw == k &&
-                l.sourceID == id
-            })
+    /// Fetches each graph link once and records only label values that would actually change.
+    @MainActor
+    static func prepareRelabeling(
+        targets: [RelabelTarget],
+        graphID: UUID,
+        in modelContext: ModelContext
+    ) throws -> RelabelPlan {
+        guard !targets.isEmpty else {
+            return RelabelPlan(mutations: [])
         }
 
-        if let links = try? context.fetch(fdSource) {
-            for l in links { l.sourceLabel = newLabel }
+        var labelsByNode: [NodeRefKey: String] = [:]
+        for target in targets {
+            labelsByNode[target.node] = target.newLabel
         }
 
-        // Target side
-        let fdTarget: FetchDescriptor<MetaLink>
-        if let gid = graphID {
-            fdTarget = FetchDescriptor<MetaLink>(predicate: #Predicate { l in
-                l.targetKindRaw == k &&
-                l.targetID == id &&
-                l.graphID == gid
-            })
-        } else {
-            fdTarget = FetchDescriptor<MetaLink>(predicate: #Predicate { l in
-                l.targetKindRaw == k &&
-                l.targetID == id
-            })
+        let gid = graphID
+        let descriptor = FetchDescriptor<MetaLink>(
+            predicate: #Predicate { link in
+                link.graphID == gid
+            }
+        )
+        let links = try modelContext.fetch(descriptor)
+        var mutations: [RelabelPlan.Mutation] = []
+
+        for link in links {
+            guard
+                let sourceKind = NodeKind(rawValue: link.sourceKindRaw),
+                let targetKind = NodeKind(rawValue: link.targetKindRaw)
+            else {
+                throw RelabelError.invalidLinkEndpoint
+            }
+
+            let source = NodeRefKey(kind: sourceKind, id: link.sourceID)
+            let target = NodeRefKey(kind: targetKind, id: link.targetID)
+            let sourceLabel = labelsByNode[source]
+            let targetLabel = labelsByNode[target]
+            let changedSourceLabel = sourceLabel == link.sourceLabel ? nil : sourceLabel
+            let changedTargetLabel = targetLabel == link.targetLabel ? nil : targetLabel
+
+            guard changedSourceLabel != nil || changedTargetLabel != nil else {
+                continue
+            }
+
+            mutations.append(
+                RelabelPlan.Mutation(
+                    link: link,
+                    newSourceLabel: changedSourceLabel,
+                    newTargetLabel: changedTargetLabel,
+                    reference: GraphMutationLinkReference(
+                        id: link.id,
+                        source: source,
+                        target: target
+                    )
+                )
+            )
         }
 
-        if let links = try? context.fetch(fdTarget) {
-            for l in links { l.targetLabel = newLabel }
+        mutations.sort { lhs, rhs in
+            lhs.reference.id.uuidString < rhs.reference.id.uuidString
+        }
+        return RelabelPlan(mutations: mutations)
+    }
+
+    /// Applies a prepared relabel plan without saving the context.
+    @MainActor
+    static func applyRelabeling(_ plan: RelabelPlan) {
+        for mutation in plan.mutations {
+            if let newSourceLabel = mutation.newSourceLabel {
+                mutation.link.sourceLabel = newSourceLabel
+            }
+            if let newTargetLabel = mutation.newTargetLabel {
+                mutation.link.targetLabel = newTargetLabel
+            }
         }
     }
 }
 
+// MARK: - Rename support
 
+/// Performs node rename and denormalized link relabeling in one `ModelContext` transaction.
+@MainActor
+enum NodeRenameService {
+    nonisolated enum RenameError: LocalizedError, Equatable, Sendable {
+        case missingGraphScope
+        case crossGraphRelationship
 
-// MARK: - Rename support (relabel denormalized link labels)
-
-/// Actor that updates denormalized link labels after a node rename.
-actor NodeRenameService {
-
-    static let shared = NodeRenameService()
-
-    private var container: AnyModelContainer? = nil
-    private var inFlight: [UUID: Task<Void, Never>] = [:]
-
-    private let log = Logger(subsystem: "BrainMesh", category: "NodeRenameService")
-
-    func configure(container: AnyModelContainer) {
-        self.container = container
-        #if DEBUG
-        log.debug("✅ configured")
-        #endif
+        var errorDescription: String? {
+            switch self {
+            case .missingGraphScope:
+                return "Die Umbenennung wurde abgebrochen, weil der Datensatz keinem Graphen eindeutig zugeordnet ist."
+            case .crossGraphRelationship:
+                return "Die Umbenennung wurde wegen einer graphübergreifenden Beziehung abgebrochen."
+            }
+        }
     }
 
-    func relabelLinksAfterEntityRename(entityID: UUID, graphID: UUID?) async {
-        await runDedupe(key: entityID) { configuredContainer in
-            let log = Logger(subsystem: "BrainMesh", category: "NodeRenameService")
+    @discardableResult
+    static func renameEntity(
+        _ entity: MetaEntity,
+        to newName: String,
+        in modelContext: ModelContext,
+        committer: GraphMutationCommitter = GraphMutationCommitter()
+    ) async throws -> Bool {
+        let cleaned = newName.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !cleaned.isEmpty else { return false }
 
-            let context = ModelContext(configuredContainer.container)
-            context.autosaveEnabled = false
+        let current = entity.name.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard cleaned != current else { return false }
+        guard let graphID = entity.graphID else {
+            throw RenameError.missingGraphScope
+        }
 
-            // Fetch entity (to read the up-to-date name).
-            let fdEntity: FetchDescriptor<MetaEntity>
-            if let gid = graphID {
-                fdEntity = FetchDescriptor<MetaEntity>(predicate: #Predicate { e in
-                    e.id == entityID && e.graphID == gid
-                })
-            } else {
-                fdEntity = FetchDescriptor<MetaEntity>(predicate: #Predicate { e in
-                    e.id == entityID
-                })
+        try Task.checkCancellation()
+
+        let gid = graphID
+        let descriptor = FetchDescriptor<MetaAttribute>(
+            predicate: #Predicate { attribute in
+                attribute.graphID == gid
             }
+        )
+        let fetchedChildren = try modelContext.fetch(descriptor).filter { attribute in
+            attribute.owner?.id == entity.id
+        }
+        let childAttributes = uniqueModels(entity.attributesList + fetchedChildren)
+        guard childAttributes.allSatisfy({ attribute in
+            attribute.graphID == graphID &&
+            attribute.owner?.id == entity.id &&
+            attribute.owner?.graphID == graphID
+        }) else {
+            throw RenameError.crossGraphRelationship
+        }
 
-            guard let entity = try? context.fetch(fdEntity).first else {
-                return
-            }
-
-            let entityLabel = entity.name.isEmpty ? "Entität" : entity.name
-            LinkCleanup.relabelLinks(
-                in: context,
-                kindRaw: NodeKind.entity.rawValue,
-                nodeID: entityID,
-                graphID: graphID,
-                newLabel: entityLabel
+        var targets = [
+            LinkCleanup.RelabelTarget(
+                node: NodeRefKey(kind: .entity, id: entity.id),
+                newLabel: cleaned
             )
+        ]
+        targets.append(contentsOf: childAttributes.map { attribute in
+            LinkCleanup.RelabelTarget(
+                node: NodeRefKey(kind: .attribute, id: attribute.id),
+                newLabel: "\(cleaned) · \(attribute.name)"
+            )
+        })
 
-            // Attributes of this entity must be relabeled as well, because their displayName includes the owner name.
-            let attrs: [MetaAttribute]
-            if let gid = graphID {
-                let fd = FetchDescriptor<MetaAttribute>(predicate: #Predicate<MetaAttribute> { a in
-                    a.graphID == gid
-                })
-                attrs = (try? context.fetch(fd)) ?? []
-            } else {
-                let fd = FetchDescriptor<MetaAttribute>()
-                attrs = (try? context.fetch(fd)) ?? []
-            }
+        let relabelPlan = try LinkCleanup.prepareRelabeling(
+            targets: targets,
+            graphID: graphID,
+            in: modelContext
+        )
+        let batch = try GraphMutationBatchFactory.nodeRenamed(
+            graphID: graphID,
+            node: NodeRefKey(kind: .entity, id: entity.id),
+            relabeledLinks: relabelPlan.mutationReferences
+        )
 
-            for a in attrs {
-                guard let owner = a.owner, owner.id == entityID else { continue }
-                LinkCleanup.relabelLinks(
-                    in: context,
-                    kindRaw: NodeKind.attribute.rawValue,
-                    nodeID: a.id,
-                    graphID: graphID,
-                    newLabel: a.displayName
+        try Task.checkCancellation()
+        entity.name = cleaned
+        for attribute in childAttributes {
+            attribute.recomputeSearchLabelFolded()
+        }
+        LinkCleanup.applyRelabeling(relabelPlan)
+
+        try await committer.commit(batch, in: modelContext)
+        return true
+    }
+
+    @discardableResult
+    static func renameAttribute(
+        _ attribute: MetaAttribute,
+        to newName: String,
+        in modelContext: ModelContext,
+        committer: GraphMutationCommitter = GraphMutationCommitter()
+    ) async throws -> Bool {
+        let cleaned = newName.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !cleaned.isEmpty else { return false }
+
+        let current = attribute.name.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard cleaned != current else { return false }
+        guard let graphID = attribute.graphID else {
+            throw RenameError.missingGraphScope
+        }
+        if let owner = attribute.owner, owner.graphID != graphID {
+            throw RenameError.crossGraphRelationship
+        }
+
+        try Task.checkCancellation()
+
+        let newDisplayLabel: String
+        if let owner = attribute.owner {
+            newDisplayLabel = "\(owner.name) · \(cleaned)"
+        } else {
+            newDisplayLabel = cleaned
+        }
+        let relabelPlan = try LinkCleanup.prepareRelabeling(
+            targets: [
+                LinkCleanup.RelabelTarget(
+                    node: NodeRefKey(kind: .attribute, id: attribute.id),
+                    newLabel: newDisplayLabel
                 )
-            }
+            ],
+            graphID: graphID,
+            in: modelContext
+        )
+        let batch = try GraphMutationBatchFactory.nodeRenamed(
+            graphID: graphID,
+            node: NodeRefKey(kind: .attribute, id: attribute.id),
+            relabeledLinks: relabelPlan.mutationReferences
+        )
 
-            do {
-                try context.save()
-            } catch {
-                #if DEBUG
-                log.debug("⚠️ save failed: \(String(describing: error))")
-                #endif
-            }
-        }
+        try Task.checkCancellation()
+        attribute.name = cleaned
+        LinkCleanup.applyRelabeling(relabelPlan)
+
+        try await committer.commit(batch, in: modelContext)
+        return true
     }
 
-    func relabelLinksAfterAttributeRename(attributeID: UUID, graphID: UUID?) async {
-        await runDedupe(key: attributeID) { configuredContainer in
-            let log = Logger(subsystem: "BrainMesh", category: "NodeRenameService")
-
-            let context = ModelContext(configuredContainer.container)
-            context.autosaveEnabled = false
-
-            let fdAttr: FetchDescriptor<MetaAttribute>
-            if let gid = graphID {
-                fdAttr = FetchDescriptor<MetaAttribute>(predicate: #Predicate { a in
-                    a.id == attributeID && a.graphID == gid
-                })
-            } else {
-                fdAttr = FetchDescriptor<MetaAttribute>(predicate: #Predicate { a in
-                    a.id == attributeID
-                })
-            }
-
-            guard let attr = try? context.fetch(fdAttr).first else {
-                return
-            }
-
-            LinkCleanup.relabelLinks(
-                in: context,
-                kindRaw: NodeKind.attribute.rawValue,
-                nodeID: attributeID,
-                graphID: graphID,
-                newLabel: attr.displayName
-            )
-
-            do {
-                try context.save()
-            } catch {
-                #if DEBUG
-                log.debug("⚠️ save failed: \(String(describing: error))")
-                #endif
-            }
+    private static func uniqueModels<Model: AnyObject>(_ models: [Model]) -> [Model] {
+        var seen = Set<ObjectIdentifier>()
+        return models.filter { model in
+            seen.insert(ObjectIdentifier(model)).inserted
         }
-    }
-
-    // MARK: - Internals
-
-    private func runDedupe(
-        key: UUID,
-        operation: @escaping @Sendable (AnyModelContainer) -> Void
-    ) async {
-        if let existing = inFlight[key] {
-            await existing.value
-            return
-        }
-
-        do {
-            try await AppLoadersConfigurator.waitUntilReadyIfNeeded(
-                serviceContainerID: container?.identity
-            )
-        } catch {
-            #if DEBUG
-            log.debug("⚠️ rename relabel skipped because service readiness is unavailable")
-            #endif
-            return
-        }
-
-        // Waiting for readiness is an actor reentrancy point. Preserve the existing
-        // per-node de-duplication if another rename operation started meanwhile.
-        if let existing = inFlight[key] {
-            await existing.value
-            return
-        }
-
-        guard let configuredContainer = container else {
-            #if DEBUG
-            log.debug("⚠️ not configured after service readiness")
-            #endif
-            return
-        }
-
-        let task = Task.detached(priority: .utility) { [configuredContainer] in
-            operation(configuredContainer)
-        }
-
-        inFlight[key] = task
-        await task.value
-        inFlight[key] = nil
     }
 }

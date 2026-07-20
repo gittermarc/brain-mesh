@@ -15,9 +15,11 @@ struct GraphPickerNameEditorSheet: View {
     let confirmTitle: String
     let initialText: String
     let placeholder: String
-    let onCommit: (String) -> Void
+    let onCommit: @MainActor (String) async throws -> Void
 
     @State private var nameText: String
+    @State private var isSaving = false
+    @State private var errorMessage: String?
 
     init(
         title: String,
@@ -25,7 +27,7 @@ struct GraphPickerNameEditorSheet: View {
         confirmTitle: String,
         initialText: String,
         placeholder: String,
-        onCommit: @escaping (String) -> Void
+        onCommit: @MainActor @escaping (String) async throws -> Void
     ) {
         self.title = title
         self.message = message
@@ -43,6 +45,7 @@ struct GraphPickerNameEditorSheet: View {
                     TextField(placeholder, text: $nameText)
                         .textInputAutocapitalization(.words)
                         .disableAutocorrection(true)
+                        .disabled(isSaving)
                 }
 
                 Section {
@@ -58,15 +61,29 @@ struct GraphPickerNameEditorSheet: View {
                     Button("Abbrechen") {
                         dismiss()
                     }
+                    .disabled(isSaving)
                 }
 
                 ToolbarItem(placement: .confirmationAction) {
                     Button(confirmTitle) {
-                        onCommit(cleanedName)
-                        dismiss()
+                        commit()
                     }
-                    .disabled(cleanedName.isEmpty)
+                    .disabled(cleanedName.isEmpty || isSaving)
                 }
+            }
+            .overlay {
+                if isSaving {
+                    ProgressView()
+                        .controlSize(.large)
+                }
+            }
+            .alert("Speichern fehlgeschlagen", isPresented: Binding(
+                get: { errorMessage != nil },
+                set: { if $0 == false { errorMessage = nil } }
+            )) {
+                Button("OK", role: .cancel) {}
+            } message: {
+                Text(errorMessage ?? "")
             }
         }
         .presentationDetents([.medium])
@@ -74,5 +91,22 @@ struct GraphPickerNameEditorSheet: View {
 
     private var cleanedName: String {
         nameText.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    @MainActor
+    private func commit() {
+        guard isSaving == false else { return }
+        isSaving = true
+        errorMessage = nil
+
+        Task { @MainActor in
+            do {
+                try await onCommit(cleanedName)
+                dismiss()
+            } catch {
+                errorMessage = error.localizedDescription
+            }
+            isSaving = false
+        }
     }
 }

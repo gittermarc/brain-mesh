@@ -29,31 +29,33 @@ extension EntitiesHomeView {
             return
         }
 
-        do {
-            let gid = graphID
-            let descriptor = FetchDescriptor<MetaEntity>(
-                predicate: #Predicate { entity in
-                    entity.graphID == gid
+        Task { @MainActor in
+            do {
+                let gid = graphID
+                let descriptor = FetchDescriptor<MetaEntity>(
+                    predicate: #Predicate { entity in
+                        entity.graphID == gid
+                    }
+                )
+                let entitiesToDelete = try modelContext.fetch(descriptor).filter { entity in
+                    requestedIDs.contains(entity.id)
                 }
-            )
-            let entitiesToDelete = try modelContext.fetch(descriptor).filter { entity in
-                requestedIDs.contains(entity.id)
-            }
 
-            guard !entitiesToDelete.isEmpty else {
+                guard !entitiesToDelete.isEmpty else {
+                    refreshAfterDeletion()
+                    return
+                }
+
+                try await GraphNodeDeletionService.deleteEntities(
+                    entitiesToDelete,
+                    in: modelContext
+                )
+
+                rows.removeAll { requestedIDs.contains($0.id) }
                 refreshAfterDeletion()
-                return
+            } catch {
+                deletionErrorMessage = error.localizedDescription
             }
-
-            try GraphNodeDeletionService.deleteEntities(
-                entitiesToDelete,
-                in: modelContext
-            )
-
-            rows.removeAll { requestedIDs.contains($0.id) }
-            refreshAfterDeletion()
-        } catch {
-            deletionErrorMessage = error.localizedDescription
         }
     }
 

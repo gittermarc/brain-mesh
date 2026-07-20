@@ -8,10 +8,23 @@
 import Foundation
 import SwiftData
 
+nonisolated enum GraphBootstrapError: LocalizedError, Equatable, Sendable {
+    case missingGraphScope
+
+    var errorDescription: String? {
+        "Eine Bootstrap-Reparatur konnte keinem Graphen zugeordnet werden."
+    }
+}
+
 @MainActor
 enum GraphBootstrap {
-    static func saveIfChanged(_ changed: Bool, using modelContext: ModelContext) {
-        guard changed else { return }
-        try? modelContext.save()
+    static func integrityRepairBatches(
+        graphIDs: Set<UUID>
+    ) throws -> [GraphMutationBatch] {
+        try graphIDs
+            .sorted { lhs, rhs in lhs.uuidString < rhs.uuidString }
+            .map { graphID in
+                try GraphMutationBatchFactory.graphIntegrityRepair(graphID: graphID)
+            }
     }
 }

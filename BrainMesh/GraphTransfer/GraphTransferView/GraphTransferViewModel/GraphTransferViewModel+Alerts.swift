@@ -8,10 +8,6 @@ import Foundation
 extension GraphTransferViewModel {
 
     func userFacingMessage(for error: Error) -> String {
-        #if DEBUG
-        print("⚠️ GraphTransfer error: \(error)")
-        #endif
-
         if let error = error as? GraphTransferError {
             switch error {
             case .fileAccessDenied:
@@ -26,6 +22,8 @@ extension GraphTransferViewModel {
                 return "Die Datei konnte nicht gelesen werden. Prüfe, ob sie noch vorhanden ist und BrainMesh Zugriff darauf hat."
             case .saveFailed:
                 return "Der Import konnte nicht gespeichert werden. Prüfe deinen freien Speicherplatz und versuche es erneut."
+            case .importCleanupFailed:
+                return "Ein unvollständiger Import konnte nicht vollständig bereinigt werden. Starte BrainMesh neu und prüfe den Graph-Picker, bevor du den Import erneut versuchst."
             case .writeFailed:
                 return "Die Exportdatei konnte nicht erstellt werden. Prüfe deinen freien Speicherplatz und versuche es erneut."
             case .backupPackageWriteFailed:

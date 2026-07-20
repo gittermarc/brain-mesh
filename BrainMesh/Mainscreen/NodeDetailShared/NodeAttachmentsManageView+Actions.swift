@@ -42,23 +42,50 @@ extension NodeAttachmentsManageView {
     // MARK: - Delete
 
     @MainActor
-    func deleteAttachment(attachmentID: UUID) {
+    func deleteAttachment(attachmentID: UUID) async {
         let id = attachmentID
-        let fd = FetchDescriptor<MetaAttachment>(predicate: #Predicate { a in
-            a.id == id
-        })
+        let expectedOwnerKindRaw = ownerKind.rawValue
+        let expectedOwnerID = ownerID
+        let descriptor: FetchDescriptor<MetaAttachment>
 
-        guard let att = (try? modelContext.fetch(fd))?.first else {
-            errorMessage = "Anhang konnte nicht gefunden werden."
-            return
+        if let expectedGraphID = graphID {
+            descriptor = FetchDescriptor<MetaAttachment>(
+                predicate: #Predicate { attachment in
+                    attachment.id == id &&
+                    attachment.ownerKindRaw == expectedOwnerKindRaw &&
+                    attachment.ownerID == expectedOwnerID &&
+                    attachment.graphID == expectedGraphID
+                }
+            )
+        } else {
+            descriptor = FetchDescriptor<MetaAttachment>(
+                predicate: #Predicate { attachment in
+                    attachment.id == id &&
+                    attachment.ownerKindRaw == expectedOwnerKindRaw &&
+                    attachment.ownerID == expectedOwnerID &&
+                    attachment.graphID == nil
+                }
+            )
         }
 
-        AttachmentCleanup.deleteCachedFiles(for: att)
-        modelContext.delete(att)
-        try? modelContext.save()
+        do {
+            guard let attachment = try modelContext.fetch(descriptor).first else {
+                errorMessage = "Anhang konnte nicht gefunden werden."
+                return
+            }
 
-        attachments.removeAll { $0.id == attachmentID }
-        totalCount = max(0, totalCount - 1)
-        hasMore = attachments.count < totalCount
+            try await AttachmentMutationService.delete(
+                attachment,
+                in: modelContext
+            )
+
+            attachments.removeAll { $0.id == attachmentID }
+            totalCount = max(0, totalCount - 1)
+            hasMore = attachments.count < totalCount
+        } catch is CancellationError {
+            return
+        } catch {
+            errorMessage = error.localizedDescription
+        }
     }
 }

@@ -199,11 +199,14 @@ extension AttributeDetailView {
                 NavigationStack {
                     NodeNotesEditorView(
                         title: attribute.name.isEmpty ? "Notiz" : "Notiz – \(attribute.name)",
-                        notes: Binding(
-                            get: { attribute.notes },
-                            set: { attribute.notes = $0 }
+                        initialNotes: attribute.notes
+                    ) { notes in
+                        try await NodeNotesPersistence.commitAttributeNotes(
+                            notes,
+                            attribute: attribute,
+                            in: modelContext
                         )
-                    )
+                    }
                 }
             }
             .sheet(item: $detailsSchemaBuilderEntity) { entity in
@@ -220,27 +223,24 @@ extension AttributeDetailView {
 
     @MainActor
     fileprivate func renameAttribute(to newName: String) async throws {
-        let cleaned = newName.trimmingCharacters(in: .whitespacesAndNewlines)
-        if cleaned.isEmpty { return }
-
-        let current = attribute.name.trimmingCharacters(in: .whitespacesAndNewlines)
-        if cleaned == current { return }
-
-        attribute.name = cleaned
-        try modelContext.save()
-
-        await NodeRenameService.shared.relabelLinksAfterAttributeRename(
-            attributeID: attribute.id,
-            graphID: attribute.graphID
+        try await NodeRenameService.renameAttribute(
+            attribute,
+            to: newName,
+            in: modelContext
         )
     }
 
     func deleteAttribute() {
-        do {
-            try GraphNodeDeletionService.deleteAttribute(attribute, in: modelContext)
-            dismiss()
-        } catch {
-            errorMessage = error.localizedDescription
+        Task { @MainActor in
+            do {
+                try await GraphNodeDeletionService.deleteAttribute(
+                    attribute,
+                    in: modelContext
+                )
+                dismiss()
+            } catch {
+                errorMessage = error.localizedDescription
+            }
         }
     }
 }

@@ -12,27 +12,24 @@ extension EntityDetailView {
 
     @MainActor
     func renameEntity(to newName: String) async throws {
-        let cleaned = newName.trimmingCharacters(in: .whitespacesAndNewlines)
-        if cleaned.isEmpty { return }
-
-        let current = entity.name.trimmingCharacters(in: .whitespacesAndNewlines)
-        if cleaned == current { return }
-
-        entity.name = cleaned
-        try modelContext.save()
-
-        await NodeRenameService.shared.relabelLinksAfterEntityRename(
-            entityID: entity.id,
-            graphID: entity.graphID
+        _ = try await NodeRenameService.renameEntity(
+            entity,
+            to: newName,
+            in: modelContext
         )
     }
 
     func deleteEntity() {
-        do {
-            try GraphNodeDeletionService.deleteEntity(entity, in: modelContext)
-            dismiss()
-        } catch {
-            errorMessage = error.localizedDescription
+        Task { @MainActor in
+            do {
+                try await GraphNodeDeletionService.deleteEntity(
+                    entity,
+                    in: modelContext
+                )
+                dismiss()
+            } catch {
+                errorMessage = error.localizedDescription
+            }
         }
     }
 }

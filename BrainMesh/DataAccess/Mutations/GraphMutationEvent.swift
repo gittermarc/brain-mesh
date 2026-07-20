@@ -38,6 +38,9 @@ nonisolated enum GraphMutationKind: Hashable, Sendable {
     case attachmentCreated
     case attachmentUpdated
     case attachmentDeleted
+    case detailTemplateCreated
+    case graphCreated
+    case graphUpdated
     case graphImported
     case graphReplaced
     case graphDeleted
@@ -73,6 +76,7 @@ nonisolated enum GraphMutationReference: Hashable, Sendable {
         id: UUID,
         owner: NodeRefKey?
     )
+    case detailTemplate(id: UUID)
 }
 
 /// A single graph-scoped mutation notification.

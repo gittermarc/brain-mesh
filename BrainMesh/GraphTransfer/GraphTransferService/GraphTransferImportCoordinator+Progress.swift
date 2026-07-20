@@ -33,7 +33,7 @@ nonisolated extension GraphTransferImportCoordinator {
 
     func saveContext() throws {
         do {
-            try context.save()
+            try saveOperation(context)
         } catch {
             throw GraphTransferError.saveFailed(underlying: String(describing: error))
         }

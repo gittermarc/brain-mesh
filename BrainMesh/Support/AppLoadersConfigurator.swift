@@ -209,6 +209,11 @@ enum AppLoadersConfigurator {
     private static func configureServices(
         container: AnyModelContainer
     ) async throws {
+        // A replacement container must never overlap with the previous mutation subscription.
+        // The new subscription starts only after every cache owner below points at the new store.
+        try Task.checkCancellation()
+        await GraphMutationCacheInvalidationCoordinator.shared.stop()
+
         try Task.checkCancellation()
         await GraphReadRepository.shared.configure(container: container)
 
@@ -252,7 +257,9 @@ enum AppLoadersConfigurator {
         await BulkLinkLoader.shared.configure(container: container)
 
         try Task.checkCancellation()
-        await NodeRenameService.shared.configure(container: container)
+        await GraphMutationCacheInvalidationCoordinator.shared.configure(
+            container: container
+        )
     }
 
     private static func finishSuccess(
@@ -414,6 +421,8 @@ enum AppLoadersConfigurator {
         if let task {
             await task.value
         }
+
+        await GraphMutationCacheInvalidationCoordinator.shared.resetForTesting()
 
         state = .notStarted
         configurationOperationForTesting = nil

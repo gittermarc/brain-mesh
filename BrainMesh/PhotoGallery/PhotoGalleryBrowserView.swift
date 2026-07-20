@@ -80,6 +80,9 @@ struct PhotoGalleryBrowserView: View {
                                 do {
                                     try await PhotoGalleryActions(modelContext: modelContext).setAsMainPhoto(
                                         attachment,
+                                        ownerKind: ownerKind,
+                                        ownerID: ownerID,
+                                        graphID: graphID,
                                         mainStableID: mainStableID,
                                         mainImageData: $mainImageData,
                                         mainImagePath: $mainImagePath
@@ -122,19 +125,25 @@ struct PhotoGalleryBrowserView: View {
         .onChange(of: pickedItems) { _, newItems in
             guard !newItems.isEmpty else { return }
             Task { @MainActor in
-                let result = await PhotoGalleryImportController.importPickedImages(
-                    newItems,
-                    ownerKind: ownerKind,
-                    ownerID: ownerID,
-                    graphID: graphID,
-                    in: modelContext,
-                    progress: importProgress
-                )
+                defer { pickedItems = [] }
+                do {
+                    let result = try await PhotoGalleryImportController.importPickedImages(
+                        newItems,
+                        ownerKind: ownerKind,
+                        ownerID: ownerID,
+                        graphID: graphID,
+                        in: modelContext,
+                        progress: importProgress
+                    )
 
-                if result.didFailAnything {
-                    presentation.showError("Einige Bilder konnten nicht importiert werden (\(result.failed)).")
+                    if result.didFailAnything {
+                        presentation.showError("Einige Bilder konnten nicht importiert werden (\(result.failed)).")
+                    }
+                } catch is CancellationError {
+                    return
+                } catch {
+                    presentation.showError(error.localizedDescription)
                 }
-                pickedItems = []
             }
         }
         .onChange(of: isPickingPhotos) { _, isPresented in
@@ -175,10 +184,25 @@ struct PhotoGalleryBrowserView: View {
         }
         .alert("Bild löschen?", isPresented: confirmDeleteBinding) {
             Button("Löschen", role: .destructive) {
-                if let attachment = attachmentForPendingDelete {
-                    PhotoGalleryActions(modelContext: modelContext).delete(attachment)
+                guard let attachment = attachmentForPendingDelete else {
+                    presentation.clearDeleteRequest()
+                    return
                 }
-                presentation.clearDeleteRequest()
+
+                Task { @MainActor in
+                    do {
+                        try await PhotoGalleryActions(modelContext: modelContext)
+                            .delete(
+                                attachment,
+                                ownerKind: ownerKind,
+                                ownerID: ownerID,
+                                graphID: graphID
+                            )
+                        presentation.clearDeleteRequest()
+                    } catch {
+                        presentation.showError(error.localizedDescription)
+                    }
+                }
             }
             Button("Abbrechen", role: .cancel) {
                 presentation.clearDeleteRequest()

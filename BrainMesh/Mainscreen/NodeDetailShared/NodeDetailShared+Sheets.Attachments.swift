@@ -135,7 +135,7 @@ struct NodeAttachmentsManageView: View {
                 }
             } onDelete: {
                 Task { @MainActor in
-                    deleteAttachment(attachmentID: item.id)
+                    await deleteAttachment(attachmentID: item.id)
                 }
             }
         }

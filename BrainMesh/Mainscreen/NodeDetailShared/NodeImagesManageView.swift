@@ -81,7 +81,7 @@ struct NodeImagesManageView: View {
                 Button("Löschen", role: .destructive) {
                     Task { @MainActor in
                         if let item = confirmDeleteItem {
-                            deleteImage(item)
+                            await deleteImage(item)
                         }
                         confirmDeleteItem = nil
                     }

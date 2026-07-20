@@ -88,7 +88,7 @@ struct DetailsSchemaSaveTemplateSheet: View {
         defer { isSaving = false }
 
         do {
-            let didSave = try DetailsSchemaActions.saveTemplate(
+            let didSave = try await DetailsSchemaActions.saveTemplate(
                 from: entity,
                 name: name,
                 modelContext: modelContext

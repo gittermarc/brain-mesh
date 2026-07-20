@@ -86,7 +86,7 @@ extension GraphTransferViewModel {
         alertState = AlertState(title: "Import nicht möglich", message: message)
     }
 
-    func performImport() async {
+    func performImport(mode: ImportMode = .asNewGraphRemap) async {
         guard isBusy == false else { return }
         guard let url = selectedImportURL else { return }
         guard selectedPreviewAllowsImport else {
@@ -106,7 +106,7 @@ extension GraphTransferViewModel {
         }
 
         do {
-            let result = try await GraphTransferService.shared.importGraph(from: url, mode: .asNewGraphRemap, progress: progressHandler)
+            let result = try await GraphTransferService.shared.importGraph(from: url, mode: mode, progress: progressHandler)
             importState = .finished(result: result)
         } catch {
             let message = userFacingMessage(for: error)

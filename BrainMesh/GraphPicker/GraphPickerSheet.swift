@@ -34,6 +34,7 @@ struct GraphPickerSheet: View {
     @State private var deleteGraph: MetaGraph?
     @State private var isDeleting = false
     @State private var deleteError: String?
+    @State private var managementError: String?
 
     // Stable snapshot for presentation while delete transitions run.
     @State private var displayedGraphs: [MetaGraph] = []
@@ -107,7 +108,15 @@ struct GraphPickerSheet: View {
         .task {
             if !didInitialDedupe {
                 didInitialDedupe = true
-                _ = GraphDedupeService.removeDuplicateGraphs(using: modelContext)
+                do {
+                    _ = try await GraphDedupeService.removeDuplicateGraphs(
+                        using: modelContext
+                    )
+                } catch is CancellationError {
+                    return
+                } catch {
+                    managementError = error.localizedDescription
+                }
             }
             rebuildDisplayed()
         }
@@ -129,7 +138,7 @@ struct GraphPickerSheet: View {
                 initialText: mode.initialText,
                 placeholder: "Name"
             ) { cleanedName in
-                commitNameEditor(mode: mode, cleanedName: cleanedName)
+                try await commitNameEditor(mode: mode, cleanedName: cleanedName)
             }
         }
         .sheet(item: $securityGraph) { graph in
@@ -137,6 +146,14 @@ struct GraphPickerSheet: View {
         }
         .sheet(isPresented: $showProPaywall) {
             ProPaywallView(feature: paywallFeature)
+        }
+        .alert("Graphen konnten nicht aktualisiert werden", isPresented: Binding(
+            get: { managementError != nil },
+            set: { if $0 == false { managementError = nil } }
+        )) {
+            Button("OK", role: .cancel) {}
+        } message: {
+            Text(managementError ?? "")
         }
         .presentationDetents([.medium, .large])
     }
@@ -174,18 +191,25 @@ struct GraphPickerSheet: View {
         nameEditorMode = .rename(graph)
     }
 
-    private func commitNameEditor(mode: GraphPickerNameEditorMode, cleanedName: String) {
+    @MainActor
+    private func commitNameEditor(
+        mode: GraphPickerNameEditorMode,
+        cleanedName: String
+    ) async throws {
         switch mode {
         case .create:
             let graph = MetaGraph(name: cleanedName)
+            let batch = try GraphMutationBatchFactory.graphCreated(graphID: graph.id)
             modelContext.insert(graph)
-            try? modelContext.save()
+            _ = try await GraphMutationCommitter().commit(batch, in: modelContext)
             activeGraphIDString = graph.id.uuidString
             dismiss()
 
         case .rename(let graph):
+            guard graph.name != cleanedName else { return }
+            let batch = try GraphMutationBatchFactory.graphUpdated(graphID: graph.id)
             graph.name = cleanedName
-            try? modelContext.save()
+            _ = try await GraphMutationCommitter().commit(batch, in: modelContext)
         }
     }
 
@@ -209,23 +233,22 @@ struct GraphPickerSheet: View {
 
     // Deletes only surplus duplicates with identical UUID while keeping the oldest one.
     private func cleanupDuplicateGraphs() {
-        var byID: [UUID: [MetaGraph]] = [:]
-        for graph in graphs {
-            byID[graph.id, default: []].append(graph)
-        }
-
-        for (_, list) in byID where list.count > 1 {
-            let sorted = list.sorted { $0.createdAt < $1.createdAt }
-            for duplicate in sorted.dropFirst() {
-                modelContext.delete(duplicate)
+        Task { @MainActor in
+            do {
+                _ = try await GraphDedupeService.removeDuplicateGraphs(
+                    using: modelContext
+                )
+                if !isDeleting {
+                    rebuildDisplayed()
+                }
+            } catch is CancellationError {
+                return
+            } catch {
+                managementError = error.localizedDescription
             }
         }
-
-        try? modelContext.save()
-        if !isDeleting {
-            rebuildDisplayed()
-        }
     }
+
 }
 
 private enum GraphPickerNameEditorMode: Identifiable {

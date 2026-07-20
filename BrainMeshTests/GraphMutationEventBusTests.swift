@@ -264,6 +264,9 @@ struct GraphMutationEventBusTests {
                 .attachmentCreated,
                 .attachmentUpdated,
                 .attachmentDeleted,
+                .detailTemplateCreated,
+                .graphCreated,
+                .graphUpdated,
                 .graphImported,
                 .graphReplaced,
                 .graphDeleted,
@@ -291,6 +294,7 @@ struct GraphMutationEventBusTests {
                 id: testUUID(706),
                 owner: NodeRefKey(kind: .attribute, id: testUUID(702))
             ),
+            .detailTemplate(id: testUUID(707)),
         ]
 
         let events = kinds.map {
@@ -302,7 +306,7 @@ struct GraphMutationEventBusTests {
             )
         }
 
-        #expect(events.count == 18 + reasons.count)
+        #expect(events.count == 21 + reasons.count)
         #expect(
             events.compactMap(\.fullRebuildReason) == reasons
         )

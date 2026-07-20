@@ -26,6 +26,9 @@ extension NodeImagesManageView {
         do {
             try await PhotoGalleryActions(modelContext: modelContext).setAsMainPhoto(
                 attachment,
+                ownerKind: ownerKind,
+                ownerID: ownerID,
+                graphID: graphID,
                 mainStableID: mainStableID,
                 mainImageData: $mainImageData,
                 mainImagePath: $mainImagePath
@@ -36,7 +39,7 @@ extension NodeImagesManageView {
     }
 
     @MainActor
-    func deleteImage(_ item: AttachmentListItem) {
+    func deleteImage(_ item: AttachmentListItem) async {
         guard let attachment = NodeImagesManageAttachmentResolver.resolveImageAttachment(
             in: modelContext,
             ownerKind: ownerKind,
@@ -48,7 +51,17 @@ extension NodeImagesManageView {
             return
         }
 
-        PhotoGalleryActions(modelContext: modelContext).delete(attachment)
-        listState.removeImage(attachmentID: attachment.id)
+        do {
+            try await PhotoGalleryActions(modelContext: modelContext)
+                .delete(
+                    attachment,
+                    ownerKind: ownerKind,
+                    ownerID: ownerID,
+                    graphID: graphID
+                )
+            listState.removeImage(attachmentID: attachment.id)
+        } catch {
+            errorMessage = error.localizedDescription
+        }
     }
 }

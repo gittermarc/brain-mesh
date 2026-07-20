@@ -42,6 +42,17 @@ actor EntitiesHomeLoader {
         linkCountsCache.removeValue(forKey: key)
     }
 
+    func invalidateCaches(forGraphID graphID: UUID) {
+        invalidateCache(for: graphID)
+    }
+
+    func hasCachedCountsForTesting(
+        kind: EntitiesHomeDerivedCountKind,
+        graphID: UUID
+    ) -> Bool {
+        cachedCountEntry(for: kind, graphID: graphID) != nil
+    }
+
     func loadSnapshot(
         activeGraphID: UUID?,
         foldedSearch: String,

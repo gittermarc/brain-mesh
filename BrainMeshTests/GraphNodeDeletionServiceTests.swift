@@ -8,7 +8,7 @@ import Testing
 struct GraphNodeDeletionServiceTests {
 
     @Test
-    func deleteAttribute_removesDetailValuesLinksAndAttachments() throws {
+    func deleteAttribute_removesDetailValuesLinksAndAttachments() async throws {
         let store = try BrainMeshTestContainer.makeInMemoryStore()
         let fixtures = BrainMeshFixtureBuilder(context: store.context)
         let graph = fixtures.makeGraph(name: "Primary")
@@ -51,7 +51,7 @@ struct GraphNodeDeletionServiceTests {
         let unrelatedLinkID = unrelatedLink.id
         let unrelatedAttachmentID = unrelatedAttachment.id
 
-        let result = try GraphNodeDeletionService.deleteAttribute(
+        let result = try await GraphNodeDeletionService.deleteAttribute(
             attribute,
             in: store.context
         )
@@ -80,7 +80,7 @@ struct GraphNodeDeletionServiceTests {
     }
 
     @Test
-    func deleteAttribute_doesNotChangeMatchingScalarReferencesInAnotherGraph() throws {
+    func deleteAttribute_doesNotChangeMatchingScalarReferencesInAnotherGraph() async throws {
         let store = try BrainMeshTestContainer.makeInMemoryStore()
         let fixtures = BrainMeshFixtureBuilder(context: store.context)
         let primaryGraph = fixtures.makeGraph(name: "Primary")
@@ -152,7 +152,7 @@ struct GraphNodeDeletionServiceTests {
         let otherLinkID = otherLink.id
         let otherAttachmentID = otherAttachment.id
 
-        let result = try GraphNodeDeletionService.deleteAttribute(
+        let result = try await GraphNodeDeletionService.deleteAttribute(
             primaryTarget,
             in: store.context
         )
@@ -170,7 +170,7 @@ struct GraphNodeDeletionServiceTests {
     }
 
     @Test
-    func deleteEntity_removesChildrenDetailsLinksAndAttachments() throws {
+    func deleteEntity_removesChildrenDetailsLinksAndAttachments() async throws {
         let store = try BrainMeshTestContainer.makeInMemoryStore()
         let fixtures = BrainMeshFixtureBuilder(context: store.context)
         let graph = fixtures.makeGraph(name: "Primary")
@@ -236,7 +236,7 @@ struct GraphNodeDeletionServiceTests {
         let unrelatedLinkID = unrelatedLink.id
         let unrelatedAttachmentID = unrelatedAttachment.id
 
-        let result = try GraphNodeDeletionService.deleteEntity(
+        let result = try await GraphNodeDeletionService.deleteEntity(
             target,
             in: store.context
         )
@@ -274,7 +274,7 @@ struct GraphNodeDeletionServiceTests {
     }
 
     @Test
-    func deleteEntity_doesNotChangeMatchingNodesInAnotherGraph() throws {
+    func deleteEntity_doesNotChangeMatchingNodesInAnotherGraph() async throws {
         let store = try BrainMeshTestContainer.makeInMemoryStore()
         let fixtures = BrainMeshFixtureBuilder(context: store.context)
         let primaryGraph = fixtures.makeGraph(name: "Primary")
@@ -347,7 +347,7 @@ struct GraphNodeDeletionServiceTests {
         let otherLinkID = otherLink.id
         let otherAttachmentIDs = Set([otherEntityAttachment.id, otherAttributeAttachment.id])
 
-        let result = try GraphNodeDeletionService.deleteEntity(
+        let result = try await GraphNodeDeletionService.deleteEntity(
             primaryEntity,
             in: store.context
         )
@@ -369,7 +369,7 @@ struct GraphNodeDeletionServiceTests {
     }
 
     @Test
-    func deleteAttributesBatch_commitsAndLeavesNoScalarOrphans() throws {
+    func deleteAttributesBatch_commitsAndLeavesNoScalarOrphans() async throws {
         let store = try BrainMeshTestContainer.makeInMemoryStore()
         let fixtures = BrainMeshFixtureBuilder(context: store.context)
         let graph = fixtures.makeGraph(name: "Primary")
@@ -414,7 +414,7 @@ struct GraphNodeDeletionServiceTests {
         let deletedAttributeIDs = Set([first.id, second.id])
         let unrelatedLinkID = unrelatedLink.id
 
-        let result = try GraphNodeDeletionService.deleteAttributes(
+        let result = try await GraphNodeDeletionService.deleteAttributes(
             [first, second, first],
             in: store.context
         )
@@ -447,7 +447,7 @@ struct GraphNodeDeletionServiceTests {
     }
 
     @Test
-    func deleteAttribute_missingTargetCleansDanglingDependencies() throws {
+    func deleteAttribute_missingTargetCleansDanglingDependencies() async throws {
         let store = try BrainMeshTestContainer.makeInMemoryStore()
         let fixtures = BrainMeshFixtureBuilder(context: store.context)
         let graph = fixtures.makeGraph(name: "Primary")
@@ -484,7 +484,7 @@ struct GraphNodeDeletionServiceTests {
         #expect(before.attachments.contains { $0.id == danglingAttachmentID })
         #expect(before.detailValues.contains { $0.id == danglingDetailValueID })
 
-        let result = try GraphNodeDeletionService.deleteAttribute(
+        let result = try await GraphNodeDeletionService.deleteAttribute(
             missingAttribute,
             in: store.context
         )
@@ -502,7 +502,7 @@ struct GraphNodeDeletionServiceTests {
     }
 
     @Test
-    func deleteAttribute_alreadyDeletedDependenciesRemainConsistent() throws {
+    func deleteAttribute_alreadyDeletedDependenciesRemainConsistent() async throws {
         let store = try BrainMeshTestContainer.makeInMemoryStore()
         let fixtures = BrainMeshFixtureBuilder(context: store.context)
         let graph = fixtures.makeGraph(name: "Primary")
@@ -529,7 +529,7 @@ struct GraphNodeDeletionServiceTests {
         try store.context.save()
 
         let attributeID = attribute.id
-        let result = try GraphNodeDeletionService.deleteAttribute(
+        let result = try await GraphNodeDeletionService.deleteAttribute(
             attribute,
             in: store.context
         )
@@ -567,7 +567,7 @@ struct GraphNodeDeletionServiceTests {
         let attachmentID = attachment.id
 
         let deletionTask = Task { @MainActor in
-            try GraphNodeDeletionService.deleteAttribute(
+            try await GraphNodeDeletionService.deleteAttribute(
                 attribute,
                 in: store.context
             )
@@ -590,7 +590,7 @@ struct GraphNodeDeletionServiceTests {
     }
 
     @Test
-    func deleteAttribute_withoutGraphScopeFailsWithoutMutatingData() throws {
+    func deleteAttribute_withoutGraphScopeFailsWithoutMutatingData() async throws {
         let store = try BrainMeshTestContainer.makeInMemoryStore()
         let fixtures = BrainMeshFixtureBuilder(context: store.context)
         let owner = fixtures.makeEntity(name: "Legacy Owner")
@@ -608,7 +608,7 @@ struct GraphNodeDeletionServiceTests {
         let attachmentID = attachment.id
 
         do {
-            _ = try GraphNodeDeletionService.deleteAttribute(
+            _ = try await GraphNodeDeletionService.deleteAttribute(
                 attribute,
                 in: store.context
             )

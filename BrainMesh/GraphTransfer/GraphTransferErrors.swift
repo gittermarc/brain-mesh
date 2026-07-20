@@ -15,6 +15,7 @@ enum GraphTransferError: Error, Sendable {
     case writeFailed(underlying: String)
     case decodeFailed(underlying: String)
     case saveFailed(underlying: String)
+    case importCleanupFailed
     case backupPackageWriteFailed(underlying: String)
     case backupAttachmentReadFailed(attachmentID: UUID, underlying: String)
     case backupAttachmentWriteFailed(attachmentID: UUID, underlying: String)
@@ -56,6 +57,8 @@ extension GraphTransferError: LocalizedError {
             return "Die .bmgraph-Datei konnte nicht gelesen werden."
         case .saveFailed:
             return "Der Import konnte nicht gespeichert werden."
+        case .importCleanupFailed:
+            return "Ein unvollständiger Import konnte nicht vollständig bereinigt werden."
         case .backupPackageWriteFailed:
             return "Das Full-Backup-Paket konnte nicht erstellt werden."
         case .backupAttachmentReadFailed:

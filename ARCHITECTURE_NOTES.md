@@ -109,27 +109,24 @@
 - `MetaAttachment` speichert Owner skalar und wird nicht automatisch durch Relationship-Cascade gelöscht.
 - Konsequenz: Delete-Flows müssen Cleanup explizit aufrufen.
 
-### Konkrete Cleanup-Asymmetrie
+### Zentraler Node-Cleanup
 
-- Entity Delete:
-  - `BrainMesh/Mainscreen/EntityDetail/EntityDetailView+Actions.swift` löscht Entity- und Attribute-Attachments und Links vor `modelContext.delete(entity)`.
-  - `BrainMesh/Mainscreen/EntitiesHome/EntitiesHomeActions.swift` macht denselben Cleanup für Home-Deletes.
-- Attribute Delete in Entity-Attributlisten:
-  - `EntityAttributesAllListSection.swift` und `EntityAttributesSectionView.swift` rufen `AttachmentCleanup.deleteAttachments` und `LinkCleanup.deleteLinks` für Attribute.
-- Attribute Detail Delete:
-  - `BrainMesh/Mainscreen/AttributeDetail/AttributeDetailView+Sheets.swift` ruft in `deleteAttribute()` nur `modelContext.delete(attribute)` und `try? modelContext.save()`.
-  - Hotspot-Grund: potenzielle orphaned `MetaLink` und `MetaAttachment`, weil deren Ownership skalar ist und nicht cascade-t.
-  - Priorität: P0/P1, weil Datenintegrität betroffen ist.
+- Alle produktiven Entity-/Attribute-Delete-Pfade in Detail, Home und Attributlisten delegieren an `GraphNodeDeletionService`.
+- Der Service erfasst vor der ersten Mutation graph-scoped technische Referenzen für Links, Detailwerte, Detaildefinitionen, Attachments, Attribute und Entities.
+- Einzel- und Mehrfachlöschungen verwenden genau einen Save und einen deterministisch geordneten Mutation-Batch pro Benutzeraktion.
+- Lokale Attachment-/Header-Cachedateien werden erst nach erfolgreichem SwiftData-Commit entfernt; Save-Fehler publizieren nichts und lassen bestehende Dateien bestehen.
+- Der graphweite `GraphDeletionService` bleibt als eigener Lifecycle-Pfad bestehen und gehört nicht zu dieser graph-lokalen Service-Grenze.
 
 ### Denormalisierte Labels
 
 - `MetaLink` enthält `sourceLabel` und `targetLabel` für schnelles Rendering und Search.
 - Rename-Pfad:
-  - `EntityDetailView+Actions.swift` ruft `NodeRenameService.shared.relabelLinksAfterEntityRename`.
-  - `AttributeDetailView+Sheets.swift` ruft `NodeRenameService.shared.relabelLinksAfterAttributeRename`.
+  - `NodeRenameService` führt Node-Änderung und alle tatsächlichen `sourceLabel`-/`targetLabel`-Relabels im selben Main-Actor-`ModelContext` aus.
+  - Genau ein `GraphMutationCommitter`-Commit publiziert zuerst das Node-Update und danach die nach Link-ID sortierten Link-Updates.
+  - Entity-Rename berücksichtigt Attribute, deren sichtbares `displayName` vom Owner-Namen abhängt.
 - Risiko:
-  - Wenn zukünftige Rename-Flows diese Services nicht rufen, werden Link-Labels stale.
-  - Entity-Rename lädt Attribute für den Graph und prüft `owner.id`; bei sehr vielen Attributes kann das teuer sein.
+  - Neue Rename-Einstiegspunkte müssen weiterhin zentral über `NodeRenameService` laufen, sonst können denormalisierte Labels stale werden.
+  - Entity-Rename lädt die graph-scoped Attribute für die Owner-Prüfung; bei sehr großen Graphen bleibt dies ein möglicher Optimierungspunkt.
 
 ### Details-System
 
@@ -147,11 +144,13 @@
 - Import-Limit: 25 MB in `AttachmentsSection`, EntityDetail, AttributeDetail, NodeAttachmentsManage.
 - `AttachmentImportPipeline` normalisiert Galerie-Bilder und komprimiert Videos, falls größer als Limit und Kompression aktiv ist.
 - Lokale Cache-Dateien werden in Application Support gespeichert.
-- `AttachmentCleanup` löscht Datensätze und lokale Cache-/Thumbnail-Dateien.
+- `AttachmentMutationService` committed fachliche Create-/Update-/Delete-Operationen über den zentralen Committer. Neue vorbereitete Cache-Dateien werden bei Save-Fehler als Orphans entfernt; bestehende Dateien werden erst nach erfolgreichem Commit gelöscht oder ersetzt.
+- `AttachmentCleanup` erstellt für Node-Delete graph-scoped, value-only Mutation- und Cache-Referenzen, mutiert aber nicht eigenständig die Save-Grenze.
+- `AttachmentStore.ensurePreviewURL` rehydriert rekonstruierbare Preview-Dateien ohne `localPath`-Mutation, Save oder Domain-Event.
+- Headerbilder bleiben Node-Mutationen (`entityUpdated`/`attributeUpdated`), Galerie-Bilder sind Attachment-Mutationen.
 - Risiken:
   - Große Videos und Backups belasten CloudKit/Sync und Export/Import.
   - Materialisierung von Preview-URLs sollte nicht aus SwiftUI-`body` passieren.
-  - Direct Attribute Delete ohne Cleanup ist konkreter Datenintegritäts-Hotspot.
 
 ### Header Images
 
@@ -417,9 +416,12 @@
   - Import/Export bewegt potenziell alle Graphdaten und Attachment-Assets.
   - ByteCount-Validierung existiert in Backup-Attachment-Pfaden.
   - Free-Limit `ProLimits.freeGraphLimit = 3` beeinflusst Import-Entscheidung.
-- Risiken:
-  - Teilimport und Rollback müssen exakt bleiben.
-  - **UNKNOWN**: Ob Import immer atomar ist; statischer Scan reicht für vollständigen Beweis nicht.
+- Save-/Event-Grenzen:
+  - Interne Checkpoint-Saves bleiben eventfrei. Nach dem vollständig erfolgreichen Abschluss publiziert der zentrale Committer genau einen graph-scoped Import- oder Replace-Batch.
+  - Jeder Fehler oder Abbruch führt über einen expliziten Cleanup-Save zur Entfernung des sichtbaren Teilgraphen; lokale Attachment-Cachedateien werden erst nach erfolgreichem Cleanup entfernt.
+  - Replace behält die realen getrennten Grenzen bei: zuerst Graph-Delete-Commit, danach erfolgreicher Replacement-Import-Commit.
+- Verbleibende Risiken:
+  - Sehr große Imports bleiben durch Checkpoint-Saves nicht als eine einzige SwiftData-Transaktion atomar; die explizite Cleanup-Grenze stellt jedoch sicher, dass ein fehlgeschlagener Gesamtimport keinen sichtbaren Teilgraphen zurücklässt.
 - Hebel:
   - Import-Transaktionslog oder Dry-Run-Manifest.
   - Konsistenzcheck nach Import: orphaned links, orphaned attachments, duplicate graph IDs.
@@ -650,10 +652,11 @@ Ziel: Storage- und Medienpfade entkoppeln.
   - `GraphReadRepository` für Graph-Metadaten, alle Source-DTOs und einen vollständigen indexierbaren Graph-Snapshot.
   - `NodeRepository` für Entity-/Attribute-Lookups, Node-Summaries sowie eingehende und ausgehende direkte Nachbarschaften.
   - DTOs sind value-only und `Sendable`; Attachment-DTOs enthalten weder `fileData` noch lokalen Dateipfad.
-  - `GraphMutationCommitter` bildet die zentrale Save-then-Publish-Grenze für die geradlinigen Add-/Link-/Detail-Basismutationen.
+  - `GraphMutationCommitter` bildet die einzige Save-then-Publish-Grenze für lokale und graphweite Mutationen. Main-Actor-Kontexte und caller-isolierte GraphTransfer-Kontexte verwenden dieselbe Implementierung.
+  - `NodeRenameService`, `NodeNotesPersistence`, `GraphNodeDeletionService`, `BulkLinkExecutor` und `AttachmentMutationService` bauen auf derselben Commit-Grenze auf; es gibt keinen parallelen zweiten Save-then-Publish-Mechanismus.
 - Weiterhin offen:
   - Bestehende Feature-Loader bauen teilweise eigene `FetchDescriptor`-Predicates und können schrittweise auf die Read-Schicht migriert werden.
-  - Zusammengesetzte Rename-/Cleanup-Mutationen und Cache-Invalidation; der Delete-Slice ist bereits in `GraphNodeDeletionService` zentralisiert.
+  - Remote-CloudKit-Reconciliation, persistente Event-History, GraphCanvas-Reload-Scheduling und ein lokaler Search-Indexer.
 
 #### Mutation Events
 
@@ -661,25 +664,31 @@ Ziel: Storage- und Medienpfade entkoppeln.
   - `GraphMutationEvent` und `GraphMutationBatch` sind graph-scoped, value-only, `Hashable` und `Sendable`; sie enthalten ausschließlich IDs, technische Referenzen, Mutation-Art und Zeitpunkte.
   - `GraphMutationEventBus` ist ein actor-sicherer Multicast-Bus mit unabhängigen `AsyncStream`-Subscriptions, deterministischen Sequenznummern und expliziter Buffering-Policy.
   - Die Publisher-API heißt bewusst `publishCommitted(_:)`. `GraphMutationCommitter` ist die einzige Save-then-Publish-Abstraktion: Er prüft Cancellation vor der irreversiblen Commit-Phase, führt `ModelContext.save()` aus und publiziert erst danach genau einen bereits vollständig aus technischen IDs gebauten Batch. Bei Save-Fehlern wird nichts publiziert; Publish-Diagnosen aus dem Receipt machen einen erfolgreichen Save nicht rückwirkend fehlerhaft. Eine Pre-Commit-Publish-API existiert nicht.
-  - `GraphMutationBatchFactory` klassifiziert die PR-05A-Basismutationen ausschließlich aus technischen IDs und definiert deterministische Reihenfolgen für bidirektionale Links, Mehrfach-Link-Löschungen und Detailfeld-Cleanup.
+  - `GraphMutationBatchFactory` klassifiziert sämtliche integrierten Mutationen ausschließlich aus technischen IDs. Definiert sind unter anderem stabile Reihenfolgen für bidirektionale/Bulk-Links, Rename-Relabels, Detailfeld-/Node-Cleanup, Graph-Lifecycle, Repair sowie Import/Replace.
   - Der Default-Buffer ist unbounded, da noch keine persistente Event-History existiert. Bounded Policies melden Drops im technischen Publish-Receipt; Subscriber erkennen Lücken über monotone Delivery-Sequenzen und müssen später über Reconciliation abgesichert werden.
   - Streams werden bei Cancellation entfernt; der Bus kann beendet und für isolierte Tests deterministisch zurückgesetzt werden.
 - Produktiv integriert:
   - Entity- und Attribute-Erstellung.
   - Einzelne Link-Erstellung einschließlich eines deterministischen bidirektionalen Batches, Link-Notiz-Updates sowie graph-lokale Einzel-/Mehrfachlöschungen.
   - Detail-Schema-Anlegen, -Ändern, -Umsortieren und -Löschen sowie Detailwert-Anlegen, -Ändern und -Löschen. Feld-Cleanup publiziert deterministisch zuerst Detailwert-Löschungen und danach ein Schema-Event.
-  - Wiederverwendbare Detail-Templates verändern kein aktives Entity-Schema und bleiben deshalb ein expliziter Save ohne Graph-Mutation-Event.
+  - Wiederverwendbare Detail-Templates verändern kein aktives Entity-Schema, publizieren aber für ihre graphgebundene Persistenz ein technisches `detailTemplateCreated`-Event. Graph-Löschung und Legacy-Scoping berücksichtigen Templates ebenfalls.
+  - Entity-/Attribute-Rename inklusive aller tatsächlich relabelten Links als eine Transaktion und ein deterministischer Batch.
+  - Node-Notes als expliziter Abschluss-Commit ohne Save pro Tastendruck.
+  - Zentrale Einzel-/Batch-Node-Löschung mit Link-, Detail-, Attachment- und lokalen Cache-Seiteneffekten nach der Save-Grenze.
+  - Bulk-Link als ein final geplanter Save und Batch.
+  - Headerbilder als Node-Update sowie Galerie/Attachments als Attachment-Create/Update/Delete; reine Cache-Rehydration bleibt eventfrei.
+  - Graph-Erstellung, Rename und vollständige Löschung einschließlich post-commit Datei-/Lock-Seiteneffekten.
+- Graphweite Integration:
+  - Dedupe, Bootstrap-Reparaturen, folded-Notes-Backfill und Attachment-GraphID-Migration als geschlossene `integrityRepair`-Batches.
+  - Struktur- und Vollbackup-Import mit eventfreien Checkpoint-Saves, genau einem finalen Import-/Replace-Batch und persistenter Teilgraph-Bereinigung bei Fehler oder Cancellation.
+  - Seltene atomare Multi-Graph-Wartung publiziert nach einem Save einen deterministisch nach Graph-ID geordneten Batch pro Graph; ein Mixed-Graph-Batch bleibt unzulässig.
+  - `GraphMutationCacheInvalidationCoordinator` startet zentral und container-idempotent genau eine unbounded Subscription. `EntitiesHomeLoader` invalidiert nur Graph-Counts des betroffenen Graphen; `GraphStatsLoader` invalidiert graphbezogene Counts und das Total-Aggregat. Dashboard-Snapshots werden breiter verworfen, weil sie das graphübergreifende Total einbetten.
+  - `EntitiesHomeCockpitLoader` und `BrainMeshSearchService` besitzen aktuell keinen langlebigen Cache und erhalten deshalb keinen No-op-Subscriber.
 - Noch nicht integriert:
-  - Zusammengesetzte Rename-/Relabel-, Node-Cleanup-, Bulk-, Medien- und graphweite Import-/Lifecycle-Mutationen.
-  - Cache-Invalidation-Subscriber und CloudKit-Reconciliation für Änderungen anderer Geräte.
-  - Persistente Event-History und lokaler Search-Indexer.
-- Geplante Verbraucher:
-  - EntitiesHomeLoader cache invalidation.
-  - GraphStatsLoader cache invalidation.
-  - GraphCanvas reload scheduling.
-  - Search index invalidation.
+  - CloudKit-Reconciliation für Änderungen anderer Geräte.
+  - Persistente Event-History, GraphCanvas-Reload-Scheduling und lokaler Search-Indexer.
 - Nutzen:
-  - Schafft eine getestete Post-Commit-Grenze für präzise Basismutationen; spätere Subscriber können darauf graph-scoped reagieren, ohne SwiftData-Modelle oder Nutzdaten über Actor-Grenzen zu transportieren.
+  - Schafft eine getestete Post-Commit-Grenze für sämtliche aktiven lokalen Graphdaten-Mutationen und hält die vorhandenen Home-/Stats-Caches graph-scoped konsistent, ohne SwiftData-Modelle oder Nutzdaten über Actor-Grenzen zu transportieren.
 
 #### Sheet Coordinators
 
@@ -695,11 +704,11 @@ Ziel: Storage- und Medienpfade entkoppeln.
 
 ### Datenverlust / Datenintegrität
 
-- Entity- und Attribute-Löschungen laufen zentral über `GraphNodeDeletionService`; der Service erfasst Kind-Attribute vor dem Cascade-Delete und entfernt graph-scoped skalare Link-/Attachment-Referenzen vor genau einem Save.
-- Link-Labels sind denormalisiert und müssen nach Rename immer aktualisiert werden.
+- Entity- und Attribute-Löschungen laufen zentral über `GraphNodeDeletionService`; der Service erfasst Kind-Attribute und alle technischen Cleanup-Referenzen vor dem Cascade-Delete und committed genau einen Batch.
+- Link-Labels sind denormalisiert; `NodeRenameService` aktualisiert sie gemeinsam mit dem Node-Rename in derselben Transaktion.
 - Graph Delete behandelt Duplicate `MetaGraph` Records mit gleicher UUID defensiv; gut, aber zeigt, dass Duplikate real einkalkuliert sind.
-- Die Delete-Cleanup-Pfade in `AttachmentCleanup` und `LinkCleanup` sind throwing; verbleibende `try?`-Risiken liegen außerhalb dieses Delete-Pfads, unter anderem in Rename-/Loader-Logik.
-  - `GraphCanvasDataLoader+Neighborhood.swift` nutzt `try? context.fetch` an mehreren Stellen.
+- Fachliche lokale und graphweite Save-Pfade verwenden den zentralen Committer beziehungsweise den bewusst eventfreien Import-Cleanup. Verbleibende `try?`-Risiken betreffen rekonstruierbare Cache-Metadaten, unreferenzierte Legacy-Dateien oder nichtmutierende Loader-Fetches.
+  - `GraphCanvasDataLoader+Neighborhood.swift` nutzt `try? context.fetch` an mehreren nichtmutierenden Read-Pfaden.
 - Risiko bei CloudKit:
   - Reihenfolge von Delete/Rename/Attachment-Sync über Geräte kann Denormalisierungen und skalare Owner-Referenzen sichtbar machen.
 
@@ -791,7 +800,7 @@ Ziel: Storage- und Medienpfade entkoppeln.
 - **UNKNOWN**: Release-CloudKit-Environment und ob `aps-environment = development` in der hochgeladenen Entitlements-Datei beim Release anders ersetzt wird.
 - **UNKNOWN**: Ob local-only Fallback-Daten später in CloudKit migriert werden oder in getrennten Stores bleiben.
 - **UNKNOWN**: Custom CloudKit Conflict Resolution wurde nicht gefunden.
-- **UNKNOWN**: Vollständige Atomarität von GraphTransfer-Importen wurde statisch nicht bewiesen.
+- **KNOWN**: GraphTransfer verwendet bewusst eventfreie Checkpoint-Saves statt vollständiger Ein-Save-Atomarität; Fehler und Cancellation werden durch persistentes Teilgraph-Cleanup kompensiert, bevor ein Erfolgs-Batch entstehen kann.
 - **UNKNOWN**: CI/CD, Fastlane, Build-Skripte oder Release-Pipeline sind im ZIP nicht ersichtlich.
 - **UNKNOWN**: App Store Connect StoreKit-Produktkonfiguration außerhalb der IDs in `Info.plist`.
 - **UNKNOWN**: Geplante Datenobergrenzen für Graphen, Nodes, Links, DetailValues und Attachments.
@@ -806,11 +815,11 @@ Ziel: Storage- und Medienpfade entkoppeln.
 - Umsetzung:
   - `BrainMesh/Mainscreen/Deletion/GraphNodeDeletionService.swift` ist der zentrale Main-Actor-Löschpfad für einzelne und mehrere Attribute sowie Entities mit Kind-Attributen.
   - Cleanup-Pläne für `MetaLink` und `MetaAttachment` sind throwing, graph-scoped und werden vor der ersten Mutation vorbereitet.
-  - Der Service entfernt skalare Referenzen, löscht anschließend das Zielmodell und speichert genau einmal; Attachment-Cachedateien werden erst nach erfolgreichem Commit entfernt.
+  - Der Service entfernt skalare Referenzen, löscht anschließend das Zielmodell und committed genau einmal; Attachment- und Header-Cachedateien werden erst nach erfolgreichem Commit entfernt.
   - Entity-Delete erfasst alle Kind-Attribut-IDs vor dem Cascade-Delete, damit auch deren Links und Attachments entfernt werden.
   - Detail-, Home- und Attributlisten-Pfade zeigen Fehler an und dismissen beziehungsweise entfernen UI-Einträge erst nach erfolgreichem Commit.
 - Tests:
-  - `BrainMeshTests/GraphNodeDeletionServiceTests.swift` deckt Cleanup, Graph-Isolation, Batch-Verhalten, Result-Zähler und fehlende Ziele beziehungsweise Abhängigkeiten ab.
+  - `BrainMeshTests/GraphNodeDeletionServiceTests.swift` und `GraphNodeDeletionMutationTests.swift` decken Cleanup, Graph-Isolation, Batch-Verhalten, stabile Event-Reihenfolge, Save-Fehler ohne Datei-Löschung, Result-Zähler und fehlende Ziele beziehungsweise Abhängigkeiten ab.
 - Verbleibende Grenze:
   - Der graphweite `GraphDeletionService` behält seine eigene atomare Graph-Transaktion, verwendet aber dieselben throwing Attachment-Cleanup-Pläne.
 
@@ -830,7 +839,7 @@ Ziel: Storage- und Medienpfade entkoppeln.
   - Der verhaltenskompatible Provider-Split ist abgeschlossen; `BrainMeshSearchService` orchestriert die deterministische Candidate-Pipeline.
 - Nächste Schritte:
   - `SearchDocument` oder lokalen Index an der Provider-Grenze einführen.
-  - Mutation-Events für Rename, Node-Notes, zusammengesetzte Link-/Delete-Pfade und Attachments ergänzen; geradlinige Link- und Detail-Mutationen sind bereits angebunden.
+  - Für einen späteren lokalen Index die vorhandene vollständige Write-Path-Klassifikation und graph-scoped Mutation-Events als Invalidation-Quelle verwenden.
 - Risiko:
   - Mittel.
   - Index muss mit Sync, Import/Export und lokalen Mutationen konsistent bleiben.

@@ -134,28 +134,24 @@ nonisolated enum AttachmentStore {
         }
     }
 
-    /// Ensures we have a file URL for preview.
-    /// - If `localPath` exists, returns that.
-    /// - Else, tries the deterministic filename (id + extension) if it exists on disk.
-    /// - Else, writes `fileData` to cache for preview and persists `localPath`.
+    /// Ensures a reconstructable local cache file exists for preview.
+    ///
+    /// Rehydration intentionally does not mutate `localPath`: restoring a disposable cache file
+    /// is not a graph-domain mutation and must not trigger a SwiftData save or mutation event.
     @MainActor
     static func ensurePreviewURL(for attachment: MetaAttachment) -> URL? {
         if let existing = existingCachedFileURL(for: attachment) {
-            // If we found it via deterministic fallback and localPath is nil/stale, normalize it.
-            let normalized = makeLocalFilename(attachmentID: attachment.id, fileExtension: attachment.fileExtension)
-            if attachment.localPath != normalized {
-                // This mutation is expected on the UI/main path (preview).
-                attachment.localPath = normalized
-            }
             return existing
         }
 
         guard let data = attachment.fileData else { return nil }
-        let ext = attachment.fileExtension
 
         do {
-            let filename = try writeToCache(data: data, attachmentID: attachment.id, fileExtension: ext)
-            attachment.localPath = filename
+            let filename = try writeToCache(
+                data: data,
+                attachmentID: attachment.id,
+                fileExtension: attachment.fileExtension
+            )
             return url(forLocalPath: filename)
         } catch {
             return nil

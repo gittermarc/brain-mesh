@@ -216,9 +216,6 @@ enum AttachmentImportPipeline {
                     quality: compressionQuality
                 )
 
-                // The picker hands us a temp URL; we don't need it after exporting.
-                try? FileManager.default.removeItem(at: url)
-
                 let data = try Data(contentsOf: compressed.outputURL, options: [.mappedIfSafe])
                 if data.count > maxBytes {
                     AttachmentStore.delete(localPath: compressed.localFilename)
@@ -250,9 +247,6 @@ enum AttachmentImportPipeline {
         guard let cachedURL = AttachmentStore.url(forLocalPath: cachedFilename) else {
             throw AttachmentImportPipelineError.cacheWriteFailed
         }
-
-        // The picker hands us a temp URL; we don't need it after copying.
-        try? FileManager.default.removeItem(at: url)
 
         let data = try Data(contentsOf: cachedURL, options: [.mappedIfSafe])
         if data.count > maxBytes {

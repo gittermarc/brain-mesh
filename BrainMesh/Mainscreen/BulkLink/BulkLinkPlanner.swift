@@ -23,6 +23,7 @@ struct BulkLinkPlanner {
         existingIncomingSources: Set<NodeRefKey>,
         graphID: UUID?
     ) throws -> BulkLinkMutationPlan {
+        try Task.checkCancellation()
         let finalNote = normalizedNote(note)
 
         if ignoreDuplicates == false {
@@ -44,7 +45,10 @@ struct BulkLinkPlanner {
         var skippedDuplicates = 0
         var skippedSelf = 0
 
-        for target in selectedTargets {
+        let orderedTargets = selectedTargets.sorted(by: stableTargetOrder)
+
+        for target in orderedTargets {
+            try Task.checkCancellation()
             if isSelfLink(source: source, target: target) {
                 skippedSelf += 1
                 continue
@@ -120,6 +124,14 @@ struct BulkLinkPlanner {
         }
 
         return duplicates
+    }
+
+
+    private static func stableTargetOrder(_ lhs: NodeRef, _ rhs: NodeRef) -> Bool {
+        if lhs.kind.rawValue != rhs.kind.rawValue {
+            return lhs.kind.rawValue < rhs.kind.rawValue
+        }
+        return lhs.id.uuidString < rhs.id.uuidString
     }
 
     private static func isSelfLink(source: NodeRef, target: NodeRef) -> Bool {

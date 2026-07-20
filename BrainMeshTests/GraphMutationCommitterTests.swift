@@ -18,7 +18,7 @@ struct GraphMutationCommitterTests {
             graphID: graphID,
             entityID: entityID
         )
-        let publisher = GraphMutationReceiptPublisher(
+        let publisher = GraphMutationRecordingPublisher(
             receipts: [.published(sequenceNumber: 11)]
         )
         let committer = GraphMutationCommitter(publisher: publisher)
@@ -52,7 +52,7 @@ struct GraphMutationCommitterTests {
             graphID: graphID,
             entityID: entityID
         )
-        let publisher = GraphMutationReceiptPublisher(
+        let publisher = GraphMutationRecordingPublisher(
             receipts: [.busFinished]
         )
         let committer = GraphMutationCommitter(
@@ -91,7 +91,7 @@ struct GraphMutationCommitterTests {
             definitionIDs: [testUUID(22)]
         )
 
-        let publishProblemPublisher = GraphMutationReceiptPublisher(
+        let publishProblemPublisher = GraphMutationRecordingPublisher(
             receipts: [.busFinished]
         )
         let successfulCommitter = GraphMutationCommitter(
@@ -106,7 +106,7 @@ struct GraphMutationCommitterTests {
         #expect(publishReceipt.hasPublicationProblem)
         #expect(await publishProblemPublisher.recordedBatches == [batch])
 
-        let saveFailurePublisher = GraphMutationReceiptPublisher(
+        let saveFailurePublisher = GraphMutationRecordingPublisher(
             receipts: [.published(sequenceNumber: 1)]
         )
         let failingCommitter = GraphMutationCommitter(
@@ -152,7 +152,7 @@ struct GraphMutationCommitterTests {
                 terminatedSubscriberCount: 1
             )
         ]
-        let publisher = GraphMutationReceiptPublisher(receipts: expectedReceipts)
+        let publisher = GraphMutationRecordingPublisher(receipts: expectedReceipts)
         let committer = GraphMutationCommitter(publisher: publisher)
 
         var actualReceipts: [GraphMutationPublishReceipt] = []
@@ -181,7 +181,7 @@ struct GraphMutationCommitterTests {
             graphID: graphID,
             entityID: entityID
         )
-        let publisher = GraphMutationReceiptPublisher(
+        let publisher = GraphMutationRecordingPublisher(
             receipts: [.published(sequenceNumber: 51)]
         )
         let committer = GraphMutationCommitter(
@@ -225,7 +225,7 @@ struct GraphMutationCommitterTests {
             graphID: graphID,
             entityID: entityID
         )
-        let publisher = GraphMutationReceiptPublisher(
+        let publisher = GraphMutationRecordingPublisher(
             receipts: [.published(sequenceNumber: 55)]
         )
         var saveCallCount = 0
@@ -263,6 +263,89 @@ struct GraphMutationCommitterTests {
     }
 
     @Test
+    @MainActor
+    func multiGraphMaintenanceSavesOnceAndPublishesSortedSingleGraphBatches() async throws {
+        let store = try BrainMeshTestContainer.makeInMemoryStore()
+        let firstGraphID = testUUID(71)
+        let secondGraphID = testUUID(72)
+        let firstBatch = try GraphMutationBatchFactory.graphIntegrityRepair(
+            graphID: firstGraphID
+        )
+        let secondBatch = try GraphMutationBatchFactory.graphIntegrityRepair(
+            graphID: secondGraphID
+        )
+        let publisher = GraphMutationRecordingPublisher(receipts: [])
+        var saveCallCount = 0
+        let committer = GraphMutationCommitter(
+            publisher: publisher,
+            saveOperation: { _ in
+                saveCallCount += 1
+            }
+        )
+
+        let receipts = try await committer.commit(
+            [secondBatch, firstBatch],
+            in: store.context
+        )
+
+        #expect(saveCallCount == 1)
+        #expect(receipts.count == 2)
+        #expect(await publisher.recordedBatches == [firstBatch, secondBatch])
+        #expect(
+            await publisher.recordedBatches.allSatisfy { batch in
+                batch.events.allSatisfy { $0.graphID == batch.graphID }
+            }
+        )
+    }
+
+    @Test
+    @MainActor
+    func multiGraphMaintenanceSaveFailurePublishesNoBatch() async throws {
+        let store = try BrainMeshTestContainer.makeInMemoryStore()
+        let batches = [
+            try GraphMutationBatchFactory.graphIntegrityRepair(graphID: testUUID(73)),
+            try GraphMutationBatchFactory.graphIntegrityRepair(graphID: testUUID(74))
+        ]
+        let publisher = GraphMutationRecordingPublisher(receipts: [])
+        let committer = GraphMutationCommitter(
+            publisher: publisher,
+            saveOperation: { _ in
+                throw GraphMutationCommitterTestError.saveFailed
+            }
+        )
+
+        await #expect(throws: GraphMutationCommitterTestError.saveFailed) {
+            _ = try await committer.commit(batches, in: store.context)
+        }
+        #expect(await publisher.recordedBatches.isEmpty)
+    }
+
+    @Test
+    @MainActor
+    func duplicateGraphScopeIsRejectedBeforeSave() async throws {
+        let store = try BrainMeshTestContainer.makeInMemoryStore()
+        let graphID = testUUID(75)
+        let batches = [
+            try GraphMutationBatchFactory.graphUpdated(graphID: graphID),
+            try GraphMutationBatchFactory.graphIntegrityRepair(graphID: graphID)
+        ]
+        let publisher = GraphMutationRecordingPublisher(receipts: [])
+        var saveCallCount = 0
+        let committer = GraphMutationCommitter(
+            publisher: publisher,
+            saveOperation: { _ in
+                saveCallCount += 1
+            }
+        )
+
+        await #expect(throws: GraphMutationCommitterError.duplicateGraphScope) {
+            _ = try await committer.commit(batches, in: store.context)
+        }
+        #expect(saveCallCount == 0)
+        #expect(await publisher.recordedBatches.isEmpty)
+    }
+
+    @Test
     func mixedGraphBatchIsRejectedBeforeItCanBeCommitted() {
         let firstGraphID = testUUID(60)
         let secondGraphID = testUUID(61)
@@ -290,29 +373,6 @@ struct GraphMutationCommitterTests {
 
 private enum GraphMutationCommitterTestError: Error {
     case saveFailed
-}
-
-private actor GraphMutationReceiptPublisher: GraphMutationPublishing {
-    private var receipts: [GraphMutationPublishReceipt]
-    private var batches: [GraphMutationBatch] = []
-
-    init(receipts: [GraphMutationPublishReceipt]) {
-        self.receipts = receipts
-    }
-
-    var recordedBatches: [GraphMutationBatch] {
-        batches
-    }
-
-    func publishCommitted(
-        _ batch: GraphMutationBatch
-    ) async -> GraphMutationPublishReceipt {
-        batches.append(batch)
-        guard !receipts.isEmpty else {
-            return .published(sequenceNumber: UInt64(batches.count))
-        }
-        return receipts.removeFirst()
-    }
 }
 
 private extension GraphMutationPublishReceipt {

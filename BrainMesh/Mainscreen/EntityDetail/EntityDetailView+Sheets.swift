@@ -203,11 +203,14 @@ extension EntityDetailView {
                 NavigationStack {
                     NodeNotesEditorView(
                         title: entity.name.isEmpty ? "Notiz" : "Notiz – \(entity.name)",
-                        notes: Binding(
-                            get: { entity.notes },
-                            set: { entity.notes = $0 }
+                        initialNotes: entity.notes
+                    ) { notes in
+                        try await NodeNotesPersistence.commitEntityNotes(
+                            notes,
+                            entity: entity,
+                            in: modelContext
                         )
-                    )
+                    }
                 }
             }
     }
