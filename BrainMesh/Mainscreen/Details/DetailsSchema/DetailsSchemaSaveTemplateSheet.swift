@@ -13,6 +13,8 @@ struct DetailsSchemaSaveTemplateSheet: View {
     @Bindable var entity: MetaEntity
 
     @State private var name: String
+    @State private var errorMessage: String? = nil
+    @State private var isSaving: Bool = false
     @FocusState private var isNameFocused: Bool
 
     init(entity: MetaEntity) {
@@ -44,6 +46,13 @@ struct DetailsSchemaSaveTemplateSheet: View {
                     Text("Speichert das aktuelle Feld-Set, damit du es bei anderen Entitäten schnell übernehmen kannst.")
                         .foregroundStyle(.secondary)
                 }
+
+                if let errorMessage {
+                    Section {
+                        Text(errorMessage)
+                            .foregroundStyle(.red)
+                    }
+                }
             }
             .navigationTitle("Als Set speichern")
             .navigationBarTitleDisplayMode(.inline)
@@ -52,14 +61,14 @@ struct DetailsSchemaSaveTemplateSheet: View {
                     Button("Abbrechen") {
                         dismiss()
                     }
+                    .disabled(isSaving)
                 }
 
                 ToolbarItem(placement: .confirmationAction) {
                     Button("Speichern") {
-                        DetailsSchemaActions.saveTemplate(from: entity, name: name, modelContext: modelContext)
-                        dismiss()
+                        Task { await saveTemplate() }
                     }
-                    .disabled(isSaveDisabled)
+                    .disabled(isSaveDisabled || isSaving)
                 }
             }
             .onAppear {
@@ -67,6 +76,31 @@ struct DetailsSchemaSaveTemplateSheet: View {
                     isNameFocused = true
                 }
             }
+        }
+        .interactiveDismissDisabled(isSaving)
+    }
+
+    @MainActor
+    private func saveTemplate() async {
+        guard !isSaving else { return }
+        isSaving = true
+        errorMessage = nil
+        defer { isSaving = false }
+
+        do {
+            let didSave = try DetailsSchemaActions.saveTemplate(
+                from: entity,
+                name: name,
+                modelContext: modelContext
+            )
+            if didSave {
+                dismiss()
+            }
+        } catch is CancellationError {
+            modelContext.rollback()
+        } catch {
+            modelContext.rollback()
+            errorMessage = error.localizedDescription
         }
     }
 

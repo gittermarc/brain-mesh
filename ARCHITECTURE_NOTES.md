@@ -650,29 +650,36 @@ Ziel: Storage- und Medienpfade entkoppeln.
   - `GraphReadRepository` für Graph-Metadaten, alle Source-DTOs und einen vollständigen indexierbaren Graph-Snapshot.
   - `NodeRepository` für Entity-/Attribute-Lookups, Node-Summaries sowie eingehende und ausgehende direkte Nachbarschaften.
   - DTOs sind value-only und `Sendable`; Attachment-DTOs enthalten weder `fileData` noch lokalen Dateipfad.
+  - `GraphMutationCommitter` bildet die zentrale Save-then-Publish-Grenze für die geradlinigen Add-/Link-/Detail-Basismutationen.
 - Weiterhin offen:
   - Bestehende Feature-Loader bauen teilweise eigene `FetchDescriptor`-Predicates und können schrittweise auf die Read-Schicht migriert werden.
-  - Ein allgemeiner `GraphMutationService` für Add/Rename und Cache-Invalidation; der Delete-Slice ist bereits in `GraphNodeDeletionService` zentralisiert.
+  - Zusammengesetzte Rename-/Cleanup-Mutationen und Cache-Invalidation; der Delete-Slice ist bereits in `GraphNodeDeletionService` zentralisiert.
 
 #### Mutation Events
 
 - Umgesetzt unter `BrainMesh/DataAccess/Mutations/`:
   - `GraphMutationEvent` und `GraphMutationBatch` sind graph-scoped, value-only, `Hashable` und `Sendable`; sie enthalten ausschließlich IDs, technische Referenzen, Mutation-Art und Zeitpunkte.
   - `GraphMutationEventBus` ist ein actor-sicherer Multicast-Bus mit unabhängigen `AsyncStream`-Subscriptions, deterministischen Sequenznummern und expliziter Buffering-Policy.
-  - Die Publisher-API heißt bewusst `publishCommitted(_:)`; `saveAndPublish(_:save:)` führt den Commit zuerst aus und publiziert bei einem Save-Fehler nichts. Eine Pre-Commit-Publish-API existiert nicht.
+  - Die Publisher-API heißt bewusst `publishCommitted(_:)`. `GraphMutationCommitter` ist die einzige Save-then-Publish-Abstraktion: Er prüft Cancellation vor der irreversiblen Commit-Phase, führt `ModelContext.save()` aus und publiziert erst danach genau einen bereits vollständig aus technischen IDs gebauten Batch. Bei Save-Fehlern wird nichts publiziert; Publish-Diagnosen aus dem Receipt machen einen erfolgreichen Save nicht rückwirkend fehlerhaft. Eine Pre-Commit-Publish-API existiert nicht.
+  - `GraphMutationBatchFactory` klassifiziert die PR-05A-Basismutationen ausschließlich aus technischen IDs und definiert deterministische Reihenfolgen für bidirektionale Links, Mehrfach-Link-Löschungen und Detailfeld-Cleanup.
   - Der Default-Buffer ist unbounded, da noch keine persistente Event-History existiert. Bounded Policies melden Drops im technischen Publish-Receipt; Subscriber erkennen Lücken über monotone Delivery-Sequenzen und müssen später über Reconciliation abgesichert werden.
   - Streams werden bei Cancellation entfernt; der Bus kann beendet und für isolierte Tests deterministisch zurückgesetzt werden.
+- Produktiv integriert:
+  - Entity- und Attribute-Erstellung.
+  - Einzelne Link-Erstellung einschließlich eines deterministischen bidirektionalen Batches, Link-Notiz-Updates sowie graph-lokale Einzel-/Mehrfachlöschungen.
+  - Detail-Schema-Anlegen, -Ändern, -Umsortieren und -Löschen sowie Detailwert-Anlegen, -Ändern und -Löschen. Feld-Cleanup publiziert deterministisch zuerst Detailwert-Löschungen und danach ein Schema-Event.
+  - Wiederverwendbare Detail-Templates verändern kein aktives Entity-Schema und bleiben deshalb ein expliziter Save ohne Graph-Mutation-Event.
 - Noch nicht integriert:
-  - Produktive Write-Pfade publizieren in diesem Slice noch keine Events.
-  - CloudKit-Änderungen anderer Geräte benötigen weiterhin eine spätere Reconciliation.
-  - Es existieren weder persistente Event-History noch Indexer oder Cache-Invalidation-Consumer.
+  - Zusammengesetzte Rename-/Relabel-, Node-Cleanup-, Bulk-, Medien- und graphweite Import-/Lifecycle-Mutationen.
+  - Cache-Invalidation-Subscriber und CloudKit-Reconciliation für Änderungen anderer Geräte.
+  - Persistente Event-History und lokaler Search-Indexer.
 - Geplante Verbraucher:
   - EntitiesHomeLoader cache invalidation.
   - GraphStatsLoader cache invalidation.
   - GraphCanvas reload scheduling.
   - Search index invalidation.
 - Nutzen:
-  - Schafft die getestete Infrastruktur gegen TTL-/Reload-Zufall, ohne Write-Pfade vorzeitig umzubauen.
+  - Schafft eine getestete Post-Commit-Grenze für präzise Basismutationen; spätere Subscriber können darauf graph-scoped reagieren, ohne SwiftData-Modelle oder Nutzdaten über Actor-Grenzen zu transportieren.
 
 #### Sheet Coordinators
 
@@ -823,7 +830,7 @@ Ziel: Storage- und Medienpfade entkoppeln.
   - Der verhaltenskompatible Provider-Split ist abgeschlossen; `BrainMeshSearchService` orchestriert die deterministische Candidate-Pipeline.
 - Nächste Schritte:
   - `SearchDocument` oder lokalen Index an der Provider-Grenze einführen.
-  - Mutation-Events für Rename, Notes, Link, Details und Attachments ergänzen.
+  - Mutation-Events für Rename, Node-Notes, zusammengesetzte Link-/Delete-Pfade und Attachments ergänzen; geradlinige Link- und Detail-Mutationen sind bereits angebunden.
 - Risiko:
   - Mittel.
   - Index muss mit Sync, Import/Export und lokalen Mutationen konsistent bleiben.

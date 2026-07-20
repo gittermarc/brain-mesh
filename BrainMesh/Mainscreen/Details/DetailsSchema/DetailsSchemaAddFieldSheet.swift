@@ -27,6 +27,7 @@ struct DetailsAddFieldSheet: View {
     @State private var optionsText: String = ""
 
     @State private var error: String? = nil
+    @State private var isSaving: Bool = false
 
     var body: some View {
         NavigationStack {
@@ -92,19 +93,24 @@ struct DetailsAddFieldSheet: View {
             .toolbar {
                 ToolbarItem(placement: .topBarLeading) {
                     Button("Abbrechen") { dismiss() }
+                        .disabled(isSaving)
                 }
 
                 ToolbarItem(placement: .topBarTrailing) {
                     Button("Hinzufügen") {
-                        addField()
+                        Task { await addField() }
                     }
                     .font(.headline)
+                    .disabled(isSaving)
                 }
             }
         }
+        .interactiveDismissDisabled(isSaving)
     }
 
-    private func addField() {
+    @MainActor
+    private func addField() async {
+        guard !isSaving else { return }
         error = nil
 
         let cleanedName = name.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -119,8 +125,6 @@ struct DetailsAddFieldSheet: View {
             return
         }
 
-        let sortIndex = (entity.detailFieldsList.map { $0.sortIndex }.max() ?? -1) + 1
-
         let options = optionsText
             .split(separator: "\n")
             .map { String($0).trimmingCharacters(in: .whitespacesAndNewlines) }
@@ -131,22 +135,35 @@ struct DetailsAddFieldSheet: View {
             return
         }
 
+        isSaving = true
+        defer { isSaving = false }
+
+        let sortIndex = (entity.detailFieldsList.map(\.sortIndex).max() ?? -1) + 1
+        let cleanedUnit = unit.trimmingCharacters(in: .whitespacesAndNewlines)
         let field = MetaDetailFieldDefinition(
             owner: entity,
             name: cleanedName,
             type: type,
             sortIndex: sortIndex,
-            unit: unit.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? nil : unit,
-            options: options,
+            unit: type.supportsUnit && !cleanedUnit.isEmpty ? cleanedUnit : nil,
+            options: type.supportsOptions ? options : [],
             isPinned: isPinned
         )
 
-        modelContext.insert(field)
-        entity.addDetailField(field)
-
-        try? modelContext.save()
-
-        onResult(.added)
-        dismiss()
+        do {
+            _ = try await DetailsSchemaActions.addField(
+                field,
+                to: entity,
+                modelContext: modelContext
+            )
+            onResult(.added)
+            dismiss()
+        } catch is CancellationError {
+            modelContext.rollback()
+        } catch {
+            modelContext.rollback()
+            self.error = error.localizedDescription
+        }
     }
+
 }

@@ -454,61 +454,6 @@ struct GraphMutationEventBusTests {
 
         await bus.finish()
     }
-
-    @Test
-    @MainActor
-    func failedSaveDoesNotPublishAndSuccessfulSavePublishesOneBatch() async throws {
-        let recorder = GraphMutationEventRecorder()
-        let batch = try makeBatch(
-            id: testUUID(1_001),
-            graphID: testUUID(10),
-            kinds: [.detailSchemaChanged]
-        )
-
-        var receivedSaveFailure = false
-        do {
-            _ = try await recorder.saveAndPublish(batch) {
-                throw GraphMutationTestError.saveFailed
-            }
-        } catch GraphMutationTestError.saveFailed {
-            receivedSaveFailure = true
-        }
-
-        #expect(receivedSaveFailure)
-        #expect(await recorder.recordedBatches.isEmpty)
-
-        _ = try await recorder.saveAndPublish(batch) {}
-        #expect(await recorder.recordedBatches == [batch])
-    }
-}
-
-private enum GraphMutationTestError: Error {
-    case saveFailed
-}
-
-private actor GraphMutationEventRecorder: GraphMutationPublishing {
-    private var batches: [GraphMutationBatch] = []
-    private var nextSequenceNumber: UInt64 = 1
-
-    var recordedBatches: [GraphMutationBatch] {
-        batches
-    }
-
-    func publishCommitted(
-        _ batch: GraphMutationBatch
-    ) async -> GraphMutationPublishReceipt {
-        let sequenceNumber = nextSequenceNumber
-        nextSequenceNumber += 1
-        batches.append(batch)
-        return GraphMutationPublishReceipt(
-            disposition: .published,
-            sequenceNumber: sequenceNumber,
-            subscriberCount: 1,
-            enqueuedSubscriberCount: 1,
-            droppedSubscriberCount: 0,
-            terminatedSubscriberCount: 0
-        )
-    }
 }
 
 private func makeBatch(

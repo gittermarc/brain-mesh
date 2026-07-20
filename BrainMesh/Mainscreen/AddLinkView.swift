@@ -27,6 +27,7 @@ struct AddLinkView: View {
 
     @State private var showSaveErrorAlert = false
     @State private var saveErrorMessage: String = ""
+    @State private var isSaving = false
 
     var body: some View {
         NavigationStack {
@@ -81,10 +82,13 @@ struct AddLinkView: View {
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
                     Button("Abbrechen") { dismiss() }
+                        .disabled(isSaving)
                 }
                 ToolbarItem(placement: .confirmationAction) {
-                    Button("Speichern") { save() }
-                        .disabled(selectedTarget == nil)
+                    Button("Speichern") {
+                        Task { await save() }
+                    }
+                    .disabled(selectedTarget == nil || isSaving)
                 }
             }
             .alert("Link existiert bereits", isPresented: $showDuplicateAlert) {
@@ -109,93 +113,87 @@ struct AddLinkView: View {
                 }
             }
         }
+        .interactiveDismissDisabled(isSaving)
     }
 
-    private func save() {
-        guard let target = selectedTarget else { return }
+    @MainActor
+    private func save() async {
+        guard let target = selectedTarget, !isSaving else { return }
 
         if target.kind == source.kind && target.id == source.id {
             showSelfLinkAlert = true
             return
         }
 
-        let sKind = source.kind.rawValue
-        let sID = source.id
-        let tKind = target.kind.rawValue
-        let tID = target.id
-        let gid = graphID
-
-        let forwardFD: FetchDescriptor<MetaLink>
-        if let gid {
-            forwardFD = FetchDescriptor<MetaLink>(
-                predicate: #Predicate { l in
-                    l.sourceKindRaw == sKind &&
-                    l.sourceID == sID &&
-                    l.targetKindRaw == tKind &&
-                    l.targetID == tID &&
-                    l.graphID == gid
-                }
-            )
-        } else {
-            forwardFD = FetchDescriptor<MetaLink>(
-                predicate: #Predicate { l in
-                    l.sourceKindRaw == sKind &&
-                    l.sourceID == sID &&
-                    l.targetKindRaw == tKind &&
-                    l.targetID == tID
-                }
-            )
+        guard let graphID else {
+            saveErrorMessage = "Für diese Verbindung ist kein Graph zugeordnet."
+            showSaveErrorAlert = true
+            return
         }
 
-        let forwardExists = ((try? modelContext.fetchCount(forwardFD)) ?? 0) > 0
+        isSaving = true
+        defer { isSaving = false }
 
-        var reverseExists = false
-        if createBidirectional {
-            let reverseFD: FetchDescriptor<MetaLink>
-            if let gid {
-                reverseFD = FetchDescriptor<MetaLink>(
-                    predicate: #Predicate { l in
-                        l.sourceKindRaw == tKind &&
-                        l.sourceID == tID &&
-                        l.targetKindRaw == sKind &&
-                        l.targetID == sID &&
-                        l.graphID == gid
+        let sourceKindRaw = source.kind.rawValue
+        let sourceID = source.id
+        let targetKindRaw = target.kind.rawValue
+        let targetID = target.id
+        let graphScopeID = graphID
+
+        let forwardDescriptor = FetchDescriptor<MetaLink>(
+            predicate: #Predicate { link in
+                link.sourceKindRaw == sourceKindRaw &&
+                link.sourceID == sourceID &&
+                link.targetKindRaw == targetKindRaw &&
+                link.targetID == targetID &&
+                link.graphID == graphScopeID
+            }
+        )
+
+        let forwardExists: Bool
+        let reverseExists: Bool
+        do {
+            forwardExists = try modelContext.fetchCount(forwardDescriptor) > 0
+
+            if createBidirectional {
+                let reverseDescriptor = FetchDescriptor<MetaLink>(
+                    predicate: #Predicate { link in
+                        link.sourceKindRaw == targetKindRaw &&
+                        link.sourceID == targetID &&
+                        link.targetKindRaw == sourceKindRaw &&
+                        link.targetID == sourceID &&
+                        link.graphID == graphScopeID
                     }
                 )
+                reverseExists = try modelContext.fetchCount(reverseDescriptor) > 0
             } else {
-                reverseFD = FetchDescriptor<MetaLink>(
-                    predicate: #Predicate { l in
-                        l.sourceKindRaw == tKind &&
-                        l.sourceID == tID &&
-                        l.targetKindRaw == sKind &&
-                        l.targetID == sID
-                    }
-                )
+                reverseExists = false
             }
-            reverseExists = ((try? modelContext.fetchCount(reverseFD)) ?? 0) > 0
+        } catch {
+            saveErrorMessage = error.localizedDescription
+            showSaveErrorAlert = true
+            return
         }
 
-        if !createBidirectional {
-            if forwardExists {
-                duplicateAlertMessage = "Diese Verbindung ist schon vorhanden."
-                showDuplicateAlert = true
-                return
-            }
-        } else {
-            if forwardExists && reverseExists {
-                duplicateAlertMessage = "Beide Richtungen existieren bereits."
-                showDuplicateAlert = true
-                return
-            }
+        if !createBidirectional, forwardExists {
+            duplicateAlertMessage = "Diese Verbindung ist schon vorhanden."
+            showDuplicateAlert = true
+            return
+        }
+
+        if createBidirectional, forwardExists, reverseExists {
+            duplicateAlertMessage = "Beide Richtungen existieren bereits."
+            showDuplicateAlert = true
+            return
         }
 
         let cleaned = note.trimmingCharacters(in: .whitespacesAndNewlines)
         let finalNote = cleaned.isEmpty ? nil : cleaned
 
-        var inserted: [MetaLink] = []
+        var insertedLinks: [MetaLink] = []
 
         if !forwardExists {
-            let link = MetaLink(
+            let forward = MetaLink(
                 sourceKind: source.kind,
                 sourceID: source.id,
                 sourceLabel: source.label,
@@ -203,13 +201,13 @@ struct AddLinkView: View {
                 targetID: target.id,
                 targetLabel: target.label,
                 note: finalNote,
-                graphID: gid
+                graphID: graphID
             )
-            modelContext.insert(link)
-            inserted.append(link)
+            modelContext.insert(forward)
+            insertedLinks.append(forward)
         }
 
-        if createBidirectional && !reverseExists {
+        if createBidirectional, !reverseExists {
             let reverse = MetaLink(
                 sourceKind: target.kind,
                 sourceID: target.id,
@@ -218,21 +216,34 @@ struct AddLinkView: View {
                 targetID: source.id,
                 targetLabel: source.label,
                 note: finalNote,
-                graphID: gid
+                graphID: graphID
             )
             modelContext.insert(reverse)
-            inserted.append(reverse)
+            insertedLinks.append(reverse)
         }
 
+        guard !insertedLinks.isEmpty else { return }
+
         do {
-            try modelContext.save()
+            let references = insertedLinks.map { link in
+                GraphMutationLinkReference(
+                    id: link.id,
+                    source: NodeRefKey(kind: link.sourceKind, id: link.sourceID),
+                    target: NodeRefKey(kind: link.targetKind, id: link.targetID)
+                )
+            }
+            let batch = try GraphMutationBatchFactory.linksCreated(
+                graphID: graphID,
+                links: references
+            )
+            try await GraphMutationCommitter().commit(batch, in: modelContext)
             dismiss()
+        } catch is CancellationError {
+            modelContext.rollback()
         } catch {
+            modelContext.rollback()
             saveErrorMessage = error.localizedDescription
             showSaveErrorAlert = true
-            for l in inserted {
-                modelContext.delete(l)
-            }
         }
     }
 }

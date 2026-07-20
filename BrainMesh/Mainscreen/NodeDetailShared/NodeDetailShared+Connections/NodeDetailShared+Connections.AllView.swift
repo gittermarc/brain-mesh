@@ -22,6 +22,8 @@ struct NodeConnectionsAllView: View {
     @State private var loadErrorMessage: String? = nil
 
     @State private var editNoteRequest: EditLinkNoteRequest? = nil
+    @State private var mutationErrorMessage: String? = nil
+    @State private var isMutating: Bool = false
 
     init(ownerKind: NodeKind, ownerID: UUID, graphID: UUID?, initialSegment: NodeLinkDirectionSegment = .outgoing) {
         self.ownerKind = ownerKind
@@ -88,7 +90,9 @@ struct NodeConnectionsAllView: View {
                             .tint(Color.accentColor)
                         }
                     }
-                    .onDelete(perform: deleteLinks)
+                    .onDelete { offsets in
+                        Task { await deleteLinks(at: offsets) }
+                    }
                 }
             }
         }
@@ -103,6 +107,15 @@ struct NodeConnectionsAllView: View {
                 applyNoteUpdate(linkID: linkID, note: newNote)
             }
         }
+        .alert("Änderung fehlgeschlagen", isPresented: Binding(
+            get: { mutationErrorMessage != nil },
+            set: { if !$0 { mutationErrorMessage = nil } }
+        )) {
+            Button("OK", role: .cancel) {}
+        } message: {
+            Text(mutationErrorMessage ?? "")
+        }
+        .disabled(isMutating)
     }
 
     private var loadTaskKey: String {
@@ -147,37 +160,78 @@ struct NodeConnectionsAllView: View {
         }
     }
 
-    private func deleteLinks(at offsets: IndexSet) {
+    @MainActor
+    private func deleteLinks(at offsets: IndexSet) async {
+        guard !isMutating else { return }
+
         let rows = currentRows
-
-        var idsToDelete: [UUID] = []
-        for idx in offsets {
-            guard rows.indices.contains(idx) else { continue }
-            idsToDelete.append(rows[idx].id)
+        let selectedIDs = offsets.compactMap { index in
+            rows.indices.contains(index) ? rows[index].id : nil
         }
-        guard !idsToDelete.isEmpty else { return }
+        guard !selectedIDs.isEmpty else { return }
 
-        for linkID in idsToDelete {
-            if let link = fetchLink(id: linkID) {
+        isMutating = true
+        defer { isMutating = false }
+
+        do {
+            let links = try selectedIDs.compactMap { linkID in
+                try fetchLink(id: linkID)
+            }
+            guard !links.isEmpty else {
+                await reload()
+                return
+            }
+
+            guard let graphID = links.first?.graphID else {
+                throw NodeConnectionMutationError.missingGraphScope
+            }
+            guard links.allSatisfy({ $0.graphID == graphID }) else {
+                throw NodeConnectionMutationError.mixedGraphScopes
+            }
+
+            let references = links.map { mutationReference(for: $0) }
+            for link in links {
                 modelContext.delete(link)
             }
+
+            let batch = try GraphMutationBatchFactory.linksDeleted(
+                graphID: graphID,
+                links: references
+            )
+            try await GraphMutationCommitter().commit(batch, in: modelContext)
+
+            let deletedIDs = Set(links.map(\.id))
+            snapshot = NodeConnectionsSnapshot(
+                outgoing: snapshot.outgoing.filter { !deletedIDs.contains($0.id) },
+                incoming: snapshot.incoming.filter { !deletedIDs.contains($0.id) }
+            )
+            await reload()
+        } catch is CancellationError {
+            modelContext.rollback()
+        } catch {
+            modelContext.rollback()
+            mutationErrorMessage = error.localizedDescription
         }
-        try? modelContext.save()
-
-        // Optimistic update (keeps UI snappy).
-        let idSet = Set(idsToDelete)
-        let newOutgoing = snapshot.outgoing.filter { !idSet.contains($0.id) }
-        let newIncoming = snapshot.incoming.filter { !idSet.contains($0.id) }
-        snapshot = NodeConnectionsSnapshot(outgoing: newOutgoing, incoming: newIncoming)
-
-        // Ensure list stays consistent (labels, ordering, etc.)
-        Task { await reload() }
     }
 
-    private func fetchLink(id: UUID) -> MetaLink? {
+    private func fetchLink(id: UUID) throws -> MetaLink? {
         let linkID = id
-        let fd = FetchDescriptor<MetaLink>(predicate: #Predicate { l in l.id == linkID })
-        return (try? modelContext.fetch(fd).first)
+        let descriptor = FetchDescriptor<MetaLink>(
+            predicate: #Predicate { link in
+                link.id == linkID
+            }
+        )
+        return try modelContext.fetch(descriptor).first
+    }
+
+    private func mutationReference(
+        for link: MetaLink
+    ) -> GraphMutationLinkReference {
+        GraphMutationLinkReference(
+            id: link.id,
+            source: NodeRefKey(kind: link.sourceKind, id: link.sourceID),
+            target: NodeRefKey(kind: link.targetKind, id: link.targetID)
+        )
     }
 
     private func rowNoteActionTitle(_ note: String?) -> String {
@@ -231,6 +285,7 @@ private struct LinkNoteEditorSheet: View {
 
     @State private var showSaveErrorAlert: Bool = false
     @State private var saveErrorMessage: String = ""
+    @State private var isSaving: Bool = false
 
     init(linkID: UUID, initialNote: String?, onSaved: @escaping (UUID, String?) -> Void) {
         self.linkID = linkID
@@ -257,10 +312,11 @@ private struct LinkNoteEditorSheet: View {
                 if hasNote {
                     Section {
                         Button(role: .destructive) {
-                            save(note: nil)
+                            Task { await save(note: nil) }
                         } label: {
                             Label("Notiz entfernen", systemImage: "trash")
                         }
+                        .disabled(isSaving)
                     }
                 }
             }
@@ -271,43 +327,89 @@ private struct LinkNoteEditorSheet: View {
                     Button("Abbrechen") {
                         dismiss()
                     }
+                    .disabled(isSaving)
                 }
                 ToolbarItem(placement: .confirmationAction) {
                     Button("Speichern") {
                         let finalNote = trimmed.isEmpty ? nil : trimmed
-                        save(note: finalNote)
+                        Task { await save(note: finalNote) }
                     }
+                    .disabled(isSaving)
                 }
             }
             .alert("Speichern fehlgeschlagen", isPresented: $showSaveErrorAlert) {
-                Button("OK", role: .cancel) {
-                    dismiss()
-                }
+                Button("OK", role: .cancel) {}
             } message: {
                 Text(saveErrorMessage)
             }
         }
+        .interactiveDismissDisabled(isSaving)
     }
 
-    private func save(note: String?) {
-        let lid = linkID
-        let fd = FetchDescriptor<MetaLink>(predicate: #Predicate { l in l.id == lid })
+    @MainActor
+    private func save(note: String?) async {
+        guard !isSaving else { return }
+        isSaving = true
+        defer { isSaving = false }
 
-        guard let link = (try? modelContext.fetch(fd).first) else {
-            saveErrorMessage = "Link nicht gefunden."
-            showSaveErrorAlert = true
-            return
-        }
-
-        link.note = note
+        let linkID = linkID
+        let descriptor = FetchDescriptor<MetaLink>(
+            predicate: #Predicate { link in
+                link.id == linkID
+            }
+        )
 
         do {
-            try modelContext.save()
+            guard let link = try modelContext.fetch(descriptor).first else {
+                throw NodeConnectionMutationError.linkNotFound
+            }
+            guard let graphID = link.graphID else {
+                throw NodeConnectionMutationError.missingGraphScope
+            }
+
+            guard link.note != note else {
+                onSaved(linkID, note)
+                dismiss()
+                return
+            }
+
+            let reference = GraphMutationLinkReference(
+                id: link.id,
+                source: NodeRefKey(kind: link.sourceKind, id: link.sourceID),
+                target: NodeRefKey(kind: link.targetKind, id: link.targetID)
+            )
+            link.note = note
+
+            let batch = try GraphMutationBatchFactory.linkUpdated(
+                graphID: graphID,
+                link: reference
+            )
+            try await GraphMutationCommitter().commit(batch, in: modelContext)
             onSaved(linkID, note)
             dismiss()
+        } catch is CancellationError {
+            modelContext.rollback()
         } catch {
+            modelContext.rollback()
             saveErrorMessage = error.localizedDescription
             showSaveErrorAlert = true
+        }
+    }
+}
+
+private enum NodeConnectionMutationError: LocalizedError {
+    case linkNotFound
+    case missingGraphScope
+    case mixedGraphScopes
+
+    var errorDescription: String? {
+        switch self {
+        case .linkNotFound:
+            return "Der Link wurde nicht gefunden."
+        case .missingGraphScope:
+            return "Für den Link ist kein Graph zugeordnet."
+        case .mixedGraphScopes:
+            return "Die ausgewählten Links gehören nicht zum selben Graphen."
         }
     }
 }

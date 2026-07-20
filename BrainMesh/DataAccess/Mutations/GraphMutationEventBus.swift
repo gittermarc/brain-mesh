@@ -74,6 +74,12 @@ nonisolated struct GraphMutationPublishReceipt: Hashable, Sendable {
             terminatedSubscriberCount: 0
         )
     }
+
+    var hasPublicationProblem: Bool {
+        disposition != .published ||
+        droppedSubscriberCount > 0 ||
+        terminatedSubscriberCount > 0
+    }
 }
 
 /// Narrow post-commit publisher boundary for write services and test recorders.
@@ -85,23 +91,6 @@ nonisolated protocol GraphMutationPublishing: Sendable {
     func publishCommitted(
         _ batch: GraphMutationBatch
     ) async -> GraphMutationPublishReceipt
-}
-
-extension GraphMutationPublishing {
-    /// Runs the persistence commit first and publishes only when the commit returns successfully.
-    ///
-    /// Production callers pass `ModelContext.save()` through `save`. There is deliberately no
-    /// cancellation check between the successful commit and publication: once data is durable,
-    /// local consumers still need the corresponding event batch.
-    @MainActor
-    @discardableResult
-    func saveAndPublish(
-        _ batch: GraphMutationBatch,
-        save: () throws -> Void
-    ) async throws -> GraphMutationPublishReceipt {
-        try save()
-        return await publishCommitted(batch)
-    }
 }
 
 /// Narrow subscriber boundary for cache, index, and reconciliation consumers.

@@ -4,9 +4,17 @@ import Foundation
 
 extension DetailsValueEditorSheet {
     var resolvedGraphID: UUID? {
-        if let id = attribute.graphID { return id }
-        if let id = attribute.owner?.graphID { return id }
-        return UUID(uuidString: activeGraphIDString)
+        let modelGraphIDs = [
+            attribute.graphID,
+            attribute.owner?.graphID,
+            field.graphID,
+            field.owner?.graphID
+        ].compactMap { $0 }
+
+        guard Set(modelGraphIDs).count <= 1 else {
+            return nil
+        }
+        return modelGraphIDs.first ?? UUID(uuidString: activeGraphIDString)
     }
 
     func loadExistingValue() {
@@ -48,91 +56,116 @@ extension DetailsValueEditorSheet {
     }
 
     @MainActor
-    func saveValue() {
+    func saveValue() async {
+        guard !isSaving else { return }
         error = nil
 
-        switch field.type {
-        case .singleLineText, .multiLineText:
-            let cleaned = stringInput.trimmingCharacters(in: .whitespacesAndNewlines)
-            if cleaned.isEmpty {
-                deleteValue()
-                return
-            }
-
-            let rec = upsertRecord()
-            rec.clearTypedValues()
-            rec.stringValue = cleaned
-
-        case .numberInt:
-            let cleaned = numberInput.trimmingCharacters(in: .whitespacesAndNewlines)
-            if cleaned.isEmpty {
-                deleteValue()
-                return
-            }
-
-            guard let v = Int(cleaned) else {
-                error = "Bitte gib eine gültige Ganzzahl ein."
-                return
-            }
-
-            let rec = upsertRecord()
-            rec.clearTypedValues()
-            rec.intValue = v
-
-        case .numberDouble:
-            let cleaned = numberInput.trimmingCharacters(in: .whitespacesAndNewlines)
-            if cleaned.isEmpty {
-                deleteValue()
-                return
-            }
-
-            let normalized = cleaned.replacingOccurrences(of: ",", with: ".")
-            guard let v = Double(normalized) else {
-                error = "Bitte gib eine gültige Zahl ein."
-                return
-            }
-
-            let rec = upsertRecord()
-            rec.clearTypedValues()
-            rec.doubleValue = v
-
-        case .date:
-            let rec = upsertRecord()
-            rec.clearTypedValues()
-            rec.dateValue = dateInput
-
-        case .toggle:
-            let rec = upsertRecord()
-            rec.clearTypedValues()
-            rec.boolValue = boolInput
-
-        case .singleChoice:
-            guard let selectedChoice, !selectedChoice.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
-                deleteValue()
-                return
-            }
-
-            let rec = upsertRecord()
-            rec.clearTypedValues()
-            rec.stringValue = selectedChoice
+        let preparedInput: PreparedDetailValueInput
+        do {
+            preparedInput = try prepareInput()
+        } catch {
+            self.error = error.localizedDescription
+            return
         }
 
-        try? modelContext.save()
-        hasExistingValue = existingRecord() != nil
-        dismiss()
+        switch preparedInput {
+        case .empty:
+            await deleteValue()
+
+        case .value(let payload):
+            guard let graphID = resolvedGraphID else {
+                error = DetailValuePersistenceError.missingGraphScope.localizedDescription
+                return
+            }
+
+            if let existing = existingRecord() {
+                do {
+                    try validateGraphScope(of: existing, expectedGraphID: graphID)
+                } catch {
+                    self.error = error.localizedDescription
+                    return
+                }
+                if payload.matches(existing) {
+                    dismiss()
+                    return
+                }
+            }
+
+            isSaving = true
+            defer { isSaving = false }
+
+            let record = upsertRecord()
+            record.graphID = graphID
+            record.attributeID = attribute.id
+            record.fieldID = field.id
+            payload.apply(to: record)
+            let reference = GraphMutationDetailValueReference(
+                id: record.id,
+                ownerAttributeID: attribute.id,
+                fieldID: field.id
+            )
+
+            do {
+                let batch = try GraphMutationBatchFactory.detailValueChanged(
+                    graphID: graphID,
+                    value: reference
+                )
+                try await GraphMutationCommitter().commit(batch, in: modelContext)
+                hasExistingValue = true
+                dismiss()
+            } catch is CancellationError {
+                modelContext.rollback()
+            } catch {
+                modelContext.rollback()
+                self.error = error.localizedDescription
+            }
+        }
     }
 
     @MainActor
-    func deleteValue() {
+    func deleteValue() async {
+        guard !isSaving else { return }
         guard let existing = existingRecord() else {
             dismiss()
             return
         }
+        guard let graphID = resolvedGraphID else {
+            error = DetailValuePersistenceError.missingGraphScope.localizedDescription
+            return
+        }
 
+        do {
+            try validateGraphScope(of: existing, expectedGraphID: graphID)
+        } catch {
+            self.error = error.localizedDescription
+            return
+        }
+
+        isSaving = true
+        defer { isSaving = false }
+
+        let reference = GraphMutationDetailValueReference(
+            id: existing.id,
+            ownerAttributeID: existing.attributeID,
+            fieldID: existing.fieldID
+        )
         attribute.detailValues?.removeAll(where: { $0.id == existing.id })
         modelContext.delete(existing)
-        try? modelContext.save()
-        dismiss()
+
+        do {
+            let batch = try GraphMutationBatchFactory.detailValueDeleted(
+                graphID: graphID,
+                value: reference
+            )
+            try await GraphMutationCommitter().commit(batch, in: modelContext)
+            hasExistingValue = false
+            dismiss()
+        } catch is CancellationError {
+            modelContext.rollback()
+        } catch {
+            modelContext.rollback()
+            self.error = error.localizedDescription
+        }
     }
 
     func existingRecord() -> MetaDetailFieldValue? {
@@ -156,5 +189,141 @@ extension DetailsValueEditorSheet {
         }
 
         return newValue
+    }
+
+    private func prepareInput() throws -> PreparedDetailValueInput {
+        switch field.type {
+        case .singleLineText, .multiLineText:
+            let cleaned = stringInput.trimmingCharacters(in: .whitespacesAndNewlines)
+            return cleaned.isEmpty ? .empty : .value(.string(cleaned))
+
+        case .numberInt:
+            let cleaned = numberInput.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !cleaned.isEmpty else { return .empty }
+            guard let value = Int(cleaned) else {
+                throw DetailValuePersistenceError.invalidInteger
+            }
+            return .value(.integer(value))
+
+        case .numberDouble:
+            let cleaned = numberInput.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !cleaned.isEmpty else { return .empty }
+            let normalized = cleaned.replacingOccurrences(of: ",", with: ".")
+            guard let value = Double(normalized) else {
+                throw DetailValuePersistenceError.invalidDouble
+            }
+            return .value(.double(value))
+
+        case .date:
+            return .value(.date(dateInput))
+
+        case .toggle:
+            return .value(.boolean(boolInput))
+
+        case .singleChoice:
+            guard let selectedChoice else { return .empty }
+            let cleaned = selectedChoice.trimmingCharacters(in: .whitespacesAndNewlines)
+            return cleaned.isEmpty ? .empty : .value(.string(cleaned))
+        }
+    }
+
+    private func validateGraphScope(
+        of value: MetaDetailFieldValue,
+        expectedGraphID: UUID
+    ) throws {
+        if let valueGraphID = value.graphID,
+           valueGraphID != expectedGraphID
+        {
+            throw DetailValuePersistenceError.inconsistentGraphScope
+        }
+        if let ownerGraphID = value.attribute?.graphID,
+           ownerGraphID != expectedGraphID
+        {
+            throw DetailValuePersistenceError.inconsistentGraphScope
+        }
+    }
+}
+
+private enum PreparedDetailValueInput {
+    case empty
+    case value(DetailValuePayload)
+}
+
+private enum DetailValuePayload: Equatable {
+    case string(String)
+    case integer(Int)
+    case double(Double)
+    case date(Date)
+    case boolean(Bool)
+
+    func matches(_ record: MetaDetailFieldValue) -> Bool {
+        switch self {
+        case .string(let value):
+            return record.stringValue == value &&
+                record.intValue == nil &&
+                record.doubleValue == nil &&
+                record.dateValue == nil &&
+                record.boolValue == nil
+        case .integer(let value):
+            return record.stringValue == nil &&
+                record.intValue == value &&
+                record.doubleValue == nil &&
+                record.dateValue == nil &&
+                record.boolValue == nil
+        case .double(let value):
+            return record.stringValue == nil &&
+                record.intValue == nil &&
+                record.doubleValue == value &&
+                record.dateValue == nil &&
+                record.boolValue == nil
+        case .date(let value):
+            return record.stringValue == nil &&
+                record.intValue == nil &&
+                record.doubleValue == nil &&
+                record.dateValue == value &&
+                record.boolValue == nil
+        case .boolean(let value):
+            return record.stringValue == nil &&
+                record.intValue == nil &&
+                record.doubleValue == nil &&
+                record.dateValue == nil &&
+                record.boolValue == value
+        }
+    }
+
+    func apply(to record: MetaDetailFieldValue) {
+        record.clearTypedValues()
+        switch self {
+        case .string(let value):
+            record.stringValue = value
+        case .integer(let value):
+            record.intValue = value
+        case .double(let value):
+            record.doubleValue = value
+        case .date(let value):
+            record.dateValue = value
+        case .boolean(let value):
+            record.boolValue = value
+        }
+    }
+}
+
+private enum DetailValuePersistenceError: LocalizedError {
+    case missingGraphScope
+    case inconsistentGraphScope
+    case invalidInteger
+    case invalidDouble
+
+    var errorDescription: String? {
+        switch self {
+        case .missingGraphScope:
+            return "Für dieses Detail ist kein Graph zugeordnet."
+        case .inconsistentGraphScope:
+            return "Das Detail gehört nicht eindeutig zu diesem Graphen."
+        case .invalidInteger:
+            return "Bitte gib eine gültige Ganzzahl ein."
+        case .invalidDouble:
+            return "Bitte gib eine gültige Zahl ein."
+        }
     }
 }

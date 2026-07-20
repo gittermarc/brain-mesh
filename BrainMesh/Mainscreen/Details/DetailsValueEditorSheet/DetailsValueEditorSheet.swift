@@ -25,6 +25,7 @@ struct DetailsValueEditorSheet: View {
 
     @State var hasExistingValue: Bool = false
     @State var error: String? = nil
+    @State var isSaving: Bool = false
 
     // MARK: - Completion (singleLineText + multiLineText)
 
@@ -60,10 +61,11 @@ struct DetailsValueEditorSheet: View {
                 if hasExistingValue {
                     Section {
                         Button(role: .destructive) {
-                            deleteValue()
+                            Task { await deleteValue() }
                         } label: {
                             Label("Wert löschen", systemImage: "trash")
                         }
+                        .disabled(isSaving)
                     }
                 }
             }
@@ -72,13 +74,15 @@ struct DetailsValueEditorSheet: View {
             .toolbar {
                 ToolbarItem(placement: .topBarLeading) {
                     Button("Schließen") { dismiss() }
+                        .disabled(isSaving)
                 }
 
                 ToolbarItem(placement: .topBarTrailing) {
                     Button("Sichern") {
-                        saveValue()
+                        Task { await saveValue() }
                     }
                     .font(.headline)
+                    .disabled(isSaving)
                 }
 
                 if field.type == .singleLineText {
@@ -122,5 +126,6 @@ struct DetailsValueEditorSheet: View {
                 }
             }
         }
+        .interactiveDismissDisabled(isSaving)
     }
 }

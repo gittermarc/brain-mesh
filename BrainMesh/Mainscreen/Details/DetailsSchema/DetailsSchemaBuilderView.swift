@@ -20,6 +20,7 @@ struct DetailsSchemaBuilderView: View {
     @State private var editField: MetaDetailFieldDefinition? = nil
 
     @State private var alert: DetailsSchemaAlert? = nil
+    @State private var isMutating: Bool = false
 
     init(entity: MetaEntity) {
         self._entity = Bindable(wrappedValue: entity)
@@ -47,12 +48,24 @@ struct DetailsSchemaBuilderView: View {
         List {
             if entity.detailFieldsList.isEmpty {
                 DetailsSchemaTemplatesSection { template in
-                    DetailsSchemaActions.applyTemplate(template, to: entity, modelContext: modelContext)
+                    performMutation {
+                        _ = try await DetailsSchemaActions.applyTemplate(
+                            template,
+                            to: entity,
+                            modelContext: modelContext
+                        )
+                    }
                 }
 
                 if !savedTemplates.isEmpty {
                     DetailsSchemaSavedSetsSection(templates: savedTemplates) { template in
-                        DetailsSchemaActions.applyTemplate(template, to: entity, modelContext: modelContext)
+                        performMutation {
+                            _ = try await DetailsSchemaActions.applyTemplate(
+                                template,
+                                to: entity,
+                                modelContext: modelContext
+                            )
+                        }
                     }
                 }
             }
@@ -63,13 +76,27 @@ struct DetailsSchemaBuilderView: View {
                     editField = field
                 },
                 onMove: { source, destination in
-                    DetailsSchemaActions.moveFields(in: entity, modelContext: modelContext, from: source, to: destination)
+                    performMutation {
+                        _ = try await DetailsSchemaActions.moveFields(
+                            in: entity,
+                            modelContext: modelContext,
+                            from: source,
+                            to: destination
+                        )
+                    }
                 },
                 onDelete: { offsets in
-                    DetailsSchemaActions.deleteFields(in: entity, modelContext: modelContext, at: offsets)
+                    performMutation {
+                        _ = try await DetailsSchemaActions.deleteFields(
+                            in: entity,
+                            modelContext: modelContext,
+                            at: offsets
+                        )
+                    }
                 }
             )
         }
+        .disabled(isMutating)
         .navigationTitle("Details")
         .navigationBarTitleDisplayMode(.inline)
         .toolbar {
@@ -131,13 +158,46 @@ struct DetailsSchemaBuilderView: View {
                     message: Text("Du kannst höchstens drei Felder anpinnen. Entferne zuerst einen Pin bei einem anderen Feld."),
                     dismissButton: .default(Text("OK"))
                 )
+            case .persistence(let message):
+                return Alert(
+                    title: Text("Änderung fehlgeschlagen"),
+                    message: Text(message),
+                    dismissButton: .default(Text("OK"))
+                )
+            }
+        }
+    }
+
+    private func performMutation(
+        _ operation: @escaping @MainActor () async throws -> Void
+    ) {
+        guard !isMutating else { return }
+        isMutating = true
+
+        Task { @MainActor in
+            defer { isMutating = false }
+            do {
+                try await operation()
+            } catch is CancellationError {
+                modelContext.rollback()
+            } catch {
+                modelContext.rollback()
+                alert = .persistence(error.localizedDescription)
             }
         }
     }
 }
 
-private enum DetailsSchemaAlert: String, Identifiable {
+private enum DetailsSchemaAlert: Identifiable {
     case pinnedLimit
+    case persistence(String)
 
-    var id: String { rawValue }
+    var id: String {
+        switch self {
+        case .pinnedLimit:
+            return "pinned-limit"
+        case .persistence(let message):
+            return "persistence-\(message)"
+        }
+    }
 }

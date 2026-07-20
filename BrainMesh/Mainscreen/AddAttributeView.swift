@@ -21,6 +21,8 @@ struct AddAttributeView: View {
 
     @State private var didCreate: Bool = false
     @State private var didMarkSystemModal: Bool = false
+    @State private var isSaving: Bool = false
+    @State private var saveErrorMessage: String? = nil
 
     private var canSubmit: Bool {
         !draft.name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
@@ -47,19 +49,25 @@ struct AddAttributeView: View {
                         Task { await draft.cleanupOrphanedLocalCacheIfNeeded() }
                         dismiss()
                     }
+                    .disabled(isSaving)
                 }
             }
             .safeAreaInset(edge: .bottom) {
                 VStack(spacing: 10) {
                     Button {
-                        save()
+                        Task { await save() }
                     } label: {
-                        Text("Attribut hinzufügen")
-                            .frame(maxWidth: .infinity)
+                        if isSaving {
+                            ProgressView()
+                                .frame(maxWidth: .infinity)
+                        } else {
+                            Text("Attribut hinzufügen")
+                                .frame(maxWidth: .infinity)
+                        }
                     }
                     .buttonStyle(.borderedProminent)
                     .controlSize(.large)
-                    .disabled(!canSubmit)
+                    .disabled(!canSubmit || isSaving)
                 }
                 .padding(.horizontal)
                 .padding(.vertical, 8)
@@ -111,7 +119,16 @@ struct AddAttributeView: View {
             } message: {
                 Text(draft.loadError ?? "")
             }
+            .alert("Erstellen fehlgeschlagen", isPresented: Binding(
+                get: { saveErrorMessage != nil },
+                set: { if !$0 { saveErrorMessage = nil } }
+            )) {
+                Button("OK", role: .cancel) {}
+            } message: {
+                Text(saveErrorMessage ?? "")
+            }
         }
+        .interactiveDismissDisabled(isSaving)
     }
 
     private var previewHeader: some View {
@@ -217,25 +234,51 @@ struct AddAttributeView: View {
         }
     }
 
-    private func save() {
+    @MainActor
+    private func save() async {
         let cleaned = draft.name.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !cleaned.isEmpty else { return }
-
-        let attr = MetaAttribute(name: cleaned, owner: nil, graphID: entity.graphID, iconSymbolName: draft.iconSymbolName)
-        attr.id = draft.stableID
-        attr.notes = draft.notes
-
-        if let d = draft.imageData, !d.isEmpty {
-            attr.imageData = d
-            attr.imagePath = (draft.imagePath?.isEmpty == false) ? draft.imagePath : draft.stableFilename()
+        guard !cleaned.isEmpty, !isSaving else { return }
+        guard let graphID = entity.graphID else {
+            saveErrorMessage = "Für diese Entität ist kein Graph zugeordnet."
+            return
         }
 
-        modelContext.insert(attr)
-        entity.addAttribute(attr)
+        isSaving = true
+        defer { isSaving = false }
 
-        try? modelContext.save()
+        let attribute = MetaAttribute(
+            name: cleaned,
+            owner: nil,
+            graphID: graphID,
+            iconSymbolName: draft.iconSymbolName
+        )
+        attribute.id = draft.stableID
+        attribute.notes = draft.notes
 
-        didCreate = true
-        dismiss()
+        if let data = draft.imageData, !data.isEmpty {
+            attribute.imageData = data
+            attribute.imagePath = (draft.imagePath?.isEmpty == false)
+                ? draft.imagePath
+                : draft.stableFilename()
+        }
+
+        modelContext.insert(attribute)
+        entity.addAttribute(attribute)
+
+        do {
+            let batch = try GraphMutationBatchFactory.attributeCreated(
+                graphID: graphID,
+                attributeID: attribute.id,
+                ownerEntityID: entity.id
+            )
+            try await GraphMutationCommitter().commit(batch, in: modelContext)
+            didCreate = true
+            dismiss()
+        } catch is CancellationError {
+            modelContext.rollback()
+        } catch {
+            modelContext.rollback()
+            saveErrorMessage = error.localizedDescription
+        }
     }
 }

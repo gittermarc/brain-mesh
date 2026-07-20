@@ -6,7 +6,7 @@ BrainMesh ist eine SwiftUI-iOS/iPadOS-App für graphbasiertes Wissens- und Entit
 
 ## Scan Snapshot
 
-- Produktions-Swift: 467 Dateien, 58.107 Zeilen unter `BrainMesh/`.
+- Produktions-Swift: 487 Dateien, 62.970 Zeilen unter `BrainMesh/`.
 - Größte Module nach Zeilen: `Mainscreen`, `GraphCanvas`, `GraphTransfer`, `Stats`, `Settings`, `Attachments`.
 - Entry Point: `BrainMesh/BrainMeshApp.swift`.
 - Root UI: `BrainMesh/ContentView.swift`, eingebettet in `BrainMesh/AppRoot/AppRootView.swift`.
@@ -29,7 +29,7 @@ BrainMesh ist eine SwiftUI-iOS/iPadOS-App für graphbasiertes Wissens- und Entit
 - **Graph Transfer**: Export/Import für `.bmgraph` und `.bmbackup`, implementiert unter `BrainMesh/GraphTransfer/`.
 - **Command Center**: globale Suche/Aktionen, UI unter `BrainMesh/Search/CommandCenter/`; `BrainMeshSearchService` orchestriert quellspezifische Candidate Provider unter `BrainMesh/Search/Candidates/`.
 - **GraphScope / Read Repositories**: `BrainMesh/DataAccess/` stellt eine nicht-optionale Graph-Grenze, zentrale Fetch-Descriptor-Factories und value-only DTO-Repositories für Graph-Snapshots, Node-Lookups und direkte Nachbarschaften bereit.
-- **GraphMutationEventBus**: actor-sicherer Multicast-Bus unter `BrainMesh/DataAccess/Mutations/` für datensparsame, graph-scoped Post-Commit-Batches; die produktiven Write-Pfade werden erst im folgenden Slice angebunden.
+- **GraphMutationEventBus / GraphMutationCommitter**: actor-sicherer Multicast-Bus plus zentrale Main-Actor-isolierte Save-then-Publish-Grenze unter `BrainMesh/DataAccess/Mutations/`. Entity-, Attribute-, einzelne Link- sowie Detail-Schema-/Detailwert-Basismutationen publizieren graph-scoped Post-Commit-Batches; zusammengesetzte, graphweite und medienbezogene Pfade folgen in späteren Slices.
 
 ## Architecture Map
 
@@ -58,7 +58,7 @@ BrainMesh ist eine SwiftUI-iOS/iPadOS-App für graphbasiertes Wissens- und Entit
   - Default-Graph, Legacy-GraphID-Migration, Folded-Notes-Backfill.
 - `BrainMesh/DataAccess/`
   - `GraphScope`, graph-scoped `FetchDescriptor`-Factories, `GraphReadRepository`, `NodeRepository` und ausschließlich value-only, `Sendable` Read-DTOs.
-  - `Mutations/` enthält den zentralen `GraphMutationEventBus`, technische Mutation-Referenzen und atomare `GraphMutationBatch`-Werte ohne Nutzdaten.
+  - `Mutations/` enthält den zentralen `GraphMutationEventBus`, den einzigen `GraphMutationCommitter` für Save-then-Publish, value-only Batch-Factories, technische Mutation-Referenzen und atomare `GraphMutationBatch`-Werte ohne Nutzdaten.
 
 ### Storage / Sync / Caches
 
@@ -102,7 +102,7 @@ BrainMesh ist eine SwiftUI-iOS/iPadOS-App für graphbasiertes Wissens- und Entit
   - `BrainMesh/Search/BrainMeshSearchService.swift` mit value-only Candidate Providern unter `BrainMesh/Search/Candidates/`
   - `BrainMesh/DataAccess/GraphReadRepository.swift` für vollständige graph-scoped Source-Snapshots
   - `BrainMesh/DataAccess/NodeRepository.swift` für graph-scoped Node-Lookups und direkte Nachbarschaften
-  - `BrainMesh/DataAccess/Mutations/GraphMutationEventBus.swift` für actor-sichere, multicastfähige Post-Commit-Ereignisse; produktive Publisher folgen in einem separaten Slice
+  - `BrainMesh/DataAccess/Mutations/GraphMutationEventBus.swift` und `GraphMutationCommitter.swift` für actor-sichere Multicast-Ereignisse und die zentrale Save-then-Publish-Grenze; produktiv angebunden sind die geradlinigen Entity-, Attribute-, Einzel-Link- und Detail-Basismutationen
   - `BrainMesh/Mainscreen/Deletion/GraphNodeDeletionService.swift` für graph-scoped Entity-/Attribute-Löschungen mit Link-, Attachment- und Detail-Cleanup
   - `BrainMesh/Mainscreen/LinkCleanup.swift` mit `NodeRenameService`
 
@@ -123,7 +123,7 @@ BrainMesh ist eine SwiftUI-iOS/iPadOS-App für graphbasiertes Wissens- und Entit
 | `BrainMesh/Settings/` | Settings, Sync, Appearance, Display, Guide | Sync-Diagnose und große Guide-View |
 | `BrainMesh/Attachments/` | Attachment-Modell, Store, Hydrator, Import, Thumbnails | CloudKit-Assets, lokale Cache-Dateien, 25-MB-Limit |
 | `BrainMesh/Search/` | Search-Orchestrator, Candidate Provider, Ranking, Command Center | Provider-Grenze ist vorhanden; Links, Detailwerte und Attachments werden weiterhin graphweit gescannt |
-| `BrainMesh/DataAccess/` | Graph-scoped Fetch-Factories, Read-Repositories, value-only DTOs und Mutation-Infrastruktur | nicht-optionaler `GraphScope`; actor-sicherer Event-Bus; keine SwiftData-Modelle, Attachment-Binärdaten oder Nutzdaten über Actor-Grenzen |
+| `BrainMesh/DataAccess/` | Graph-scoped Fetch-Factories, Read-Repositories, value-only DTOs und Mutation-Infrastruktur | nicht-optionaler `GraphScope`; actor-sicherer Event-Bus; zentraler Main-Actor-Committer; keine SwiftData-Modelle, Attachment-Binärdaten oder Nutzdaten über Actor-Grenzen |
 | `BrainMesh/PhotoGallery/` | Galerie-Browser/Viewer/Section | `@Query` über Attachment-Galeriebilder |
 | `BrainMesh/GraphPicker/` | Graph-Auswahl, Löschen, Sheet | Graph-Lifecycle und Pro-Limit |
 | `BrainMesh/Security/` | Graph-Lock, Unlock, Crypto | Zugriffsschutz, ScenePhase-Interaktion |

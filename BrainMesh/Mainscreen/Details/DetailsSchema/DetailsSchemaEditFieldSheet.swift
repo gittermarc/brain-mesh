@@ -22,6 +22,7 @@ struct DetailsEditFieldSheet: View {
     @State private var optionsText: String = ""
 
     @State private var error: String? = nil
+    @State private var isSaving: Bool = false
 
     var body: some View {
         NavigationStack {
@@ -70,10 +71,11 @@ struct DetailsEditFieldSheet: View {
 
                 Section {
                     Button(role: .destructive) {
-                        deleteField()
+                        Task { await deleteField() }
                     } label: {
                         Label("Feld löschen", systemImage: "trash")
                     }
+                    .disabled(isSaving)
                 }
             }
             .navigationTitle("Feld bearbeiten")
@@ -81,13 +83,15 @@ struct DetailsEditFieldSheet: View {
             .toolbar {
                 ToolbarItem(placement: .topBarLeading) {
                     Button("Schließen") { dismiss() }
+                        .disabled(isSaving)
                 }
 
                 ToolbarItem(placement: .topBarTrailing) {
                     Button("Sichern") {
-                        saveChanges()
+                        Task { await saveChanges() }
                     }
                     .font(.headline)
+                    .disabled(isSaving)
                 }
             }
             .onAppear {
@@ -98,9 +102,12 @@ struct DetailsEditFieldSheet: View {
                 optionsText = field.options.joined(separator: "\n")
             }
         }
+        .interactiveDismissDisabled(isSaving)
     }
 
-    private func saveChanges() {
+    @MainActor
+    private func saveChanges() async {
+        guard !isSaving else { return }
         error = nil
 
         let cleanedName = name.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -125,36 +132,67 @@ struct DetailsEditFieldSheet: View {
             return
         }
 
+        let cleanedUnit = unit.trimmingCharacters(in: .whitespacesAndNewlines)
+        let finalUnit = type.supportsUnit && !cleanedUnit.isEmpty ? cleanedUnit : nil
+        let finalOptions = type.supportsOptions ? options : []
+
+        let hasChanges = field.name != cleanedName ||
+            field.type != type ||
+            field.unit != finalUnit ||
+            field.isPinned != isPinned ||
+            field.options != finalOptions
+
+        guard hasChanges else {
+            onResult(.saved)
+            dismiss()
+            return
+        }
+
+        isSaving = true
+        defer { isSaving = false }
+
         field.name = cleanedName
         field.type = type
-        field.unit = (type.supportsUnit && !unit.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty) ? unit : nil
+        field.unit = finalUnit
         field.isPinned = isPinned
+        field.setOptions(finalOptions)
 
-        if type.supportsOptions {
-            field.setOptions(options)
-        } else {
-            field.optionsJSON = nil
+        do {
+            _ = try await DetailsSchemaActions.commitFieldUpdate(
+                field,
+                in: entity,
+                modelContext: modelContext
+            )
+            onResult(.saved)
+            dismiss()
+        } catch is CancellationError {
+            modelContext.rollback()
+        } catch {
+            modelContext.rollback()
+            self.error = error.localizedDescription
         }
-
-        try? modelContext.save()
-        onResult(.saved)
-        dismiss()
     }
 
-    private func deleteField() {
-        DetailsSchemaActions.deleteAllValues(modelContext: modelContext, forFieldID: field.id)
-        entity.removeDetailField(field)
-        modelContext.delete(field)
+    @MainActor
+    private func deleteField() async {
+        guard !isSaving else { return }
+        error = nil
+        isSaving = true
+        defer { isSaving = false }
 
-        // Reindex remaining
-        let remaining = entity.detailFieldsList
-            .filter { $0.id != field.id }
-            .sorted(by: { $0.sortIndex < $1.sortIndex })
-        for (idx, f) in remaining.enumerated() {
-            f.sortIndex = idx
+        do {
+            _ = try await DetailsSchemaActions.deleteField(
+                field,
+                from: entity,
+                modelContext: modelContext
+            )
+            dismiss()
+        } catch is CancellationError {
+            modelContext.rollback()
+        } catch {
+            modelContext.rollback()
+            self.error = error.localizedDescription
         }
-
-        try? modelContext.save()
-        dismiss()
     }
+
 }
