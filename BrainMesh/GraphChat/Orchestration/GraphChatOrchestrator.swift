@@ -60,6 +60,7 @@ actor GraphChatOrchestrator {
         let requestID: UUID
         let task: Task<Void, Never>
         var sessionID: GraphChatModelSessionID?
+        var evidenceRegistry: GraphChatEvidenceRegistry?
     }
 
     private let provider: any GraphChatModelProvider
@@ -161,7 +162,8 @@ actor GraphChatOrchestrator {
             activeGeneration = ActiveGeneration(
                 requestID: requestID,
                 task: task,
-                sessionID: nil
+                sessionID: nil,
+                evidenceRegistry: nil
             )
             pair.continuation.onTermination = { @Sendable [weak self] _ in
                 Task {
@@ -181,16 +183,19 @@ actor GraphChatOrchestrator {
         guard let activeGeneration else {
             return
         }
+        let evidenceRegistry = activeGeneration.evidenceRegistry
         activeGeneration.task.cancel()
         if let sessionID = activeGeneration.sessionID {
             await provider.cancelGeneration(sessionID: sessionID)
         }
         await activeGeneration.task.value
+        await evidenceRegistry?.removeAll()
     }
 
     func discardSession() async {
         await cancelCurrentGeneration()
         if let preparedSession {
+            await preparedSession.evidenceRegistry.removeAll()
             await provider.discardSession(sessionID: preparedSession.sessionID)
             self.preparedSession = nil
         }
@@ -213,7 +218,7 @@ actor GraphChatOrchestrator {
         do {
             let normalizedQuestion = try validateQuestion(question)
             let initialResources = try await takeOrCreateSessionResources(for: key)
-            setActiveSessionID(initialResources.sessionID, requestID: requestID)
+            setActiveResources(initialResources, requestID: requestID)
             let answer = try await generateWithSingleContextRetry(
                 resources: initialResources,
                 question: normalizedQuestion,
@@ -256,18 +261,21 @@ actor GraphChatOrchestrator {
                     conversationSummary: summary,
                     continuation: continuation
                 )
+                await resources.evidenceRegistry.removeAll()
                 await provider.discardSession(sessionID: resources.sessionID)
                 return answer
             } catch let error as GraphChatProviderError
                 where error.code == .contextWindowExceeded && retryCount == 0 {
+                await resources.evidenceRegistry.removeAll()
                 await provider.discardSession(sessionID: resources.sessionID)
                 retryCount += 1
                 resources = try await replaceSession(in: resources)
-                setActiveSessionID(resources.sessionID, requestID: requestID)
+                setActiveResources(resources, requestID: requestID)
             } catch {
                 if Task.isCancelled {
                     await provider.cancelGeneration(sessionID: resources.sessionID)
                 }
+                await resources.evidenceRegistry.removeAll()
                 await provider.discardSession(sessionID: resources.sessionID)
                 throw error
             }
@@ -485,11 +493,13 @@ actor GraphChatOrchestrator {
         }
         switch concurrentRequestPolicy {
         case .cancelPrevious:
+            let evidenceRegistry = activeGeneration.evidenceRegistry
             activeGeneration.task.cancel()
             if let sessionID = activeGeneration.sessionID {
                 await provider.cancelGeneration(sessionID: sessionID)
             }
             await activeGeneration.task.value
+            await evidenceRegistry?.removeAll()
         }
     }
 
@@ -503,14 +513,15 @@ actor GraphChatOrchestrator {
         }
     }
 
-    private func setActiveSessionID(
-        _ sessionID: GraphChatModelSessionID,
+    private func setActiveResources(
+        _ resources: SessionResources,
         requestID: UUID
     ) {
         guard var activeGeneration, activeGeneration.requestID == requestID else {
             return
         }
-        activeGeneration.sessionID = sessionID
+        activeGeneration.sessionID = resources.sessionID
+        activeGeneration.evidenceRegistry = resources.evidenceRegistry
         self.activeGeneration = activeGeneration
     }
 
@@ -525,6 +536,7 @@ actor GraphChatOrchestrator {
         guard let preparedSession, preparedSession.key != key else {
             return
         }
+        await preparedSession.evidenceRegistry.removeAll()
         await provider.discardSession(sessionID: preparedSession.sessionID)
         self.preparedSession = nil
     }

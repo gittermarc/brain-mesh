@@ -21,6 +21,7 @@ struct GraphCanvasActionRailModel: Equatable, Sendable {
     var actions: [GraphCanvasActionRailAction] {
         var result: [GraphCanvasActionRailAction] = [
             .openDetails,
+            .askGraph,
             .center,
             .expandNeighbors
         ]
@@ -42,6 +43,7 @@ struct GraphCanvasActionRailModel: Equatable, Sendable {
 
 enum GraphCanvasActionRailActionKind: Hashable, Sendable {
     case openDetails
+    case askGraph
     case center
     case expandNeighbors
     case setFocus
@@ -63,6 +65,7 @@ struct GraphCanvasActionRailAction: Identifiable, Equatable, Sendable {
     var id: String {
         switch kind {
         case .openDetails: return "openDetails"
+        case .askGraph: return "askGraph"
         case .center: return "center"
         case .expandNeighbors: return "expandNeighbors"
         case .setFocus: return "setFocus"
@@ -80,6 +83,15 @@ struct GraphCanvasActionRailAction: Identifiable, Equatable, Sendable {
         compactTitle: "Details",
         systemImage: "info.circle",
         accessibilityLabel: "Details öffnen",
+        badgeText: nil
+    )
+
+    static let askGraph = GraphCanvasActionRailAction(
+        kind: .askGraph,
+        title: "Zu diesem Node fragen",
+        compactTitle: "Fragen",
+        systemImage: "bubble.left.and.bubble.right",
+        accessibilityLabel: "Graph Chat zu diesem Node öffnen",
         badgeText: nil
     )
 

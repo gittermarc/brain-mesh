@@ -17,6 +17,35 @@ nonisolated enum RootTab: Int, Hashable, Sendable {
     case graph = 1
     case stats = 2
     case settings = 3
+    case chat = 4
+
+    static let visibleOrder: [RootTab] = [
+        .entities,
+        .graph,
+        .chat,
+        .stats,
+        .settings
+    ]
+
+    var title: String {
+        switch self {
+        case .entities: return "Entitäten"
+        case .graph: return "Graph"
+        case .chat: return "Chat"
+        case .stats: return "Stats"
+        case .settings: return "Einstellungen"
+        }
+    }
+
+    var systemImage: String {
+        switch self {
+        case .entities: return "list.bullet"
+        case .graph: return "circle.grid.cross"
+        case .chat: return "bubble.left.and.bubble.right"
+        case .stats: return "chart.bar"
+        case .settings: return "gearshape"
+        }
+    }
 }
 
 /// Small router that owns the currently selected root tab.
@@ -44,6 +73,9 @@ final class RootTabRouter: ObservableObject {
 
     @MainActor
     func openGraph(animated: Bool = true) { select(.graph, animated: animated) }
+
+    @MainActor
+    func openChat(animated: Bool = true) { select(.chat, animated: animated) }
 
     @MainActor
     func openStats(animated: Bool = true) { select(.stats, animated: animated) }

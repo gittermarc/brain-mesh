@@ -48,6 +48,10 @@ actor GraphChatEvidenceRegistry {
         evidenceByID[id] != nil
     }
 
+    func removeAll() {
+        evidenceByID.removeAll(keepingCapacity: false)
+    }
+
     func snapshotForTesting() -> [GraphEvidence] {
         evidenceByID.values.sorted {
             $0.id.rawValue.uuidString < $1.id.rawValue.uuidString

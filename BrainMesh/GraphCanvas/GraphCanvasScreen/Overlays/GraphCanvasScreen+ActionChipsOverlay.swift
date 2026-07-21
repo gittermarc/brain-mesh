@@ -56,6 +56,8 @@ extension GraphCanvasScreen {
         switch action {
         case .openDetails:
             openDetails(for: node.key)
+        case .askGraph:
+            openGraphChat(for: node.key)
         case .center:
             cameraCommand = CameraCommand(kind: .center(node.key))
         case .expandNeighbors:
@@ -129,6 +131,22 @@ extension GraphCanvasScreen {
 
     func nodeLabel(for node: GraphNode) -> String {
         labelCache[node.key] ?? node.label
+    }
+
+    func openGraphChat(for key: NodeKey) {
+        guard let activeGraphID else {
+            return
+        }
+        let launch = GraphChatContextEntryPoint.graphNode(
+            graphID: activeGraphID,
+            node: key
+        )
+        graphChatLaunchCoordinator.launch(
+            scope: launch.scope,
+            prefilledQuestion: launch.prefilledQuestion,
+            presentationStyle: .rootTab
+        )
+        tabRouter.openChat()
     }
 
     func openDetails(for key: NodeKey) {

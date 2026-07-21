@@ -13,6 +13,7 @@ struct CommandCenterView: View {
     @EnvironmentObject private var tabRouter: RootTabRouter
     @EnvironmentObject private var graphJump: GraphJumpCoordinator
     @EnvironmentObject private var recentNodeStore: RecentNodeStore
+    @EnvironmentObject private var graphChatLaunchCoordinator: GraphChatLaunchCoordinator
 
     @AppStorage(BMAppStorageKeys.activeGraphID) private var activeGraphIDString: String = ""
     private var activeGraphID: UUID? { UUID(uuidString: activeGraphIDString) }
@@ -201,6 +202,21 @@ struct CommandCenterView: View {
                 commandCenter.dismiss()
                 dismiss()
                 tabRouter.select(tab)
+
+            case .openChat:
+                guard let launch = CommandCenterActionResolver.graphChatLaunch(
+                    activeGraphID: activeGraphID
+                ) else {
+                    return
+                }
+                graphChatLaunchCoordinator.launch(
+                    scope: launch.scope,
+                    prefilledQuestion: launch.prefilledQuestion,
+                    presentationStyle: .rootTab
+                )
+                commandCenter.dismiss()
+                dismiss()
+                tabRouter.openChat()
 
             case .jumpToGraph(let graphID, let nodeKey):
                 graphJump.requestJump(to: nodeKey, in: graphID, centerOnArrival: true)

@@ -20,6 +20,7 @@ struct AttributeDetailHeroAndToolbelt: View {
     let onAddLink: () -> Void
     let onAddPhoto: () -> Void
     let onAddFile: () -> Void
+    let onAskGraph: () -> Void
 
     var body: some View {
         VStack(spacing: 14) {
@@ -39,6 +40,12 @@ struct AttributeDetailHeroAndToolbelt: View {
                 NodeToolbeltButton(title: "Foto", systemImage: "photo") { onAddPhoto() }
                 NodeToolbeltButton(title: "Datei", systemImage: "paperclip") { onAddFile() }
             }
+
+            Button(action: onAskGraph) {
+                Label("Zu diesem Eintrag fragen", systemImage: "bubble.left.and.bubble.right")
+                    .frame(maxWidth: .infinity)
+            }
+            .buttonStyle(.bordered)
         }
     }
 }

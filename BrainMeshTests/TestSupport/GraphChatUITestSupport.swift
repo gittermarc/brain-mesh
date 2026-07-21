@@ -165,16 +165,16 @@ nonisolated struct GraphChatUIFakeIndexProvider: GraphChatIndexStatusProviding {
 
 @MainActor
 final class GraphChatUINavigationRecorder {
-    private(set) var openedTargets: [GraphSourceNavigationTarget] = []
-    private(set) var shownTargets: [GraphSourceNavigationTarget] = []
+    private(set) var openedReferences: [GraphSourceReference] = []
+    private(set) var shownReferences: [GraphSourceReference] = []
 
     func actions() -> GraphChatNavigationActions {
         GraphChatNavigationActions(
-            openEntry: { [weak self] target in
-                self?.openedTargets.append(target)
+            openEntry: { [weak self] reference in
+                self?.openedReferences.append(reference)
             },
-            showInGraph: { [weak self] target in
-                self?.shownTargets.append(target)
+            showInGraph: { [weak self] reference in
+                self?.shownReferences.append(reference)
             }
         )
     }

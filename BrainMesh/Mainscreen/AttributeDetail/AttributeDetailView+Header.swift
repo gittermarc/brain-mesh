@@ -28,7 +28,8 @@ extension AttributeDetailView {
             pills: heroPills,
             onAddLink: { showLinkChooser = true },
             onAddPhoto: { showGalleryBrowser = true },
-            onAddFile: { showAttachmentChooser = true }
+            onAddFile: { showAttachmentChooser = true },
+            onAskGraph: openGraphChatForAttribute
         )
 
         AttributeDetailHighlightsRow(
@@ -52,6 +53,23 @@ extension AttributeDetailView {
                 }
             }
         )
+    }
+
+    func openGraphChatForAttribute() {
+        guard let graphID = attribute.graphID ?? attribute.owner?.graphID,
+              UUID(uuidString: activeGraphIDString) == graphID else {
+            return
+        }
+        let launch = GraphChatContextEntryPoint.attribute(
+            graphID: graphID,
+            attributeID: attribute.id
+        )
+        graphChatLaunchCoordinator.launch(
+            scope: launch.scope,
+            prefilledQuestion: launch.prefilledQuestion,
+            presentationStyle: .rootTab
+        )
+        tabRouter.openChat()
     }
 
     var heroPills: [NodeStatPill] {

@@ -28,6 +28,7 @@ final class GraphChatViewModel: ObservableObject {
     private let indexStatusProvider: any GraphChatIndexStatusProviding
     private let historyStore: any GraphChatHistoryStoring
     private let navigationActions: GraphChatNavigationActions
+    private let generationAccessProvider: @MainActor () -> Bool
 
     private var generationTask: Task<Void, Never>?
     private var hasLoaded = false
@@ -42,7 +43,8 @@ final class GraphChatViewModel: ObservableObject {
         availabilityProvider: any GraphChatAvailabilityProviding,
         indexStatusProvider: any GraphChatIndexStatusProviding,
         historyStore: any GraphChatHistoryStoring,
-        navigationActions: GraphChatNavigationActions
+        navigationActions: GraphChatNavigationActions,
+        generationAccessProvider: @escaping @MainActor () -> Bool = { true }
     ) {
         precondition(
             graphScope == chatScope.graphScope,
@@ -57,6 +59,7 @@ final class GraphChatViewModel: ObservableObject {
         self.indexStatusProvider = indexStatusProvider
         self.historyStore = historyStore
         self.navigationActions = navigationActions
+        self.generationAccessProvider = generationAccessProvider
     }
 
     deinit {
@@ -76,7 +79,9 @@ final class GraphChatViewModel: ObservableObject {
     }
 
     var canSend: Bool {
-        composerState.canSend && availabilityState.isAvailable
+        composerState.canSend
+            && availabilityState.isAvailable
+            && generationAccessProvider()
     }
 
     var suggestions: [GraphChatEmptyStateSuggestion] {
@@ -143,6 +148,20 @@ final class GraphChatViewModel: ObservableObject {
         composerState.text = String(text.prefix(4_000))
     }
 
+    func notifyGenerationAccessChanged() {
+        objectWillChange.send()
+    }
+
+    func applyPrefilledQuestion(_ question: String?) {
+        guard isGenerating == false,
+              composerState.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+              let question = question?.trimmingCharacters(in: .whitespacesAndNewlines),
+              question.isEmpty == false else {
+            return
+        }
+        composerState.text = String(question.prefix(4_000))
+    }
+
     func useSuggestion(_ suggestion: GraphChatEmptyStateSuggestion) {
         guard isGenerating == false else {
             return
@@ -159,6 +178,7 @@ final class GraphChatViewModel: ObservableObject {
 
     func send() {
         guard availabilityState.isAvailable,
+              generationAccessProvider(),
               let question = composerState.submissionText() else {
             return
         }
@@ -185,7 +205,8 @@ final class GraphChatViewModel: ObservableObject {
     }
 
     func retry(messageID: UUID) {
-        guard isGenerating == false,
+        guard generationAccessProvider(),
+              isGenerating == false,
               let index = messages.firstIndex(where: { $0.id == messageID }),
               case .assistant(let state) = messages[index].state,
               state.canRetry else {
@@ -219,18 +240,29 @@ final class GraphChatViewModel: ObservableObject {
         await historyStore.removeMessages(for: chatScope)
     }
 
+    func discardSensitiveState() {
+        generationTask?.cancel()
+        generationTask = nil
+        composerState = GraphChatComposerState()
+        messages = []
+        schemaSnapshot = nil
+        schemaErrorMessage = nil
+        indexState = .loading
+        scrollAnchorToken = UUID()
+    }
+
     func openEntry(_ presentation: GraphChatEvidencePresentation) {
-        guard let target = presentation.navigationTarget else {
+        guard presentation.canOpenEntry else {
             return
         }
-        navigationActions.openEntry(target)
+        navigationActions.openEntry(presentation.sourceReference)
     }
 
     func showInGraph(_ presentation: GraphChatEvidencePresentation) {
-        guard let target = presentation.navigationTarget else {
+        guard presentation.canShowInGraph else {
             return
         }
-        navigationActions.showInGraph(target)
+        navigationActions.showInGraph(presentation.sourceReference)
     }
 
     private func startGeneration(

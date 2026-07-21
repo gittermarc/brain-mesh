@@ -14,10 +14,18 @@ import Combine
 final class GraphLockCoordinator: ObservableObject {
 
     @Published var activeRequest: GraphLockRequest?
+    @Published private(set) var lockRevision: UInt64 = 0
 
     @AppStorage(BMAppStorageKeys.activeGraphID) private var activeGraphIDString: String = ""
 
     private var unlockedGraphIDs: Set<UUID> = []
+    private var lockHandler: (@MainActor (UUID?) -> Void)?
+
+    func setLockHandler(
+        _ handler: @escaping @MainActor (UUID?) -> Void
+    ) {
+        lockHandler = handler
+    }
 
     func isUnlocked(graphID: UUID) -> Bool {
         unlockedGraphIDs.contains(graphID)
@@ -25,10 +33,14 @@ final class GraphLockCoordinator: ObservableObject {
 
     func lock(graphID: UUID) {
         unlockedGraphIDs.remove(graphID)
+        lockRevision &+= 1
+        lockHandler?(graphID)
     }
 
     func lockAll() {
         unlockedGraphIDs.removeAll()
+        lockRevision &+= 1
+        lockHandler?(nil)
     }
 
     func requestUnlock(
@@ -68,6 +80,7 @@ final class GraphLockCoordinator: ObservableObject {
 
         if success {
             unlockedGraphIDs.insert(req.graphID)
+            lockRevision &+= 1
             req.onSuccess?()
         } else {
             req.onCancel?()

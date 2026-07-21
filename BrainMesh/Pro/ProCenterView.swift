@@ -165,6 +165,12 @@ struct ProCenterView: View {
                     isProActive: proStore.isProActive,
                     onTap: { openPaywall(for: .graphProtection) }
                 )
+
+                ProFeatureCard(
+                    feature: .chatWithGraph,
+                    isProActive: proStore.isProActive,
+                    onTap: { openPaywall(for: .chatWithGraph) }
+                )
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
@@ -332,6 +338,8 @@ private struct ProFeatureCard: View {
             return "square.grid.2x2.fill"
         case .graphProtection:
             return "lock.shield.fill"
+        case .chatWithGraph:
+            return "bubble.left.and.bubble.right"
         }
     }
 }

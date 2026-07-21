@@ -25,7 +25,8 @@ extension EntityDetailView {
             onAddLink: { showLinkChooser = true },
             onAddAttribute: { showAddAttribute = true },
             onAddPhoto: { showGalleryBrowser = true },
-            onAddFile: { showAttachmentChooser = true }
+            onAddFile: { showAttachmentChooser = true },
+            onAskGraph: openGraphChatForEntity
         )
 
         EntityDetailHighlightsRow(
@@ -49,6 +50,23 @@ extension EntityDetailView {
                 }
             }
         )
+    }
+
+    func openGraphChatForEntity() {
+        guard let graphID = entity.graphID,
+              UUID(uuidString: activeGraphIDString) == graphID else {
+            return
+        }
+        let launch = GraphChatContextEntryPoint.entity(
+            graphID: graphID,
+            entityID: entity.id
+        )
+        graphChatLaunchCoordinator.launch(
+            scope: launch.scope,
+            prefilledQuestion: launch.prefilledQuestion,
+            presentationStyle: .rootTab
+        )
+        tabRouter.openChat()
     }
 
     var heroPills: [NodeStatPill] {

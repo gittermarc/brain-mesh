@@ -14,7 +14,7 @@ struct BrainMeshApp: App {
     @StateObject private var appearanceStore = AppearanceStore()
     @StateObject private var displaySettingsStore = DisplaySettingsStore()
     @StateObject private var onboardingCoordinator = OnboardingCoordinator()
-    @StateObject private var graphLockCoordinator = GraphLockCoordinator()
+    @StateObject private var graphLockCoordinator: GraphLockCoordinator
     @StateObject private var systemModalCoordinator = SystemModalCoordinator()
     @StateObject private var proStore = ProEntitlementStore()
     @StateObject private var tabRouter = RootTabRouter()
@@ -22,10 +22,15 @@ struct BrainMeshApp: App {
     @StateObject private var commandCenter = CommandCenterCoordinator()
     @StateObject private var recentNodeStore = RecentNodeStore()
     @StateObject private var entitiesHomeRouting = EntitiesHomeRoutingCoordinator()
+    @StateObject private var graphChatLaunchCoordinator: GraphChatLaunchCoordinator
+    @StateObject private var graphChatSessionStore: GraphChatSessionStore
 
     private let sharedModelContainer: ModelContainer
 
     init() {
+        let graphLockCoordinator = GraphLockCoordinator()
+        let graphChatLaunchCoordinator = GraphChatLaunchCoordinator()
+
         let schema = Schema([
             MetaGraph.self,
             MetaEntity.self,
@@ -59,6 +64,18 @@ struct BrainMeshApp: App {
             #endif
         }
 
+        let graphChatSessionStore = GraphChatSessionStore(
+            modelContainer: sharedModelContainer
+        )
+        graphLockCoordinator.setLockHandler { [weak graphChatSessionStore, weak graphChatLaunchCoordinator] graphID in
+            graphChatSessionStore?.handleSecurityLock(graphID: graphID)
+            graphChatLaunchCoordinator?.handleSecurityLock(graphID: graphID)
+        }
+
+        _graphLockCoordinator = StateObject(wrappedValue: graphLockCoordinator)
+        _graphChatLaunchCoordinator = StateObject(wrappedValue: graphChatLaunchCoordinator)
+        _graphChatSessionStore = StateObject(wrappedValue: graphChatSessionStore)
+
         // Refresh iCloud account status once on launch (shows up in Settings → Sync).
         Task.detached(priority: .utility) {
             await SyncRuntime.shared.refreshAccountStatus()
@@ -82,6 +99,8 @@ struct BrainMeshApp: App {
                 .environmentObject(commandCenter)
                 .environmentObject(recentNodeStore)
                 .environmentObject(entitiesHomeRouting)
+                .environmentObject(graphChatLaunchCoordinator)
+                .environmentObject(graphChatSessionStore)
         }
         .modelContainer(sharedModelContainer)
     }

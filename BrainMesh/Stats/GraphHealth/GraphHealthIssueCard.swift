@@ -10,6 +10,7 @@ struct GraphHealthIssueCard: View {
     let presentation: GraphHealthIssuePresentation
     let dashboardGraphID: UUID?
     let onAction: () -> Void
+    let onExplain: () -> Void
 
     private var resolvedAction: GraphHealthResolvedAction {
         GraphHealthActionResolver.primaryAction(for: issue, dashboardGraphID: dashboardGraphID)
@@ -24,10 +25,11 @@ struct GraphHealthIssueCard: View {
             header
             explanation
             actionArea
+            explainAction
         }
         .padding(12)
         .background(cardBackground)
-        .accessibilityElement(children: .combine)
+        .accessibilityElement(children: .contain)
     }
 
     private var header: some View {
@@ -85,6 +87,30 @@ struct GraphHealthIssueCard: View {
         } else {
             actionHint
         }
+    }
+
+    private var explainAction: some View {
+        Button(action: onExplain) {
+            HStack(spacing: 8) {
+                Image(systemName: "bubble.left.and.bubble.right")
+                    .frame(width: 18)
+                Text("Diesen Befund erklären")
+                    .font(.caption.weight(.semibold))
+                Spacer(minLength: 0)
+                Image(systemName: "chevron.right")
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(.secondary)
+            }
+            .padding(.horizontal, 10)
+            .padding(.vertical, 8)
+            .frame(maxWidth: .infinity, alignment: .leading)
+        }
+        .buttonStyle(.plain)
+        .background(
+            RoundedRectangle(cornerRadius: 12, style: .continuous)
+                .fill(.thinMaterial)
+        )
+        .accessibilityLabel("Diesen Befund im Graph Chat erklären")
     }
 
     private var actionHint: some View {

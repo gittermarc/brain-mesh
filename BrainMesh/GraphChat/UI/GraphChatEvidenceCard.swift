@@ -19,7 +19,7 @@ struct GraphChatEvidenceCard: View {
                     .font(.caption.weight(.semibold))
                     .foregroundStyle(.secondary)
                 Spacer(minLength: 8)
-                if evidence.navigationTarget != nil {
+                if evidence.canOpenEntry {
                     Image(systemName: "link")
                         .font(.caption)
                         .foregroundStyle(.secondary)
@@ -58,23 +58,25 @@ struct GraphChatEvidenceCard: View {
                 .accessibilityElement(children: .contain)
             }
 
-            if evidence.navigationTarget != nil {
+            if evidence.canOpenEntry || evidence.canShowInGraph {
                 HStack(spacing: 10) {
-                    Button(action: onOpenEntry) {
-                        Label("Eintrag öffnen", systemImage: "arrow.up.right.square")
-                            .frame(minHeight: 32)
+                    if evidence.canOpenEntry {
+                        Button(action: onOpenEntry) {
+                            Label("Eintrag öffnen", systemImage: "arrow.up.right.square")
+                                .frame(minHeight: 32)
+                        }
+                        .buttonStyle(.bordered)
+                        .accessibilityHint("Öffnet die validierte Quelle außerhalb des Chats.")
                     }
-                    .buttonStyle(.bordered)
-                    .disabled(evidence.canOpenEntry == false)
-                    .accessibilityHint("Öffnet die validierte Quelle außerhalb des Chats.")
 
-                    Button(action: onShowInGraph) {
-                        Label("Im Graph zeigen", systemImage: "point.3.connected.trianglepath.dotted")
-                            .frame(minHeight: 32)
+                    if evidence.canShowInGraph {
+                        Button(action: onShowInGraph) {
+                            Label("Im Graph zeigen", systemImage: "point.3.connected.trianglepath.dotted")
+                                .frame(minHeight: 32)
+                        }
+                        .buttonStyle(.bordered)
+                        .accessibilityHint("Fokussiert die validierte Quelle in der Graph-Ansicht.")
                     }
-                    .buttonStyle(.bordered)
-                    .disabled(evidence.canShowInGraph == false)
-                    .accessibilityHint("Fokussiert die validierte Quelle in der Graph-Ansicht.")
                 }
                 .controlSize(.small)
             }

@@ -15,6 +15,10 @@ struct AttributeDetailView: View {
     // NOTE: Must not be `private` because AttributeDetailView is split across multiple files via extensions.
     @EnvironmentObject var display: DisplaySettingsStore
     @EnvironmentObject var recentNodeStore: RecentNodeStore
+    @EnvironmentObject var graphChatLaunchCoordinator: GraphChatLaunchCoordinator
+    @EnvironmentObject var tabRouter: RootTabRouter
+
+    @AppStorage(BMAppStorageKeys.activeGraphID) var activeGraphIDString: String = ""
 
     @Bindable var attribute: MetaAttribute
 

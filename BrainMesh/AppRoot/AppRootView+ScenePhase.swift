@@ -39,6 +39,11 @@ extension AppRootView {
             guard systemModals.isSystemModalPresented == false else { return }
             Task { await handleBecameActive() }
         } else if newPhase == .background {
+            // Sensitive chat state is hidden immediately so it cannot remain in an app-switcher snapshot.
+            // The graph lock itself keeps its existing debounce to avoid disrupting system pickers.
+            graphChatSessionStore.handleSecurityLock()
+            graphChatLaunchCoordinator.handleSecurityLock(graphID: nil)
+
             // Auto-lock when the app actually goes to background — but debounce the lock.
             //
             // Why: When the system presents a Face ID prompt from inside a picker (notably

@@ -17,6 +17,9 @@ struct AppRootView: View {
 
     @EnvironmentObject var graphLock: GraphLockCoordinator
     @EnvironmentObject var systemModals: SystemModalCoordinator
+    @EnvironmentObject var proStore: ProEntitlementStore
+    @EnvironmentObject var graphChatLaunchCoordinator: GraphChatLaunchCoordinator
+    @EnvironmentObject var graphChatSessionStore: GraphChatSessionStore
 
     @AppStorage(BMAppStorageKeys.activeGraphID) var activeGraphIDString: String = ""
 
@@ -45,10 +48,26 @@ struct AppRootView: View {
             .onChange(of: scenePhase) { _, newPhase in
                 handleScenePhaseChange(newPhase)
             }
-            .onChange(of: activeGraphIDString) { _, _ in
+            .onChange(of: activeGraphIDString) { _, newValue in
+                graphChatSessionStore.handleActiveGraphChange()
+                graphChatLaunchCoordinator.handleActiveGraphChange(
+                    to: UUID(uuidString: newValue)
+                )
+
                 // Avoid forcing lock sheets on top of system pickers.
                 guard systemModals.isSystemModalPresented == false else { return }
                 Task { await enforceLockIfNeeded() }
+            }
+            .onChange(of: proStore.entitlement) { _, entitlement in
+                guard entitlement != .pro else {
+                    return
+                }
+                graphChatSessionStore.handleEntitlementRevocation()
+                if let activeGraphID = UUID(uuidString: activeGraphIDString) {
+                    graphChatLaunchCoordinator.resetToWholeGraph(activeGraphID)
+                } else {
+                    graphChatLaunchCoordinator.invalidate()
+                }
             }
             .sheet(isPresented: $onboarding.isPresented) {
                 OnboardingSheetView()

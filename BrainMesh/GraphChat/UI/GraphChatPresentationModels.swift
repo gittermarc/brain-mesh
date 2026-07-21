@@ -268,6 +268,7 @@ nonisolated struct GraphChatEvidencePresentation: Hashable, Sendable, Identifiab
     static let maximumFieldValues = 6
 
     let id: GraphEvidenceID
+    let sourceReference: GraphSourceReference
     let sourceKind: GraphSourceKind
     let sourceKindTitle: String
     let title: String
@@ -277,6 +278,7 @@ nonisolated struct GraphChatEvidencePresentation: Hashable, Sendable, Identifiab
 
     init(evidence: GraphEvidence) {
         self.id = evidence.id
+        self.sourceReference = evidence.sourceReference
         self.sourceKind = evidence.sourceReference.sourceKind
         self.sourceKindTitle = Self.sourceTitle(
             for: evidence.sourceReference.sourceKind,
@@ -300,10 +302,18 @@ nonisolated struct GraphChatEvidencePresentation: Hashable, Sendable, Identifiab
 
     var canOpenEntry: Bool {
         navigationTarget != nil
+            || (sourceKind == .link && sourceReference.linkID != nil)
     }
 
     var canShowInGraph: Bool {
-        navigationTarget != nil
+        switch sourceKind {
+        case .graph:
+            return false
+        case .link:
+            return sourceReference.node != nil || sourceReference.owner != nil
+        case .entity, .attribute, .detailField, .detailValue, .attachment:
+            return navigationTarget != nil
+        }
     }
 
     private static func sourceTitle(

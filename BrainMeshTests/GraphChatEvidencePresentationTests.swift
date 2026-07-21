@@ -92,6 +92,38 @@ struct GraphChatEvidencePresentationTests {
     }
 
     @Test
+    func linkCanOpenEndpointRouteWithoutGraphJumpAndGraphStatsDoNotOfferNodeJump() {
+        let graphID = GraphChatTestSupport.graphID
+        let link = GraphEvidence(
+            sourceReference: GraphSourceReference(
+                graphID: graphID,
+                sourceKind: .link,
+                sourceID: UUID(),
+                linkID: UUID()
+            ),
+            summary: "Verbindung",
+            navigationTitle: "Verbindung"
+        )
+        let graph = GraphEvidence(
+            sourceReference: GraphSourceReference(
+                graphID: graphID,
+                sourceKind: .graph,
+                sourceID: graphID
+            ),
+            summary: "Statistik",
+            navigationTitle: "Graph"
+        )
+
+        let linkPresentation = GraphChatEvidencePresentation(evidence: link)
+        let graphPresentation = GraphChatEvidencePresentation(evidence: graph)
+
+        #expect(linkPresentation.canOpenEntry)
+        #expect(linkPresentation.canShowInGraph == false)
+        #expect(graphPresentation.canOpenEntry)
+        #expect(graphPresentation.canShowInGraph == false)
+    }
+
+    @Test
     func injectedNavigationActionsReceiveValidatedTarget() throws {
         let recorder = GraphChatUINavigationRecorder()
         let setup = GraphChatUITestSupport.makeViewModel(
@@ -103,13 +135,13 @@ struct GraphChatEvidencePresentationTests {
             kind: .entity
         )
         let presentation = GraphChatEvidencePresentation(evidence: evidence)
-        let target = try #require(presentation.navigationTarget)
+        _ = try #require(presentation.navigationTarget)
 
         setup.viewModel.openEntry(presentation)
         setup.viewModel.showInGraph(presentation)
 
-        #expect(recorder.openedTargets == [target])
-        #expect(recorder.shownTargets == [target])
+        #expect(recorder.openedReferences == [evidence.sourceReference])
+        #expect(recorder.shownReferences == [evidence.sourceReference])
     }
 
     private func makeEvidence(

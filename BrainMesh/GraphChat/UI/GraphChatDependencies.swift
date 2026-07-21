@@ -2,7 +2,7 @@
 //  GraphChatDependencies.swift
 //  BrainMesh
 //
-//  Dependency boundaries for the internal graph chat presentation layer.
+//  Dependency boundaries for the graph chat presentation layer.
 //
 
 import Foundation
@@ -113,12 +113,12 @@ actor InMemoryGraphChatHistoryStore: GraphChatHistoryStoring {
 
 @MainActor
 struct GraphChatNavigationActions {
-    let openEntry: (GraphSourceNavigationTarget) -> Void
-    let showInGraph: (GraphSourceNavigationTarget) -> Void
+    let openEntry: (GraphSourceReference) -> Void
+    let showInGraph: (GraphSourceReference) -> Void
 
     init(
-        openEntry: @escaping (GraphSourceNavigationTarget) -> Void,
-        showInGraph: @escaping (GraphSourceNavigationTarget) -> Void
+        openEntry: @escaping (GraphSourceReference) -> Void,
+        showInGraph: @escaping (GraphSourceReference) -> Void
     ) {
         self.openEntry = openEntry
         self.showInGraph = showInGraph

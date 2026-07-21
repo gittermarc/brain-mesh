@@ -19,6 +19,7 @@ struct GraphStatsView: View {
     @EnvironmentObject private var graphJump: GraphJumpCoordinator
     @EnvironmentObject private var commandCenter: CommandCenterCoordinator
     @EnvironmentObject private var entitiesHomeRouting: EntitiesHomeRoutingCoordinator
+    @EnvironmentObject private var graphChatLaunchCoordinator: GraphChatLaunchCoordinator
 
     @AppStorage(BMAppStorageKeys.activeGraphID) private var activeGraphIDString: String = ""
     var activeGraphID: UUID? { UUID(uuidString: activeGraphIDString) }
@@ -165,6 +166,35 @@ struct GraphStatsView: View {
     @MainActor
     func retryPerGraphCountsLoad() {
         _ = triggerPerGraphCountsReload(for: perGraphCountsLoadKey, force: true)
+    }
+
+    @MainActor
+    func explainHealthIssue(_ issue: GraphHealthIssue) {
+        guard let graphID = activeGraphID,
+              dashboardGraphID == graphID else {
+            return
+        }
+        let primaryNode: NodeKey?
+        if let rawKind = issue.primaryNodeKindRaw,
+           let kind = NodeKind(rawValue: rawKind),
+           let nodeID = issue.primaryNodeID {
+            primaryNode = NodeKey(kind: kind, uuid: nodeID)
+        } else {
+            primaryNode = nil
+        }
+        let launch = GraphChatContextEntryPoint.statsFinding(
+            graphID: graphID,
+            title: issue.title,
+            message: issue.message,
+            count: issue.count,
+            primaryNode: primaryNode
+        )
+        graphChatLaunchCoordinator.launch(
+            scope: launch.scope,
+            prefilledQuestion: launch.prefilledQuestion,
+            presentationStyle: .rootTab
+        )
+        tabRouter.openChat()
     }
 
     @MainActor

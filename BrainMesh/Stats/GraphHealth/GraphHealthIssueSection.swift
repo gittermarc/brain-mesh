@@ -10,6 +10,7 @@ struct GraphHealthIssueSection: View {
     let issues: [GraphHealthIssue]
     let dashboardGraphID: UUID?
     let onIssueAction: (GraphHealthIssue) -> Void
+    let onExplainIssue: (GraphHealthIssue) -> Void
 
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
@@ -48,6 +49,9 @@ struct GraphHealthIssueSection: View {
                     dashboardGraphID: dashboardGraphID,
                     onAction: {
                         onIssueAction(issue)
+                    },
+                    onExplain: {
+                        onExplainIssue(issue)
                     }
                 )
             }

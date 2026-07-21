@@ -13,6 +13,10 @@ struct EntityDetailView: View {
     @Environment(\.dismiss) var dismiss
     @EnvironmentObject var display: DisplaySettingsStore
     @EnvironmentObject var recentNodeStore: RecentNodeStore
+    @EnvironmentObject var graphChatLaunchCoordinator: GraphChatLaunchCoordinator
+    @EnvironmentObject var tabRouter: RootTabRouter
+
+    @AppStorage(BMAppStorageKeys.activeGraphID) var activeGraphIDString: String = ""
 
     @Bindable var entity: MetaEntity
 

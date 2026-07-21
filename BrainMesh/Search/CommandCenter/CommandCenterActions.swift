@@ -10,6 +10,7 @@ import Foundation
 enum CommandCenterQuickAction: String, CaseIterable, Identifiable, Sendable {
     case addEntity
     case openGraph
+    case chatWithGraph
     case openStats
     case graphTransfer
     case guide
@@ -22,6 +23,8 @@ enum CommandCenterQuickAction: String, CaseIterable, Identifiable, Sendable {
             return "Neue Entität"
         case .openGraph:
             return "Zum Graph"
+        case .chatWithGraph:
+            return "Frag deinen Graphen"
         case .openStats:
             return "Zu Stats"
         case .graphTransfer:
@@ -37,6 +40,8 @@ enum CommandCenterQuickAction: String, CaseIterable, Identifiable, Sendable {
             return "Einen neuen Knoten im aktiven Graph anlegen"
         case .openGraph:
             return "Den aktuellen Graph visuell erkunden"
+        case .chatWithGraph:
+            return "Eine Frage im Whole-Graph-Scope stellen"
         case .openStats:
             return "Kennzahlen und Struktur prüfen"
         case .graphTransfer:
@@ -52,6 +57,8 @@ enum CommandCenterQuickAction: String, CaseIterable, Identifiable, Sendable {
             return "plus.circle"
         case .openGraph:
             return "circle.grid.cross"
+        case .chatWithGraph:
+            return "bubble.left.and.bubble.right"
         case .openStats:
             return "chart.bar"
         case .graphTransfer:
@@ -65,6 +72,7 @@ enum CommandCenterQuickAction: String, CaseIterable, Identifiable, Sendable {
 enum CommandCenterResolvedAction: Equatable, Sendable {
     case present(CommandCenterDestination)
     case selectTab(RootTab)
+    case openChat
     case jumpToGraph(graphID: UUID, nodeKey: NodeKey)
 }
 
@@ -73,12 +81,23 @@ enum CommandCenterActionResolver {
         .jumpToGraph(graphID: plan.graphID, nodeKey: plan.nodeKey)
     }
 
+    static func graphChatLaunch(
+        activeGraphID: UUID?
+    ) -> GraphChatContextLaunch? {
+        guard let activeGraphID else {
+            return nil
+        }
+        return GraphChatContextEntryPoint.wholeGraph(graphID: activeGraphID)
+    }
+
     static func action(for quickAction: CommandCenterQuickAction) -> CommandCenterResolvedAction {
         switch quickAction {
         case .addEntity:
             return .present(.addEntity)
         case .openGraph:
             return .selectTab(.graph)
+        case .chatWithGraph:
+            return .openChat
         case .openStats:
             return .selectTab(.stats)
         case .graphTransfer:

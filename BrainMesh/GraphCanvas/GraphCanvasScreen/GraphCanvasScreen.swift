@@ -15,6 +15,8 @@ struct GraphCanvasScreen: View {
     @EnvironmentObject var onboarding: OnboardingCoordinator
     // NOTE: Must not be `private` because jump handling touches helpers in separate extension files.
     @EnvironmentObject var graphJump: GraphJumpCoordinator
+    @EnvironmentObject var graphChatLaunchCoordinator: GraphChatLaunchCoordinator
+    @EnvironmentObject var tabRouter: RootTabRouter
 
     // ✅ Active Graph (Multi-Graph)
     @AppStorage(BMAppStorageKeys.activeGraphID) var activeGraphIDString: String = ""

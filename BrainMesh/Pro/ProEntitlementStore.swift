@@ -39,7 +39,7 @@ enum ProProductIDs {
 @MainActor
 final class ProEntitlementStore: ObservableObject {
 
-    enum EntitlementState: Equatable {
+    enum EntitlementState: Equatable, Sendable {
         case unknown
         case free
         case pro

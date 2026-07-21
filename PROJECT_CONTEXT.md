@@ -30,7 +30,7 @@ BrainMesh ist eine SwiftUI-iOS/iPadOS-App für graphbasiertes Wissens- und Entit
 - **Graph Transfer**: Export/Import für `.bmgraph` und `.bmbackup`, implementiert unter `BrainMesh/GraphTransfer/`.
 - **Command Center**: globale Suche/Aktionen, UI unter `BrainMesh/Search/CommandCenter/`; `BrainMeshSearchService` orchestriert den indexbasierten `IndexedSearchCandidateProvider`, die unveränderte Ranking-Schicht und den transparenten Legacy-Fallback unter `BrainMesh/Search/Candidates/`.
 - **GraphScope / Read Repositories**: `BrainMesh/DataAccess/` stellt eine nicht-optionale Graph-Grenze, zentrale Fetch-Descriptor-Factories und value-only DTO-Repositories für Graph-Snapshots, Node-Lookups und direkte Nachbarschaften bereit.
-- **Graph Chat Domain**: `BrainMesh/GraphChat/` enthält die UI-unabhängige Chat-Domain, promptfähige Schema-Snapshots ohne rohe UUIDs, appseitige Alias-Auflösung, strikt validierte Query-Pläne sowie eine deterministische read-only Faktenebene mit Query Engine, Tools und revalidierter Evidence. `GraphChatModelProvider` kapselt Apples on-device Foundation Models hinter einer providerunabhängigen Grenze; `GraphChatOrchestrator` bindet exakt einen aktiven Graph-/Chat-Scope, zentrale Tool-Budgets, gestreamte Antworten, Cancellation, begrenzten evidence-basierten Gesprächskontext und abschließende Evidence-Validierung zusammen. Unter `GraphChat/UI/` existiert eine vollständig injizierbare interne SwiftUI-Chatoberfläche mit Composer, Streaming-Zuständen, schemaabhängigen Vorschlägen, Evidence-Karten und graph-/scope-getrenntem In-Memory-Verlauf. Sie ist noch nicht als Root-Tab oder Command-Center-Einstieg registriert; Cloud-Provider und Schreiboperationen sind weiterhin nicht enthalten.
+- **Graph Chat Domain**: `BrainMesh/GraphChat/` enthält die UI-unabhängige Chat-Domain, promptfähige Schema-Snapshots ohne rohe UUIDs, appseitige Alias-Auflösung, strikt validierte Query-Pläne sowie eine deterministische read-only Faktenebene mit Query Engine, Tools und revalidierter Evidence. `GraphChatModelProvider` kapselt Apples on-device Foundation Models hinter einer providerunabhängigen Grenze; `GraphChatOrchestrator` bindet exakt einen aktiven Graph-/Chat-Scope, zentrale Tool-Budgets, gestreamte Antworten, Cancellation, begrenzten evidence-basierten Gesprächskontext und abschließende Evidence-Validierung zusammen. `GraphChatLaunchCoordinator` und `GraphChatSessionStore` integrieren dieselbe Chat-Infrastruktur produktiv in Root-Tab, Command Center, Entity-/Attribute-Details, Graph Canvas und Graph-Health-Befunde. Ein Defense-in-Depth-Gate erzwingt vor jeder Generation den aktiven Graphen, gültigen Scope, entsperrten Zustand und ein eindeutig aktives Pro-Entitlement; Graphwechsel, Lock und Background verwerfen Generation, Foundation-Models-Session, Evidence und sichtbaren sensiblen State. Evidence-Routen öffnen bestehende Node-Details beziehungsweise Link-Endpunkte und validieren den aktiven Graphen erneut. Cloud-Provider, Attachment-Inhaltsanalyse und Schreiboperationen sind weiterhin nicht enthalten.
 - **GraphMutationEventBus / GraphMutationCommitter**: actor-sicherer Multicast-Bus plus einzige Save-then-Publish-Grenze unter `BrainMesh/DataAccess/Mutations/`. Main-Actor-UI-Pfade und caller-isolierte GraphTransfer-Kontexte verwenden dieselbe Committer-Implementierung. Basis- und zusammengesetzte Mutationen, Graph-Lifecycle, Dedupe, Bootstrap-/Migrations-Reparaturen sowie Import/Replace publizieren ausschließlich technische graph-scoped Post-Commit-Batches. `GraphMutationCacheInvalidationCoordinator` invalidiert die vorhandenen Home- und Stats-Caches zentral und container-idempotent.
 
 ## Architecture Map
@@ -40,13 +40,13 @@ BrainMesh ist eine SwiftUI-iOS/iPadOS-App für graphbasiertes Wissens- und Entit
 - `BrainMesh/BrainMeshApp.swift`
   - erstellt das SwiftData-Schema und den `ModelContainer`.
   - konfiguriert CloudKit oder lokalen Fallback.
-  - erzeugt App-weite EnvironmentObjects: Appearance, Display, Onboarding, Graph Lock, Pro, Tabs, Jump, Command Center, Recent Nodes, EntitiesHome Routing.
+  - erzeugt App-weite EnvironmentObjects: Appearance, Display, Onboarding, Graph Lock, Pro, Tabs, Jump, Command Center, Recent Nodes, EntitiesHome Routing sowie Graph-Chat-Launch- und Session-Koordination.
   - ruft `AppLoadersConfigurator.configureAllLoaders(with:)` auf.
 - `BrainMesh/AppRoot/AppRootView.swift`
   - hostet `ContentView`.
   - steuert Startup, Onboarding, Graph Lock, ScenePhase und Image-Hydration.
 - `BrainMesh/ContentView.swift`
-  - Root `TabView` mit vier Tabs: Entitäten, Graph, Stats, Einstellungen.
+  - Root `TabView` mit fünf Tabs: Entitäten, Graph, Chat, Stats, Einstellungen.
   - hostet Command-Center-Sheets.
 
 ### Domain / Persistence
@@ -141,7 +141,7 @@ BrainMesh ist eine SwiftUI-iOS/iPadOS-App für graphbasiertes Wissens- und Entit
 | `BrainMesh/Attachments/` | Attachment-Modell, Store, Hydrator, Import, Thumbnails | CloudKit-Assets, lokale Cache-Dateien, 25-MB-Limit |
 | `BrainMesh/Search/` | Search-Orchestrator, Candidate Provider, Ranking, Command Center, lokaler SQLite-Index-Store | Der lokale Index ist nach `ensureReady` die primäre Candidate-Quelle; konkrete Graphen bleiben isoliert, globale Suchen verwenden den Index nur bei vollständiger Readiness aller relevanten Graphen, andernfalls die bestehende Provider-Pipeline |
 | `BrainMesh/DataAccess/` | Graph-scoped Fetch-Factories, Read-Repositories, value-only DTOs und Mutation-Infrastruktur | nicht-optionaler `GraphScope`; actor-sicherer Event-Bus; zentraler Main-Actor-Committer; keine SwiftData-Modelle, Attachment-Binärdaten oder Nutzdaten über Actor-Grenzen |
-| `BrainMesh/GraphChat/` | Chat-Kernmodelle, Schema-Snapshot, Query-Plan-Validierung, deterministische Query Engine, read-only Tools, Evidence, Foundation-Models-Provider, Streaming-Orchestrator und interne SwiftUI-Präsentationsschicht | Provider und Faktenebene bleiben UI-unabhängig; die interne UI wird vollständig injiziert und ist noch nicht im Root sichtbar; partielle Antworten enthalten keine aktivierten Quellen, finale Sources werden graph- und scope-scoped validiert; Verlauf nur in Memory; keine Attachment-Inhalte oder Writes |
+| `BrainMesh/GraphChat/` | Chat-Kernmodelle, Schema-Snapshot, Query-Plan-Validierung, deterministische Query Engine, read-only Tools, Evidence, Foundation-Models-Provider, Streaming-Orchestrator, produktives Routing und SwiftUI-Präsentationsschicht | Root- und Kontext-Einstiege teilen Coordinator und Session Store; aktiver Graph, Lock, Pro-Entitlement und Modellverfügbarkeit werden vor Generation erzwungen; finale Sources werden graph- und scope-scoped validiert; Verlauf nur in Memory; keine Attachment-Inhalte, Cloud-Verarbeitung oder Writes |
 | `BrainMesh/PhotoGallery/` | Galerie-Browser/Viewer/Section | `@Query` über Attachment-Galeriebilder |
 | `BrainMesh/GraphPicker/` | Graph-Auswahl, Löschen, Sheet | Graph-Lifecycle und Pro-Limit |
 | `BrainMesh/Security/` | Graph-Lock, Unlock, Crypto | Zugriffsschutz, ScenePhase-Interaktion |
@@ -298,11 +298,12 @@ BrainMesh ist eine SwiftUI-iOS/iPadOS-App für graphbasiertes Wissens- und Entit
 
 - `RootTab.entities`: `EntitiesHomeView()`.
 - `RootTab.graph`: `GraphCanvasScreen()`.
+- `RootTab.chat`: `GraphChatTabView()`.
 - `RootTab.stats`: `GraphStatsView()`.
 - `RootTab.settings`: `NavigationStack { SettingsView(showDoneButton: false) }`.
 - Command Center:
-  - `.sheet(isPresented: $commandCenter.isPresented)` → `CommandCenterView`.
-  - `.sheet(item: $commandCenter.destination)` → `CommandCenterDestinationSheet`.
+  - `.sheet(isPresented: $commandCenter.isPresented)` → `CommandCenterView`; Quick Action „Frag deinen Graphen“ startet den Whole-Graph-Scope des aktiven Graphen.
+  - `.sheet(item: $commandCenter.destination)` → `CommandCenterDestinationSheet`, einschließlich graph-validierter Graph-Chat-Evidence-Ziele.
 
 ### Entities Home
 

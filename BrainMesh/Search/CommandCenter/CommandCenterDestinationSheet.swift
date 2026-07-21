@@ -29,6 +29,11 @@ struct CommandCenterDestinationSheet: View {
             NavigationStack {
                 NodeDestinationView(kind: kind, id: id)
             }
+
+        case .graphChatSource(let destination):
+            NavigationStack {
+                GraphChatSourceDestinationView(destination: destination)
+            }
         }
     }
 }

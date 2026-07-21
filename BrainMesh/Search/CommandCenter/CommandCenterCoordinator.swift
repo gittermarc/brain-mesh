@@ -13,6 +13,7 @@ enum CommandCenterDestination: Identifiable, Hashable, Sendable {
     case graphTransfer
     case guide
     case nodeDetail(kind: NodeKind, id: UUID)
+    case graphChatSource(GraphChatSourceDestination)
 
     var id: String {
         switch self {
@@ -24,6 +25,8 @@ enum CommandCenterDestination: Identifiable, Hashable, Sendable {
             return "guide"
         case .nodeDetail(let kind, let id):
             return "nodeDetail-\(kind.rawValue)-\(id.uuidString)"
+        case .graphChatSource(let destination):
+            return "graphChatSource-\(String(describing: destination))"
         }
     }
 }

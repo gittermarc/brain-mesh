@@ -23,6 +23,25 @@ struct GraphCanvasActionRailModelTests {
     }
 
     @Test
+    func graphChatActionIsAvailableForEntityAndAttributeSelections() {
+        let entityModel = GraphCanvasActionRailModel(
+            nodeKind: .entity,
+            isPinned: false,
+            hiddenLinkCount: 0,
+            showsAllLinks: false
+        )
+        let attributeModel = GraphCanvasActionRailModel(
+            nodeKind: .attribute,
+            isPinned: false,
+            hiddenLinkCount: 0,
+            showsAllLinks: false
+        )
+
+        #expect(kinds(entityModel).contains(.askGraph))
+        #expect(kinds(attributeModel).contains(.askGraph))
+    }
+
+    @Test
     func linkToggleIsVisibleOnlyWhenHiddenLinksExist() {
         let noHiddenLinks = GraphCanvasActionRailModel(
             nodeKind: .entity,

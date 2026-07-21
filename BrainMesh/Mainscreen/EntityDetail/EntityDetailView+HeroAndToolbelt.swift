@@ -22,6 +22,7 @@ struct EntityDetailHeroAndToolbelt: View {
     let onAddAttribute: () -> Void
     let onAddPhoto: () -> Void
     let onAddFile: () -> Void
+    let onAskGraph: () -> Void
 
     private var heroCardConfig: (showsImage: Bool, imageHeight: CGFloat, cardHeight: CGFloat?) {
         switch heroImageStyle {
@@ -56,6 +57,12 @@ struct EntityDetailHeroAndToolbelt: View {
                 NodeToolbeltButton(title: "Foto", systemImage: "photo") { onAddPhoto() }
                 NodeToolbeltButton(title: "Datei", systemImage: "paperclip") { onAddFile() }
             }
+
+            Button(action: onAskGraph) {
+                Label("Zu dieser Entität fragen", systemImage: "bubble.left.and.bubble.right")
+                    .frame(maxWidth: .infinity)
+            }
+            .buttonStyle(.bordered)
         }
     }
 }

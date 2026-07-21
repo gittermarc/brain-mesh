@@ -8,6 +8,7 @@ import SwiftUI
 struct GraphHealthCenterCard: View {
     let snapshot: GraphHealthSnapshot
     let onIssueAction: (GraphHealthIssue) -> Void
+    let onExplainIssue: (GraphHealthIssue) -> Void
 
     private var presentation: GraphHealthCenterPresentation {
         GraphHealthCenterPresentation.make(snapshot: snapshot)
@@ -26,7 +27,8 @@ struct GraphHealthCenterCard: View {
                     presentation: presentation,
                     issues: visibleIssues,
                     dashboardGraphID: snapshot.graphID,
-                    onIssueAction: onIssueAction
+                    onIssueAction: onIssueAction,
+                    onExplainIssue: onExplainIssue
                 )
             }
         }

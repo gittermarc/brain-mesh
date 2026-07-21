@@ -15,7 +15,8 @@ extension GraphStatsView {
         if let activeHealth {
             GraphHealthCenterCard(
                 snapshot: activeHealth,
-                onIssueAction: handleHealthIssuePrimaryAction
+                onIssueAction: handleHealthIssuePrimaryAction,
+                onExplainIssue: explainHealthIssue
             )
         }
     }

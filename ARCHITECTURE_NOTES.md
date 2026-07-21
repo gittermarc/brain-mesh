@@ -65,10 +65,10 @@
 
 - `BrainMesh/ContentView.swift`
   - `TabView(selection: $tabRouter.selection)`.
-  - Tabs: `EntitiesHomeView`, `GraphCanvasScreen`, `GraphStatsView`, `SettingsView` in `NavigationStack`.
+  - Tabs: `EntitiesHomeView`, `GraphCanvasScreen`, `GraphChatTabView`, `GraphStatsView`, `SettingsView` in `NavigationStack`.
   - Command-Center-Sheet und Command-Center-Destination-Sheet.
 - `BrainMesh/RootTabRouter.swift`
-  - `RootTab`: `.entities`, `.graph`, `.stats`, `.settings`.
+  - `RootTab`: `.entities`, `.graph`, `.stats`, `.settings`, `.chat`; die bisherigen Raw Values 0–3 bleiben stabil, Chat verwendet Raw Value 4 und wird visuell zwischen Graph und Stats angezeigt.
   - `@MainActor` Methoden für Tab-Wechsel.
 
 ### Cross-Screen Navigation
@@ -77,7 +77,7 @@
   - speichert pending graph jump mit `graphID`, `NodeKey`, `centerOnArrival`.
   - Konsum in `GraphCanvasScreen`.
 - `BrainMesh/Search/CommandCenter/CommandCenterDestinationSheet.swift`
-  - Destinationen: Add Entity, Graph Transfer, Guide, Node Detail.
+  - Destinationen: Add Entity, Graph Transfer, Guide, Node Detail sowie graph-validierte Graph-Chat-Source-Ziele; die Quick Action „Frag deinen Graphen“ öffnet den gemeinsamen Chat im Whole-Graph-Scope.
 - `BrainMesh/Mainscreen/EntitiesHome/EntitiesHomeRoutes.swift`
   - Detail-Route per `@Query` auf `MetaEntity.id`.
 
@@ -667,11 +667,14 @@ Ziel: Storage- und Medienpfade entkoppeln.
   - Die Foundation-Models-Adapter akzeptieren ausschließlich kompakte Entity-, Field- und Node-Aliase sowie begrenzte Argumente. Graph- und Chat-Scope stammen unveränderbar aus der appseitigen Session-Konfiguration; jeder Aufruf läuft erneut durch die bestehenden Validatoren, deterministischen Tools und das zentrale Request-Budget. Tool-Ergebnisse enthalten ausschließlich begrenzte value-only Inhalte und registrierte Evidence-IDs.
   - `GraphChatOrchestrator` erzeugt pro Anfrage eine frische, graph-/scope-gebundene Provider-Session, erlaubt genau eine laufende Generation, verwirft vorbereitete Sessions bei Graph- oder Scope-Wechsel und folgt der Policy „neue Anfrage cancelt und wartet auf die vorherige“. Der Gesprächskontext wird nur als begrenzte evidence-basierte Zusammenfassung übernommen. Ein Context-Window-Fehler darf genau einen Retry mit einer frischen Session auslösen.
   - Partielle Stream-Inhalte tragen keine navigierbaren Quellen. Erst die finale strukturierte Antwort wird gegen die request-scoped `GraphChatEvidenceRegistry` geprüft; unbekannte IDs werden entfernt und eine Antwort ohne validierte Evidence wird als unzureichend gekennzeichnet.
-  - `UI/` setzt die interne SwiftUI-Präsentationsschicht auf diese Grenzen: `GraphChatViewModel` ist Main-Actor-isoliert, hält höchstens eine Generation, übersetzt Stream-Ereignisse deterministisch in laufende, partielle, finale, No-Results-, Availability-, Fehler-, Retry- und Cancellation-Zustände und speichert den Verlauf ausschließlich graph-/scope-getrennt im injizierten In-Memory-Store. Composer, schemaabhängige Vorschläge, Availability-/Indexstatus und Evidence-Karten sind getrennte Komponenten; Navigation wird nur über reine injizierte Actions ausgelöst.
-  - Evidence-Actions werden nur für finale Antworten aktiviert. Partielle Antworten, Tool-Aktivität und abgebrochene Antworten bieten keine Source-Navigation. Die interne View besitzt keinen Root-Tab-, Command-Center- oder Paywall-Einstieg.
+  - `UI/` setzt die SwiftUI-Präsentationsschicht auf diese Grenzen: `GraphChatViewModel` ist Main-Actor-isoliert, hält höchstens eine Generation, übersetzt Stream-Ereignisse deterministisch in laufende, partielle, finale, No-Results-, Availability-, Fehler-, Retry- und Cancellation-Zustände und speichert den Verlauf ausschließlich graph-/scope-getrennt im injizierten In-Memory-Store. Composer, schemaabhängige Vorschläge, Availability-/Indexstatus und Evidence-Karten sind getrennte Komponenten; Navigation wird nur über reine injizierte Actions ausgelöst.
+  - `Routing/` stellt mit `GraphChatLaunchCoordinator` value-only Scope-/Prompt-/Presentation-Requests für Root-Tab, Command Center, Entity-/Attribute-Details, Canvas-Auswahl und Stats-Befunde bereit. Alle Einstiege verwenden dieselbe `GraphChatView` und denselben `GraphChatSessionStore`.
+  - `Security/` erzwingt aktiven Graphen, exakt autorisierten Scope, Graph-Unlock und `ProEntitlementStore.entitlement == .pro` unmittelbar vor dem Orchestrator. Unknown und Free bleiben gesperrt. Graphwechsel, spezifischer/globaler Lock und Background verwerfen die laufende Generation, Provider-Session, Evidence-Registry und sichtbaren Chatstate; Rückkehr aus Lock oder Paywall startet konservativ im Whole-Graph-Scope.
+  - Evidence-Actions werden nur für finale Antworten aktiviert. Entity und Attribute öffnen bestehende Details; Detailwerte und Attachments öffnen den Owner-Node; Graph-Jumps verwenden den validierten `graphID` plus `NodeKey`; Link-Sources zeigen die bestehenden Endpunkte. Jede Route und jedes Source-Sheet prüft den aktiven Graphen und den Lockzustand erneut.
+  - Der Chat-Tab besitzt ein Basis-Pro-Gate und konkrete Foundation-Models-Availability-Zustände. Die Free-Preview darf ausschließlich schema-abgeleitete Fragen für einen entsperrten aktiven Graphen anzeigen und führt weder Modell- noch Tool-Aufrufe aus.
   - Die produktive Integration bleibt vollständig on-device, verwendet keinen API-Key und keinen eigenen Backend- oder Cloud-Fallback. Prompts und Antworten werden nicht geloggt. Das SwiftData-/CloudKit-Hauptschema bleibt unverändert.
 - Bewusste Grenze:
-  - Root-Tab, Command Center, produktives Pro-Gating, Cloud-Provider, Multi-Hop-Pfadsuche und sämtliche Schreiboperationen sind nicht Teil dieser Schicht.
+  - Cloud-Provider, Attachment-Inhaltsanalyse, Multi-Hop-Pfadsuche, finales Paywall-Polishing und sämtliche Schreiboperationen sind nicht Teil dieser Schicht.
 
 #### Mutation Events
 

@@ -15,23 +15,13 @@ struct ContentView: View {
 
     var body: some View {
         TabView(selection: $tabRouter.selection) {
-            EntitiesHomeView()
-                .tabItem { Label("Entitäten", systemImage: "list.bullet") }
-                .tag(RootTab.entities)
-
-            GraphCanvasScreen()
-                .tabItem { Label("Graph", systemImage: "circle.grid.cross") }
-                .tag(RootTab.graph)
-
-            GraphStatsView()
-                .tabItem { Label("Stats", systemImage: "chart.bar") }
-                .tag(RootTab.stats)
-
-            NavigationStack {
-                SettingsView(showDoneButton: false)
+            ForEach(RootTab.visibleOrder, id: \.self) { tab in
+                rootContent(for: tab)
+                    .tabItem {
+                        Label(tab.title, systemImage: tab.systemImage)
+                    }
+                    .tag(tab)
             }
-            .tabItem { Label("Einstellungen", systemImage: "gearshape") }
-            .tag(RootTab.settings)
         }
         .sheet(isPresented: $commandCenter.isPresented) {
             CommandCenterView(initialQuery: commandCenter.initialQuery)
@@ -40,6 +30,24 @@ struct ContentView: View {
             commandCenter.clearDestination()
         }) { destination in
             CommandCenterDestinationSheet(destination: destination)
+        }
+    }
+
+    @ViewBuilder
+    private func rootContent(for tab: RootTab) -> some View {
+        switch tab {
+        case .entities:
+            EntitiesHomeView()
+        case .graph:
+            GraphCanvasScreen()
+        case .chat:
+            GraphChatTabView()
+        case .stats:
+            GraphStatsView()
+        case .settings:
+            NavigationStack {
+                SettingsView(showDoneButton: false)
+            }
         }
     }
 }

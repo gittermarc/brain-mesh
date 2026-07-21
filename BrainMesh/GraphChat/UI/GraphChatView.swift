@@ -2,7 +2,7 @@
 //  GraphChatView.swift
 //  BrainMesh
 //
-//  Internal-only graph chat screen. No production root entry is registered here.
+//  Shared graph chat screen hosted by the productive root and contextual routing layer.
 //
 
 import SwiftUI

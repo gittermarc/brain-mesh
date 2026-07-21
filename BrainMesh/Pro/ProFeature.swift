@@ -14,6 +14,7 @@ enum ProLimits {
 enum ProFeature: String, Identifiable, Sendable {
     case moreGraphs
     case graphProtection
+    case chatWithGraph
 
     var id: String { rawValue }
 
@@ -23,6 +24,8 @@ enum ProFeature: String, Identifiable, Sendable {
             return "Mehr Graphen"
         case .graphProtection:
             return "Graph-Schutz"
+        case .chatWithGraph:
+            return "Chat with your Graph"
         }
     }
 
@@ -32,6 +35,8 @@ enum ProFeature: String, Identifiable, Sendable {
             return "In Free sind bis zu \(ProLimits.freeGraphLimit) Graphen inklusive."
         case .graphProtection:
             return "Schütze deine Graphen mit Systemschutz oder Passwort."
+        case .chatWithGraph:
+            return "Frage deinen aktiven Graphen mit Apples lokalem Foundation Model."
         }
     }
 
@@ -48,6 +53,12 @@ enum ProFeature: String, Identifiable, Sendable {
                 "Entsperren per Face ID / Touch ID / Gerätecode",
                 "Optional: eigenes Passwort pro Graph",
                 "Sperrt automatisch beim Hintergrund/Foreground"
+            ]
+        case .chatWithGraph:
+            return [
+                "On-Device-Antworten ohne Cloud-Verarbeitung",
+                "Quellenkarten mit sicheren Detail- und Graph-Routen",
+                "Kontextfragen zu Entitäten, Attributen und Befunden"
             ]
         }
     }
