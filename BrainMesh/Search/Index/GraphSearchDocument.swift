@@ -9,7 +9,7 @@ import CryptoKit
 import Foundation
 
 nonisolated enum GraphSearchIndexSchema {
-    static let currentVersion = 2
+    static let currentVersion = 3
     static let documentIDVersion = 1
     static let sqliteApplicationID = 1_112_363_859
 }
@@ -227,6 +227,17 @@ nonisolated struct GraphSearchRankingMetadata: Hashable, Codable, Sendable {
     static let empty = GraphSearchRankingMetadata(fields: [])
 }
 
+nonisolated struct GraphSearchPresentationMetadata: Hashable, Codable, Sendable {
+    let iconSymbolName: String?
+
+    init(iconSymbolName: String? = nil) {
+        let cleaned = iconSymbolName?.trimmingCharacters(in: .whitespacesAndNewlines)
+        self.iconSymbolName = cleaned?.isEmpty == false ? cleaned : nil
+    }
+
+    static let empty = GraphSearchPresentationMetadata()
+}
+
 nonisolated struct GraphSearchDocument: Identifiable, Hashable, Codable, Sendable {
     let documentID: String
     let graphID: UUID
@@ -242,6 +253,7 @@ nonisolated struct GraphSearchDocument: Identifiable, Hashable, Codable, Sendabl
     let subtitle: String
     let normalizedSearchText: String
     let ranking: GraphSearchRankingMetadata
+    let presentation: GraphSearchPresentationMetadata
     let navigation: GraphSearchNavigationMetadata
     let evidence: GraphSearchEvidenceMetadata
     let attachmentMetadata: GraphSearchAttachmentMetadata?
@@ -284,6 +296,7 @@ nonisolated struct GraphSearchDocument: Identifiable, Hashable, Codable, Sendabl
         subtitle: String,
         searchableText: String,
         ranking: GraphSearchRankingMetadata = .empty,
+        presentation: GraphSearchPresentationMetadata = .empty,
         navigation: GraphSearchNavigationMetadata,
         evidence: GraphSearchEvidenceMetadata,
         attachmentMetadata: GraphSearchAttachmentMetadata? = nil,
@@ -310,6 +323,7 @@ nonisolated struct GraphSearchDocument: Identifiable, Hashable, Codable, Sendabl
         self.subtitle = subtitle
         self.normalizedSearchText = BMSearch.fold(searchableText)
         self.ranking = ranking
+        self.presentation = presentation
         self.navigation = navigation
         self.evidence = evidence
         self.attachmentMetadata = attachmentMetadata
@@ -351,6 +365,7 @@ nonisolated struct GraphSearchDocument: Identifiable, Hashable, Codable, Sendabl
             subtitle: subtitle,
             normalizedSearchText: normalizedSearchText,
             ranking: ranking,
+            presentation: presentation,
             navigation: navigation,
             evidence: evidence,
             attachmentMetadata: attachmentMetadata,
@@ -372,6 +387,7 @@ nonisolated struct GraphSearchDocument: Identifiable, Hashable, Codable, Sendabl
         subtitle: String,
         normalizedSearchText: String,
         ranking: GraphSearchRankingMetadata,
+        presentation: GraphSearchPresentationMetadata,
         navigation: GraphSearchNavigationMetadata,
         evidence: GraphSearchEvidenceMetadata,
         attachmentMetadata: GraphSearchAttachmentMetadata?,
@@ -391,6 +407,7 @@ nonisolated struct GraphSearchDocument: Identifiable, Hashable, Codable, Sendabl
             subtitle: subtitle,
             normalizedSearchText: normalizedSearchText,
             ranking: ranking,
+            presentation: presentation,
             navigation: navigation,
             evidence: evidence,
             attachmentMetadata: attachmentMetadata,
@@ -423,6 +440,12 @@ nonisolated struct GraphSearchDocument: Identifiable, Hashable, Codable, Sendabl
         guard contentHash.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false else {
             throw GraphSearchIndexStoreError.invalidDocument(
                 reason: "The content hash must not be empty."
+            )
+        }
+        if let iconSymbolName = presentation.iconSymbolName,
+           iconSymbolName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            throw GraphSearchIndexStoreError.invalidDocument(
+                reason: "The presentation icon must not be empty."
             )
         }
         guard (ownerKindRaw == nil) == (ownerID == nil) else {
@@ -703,6 +726,7 @@ private nonisolated struct GraphSearchDocumentHashPayload: Encodable {
     let subtitle: String
     let normalizedSearchText: String
     let ranking: GraphSearchRankingMetadata
+    let presentation: GraphSearchPresentationMetadata
     let navigation: GraphSearchNavigationMetadata
     let evidence: GraphSearchEvidenceMetadata
     let attachmentMetadata: GraphSearchAttachmentMetadata?

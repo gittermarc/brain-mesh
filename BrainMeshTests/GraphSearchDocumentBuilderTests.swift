@@ -55,7 +55,7 @@ struct GraphSearchDocumentBuilderTests {
     }
 
     @Test
-    func hashesIgnoreNonIndexedEntityAndSchemaPresentationValues() throws {
+    func hashesIncludeIndexedIconsButIgnoreNonIndexedSchemaPresentationValues() throws {
         let fixture = GraphSearchIndexerFixture()
         let builder = GraphSearchDocumentBuilder()
         let entity = fixture.primaryEntity
@@ -83,7 +83,7 @@ struct GraphSearchDocumentBuilderTests {
 
         #expect(
             try builder.documents(for: entity).map(\.contentHash)
-                == builder.documents(for: changedPresentationEntity).map(\.contentHash)
+                != builder.documents(for: changedPresentationEntity).map(\.contentHash)
         )
         #expect(
             try builder.document(for: definition).contentHash

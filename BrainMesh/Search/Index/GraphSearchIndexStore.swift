@@ -96,6 +96,9 @@ actor GraphSearchIndexStore {
     static let shared = GraphSearchIndexStore()
     static let defaultBatchSize = 128
     static let maximumSearchLimit = 500
+    static let minimumSearchCandidateLimit = 64
+    static let searchCandidateMultiplier = 8
+    static let maximumScopedGraphCount = 250
 
     let configuredDatabaseURL: URL?
     let backendPreference: GraphSearchIndexBackendPreference

@@ -185,14 +185,33 @@ extension GraphSearchIndexStore {
         text: String,
         limit: Int
     ) throws -> [GraphSearchIndexHit] {
-        try searchDocuments(graphID: graphID, text: text, limit: limit)
+        try searchDocuments(graphIDs: [graphID], text: text, limit: limit)
+    }
+
+    func search(
+        in graphIDs: [UUID],
+        text: String,
+        limit: Int
+    ) throws -> [GraphSearchIndexHit] {
+        let normalizedGraphIDs = Self.normalizedGraphIDs(graphIDs)
+        guard normalizedGraphIDs.isEmpty == false else { return [] }
+        guard normalizedGraphIDs.count <= Self.maximumScopedGraphCount else {
+            throw GraphSearchIndexStoreError.invalidStoredValue(
+                column: "search_graph_scope"
+            )
+        }
+        return try searchDocuments(
+            graphIDs: normalizedGraphIDs,
+            text: text,
+            limit: limit
+        )
     }
 
     func searchAcrossGraphs(
         text: String,
         limit: Int
     ) throws -> [GraphSearchIndexHit] {
-        try searchDocuments(graphID: nil, text: text, limit: limit)
+        try searchDocuments(graphIDs: nil, text: text, limit: limit)
     }
 
     func document(id documentID: String) throws -> GraphSearchDocument? {
@@ -409,12 +428,13 @@ extension GraphSearchIndexStore {
                 normalized_search_text,
                 ranking_boost,
                 ranking_json,
+                presentation_json,
                 navigation_json,
                 evidence_json,
                 attachment_json,
                 content_hash,
                 index_schema_version
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT(document_id) DO UPDATE SET
                 graph_id = excluded.graph_id,
                 document_kind = excluded.document_kind,
@@ -430,6 +450,7 @@ extension GraphSearchIndexStore {
                 normalized_search_text = excluded.normalized_search_text,
                 ranking_boost = excluded.ranking_boost,
                 ranking_json = excluded.ranking_json,
+                presentation_json = excluded.presentation_json,
                 navigation_json = excluded.navigation_json,
                 evidence_json = excluded.evidence_json,
                 attachment_json = excluded.attachment_json,
@@ -496,6 +517,10 @@ extension GraphSearchIndexStore {
             document.ranking,
             type: "ranking"
         )
+        let presentationJSON = try encodeMetadata(
+            document.presentation,
+            type: "presentation"
+        )
         let navigationJSON = try encodeMetadata(
             document.navigation,
             type: "navigation"
@@ -529,15 +554,16 @@ extension GraphSearchIndexStore {
         try statement.bind(document.normalizedSearchText, at: 13)
         try statement.bind(document.ranking.boost, at: 14)
         try statement.bind(rankingJSON, at: 15)
-        try statement.bind(navigationJSON, at: 16)
-        try statement.bind(evidenceJSON, at: 17)
-        try statement.bind(attachmentJSON, at: 18)
-        try statement.bind(document.contentHash, at: 19)
-        try statement.bind(document.indexSchemaVersion, at: 20)
+        try statement.bind(presentationJSON, at: 16)
+        try statement.bind(navigationJSON, at: 17)
+        try statement.bind(evidenceJSON, at: 18)
+        try statement.bind(attachmentJSON, at: 19)
+        try statement.bind(document.contentHash, at: 20)
+        try statement.bind(document.indexSchemaVersion, at: 21)
     }
 
     func searchDocuments(
-        graphID: UUID?,
+        graphIDs: [UUID]?,
         text: String,
         limit: Int
     ) throws -> [GraphSearchIndexHit] {
@@ -549,23 +575,30 @@ extension GraphSearchIndexStore {
         let safeLimit = max(0, min(limit, Self.maximumSearchLimit))
         guard safeLimit > 0 else { return [] }
         let startedAt = Self.uptimeNanoseconds()
+        let candidateLimit = Self.internalCandidateLimit(for: safeLimit)
+        let graphIDSet = graphIDs.map(Set.init)
 
         return try mapSQLiteErrors {
             try cancellationCheck()
             var candidateIDs = try candidateDocumentIDsUsingNgrams(
                 connection: connection,
-                graphID: graphID,
-                query: query
+                graphIDs: graphIDs,
+                query: query,
+                limit: candidateLimit
             )
 
             if backend.usesFTS5 {
                 let ftsIDs = try candidateDocumentIDsUsingFTS5(
                     connection: connection,
                     backend: backend,
-                    graphID: graphID,
-                    query: query
+                    graphIDs: graphIDs,
+                    query: query,
+                    limit: candidateLimit
                 )
                 candidateIDs.formUnion(ftsIDs)
+            }
+            if candidateIDs.count > candidateLimit {
+                candidateIDs = Set(candidateIDs.sorted().prefix(candidateLimit))
             }
 
             let candidates = try fetchDocuments(
@@ -581,7 +614,8 @@ extension GraphSearchIndexStore {
                 guard document.normalizedSearchText.contains(query) else {
                     continue
                 }
-                if let graphID, document.graphID != graphID {
+                if let graphIDSet,
+                   graphIDSet.contains(document.graphID) == false {
                     continue
                 }
                 hits.append(
@@ -605,8 +639,9 @@ extension GraphSearchIndexStore {
     func candidateDocumentIDsUsingFTS5(
         connection: GraphSearchSQLiteConnection,
         backend: GraphSearchIndexBackend,
-        graphID: UUID?,
-        query: String
+        graphIDs: [UUID]?,
+        query: String,
+        limit: Int
     ) throws -> Set<String> {
         let matchExpression: String?
         switch backend {
@@ -622,38 +657,35 @@ extension GraphSearchIndexStore {
             return []
         }
 
-        let statement: GraphSearchSQLiteStatement
-        if let graphID {
-            statement = try connection.prepare(
-                """
-                SELECT d.document_id
-                FROM graph_search_fts
-                JOIN graph_search_documents AS d
-                  ON d.rowid = graph_search_fts.rowid
-                WHERE graph_search_fts MATCH ?
-                  AND d.graph_id = ?
-                  AND instr(d.normalized_search_text, ?) > 0
-                """,
-                operation: "search-fts-scoped"
-            )
-            try statement.bind(matchExpression, at: 1)
-            try statement.bind(graphID.uuidString.lowercased(), at: 2)
-            try statement.bind(query, at: 3)
-        } else {
-            statement = try connection.prepare(
-                """
-                SELECT d.document_id
-                FROM graph_search_fts
-                JOIN graph_search_documents AS d
-                  ON d.rowid = graph_search_fts.rowid
-                WHERE graph_search_fts MATCH ?
-                  AND instr(d.normalized_search_text, ?) > 0
-                """,
-                operation: "search-fts-global"
-            )
-            try statement.bind(matchExpression, at: 1)
-            try statement.bind(query, at: 2)
-        }
+        let graphClause = Self.graphScopeClause(
+            column: "d.graph_id",
+            graphIDs: graphIDs
+        )
+        let statement = try connection.prepare(
+            """
+            SELECT d.document_id
+            FROM graph_search_fts
+            JOIN graph_search_documents AS d
+              ON d.rowid = graph_search_fts.rowid
+            WHERE graph_search_fts MATCH ?
+              AND instr(d.normalized_search_text, ?) > 0
+              \(graphClause.sql)
+            ORDER BY d.document_id ASC
+            LIMIT ?
+            """,
+            operation: graphIDs == nil ? "search-fts-global" : "search-fts-scoped"
+        )
+        var bindingIndex: Int32 = 1
+        try statement.bind(matchExpression, at: bindingIndex)
+        bindingIndex += 1
+        try statement.bind(query, at: bindingIndex)
+        bindingIndex += 1
+        bindingIndex = try Self.bindGraphScope(
+            graphClause.values,
+            to: statement,
+            startingAt: bindingIndex
+        )
+        try statement.bind(max(1, limit), at: bindingIndex)
 
         var documentIDs = Set<String>()
         while try statement.step() {
@@ -670,8 +702,9 @@ extension GraphSearchIndexStore {
 
     func candidateDocumentIDsUsingNgrams(
         connection: GraphSearchSQLiteConnection,
-        graphID: UUID?,
-        query: String
+        graphIDs: [UUID]?,
+        query: String,
+        limit: Int
     ) throws -> Set<String> {
         let grams = Self.queryNgrams(for: query)
         guard grams.isEmpty == false else { return [] }
@@ -679,29 +712,30 @@ extension GraphSearchIndexStore {
         var intersection: Set<String>?
         for gram in grams {
             try cancellationCheck()
-            let statement: GraphSearchSQLiteStatement
-            if let graphID {
-                statement = try connection.prepare(
-                    """
-                    SELECT document_id
-                    FROM graph_search_ngrams
-                    WHERE graph_id = ? AND gram = ?
-                    """,
-                    operation: "search-ngram-scoped"
-                )
-                try statement.bind(graphID.uuidString.lowercased(), at: 1)
-                try statement.bind(gram, at: 2)
-            } else {
-                statement = try connection.prepare(
-                    """
-                    SELECT document_id
-                    FROM graph_search_ngrams
-                    WHERE gram = ?
-                    """,
-                    operation: "search-ngram-global"
-                )
-                try statement.bind(gram, at: 1)
-            }
+            let graphClause = Self.graphScopeClause(
+                column: "graph_id",
+                graphIDs: graphIDs
+            )
+            let statement = try connection.prepare(
+                """
+                SELECT document_id
+                FROM graph_search_ngrams
+                WHERE gram = ?
+                  \(graphClause.sql)
+                ORDER BY document_id ASC
+                LIMIT ?
+                """,
+                operation: graphIDs == nil ? "search-ngram-global" : "search-ngram-scoped"
+            )
+            var bindingIndex: Int32 = 1
+            try statement.bind(gram, at: bindingIndex)
+            bindingIndex += 1
+            bindingIndex = try Self.bindGraphScope(
+                graphClause.values,
+                to: statement,
+                startingAt: bindingIndex
+            )
+            try statement.bind(max(1, limit), at: bindingIndex)
 
             var matches = Set<String>()
             while try statement.step() {
@@ -734,29 +768,24 @@ extension GraphSearchIndexStore {
         connection: GraphSearchSQLiteConnection
     ) throws -> [GraphSearchDocument] {
         guard documentIDs.isEmpty == false else { return [] }
+        try cancellationCheck()
+        let sortedIDs = documentIDs.sorted()
+        let placeholders = Array(repeating: "?", count: sortedIDs.count)
+            .joined(separator: ", ")
         let statement = try connection.prepare(
             """
             SELECT \(Self.documentSelectColumns)
             FROM graph_search_documents
-            WHERE document_id = ?
-            LIMIT 1
+            WHERE document_id IN (\(placeholders))
+            ORDER BY document_id ASC
             """,
-            operation: "fetch-search-document"
+            operation: "fetch-search-documents"
         )
-
-        let sortedIDs = documentIDs.sorted()
-        var documents: [GraphSearchDocument] = []
-        documents.reserveCapacity(sortedIDs.count)
-        for (index, documentID) in sortedIDs.enumerated() {
-            if index.isMultiple(of: batchSize) {
-                try cancellationCheck()
-            }
-            try statement.bind(documentID, at: 1)
-            if try statement.step() {
-                documents.append(try decodeDocument(from: statement))
-            }
-            try statement.reset()
+        for (offset, documentID) in sortedIDs.enumerated() {
+            try statement.bind(documentID, at: Int32(offset + 1))
         }
+        let documents = try decodeAllDocuments(from: statement)
+        try cancellationCheck()
         return documents
     }
 
@@ -851,16 +880,20 @@ extension GraphSearchIndexStore {
         guard ranking.boost == storedRankingBoost else {
             throw GraphSearchIndexStoreError.invalidStoredValue(column: "ranking_boost")
         }
-        let navigation: GraphSearchNavigationMetadata = try decodeMetadata(
+        let presentation: GraphSearchPresentationMetadata = try decodeMetadata(
             statement.columnText(at: 15),
+            type: "presentation"
+        )
+        let navigation: GraphSearchNavigationMetadata = try decodeMetadata(
+            statement.columnText(at: 16),
             type: "navigation"
         )
         let evidence: GraphSearchEvidenceMetadata = try decodeMetadata(
-            statement.columnText(at: 16),
+            statement.columnText(at: 17),
             type: "evidence"
         )
         let attachmentMetadata: GraphSearchAttachmentMetadata?
-        if let attachmentJSON = statement.columnText(at: 17) {
+        if let attachmentJSON = statement.columnText(at: 18) {
             attachmentMetadata = try decodeMetadata(
                 attachmentJSON,
                 type: "attachment"
@@ -868,10 +901,10 @@ extension GraphSearchIndexStore {
         } else {
             attachmentMetadata = nil
         }
-        guard let contentHash = statement.columnText(at: 18) else {
+        guard let contentHash = statement.columnText(at: 19) else {
             throw GraphSearchIndexStoreError.invalidStoredValue(column: "content_hash")
         }
-        let indexSchemaVersion = statement.columnInt(at: 19)
+        let indexSchemaVersion = statement.columnInt(at: 20)
 
         let document = GraphSearchDocument(
             graphID: graphID,
@@ -887,6 +920,7 @@ extension GraphSearchIndexStore {
             subtitle: subtitle,
             searchableText: normalizedSearchText,
             ranking: ranking,
+            presentation: presentation,
             navigation: navigation,
             evidence: evidence,
             attachmentMetadata: attachmentMetadata,
@@ -970,12 +1004,60 @@ extension GraphSearchIndexStore {
         normalized_search_text,
         ranking_boost,
         ranking_json,
+        presentation_json,
         navigation_json,
         evidence_json,
         attachment_json,
         content_hash,
         index_schema_version
         """
+
+    nonisolated static func internalCandidateLimit(for resultLimit: Int) -> Int {
+        let multiplied = max(0, resultLimit).multipliedReportingOverflow(
+            by: searchCandidateMultiplier
+        )
+        let expanded = multiplied.overflow ? Int.max : multiplied.partialValue
+        return min(
+            maximumSearchLimit,
+            max(minimumSearchCandidateLimit, expanded)
+        )
+    }
+
+    nonisolated static func normalizedGraphIDs(_ graphIDs: [UUID]) -> [UUID] {
+        Array(Set(graphIDs)).sorted { lhs, rhs in
+            lhs.uuidString < rhs.uuidString
+        }
+    }
+
+    nonisolated static func graphScopeClause(
+        column: String,
+        graphIDs: [UUID]?
+    ) -> (sql: String, values: [UUID]) {
+        guard let graphIDs else { return ("", []) }
+        let normalized = normalizedGraphIDs(graphIDs)
+        guard normalized.isEmpty == false else {
+            return ("AND 0 = 1", [])
+        }
+        let placeholders = Array(repeating: "?", count: normalized.count)
+            .joined(separator: ", ")
+        return ("AND \(column) IN (\(placeholders))", normalized)
+    }
+
+    static func bindGraphScope(
+        _ graphIDs: [UUID],
+        to statement: GraphSearchSQLiteStatement,
+        startingAt startIndex: Int32
+    ) throws -> Int32 {
+        var bindingIndex = startIndex
+        for graphID in graphIDs {
+            try statement.bind(
+                graphID.uuidString.lowercased(),
+                at: bindingIndex
+            )
+            bindingIndex += 1
+        }
+        return bindingIndex
+    }
 
     nonisolated static func indexedNgrams(for text: String) -> Set<String> {
         let characters = Array(text)

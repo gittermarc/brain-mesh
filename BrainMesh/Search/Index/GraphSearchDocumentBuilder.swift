@@ -97,6 +97,9 @@ nonisolated struct GraphSearchDocumentBuilder: Sendable {
                     )
                 ])
             ),
+            presentation: GraphSearchPresentationMetadata(
+                iconSymbolName: entity.iconSymbolName
+            ),
             navigation: GraphSearchNavigationMetadata(primaryNode: node),
             evidence: GraphSearchEvidenceMetadata(
                 kind: .source,
@@ -117,7 +120,7 @@ nonisolated struct GraphSearchDocumentBuilder: Sendable {
             nodeKind: .entity,
             nodeID: entity.id,
             title: entity.name,
-            subtitle: "Notiz",
+            subtitle: "Entität",
             searchableText: entity.notes,
             ranking: GraphSearchRankingMetadata(
                 fields: Self.rankingFields([
@@ -127,6 +130,9 @@ nonisolated struct GraphSearchDocumentBuilder: Sendable {
                         priority: .notes
                     )
                 ])
+            ),
+            presentation: GraphSearchPresentationMetadata(
+                iconSymbolName: entity.iconSymbolName
             ),
             navigation: GraphSearchNavigationMetadata(primaryNode: node),
             evidence: GraphSearchEvidenceMetadata(
@@ -148,7 +154,7 @@ nonisolated struct GraphSearchDocumentBuilder: Sendable {
             )
         }
 
-        let ownerLabel = attribute.ownerLabel ?? "Entität"
+        let ownerLabel = attribute.ownerLabel ?? "Ohne Entität"
         let node = GraphSearchNodeReference(
             kind: .attribute,
             id: attribute.id,
@@ -194,6 +200,9 @@ nonisolated struct GraphSearchDocumentBuilder: Sendable {
                     )
                 ])
             ),
+            presentation: GraphSearchPresentationMetadata(
+                iconSymbolName: attribute.iconSymbolName
+            ),
             navigation: GraphSearchNavigationMetadata(
                 primaryNode: node,
                 ownerNode: owner
@@ -219,7 +228,7 @@ nonisolated struct GraphSearchDocumentBuilder: Sendable {
             nodeKind: .attribute,
             nodeID: attribute.id,
             title: attribute.name,
-            subtitle: "Notiz",
+            subtitle: ownerLabel,
             searchableText: attribute.notes,
             ranking: GraphSearchRankingMetadata(
                 fields: Self.rankingFields([
@@ -229,6 +238,9 @@ nonisolated struct GraphSearchDocumentBuilder: Sendable {
                         priority: .notes
                     )
                 ])
+            ),
+            presentation: GraphSearchPresentationMetadata(
+                iconSymbolName: attribute.iconSymbolName
             ),
             navigation: GraphSearchNavigationMetadata(
                 primaryNode: node,
@@ -266,13 +278,15 @@ nonisolated struct GraphSearchDocumentBuilder: Sendable {
             label: link.targetLabel
         )
         let title = "\(link.sourceLabel) → \(link.targetLabel)"
+        let note = link.note ?? ""
+        let subtitle = Self.hasSearchableText(note) ? note : "Link"
         let sourceDocument = try makeDocument(
             graphID: link.scope.graphID,
             documentKind: .link,
             sourceKind: .link,
             sourceID: link.id,
             title: title,
-            subtitle: "Link",
+            subtitle: subtitle,
             searchableText: Self.searchableText([
                 link.sourceLabel,
                 link.targetLabel,
@@ -308,7 +322,7 @@ nonisolated struct GraphSearchDocumentBuilder: Sendable {
             )
         )
 
-        guard let note = link.note, Self.hasSearchableText(note) else {
+        guard Self.hasSearchableText(note) else {
             return [sourceDocument]
         }
 
@@ -318,7 +332,7 @@ nonisolated struct GraphSearchDocumentBuilder: Sendable {
             sourceKind: .link,
             sourceID: link.id,
             title: title,
-            subtitle: "Link-Notiz",
+            subtitle: note,
             searchableText: note,
             ranking: GraphSearchRankingMetadata(
                 fields: Self.rankingFields([
@@ -415,6 +429,9 @@ nonisolated struct GraphSearchDocumentBuilder: Sendable {
             ranking: GraphSearchRankingMetadata(
                 fields: Self.rankingFields(fields)
             ),
+            presentation: GraphSearchPresentationMetadata(
+                iconSymbolName: definition.type.systemImage
+            ),
             navigation: GraphSearchNavigationMetadata(
                 ownerNode: owner,
                 fieldID: definition.id
@@ -473,6 +490,10 @@ nonisolated struct GraphSearchDocumentBuilder: Sendable {
                 formattedValue.searchableValues + [fieldName, attributeLabel]
             ),
             ranking: GraphSearchRankingMetadata(fields: fields),
+            presentation: GraphSearchPresentationMetadata(
+                iconSymbolName: value.fieldType?.systemImage
+                    ?? BrainMeshSearchResultKind.detail.defaultIconSymbolName
+            ),
             navigation: GraphSearchNavigationMetadata(
                 ownerNode: owner,
                 fieldID: value.fieldID
@@ -586,6 +607,7 @@ nonisolated struct GraphSearchDocumentBuilder: Sendable {
         subtitle: String,
         searchableText: String,
         ranking: GraphSearchRankingMetadata,
+        presentation: GraphSearchPresentationMetadata = .empty,
         navigation: GraphSearchNavigationMetadata,
         evidence: GraphSearchEvidenceMetadata,
         attachmentMetadata: GraphSearchAttachmentMetadata? = nil
@@ -605,6 +627,7 @@ nonisolated struct GraphSearchDocumentBuilder: Sendable {
             subtitle: subtitle,
             normalizedSearchText: normalizedSearchText,
             ranking: ranking,
+            presentation: presentation,
             navigation: navigation,
             evidence: evidence,
             attachmentMetadata: attachmentMetadata,
@@ -625,6 +648,7 @@ nonisolated struct GraphSearchDocumentBuilder: Sendable {
             subtitle: subtitle,
             searchableText: normalizedSearchText,
             ranking: ranking,
+            presentation: presentation,
             navigation: navigation,
             evidence: evidence,
             attachmentMetadata: attachmentMetadata,
@@ -688,8 +712,8 @@ nonisolated struct GraphSearchDocumentBuilder: Sendable {
                 ]
             )
         case .date(let value):
-            let displayText = deterministicDateText(value)
-            let isoText = deterministicISODateText(value)
+            let displayText = BrainMeshSearchDetailValueFormatter.localizedDateText(value)
+            let isoText = BrainMeshSearchDetailValueFormatter.isoDateText(value)
             return GraphSearchFormattedDetailValue(
                 displayText: displayText,
                 searchableValues: [displayText, isoText],
@@ -728,40 +752,6 @@ nonisolated struct GraphSearchDocumentBuilder: Sendable {
         case .empty:
             return nil
         }
-    }
-
-    private static func deterministicDateText(_ date: Date) -> String {
-        let components = deterministicDateComponents(date)
-        return String(
-            format: "%02d.%02d.%04d",
-            components.day,
-            components.month,
-            components.year
-        )
-    }
-
-    private static func deterministicISODateText(_ date: Date) -> String {
-        let components = deterministicDateComponents(date)
-        return String(
-            format: "%04d-%02d-%02d",
-            components.year,
-            components.month,
-            components.day
-        )
-    }
-
-    private static func deterministicDateComponents(
-        _ date: Date
-    ) -> (year: Int, month: Int, day: Int) {
-        var calendar = Calendar(identifier: .gregorian)
-        calendar.locale = Locale(identifier: "en_US_POSIX")
-        calendar.timeZone = TimeZone(secondsFromGMT: 0) ?? .gmt
-        let components = calendar.dateComponents([.year, .month, .day], from: date)
-        return (
-            year: components.year ?? 1,
-            month: components.month ?? 1,
-            day: components.day ?? 1
-        )
     }
 
     private static func rankingFields(

@@ -108,7 +108,7 @@ struct GraphSearchIndexDocumentFixtureBuilder {
             nodeKind: .entity,
             nodeID: entityID,
             title: entityTitle,
-            subtitle: "Notiz",
+            subtitle: "Entität",
             searchableText: notes,
             ranking: GraphSearchRankingMetadata(
                 fields: [
@@ -211,7 +211,7 @@ struct GraphSearchIndexDocumentFixtureBuilder {
             nodeKind: .attribute,
             nodeID: attributeID,
             title: attributeTitle,
-            subtitle: "Notiz",
+            subtitle: ownerTitle,
             searchableText: notes,
             ranking: GraphSearchRankingMetadata(
                 fields: [
@@ -293,7 +293,7 @@ struct GraphSearchIndexDocumentFixtureBuilder {
             sourceKind: .link,
             sourceID: linkID,
             title: title,
-            subtitle: "Link-Notiz",
+            subtitle: notes,
             searchableText: notes,
             ranking: GraphSearchRankingMetadata(
                 fields: [

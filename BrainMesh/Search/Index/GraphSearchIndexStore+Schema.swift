@@ -217,6 +217,7 @@ extension GraphSearchIndexStore {
                 normalized_search_text TEXT NOT NULL,
                 ranking_boost INTEGER NOT NULL,
                 ranking_json TEXT NOT NULL,
+                presentation_json TEXT NOT NULL,
                 navigation_json TEXT NOT NULL,
                 evidence_json TEXT NOT NULL,
                 attachment_json TEXT,

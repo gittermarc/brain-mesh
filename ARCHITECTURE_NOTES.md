@@ -3,7 +3,7 @@
 ## Scan Scope
 
 - Quelle: hochgeladenes ZIP, entpackt und statisch gescannt.
-- Produktionscode unter `BrainMesh/`: 467 Swift-Dateien, 58.107 Zeilen.
+- Produktionscode unter `BrainMesh/`: 508 Swift-Dateien, 74.134 Zeilen.
 - Tests: `BrainMeshTests/`, `BrainMeshUITests/` vorhanden; nicht als Produktions-Hotspots gewertet.
 - Fokus gemäß Priorität:
   1. Sync/Storage/Model
@@ -18,7 +18,7 @@
 | 1 | `BrainMesh/Settings/BrainMeshGuideView.swift` | 671 | In-App-Guide mit vielen Sections und Hilfskomponenten | Wartbarkeitsrisiko: Copy, Layout und Komponenten in einer Datei; nicht kritischer Hot Path, aber hohe Änderungsfläche |
 | 2 | `BrainMesh/GraphTransfer/GraphTransferView/GraphTransferComponents.swift` | 569 | Karten, Import/Export-Preview, Activity-Bridge, FileDocument | Transfer-Datenintegrität und UI-States gekoppelt; viele unabhängige Komponenten in einer Datei |
 | 3 | `BrainMesh/GraphCanvas/GraphCanvasTypes.swift` | 508 | WorkMode, Lens, Render-Pläne, Derived State, Node/Edge-Typen | Zentrale Typen und Planer; Änderungen können Rendering, Physics, Inspector und Loader gleichzeitig beeinflussen |
-| 4 | `BrainMesh/Search/BrainMeshSearchService.swift` | 493 | globaler graph-scoped Search Actor | Hotspot: scannt Links, Detailwerte und Attachments teilweise graphweit und rankt in Memory |
+| 4 | `BrainMesh/Search/BrainMeshSearchService.swift` | 275 | globaler graph-scoped Search Actor | Orchestriert Readiness, begrenzte Index-Candidates, unverändertes Ranking und transparenten SwiftData-Fallback; graphweite Scans verbleiben nur im Fehler-/Fallback-Pfad |
 | 5 | `BrainMesh/GraphCanvas/GraphCanvasScreen/Overlays/GraphCanvasScreen+InspectorOverlay.swift` | 458 | Graph-Inspector mit Presets, Fokus, Toggles, Limits | Viele Bindings auf Canvas-State; Risiko für exzessive View-Invalidation und schwer testbare UI-Logik |
 | 6 | `BrainMesh/Stats/GraphStatsView/GraphStatsView.swift` | 423 | Stats-Root-View und Dashboard-Orchestrierung | View enthält Ladezustände, Sections und Trigger; Risiko für unklare Reload-Invalidation |
 | 7 | `BrainMesh/Stats/GraphStatsService/GraphStatsService.swift` | 404 | Stats DTOs, Service-Basistypen, Caches | Viele zentrale Statistiktypen in einer Datei; Änderungen an Counts/Media/Health strahlen breit aus |
@@ -323,26 +323,24 @@
 ### Global Search
 
 - Dateien:
-  - `BrainMesh/Search/BrainMeshSearchService.swift` als Actor-Orchestrator.
-  - `BrainMesh/Search/Candidates/` mit Providern für Entity, Attribute, Link, Details und Attachments.
+  - `BrainMesh/Search/BrainMeshSearchService.swift` als Actor-Orchestrator für Readiness, Primary-/Fallback-Quellen, Cancellation, Ranking und Snapshot-Erzeugung.
+  - `BrainMesh/Search/Candidates/` mit `IndexedSearchCandidateProvider` als primärer value-only Quelle sowie den bestehenden SwiftData-Providern für Entity, Attribute, Link, Details und Attachments als transparentem Legacy-Fallback.
   - `BrainMesh/Search/Index/` mit dem separaten lokalen SQLite-Store, value-only `GraphSearchDocument`-Typen, dem deterministischen `GraphSearchDocumentBuilder`, dem `GraphSearchIndexer`-Actor und graph-scoped Statuswerten.
 - Mechanik:
-  - `Task.detached` erzeugt pro Suche genau einen read-only Background `ModelContext`.
+  - Der normale Indexpfad arbeitet ausschließlich mit value-only SQLite-Dokumenten. Nur der Legacy-Fallback erzeugt in `Task.detached` genau einen read-only Background-`ModelContext` pro Suche.
   - Ein gemeinsamer Request trägt optionalen Graph-Scope, bereits gefaltete Query, Context und Cancellation-Check.
-  - Provider liefern ausschließlich `[BrainMeshSearchCandidate]`; Detail-Definitionen und typisierte Detailwerte bleiben im gemeinsamen Detail-Provider.
-  - Provider-Reihenfolge, Ranking und Limitierung entsprechen der bisherigen Suche; das Limit wird weiterhin erst nach dem Candidate-Build wirksam.
+  - Alle Quellen liefern ausschließlich `[BrainMeshSearchCandidate]`; SwiftData-Modelle überschreiten keine Actor-Grenzen. Der Index-Provider gruppiert Source-/Notes-Dokumente wieder zu genau einem bestehenden Result und rekonstruiert IDs, Titel, Untertitel, Icons, Owner-, Node- und Routing-Referenzen.
+  - `BrainMeshSearchRanking` bleibt die finale fachliche Ranking- und Tie-Breaker-Schicht. Das öffentliche Limit wird nach dem gemeinsamen Ranking angewendet; der Index-Store begrenzt bereits vorher die technische Dokument-Candidate-Menge.
 - Hotspot-Gründe:
-  - `LinkSearchCandidateProvider` lädt alle Links des Graphen und filtert/rankt in Memory.
-  - `DetailSearchCandidateProvider` lädt alle Detailwerte des Graphen und filtert/rankt in Memory.
-  - `AttachmentSearchCandidateProvider` lädt Attachment-Metadaten des Graphen und filtert/rankt in Memory; `fileData` wird nicht ausgewertet.
+  - Der normale Command-Center-Pfad liest eine begrenzte Candidate-Menge aus dem lokalen Index. `LinkSearchCandidateProvider`, `DetailSearchCandidateProvider` und `AttachmentSearchCandidateProvider` führen ihre bisherigen graphweiten SwiftData-Scans nur noch aus, wenn der Index nicht vollständig nutzbar ist. `fileData` wird weiterhin nie ausgewertet.
 - Bereits vorhandene Mitigation:
   - Background Context und value-only Rückgaben.
   - Cancellation vor, zwischen und innerhalb der Provider-Phasen.
   - `safeLimit` auf maximal 100 Ergebnisse.
   - Quellspezifische Provider-Grenze für einen späteren Index.
-  - Der lokale, versionierte `GraphSearchIndexStore` wird aus graph-scoped Read-Snapshots atomar aufgebaut und für lokale Mutation-Events inkrementell gepflegt; `BrainMeshSearchService` liest ihn in diesem Stand noch nicht.
-- Refactor-Hebel:
-  - Kontrollierter Search-Cutover an der vorhandenen Provider-Grenze.
+  - Der lokale, versionierte `GraphSearchIndexStore` wird aus graph-scoped Read-Snapshots atomar aufgebaut und für lokale Mutation-Events inkrementell gepflegt. `BrainMeshSearchService.shared` liest ihn nach erfolgreichem `ensureReady` als primäre Candidate-Quelle.
+- Verbleibender Refactor-Hebel:
+  - Entities-Home nur bei vollständiger Scope-, UX- und Routing-Parität auf dieselbe Candidate-Schicht migrieren; keine zweite Indexintegration aufbauen.
 
 ## Sync / Storage Hot Path Analyse
 
@@ -511,7 +509,7 @@ Ziel: zentrale Typen und Planer entkoppeln.
 
 #### `BrainMesh/Search/BrainMeshSearchService.swift` — Provider-Split umgesetzt
 
-- `BrainMeshSearchService` bleibt der öffentliche Actor-Orchestrator für Container-Konfiguration, Query-Folding, Limit, deterministische Provider-Reihenfolge, Cancellation und Ranking.
+- `BrainMeshSearchService` bleibt der öffentliche Actor-Orchestrator mit unveränderter `search(graphID:foldedQuery:limit:)`-API. Produktiv orchestriert er Readiness, den indexbasierten Primary Provider, den transparenten Legacy-Fallback, Cancellation und das gemeinsame Ranking.
 - `Search/Candidates/BrainMeshSearchCandidateProvider.swift` definiert den gemeinsamen Request-Context mit operationslokalem `ModelContext`, optionalem `graphID`, bereits gefalteter Query und Cancellation-Prüfung.
 - Quellspezifische Provider:
   - `EntitySearchCandidateProvider.swift`.
@@ -521,9 +519,9 @@ Ziel: zentrale Typen und Planer entkoppeln.
   - `AttachmentSearchCandidateProvider.swift` ausschließlich für Metadaten.
 - `BrainMeshSearchDetailValueFormatter.swift` kapselt value-only Datum-, Bool- und Detailwert-Formatierung.
 - Provider geben ausschließlich `[BrainMeshSearchCandidate]` zurück; SwiftData-Modelle verbleiben im operationslokalen Context.
-- Es wurde kein persistierter Index, keine zusätzliche Datenbank und keine Schemaänderung eingeführt.
+- Der Provider-Split selbst führte keinen Index ein; der inzwischen ergänzte `IndexedSearchCandidateProvider` verwendet ausschließlich den separat versionierten, rekonstruierbaren `GraphSearchIndexStore` und ändert das SwiftData-/CloudKit-Hauptschema weiterhin nicht.
 - Providerbezogene Tests liegen in `BrainMeshTests/BrainMeshSearchCandidateProviderTests.swift`.
-- Nutzen: Ein späterer Index-Provider kann ergänzt werden, ohne Ranking, Result-DTOs oder Command Center umzubauen.
+- Nutzen: Der produktive Index-Cutover konnte ohne Änderungen an Ranking, Result-DTOs, Routing oder Command Center erfolgen; dieselbe Grenze hält den SwiftData-Pfad als sicheren Fallback verfügbar.
 
 #### `BrainMesh/Settings/BrainMeshGuideView.swift`
 
@@ -576,11 +574,11 @@ Ziel: Storage- und Medienpfade entkoppeln.
 #### SearchDocument Index
 
 - Umgesetzt unter `BrainMesh/Search/Index/`:
-  - `GraphSearchDocument` ist value-only, `Codable`, `Hashable` und `Sendable` und trägt deterministische Dokument-ID, Graph-/Source-/Owner-/Node-/Field-Referenzen, Ranking-, Navigation- und Evidence-Metadaten, Content-Hash und Index-Schemaversion.
+  - `GraphSearchDocument` ist value-only, `Codable`, `Hashable` und `Sendable` und trägt deterministische Dokument-ID, Graph-/Source-/Owner-/Node-/Field-Referenzen, Ranking-, Navigation-, Presentation- und Evidence-Metadaten, Content-Hash und Index-Schemaversion. Schema v3 persistiert die für Search-Result-Parität benötigten Präsentationswerte wie benutzerdefinierte SF-Symbol-Namen.
   - Dokumentarten decken Entity, Attribute, Link, deren Notes, Detailfeld-Definition, einzelnen Detailwert und Attachment-Metadaten ab. Ein Detailwert bleibt als eigenes Fact-Dokument exakt über Source-ID und Field-ID referenzierbar.
   - Attachment-Dokumente erzwingen Metadaten-only-Suchtext aus Titel, Original-Dateiname, Dateiendung, Content-Type-Identifier, Byte-Anzahl und Content-Kind. `fileData`, lokaler Pfad, extrahierter Dateiinhalt und OCR-Text sind nicht darstellbar beziehungsweise werden bei der Dokumentvalidierung abgewiesen.
   - `GraphSearchDocumentBuilder` erzeugt aus den value-only Read-DTOs stabile Dokument-IDs und persistierbare SHA-256-Content-Hashes ausschließlich aus indexrelevanten Werten.
-  - `GraphSearchIndexStore` ist ein eigener Actor mit separater SQLite-Datei in Application Support. Batch-Upsert, Source-Delete, Graph-Replace und Graph-Delete sind transaktional; graph-scoped und optionale graphübergreifende Suche, Test-Reads, Counts, Manifest, Clear und physischer Rebuild sind vorhanden.
+  - `GraphSearchIndexStore` ist ein eigener Actor mit separater SQLite-Datei in Application Support. Batch-Upsert, Source-Delete, Graph-Replace und Graph-Delete sind transaktional; explizite Einzel-/Mehrgraph-Suche, Test-Reads, Counts, Manifest, Clear und physischer Rebuild sind vorhanden. FTS-/n-Gram-Abfragen begrenzen Kandidaten vor der Dokumentdekodierung und laden die Treffer in einem gebündelten SQLite-Read statt per N+1-Abfrage.
   - `GraphSearchIndexer` ist ein Actor für coalesced `ensureIndexed`-Aufrufe, atomare graph-scoped Full Rebuilds in begrenzten Source-Batches und präzise Source-Replacements nach lokalen Mutation-Events. Import, Replace, Repair und andere grobe Events führen zu einem Full Rebuild; Graph-Delete entfernt den Index vollständig.
   - `GraphSearchSourceManifest` speichert pro Graph stabile Source-Hashes, Source-Art-Zähler und Dokument-Fingerprints. Dokumentänderungen und Manifest werden in derselben SQLite-Transaktion veröffentlicht; semantisch abweichende Dokument-Fingerprints werden beim Lesen erkannt.
   - `GraphSearchIndexReconciler` coalesced parallele `ensureReady`-Aufrufe pro Graph, hält verschiedene Graphen unabhängig, unterstützt waiter-spezifische Cancellation und kann einen zuvor gültigen Index während einer Reparatur beziehungsweise nach einem fehlgeschlagenen Rebuild weiterhin als technisch nutzbar ausweisen.
@@ -590,10 +588,12 @@ Ziel: Storage- und Medienpfade entkoppeln.
   - Das Schema bevorzugt FTS5 mit Trigram-Tokenizer, fällt auf `unicode61` und schließlich auf einen eigenen indexierten 1-/2-/3-Gram-Store zurück. Alle Pfade verwenden `BMSearch.fold`, vorbereitete Statements und gebundene Werte.
   - Inkompatible Versionen, fehlende Schemaobjekte und beschädigte beziehungsweise logisch ungültige Indexdaten führen zu einem sicheren Index-Rebuild. Der Haupt-SwiftData-Store wird nicht geöffnet oder verändert.
   - Der Index ist vom Backup ausgeschlossen und weder Teil des CloudKit-Hauptschemas noch von GraphTransfer.
-- Noch offen:
-  - Produktiver Cutover von `BrainMeshSearchService` auf den Store.
+- Produktiver Search-Pfad:
+  - `IndexedSearchCandidateProvider` mappt ausschließlich value-only Indexdokumente auf die bestehenden Search-Candidates und gruppiert Source-/Notes-Dokumente ohne doppelte Results. `BrainMeshSearchRanking` bleibt für Match-Reason, Score, Sortierung und Limit maßgeblich.
+  - Konkrete Graphsuchen verwenden ausschließlich diesen Graphen. Globale Suchen ermitteln alle relevanten Graphen und verwenden den Index nur, wenn jeder Graph als nutzbar bestätigt ist; andernfalls läuft die gesamte Anfrage ohne Hybrid-Mischung über die Legacy-Provider.
+  - Nicht initialisierte, beschädigte oder fehlgeschlagene Indexzustände sowie Queryfehler bleiben für das Command Center transparent. Queryfehler invalidieren die betroffenen Graphen technisch für den nächsten Reconciliation-Pass.
 - Nutzen:
-  - Der rekonstruierbare Index bleibt sowohl bei lokalen Mutationen als auch bei später erkannten externen Änderungen graph-scoped konsistent; der direkte Laufzeitnutzen für `BrainMeshSearchService` entsteht mit dem späteren Cutover.
+  - Der rekonstruierbare Index bleibt bei lokalen Mutationen und später erkannten externen Änderungen graph-scoped konsistent und reduziert im Normalpfad graphweite SwiftData-Scans. Damit ist Stufe 0 abgeschlossen.
 
 #### Graph Counts Cache
 
@@ -649,7 +649,7 @@ Ziel: Storage- und Medienpfade entkoppeln.
   - `NodeRenameService`, `NodeNotesPersistence`, `GraphNodeDeletionService`, `BulkLinkExecutor` und `AttachmentMutationService` bauen auf derselben Commit-Grenze auf; es gibt keinen parallelen zweiten Save-then-Publish-Mechanismus.
 - Weiterhin offen:
   - Bestehende Feature-Loader bauen teilweise eigene `FetchDescriptor`-Predicates und können schrittweise auf die Read-Schicht migriert werden.
-  - Persistente Event-History, GraphCanvas-Reload-Scheduling sowie der produktive Search-Cutover auf den vorhandenen lokalen Search-Index-Store.
+  - Persistente Event-History und GraphCanvas-Reload-Scheduling. Der produktive Search-Cutover auf den lokalen Index ist abgeschlossen.
 
 #### Mutation Events
 
@@ -680,7 +680,7 @@ Ziel: Storage- und Medienpfade entkoppeln.
   - `EntitiesHomeCockpitLoader` und `BrainMeshSearchService` besitzen aktuell keinen langlebigen Cache und erhalten deshalb keinen No-op-Subscriber.
 - Noch nicht integriert:
   - Persistente Event-History und GraphCanvas-Reload-Scheduling.
-  - Produktiver Search-Cutover auf den vorhandenen lokalen Search-Index-Store.
+  - Entities-Home nur bei nachgewiesener UX-/Routing-Parität auf dieselbe Index-Candidate-Schicht migrieren.
 - Nutzen:
   - Schafft eine getestete Post-Commit-Grenze für sämtliche aktiven lokalen Graphdaten-Mutationen und hält die vorhandenen Home-/Stats-Caches graph-scoped konsistent, ohne SwiftData-Modelle oder Nutzdaten über Actor-Grenzen zu transportieren.
 
@@ -733,7 +733,7 @@ Ziel: Storage- und Medienpfade entkoppeln.
   - 30-FPS State Updates.
   - Per-frame Dictionaries.
 - Search bei vielen DetailValues/Attachments/Links:
-  - graphweite Scans und In-Memory-Ranking.
+  - der normale Command-Center-Pfad verwendet begrenzte SQLite-Candidates; graphweite SwiftData-Scans und In-Memory-Candidate-Builds verbleiben als transparenter Fehler-/Readiness-Fallback.
 - EntitiesHome Cockpit bei großen Graphen:
   - lädt mehrere Tabellen vollständig.
 - Stats bei vielen Medien:
@@ -831,12 +831,12 @@ Ziel: Storage- und Medienpfade entkoppeln.
   - `BrainMesh/Mainscreen/EntitiesHome/EntitiesHomeLoader/EntitiesHomeLoader+Counts.swift`
   - `BrainMesh/Mainscreen/LinkCleanup.swift`
 - Umsetzung:
-  - Der verhaltenskompatible Provider-Split ist abgeschlossen; `BrainMeshSearchService` orchestriert die deterministische Candidate-Pipeline.
+  - Der verhaltenskompatible Provider-Split und der produktive Cutover sind abgeschlossen; `BrainMeshSearchService` orchestriert Readiness, indexbasierte Candidates, transparenten Legacy-Fallback und die unveränderte deterministische Ranking-Pipeline.
   - Der lokale, vollständig rekonstruierbare `GraphSearchIndexStore` ist als separate SQLite-/FTS5-Schicht umgesetzt. `GraphSearchDocumentBuilder` und `GraphSearchIndexer` befüllen ihn atomar aus graph-scoped Read-Snapshots und halten ihn für lokale Mutation-Events inkrementell aktuell.
   - `GraphSearchIndexReconciler` vergleicht einen value-only Source-Manifest-Snapshot mit dem lokal gespeicherten Manifest, upsertet oder löscht kleine Abweichungen atomar und löst bei inkompatiblen, beschädigten oder breiten Inkonsistenzen einen Full Rebuild aus. Der Foreground-Trigger ist graph-scoped, nicht blockierend und zeitlich gedrosselt.
-  - Der Indexer verändert weder das SwiftData-/CloudKit-Hauptschema noch GraphTransfer und ist noch nicht an die produktive Suche angebunden.
+  - Der Indexer verändert weder das SwiftData-/CloudKit-Hauptschema noch GraphTransfer. Der Index ist an die produktive globale Suche angebunden; globale Mehrgraph-Suchen bleiben all-or-nothing und fallen bei unvollständiger Readiness vollständig auf die Legacy-Provider zurück.
 - Nächste Schritte:
-  - Den Search-Cutover an der vorhandenen Provider-Grenze durchführen.
+  - Entities-Home unverändert lassen, bis dieselbe Candidate-Schicht ohne Scope-, UX- oder Routing-Risiken direkt wiederverwendet werden kann.
 - Risiko:
   - Mittel.
   - Lokale Mutationen, Import/Replace und Repair werden durch Event-Consumer und Full Rebuilds abgedeckt; Änderungen außerhalb des lokalen EventBus werden beim nächsten `ensureReady`- beziehungsweise Foreground-Pass über das Source-Manifest reconciled.
