@@ -41,6 +41,10 @@ nonisolated enum GraphSearchIndexStoreError: Error, Sendable {
     case notOpen
     case invalidDocument(reason: String)
     case invalidGraphReplacement(expected: UUID, actual: UUID)
+    case invalidSourceReplacement(
+        expected: GraphSearchSourceReference,
+        actual: GraphSearchSourceReference
+    )
     case incompatibleDocumentSchemaVersion(expected: Int, actual: Int)
     case invalidStoredValue(column: String)
     case metadataEncoding(type: String)
@@ -58,6 +62,8 @@ extension GraphSearchIndexStoreError: LocalizedError {
             return "The graph search document is invalid: \(reason)"
         case .invalidGraphReplacement(let expected, let actual):
             return "A graph replacement document belongs to \(actual.uuidString) instead of \(expected.uuidString)."
+        case .invalidSourceReplacement(let expected, let actual):
+            return "A source replacement document belongs to \(actual.sourceKind.rawValue)/\(actual.sourceID.uuidString) instead of \(expected.sourceKind.rawValue)/\(expected.sourceID.uuidString)."
         case .incompatibleDocumentSchemaVersion(let expected, let actual):
             return "The graph search document schema version \(actual) is incompatible with version \(expected)."
         case .invalidStoredValue(let column):

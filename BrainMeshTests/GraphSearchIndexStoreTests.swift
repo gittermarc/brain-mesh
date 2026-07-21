@@ -89,6 +89,64 @@ struct GraphSearchIndexStoreTests {
     }
 
     @Test
+    func atomicSourceReplaceRejectsMismatchedReferenceWithoutChangingStoredDocuments() async throws {
+        try await withStore { store, _ in
+            let graphID = UUID()
+            let fixtures = GraphSearchIndexDocumentFixtureBuilder(graphID: graphID)
+            let firstID = UUID()
+            let secondID = UUID()
+            let firstEntity = fixtures.entity(id: firstID, title: "First")
+            let firstNotes = fixtures.entityNotes(
+                entityID: firstID,
+                entityTitle: "First",
+                notes: "First notes"
+            )
+            let secondEntity = fixtures.entity(id: secondID, title: "Second")
+            let updatedFirstEntity = fixtures.entity(
+                id: firstID,
+                title: "Updated First",
+                contentHash: "updated-first-hash"
+            )
+
+            _ = try await store.open()
+            try await store.upsert([firstEntity, firstNotes, secondEntity])
+
+            do {
+                try await store.replaceDocuments(
+                    for: firstEntity.sourceReference,
+                    with: [secondEntity]
+                )
+                Issue.record("Expected a mismatched source replacement to fail.")
+            } catch let error as GraphSearchIndexStoreError {
+                guard case .invalidSourceReplacement(let expected, let actual) = error else {
+                    Issue.record("Unexpected graph search index store error: \(error)")
+                    return
+                }
+                #expect(expected == firstEntity.sourceReference)
+                #expect(actual == secondEntity.sourceReference)
+            } catch {
+                Issue.record("Unexpected source replacement error: \(error)")
+            }
+
+            #expect(Set(try await store.documents(in: graphID)) == Set([
+                firstEntity,
+                firstNotes,
+                secondEntity
+            ]))
+
+            try await store.replaceDocuments(
+                for: firstEntity.sourceReference,
+                with: [updatedFirstEntity]
+            )
+
+            #expect(Set(try await store.documents(in: graphID)) == Set([
+                updatedFirstEntity,
+                secondEntity
+            ]))
+        }
+    }
+
+    @Test
     func atomicGraphReplaceRemovesOldDocumentsAndKeepsOtherGraphs() async throws {
         try await withStore { store, _ in
             let firstGraphID = UUID()

@@ -116,6 +116,41 @@ struct GraphReadRepositoryTests {
         let fields = try await repository.detailFieldDefinitions(in: scope)
         let values = try await repository.detailValues(in: scope)
         let attachments = try await repository.attachmentMetadata(in: scope)
+        let preciseEntity = try await repository.entity(
+            id: sharedEntityID,
+            in: scope
+        )
+        let preciseAttribute = try await repository.attribute(
+            id: sharedAttributeID,
+            in: scope
+        )
+        let ownedAttributes = try await repository.attributes(
+            ownerEntityID: sharedEntityID,
+            in: scope
+        )
+        let preciseLink = try await repository.link(
+            id: sharedLinkID,
+            in: scope
+        )
+        let connectedLinks = try await repository.links(
+            connectedTo: NodeRefKey(
+                kind: .attribute,
+                id: sharedAttributeID
+            ),
+            in: scope
+        )
+        let preciseField = try await repository.detailFieldDefinition(
+            id: sharedFieldID,
+            in: scope
+        )
+        let preciseValue = try await repository.detailValue(
+            id: sharedValueID,
+            in: scope
+        )
+        let preciseAttachment = try await repository.attachmentMetadata(
+            id: sharedAttachmentID,
+            in: scope
+        )
 
         #expect(graph?.name == "Primary")
         #expect(entities.map(\.name) == ["Primary Entity"])
@@ -125,6 +160,14 @@ struct GraphReadRepositoryTests {
         #expect(fields.map(\.name) == ["Primary Field"])
         #expect(values.map(\.value) == [.text("Primary Value")])
         #expect(attachments.map(\.title) == ["Primary Attachment"])
+        #expect(preciseEntity?.name == "Primary Entity")
+        #expect(preciseAttribute?.name == "Primary Attribute")
+        #expect(ownedAttributes.map(\.name) == ["Primary Attribute"])
+        #expect(preciseLink?.note == "Primary Link")
+        #expect(connectedLinks.map(\.note) == ["Primary Link"])
+        #expect(preciseField?.name == "Primary Field")
+        #expect(preciseValue?.value == .text("Primary Value"))
+        #expect(preciseAttachment?.title == "Primary Attachment")
 
         #expect(entities.allSatisfy { $0.scope == scope })
         #expect(attributes.allSatisfy { $0.scope == scope })
@@ -132,6 +175,19 @@ struct GraphReadRepositoryTests {
         #expect(fields.allSatisfy { $0.scope == scope })
         #expect(values.allSatisfy { $0.scope == scope })
         #expect(attachments.allSatisfy { $0.scope == scope })
+
+        let preciseAttachmentProperties = try #require(preciseAttachment)
+        let preciseAttachmentChildren = Mirror(
+            reflecting: preciseAttachmentProperties
+        ).children
+        #expect(
+            preciseAttachmentChildren.contains { $0.label == "fileData" }
+                == false
+        )
+        #expect(
+            preciseAttachmentChildren.contains { $0.value is Data }
+                == false
+        )
     }
 
     @Test

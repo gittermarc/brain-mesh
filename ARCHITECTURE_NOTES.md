@@ -325,7 +325,7 @@
 - Dateien:
   - `BrainMesh/Search/BrainMeshSearchService.swift` als Actor-Orchestrator.
   - `BrainMesh/Search/Candidates/` mit Providern für Entity, Attribute, Link, Details und Attachments.
-  - `BrainMesh/Search/Index/` mit dem separaten lokalen SQLite-Store und value-only `GraphSearchDocument`-Typen.
+  - `BrainMesh/Search/Index/` mit dem separaten lokalen SQLite-Store, value-only `GraphSearchDocument`-Typen, dem deterministischen `GraphSearchDocumentBuilder`, dem `GraphSearchIndexer`-Actor und graph-scoped Statuswerten.
 - Mechanik:
   - `Task.detached` erzeugt pro Suche genau einen read-only Background `ModelContext`.
   - Ein gemeinsamer Request trägt optionalen Graph-Scope, bereits gefaltete Query, Context und Cancellation-Check.
@@ -340,10 +340,9 @@
   - Cancellation vor, zwischen und innerhalb der Provider-Phasen.
   - `safeLimit` auf maximal 100 Ergebnisse.
   - Quellspezifische Provider-Grenze für einen späteren Index.
-  - Der lokale, versionierte `GraphSearchIndexStore` ist als transaktionale FTS5-/n-Gram-Basis vorhanden, wird in diesem Stand aber weder aus SwiftData aufgebaut noch von `BrainMeshSearchService` gelesen.
+  - Der lokale, versionierte `GraphSearchIndexStore` wird aus graph-scoped Read-Snapshots atomar aufgebaut und für lokale Mutation-Events inkrementell gepflegt; `BrainMeshSearchService` liest ihn in diesem Stand noch nicht.
 - Refactor-Hebel:
-  - Document Builder und Full Rebuild aus den graph-scoped Read-Repositories.
-  - Mutation-Event-Consumer plus Reconciliation für lokale und CloudKit-bedingte Änderungen.
+  - Remote-CloudKit-Reconciliation für Änderungen anderer Geräte.
   - Kontrollierter Search-Cutover an der vorhandenen Provider-Grenze.
 
 ## Sync / Storage Hot Path Analyse
@@ -581,16 +580,20 @@ Ziel: Storage- und Medienpfade entkoppeln.
   - `GraphSearchDocument` ist value-only, `Codable`, `Hashable` und `Sendable` und trägt deterministische Dokument-ID, Graph-/Source-/Owner-/Node-/Field-Referenzen, Ranking-, Navigation- und Evidence-Metadaten, Content-Hash und Index-Schemaversion.
   - Dokumentarten decken Entity, Attribute, Link, deren Notes, Detailfeld-Definition, einzelnen Detailwert und Attachment-Metadaten ab. Ein Detailwert bleibt als eigenes Fact-Dokument exakt über Source-ID und Field-ID referenzierbar.
   - Attachment-Dokumente erzwingen Metadaten-only-Suchtext aus Titel, Original-Dateiname, Dateiendung, Content-Type-Identifier, Byte-Anzahl und Content-Kind. `fileData`, lokaler Pfad, extrahierter Dateiinhalt und OCR-Text sind nicht darstellbar beziehungsweise werden bei der Dokumentvalidierung abgewiesen.
+  - `GraphSearchDocumentBuilder` erzeugt aus den value-only Read-DTOs stabile Dokument-IDs und persistierbare SHA-256-Content-Hashes ausschließlich aus indexrelevanten Werten.
   - `GraphSearchIndexStore` ist ein eigener Actor mit separater SQLite-Datei in Application Support. Batch-Upsert, Source-Delete, Graph-Replace und Graph-Delete sind transaktional; graph-scoped und optionale graphübergreifende Suche, Test-Reads, Counts, Manifest, Clear und physischer Rebuild sind vorhanden.
+  - `GraphSearchIndexer` ist ein Actor für coalesced `ensureIndexed`-Aufrufe, atomare graph-scoped Full Rebuilds in begrenzten Source-Batches und präzise Source-Replacements nach lokalen Mutation-Events. Import, Replace, Repair und andere grobe Events führen zu einem Full Rebuild; Graph-Delete entfernt den Index vollständig.
+  - Rename-Folgen aktualisieren denormalisierte Attribute-, Detail- und Link-Labels. Detail-Schema-Events ersetzen Definitionen und synchronisieren alle betroffenen Detailwert-Dokumente einschließlich Löschungen.
+  - Der UI-unabhängige, value-only Indexstatus bildet nicht initialisiert, Aufbau mit Fortschritt, bereit, veraltet und fehlgeschlagen ab. Fehler und Cancellation lassen einen vorherigen vollständigen Index bestehen.
+  - `AppLoadersConfigurator` startet nach der Service-Konfiguration genau einen idempotenten Mutation-Event-Consumer. Indexfehler blockieren weder App-Start noch Hauptdaten.
   - Das Schema bevorzugt FTS5 mit Trigram-Tokenizer, fällt auf `unicode61` und schließlich auf einen eigenen indexierten 1-/2-/3-Gram-Store zurück. Alle Pfade verwenden `BMSearch.fold`, vorbereitete Statements und gebundene Werte.
   - Inkompatible Versionen, fehlende Schemaobjekte und beschädigte beziehungsweise logisch ungültige Indexdaten führen zu einem sicheren Index-Rebuild. Der Haupt-SwiftData-Store wird nicht geöffnet oder verändert.
   - Der Index ist vom Backup ausgeschlossen und weder Teil des CloudKit-Hauptschemas noch von GraphTransfer.
 - Noch offen:
-  - Document Builder aus den graph-scoped Read-DTOs.
-  - Initialer Full Rebuild, Mutation-Event-Consumer und Reconciliation.
+  - Remote-CloudKit-Reconciliation für Änderungen anderer Geräte.
   - Produktiver Cutover von `BrainMeshSearchService` auf den Store.
 - Nutzen:
-  - Die persistente, rekonstruierbare Store-Grenze ist vorhanden; der Laufzeitnutzen für `BrainMeshSearchService` entsteht erst mit Builder, Befüllung und Cutover.
+  - Der rekonstruierbare Index ist für lokale Änderungen konsistent befüllbar; der direkte Laufzeitnutzen für `BrainMeshSearchService` entsteht mit dem späteren Cutover.
 
 #### Graph Counts Cache
 
@@ -646,7 +649,7 @@ Ziel: Storage- und Medienpfade entkoppeln.
   - `NodeRenameService`, `NodeNotesPersistence`, `GraphNodeDeletionService`, `BulkLinkExecutor` und `AttachmentMutationService` bauen auf derselben Commit-Grenze auf; es gibt keinen parallelen zweiten Save-then-Publish-Mechanismus.
 - Weiterhin offen:
   - Bestehende Feature-Loader bauen teilweise eigene `FetchDescriptor`-Predicates und können schrittweise auf die Read-Schicht migriert werden.
-  - Remote-CloudKit-Reconciliation, persistente Event-History, GraphCanvas-Reload-Scheduling sowie Builder, Befüllung und Reconciliation für den vorhandenen lokalen Search-Index-Store.
+  - Remote-CloudKit-Reconciliation, persistente Event-History, GraphCanvas-Reload-Scheduling sowie der produktive Search-Cutover auf den vorhandenen lokalen Search-Index-Store.
 
 #### Mutation Events
 
@@ -673,11 +676,12 @@ Ziel: Storage- und Medienpfade entkoppeln.
   - Struktur- und Vollbackup-Import mit eventfreien Checkpoint-Saves, genau einem finalen Import-/Replace-Batch und persistenter Teilgraph-Bereinigung bei Fehler oder Cancellation.
   - Seltene atomare Multi-Graph-Wartung publiziert nach einem Save einen deterministisch nach Graph-ID geordneten Batch pro Graph; ein Mixed-Graph-Batch bleibt unzulässig.
   - `GraphMutationCacheInvalidationCoordinator` startet zentral und container-idempotent genau eine unbounded Subscription. `EntitiesHomeLoader` invalidiert nur Graph-Counts des betroffenen Graphen; `GraphStatsLoader` invalidiert graphbezogene Counts und das Total-Aggregat. Dashboard-Snapshots werden breiter verworfen, weil sie das graphübergreifende Total einbetten.
+  - `GraphSearchIndexer` startet nach vollständiger Service-Konfiguration zentral und idempotent genau eine weitere unbounded Subscription. Präzise Events ersetzen vollständige Sources; Import, Replace, Repair und Sequenzlücken erzwingen graph-scoped Full Rebuilds.
   - `EntitiesHomeCockpitLoader` und `BrainMeshSearchService` besitzen aktuell keinen langlebigen Cache und erhalten deshalb keinen No-op-Subscriber.
 - Noch nicht integriert:
   - CloudKit-Reconciliation für Änderungen anderer Geräte.
   - Persistente Event-History und GraphCanvas-Reload-Scheduling.
-  - Mutation-Event-Consumer, Full Rebuild und Reconciliation für den vorhandenen lokalen Search-Index-Store.
+  - Produktiver Search-Cutover auf den vorhandenen lokalen Search-Index-Store.
 - Nutzen:
   - Schafft eine getestete Post-Commit-Grenze für sämtliche aktiven lokalen Graphdaten-Mutationen und hält die vorhandenen Home-/Stats-Caches graph-scoped konsistent, ohne SwiftData-Modelle oder Nutzdaten über Actor-Grenzen zu transportieren.
 
@@ -816,7 +820,7 @@ Ziel: Storage- und Medienpfade entkoppeln.
 - Verbleibende Grenze:
   - Der graphweite `GraphDeletionService` behält seine eigene atomare Graph-Transaktion, verwendet aber dieselben throwing Attachment-Cleanup-Pläne.
 
-### 2) Search/Counts Indexierung vorbereiten — lokaler Search Store umgesetzt
+### 2) Search/Counts Indexierung vorbereiten — lokaler Search Indexer umgesetzt
 
 - Ziel:
   - Graphweite Scans in `BrainMeshSearchService` und `EntitiesHomeLoader+Fetch` reduzieren.
@@ -829,14 +833,14 @@ Ziel: Storage- und Medienpfade entkoppeln.
   - `BrainMesh/Mainscreen/LinkCleanup.swift`
 - Umsetzung:
   - Der verhaltenskompatible Provider-Split ist abgeschlossen; `BrainMeshSearchService` orchestriert die deterministische Candidate-Pipeline.
-  - Der lokale, vollständig rekonstruierbare `GraphSearchIndexStore` ist als separate SQLite-/FTS5-Schicht umgesetzt. Er verändert weder das SwiftData-/CloudKit-Hauptschema noch GraphTransfer und ist noch nicht an die produktive Suche angebunden.
+  - Der lokale, vollständig rekonstruierbare `GraphSearchIndexStore` ist als separate SQLite-/FTS5-Schicht umgesetzt. `GraphSearchDocumentBuilder` und `GraphSearchIndexer` befüllen ihn atomar aus graph-scoped Read-Snapshots und halten ihn für lokale Mutation-Events inkrementell aktuell.
+  - Der Indexer verändert weder das SwiftData-/CloudKit-Hauptschema noch GraphTransfer und ist noch nicht an die produktive Suche angebunden.
 - Nächste Schritte:
-  - Document Builder und initialen Full Rebuild aus den graph-scoped Read-Repositories ergänzen.
-  - Die vorhandene Write-Path-Klassifikation und graph-scoped Mutation-Events als Invalidation-Quelle anbinden und durch Reconciliation absichern.
+  - Remote-CloudKit-Reconciliation ergänzen.
   - Danach den Search-Cutover an der vorhandenen Provider-Grenze durchführen.
 - Risiko:
   - Mittel.
-  - Der rekonstruierbare Index muss mit lokalen Mutationen, Import/Replace und Remote-CloudKit-Änderungen durch Event-Consumer plus Reconciliation konsistent gehalten werden.
+  - Lokale Mutationen, Import/Replace und Repair werden bereits durch Event-Consumer und Full Rebuilds abgedeckt; Remote-CloudKit-Änderungen benötigen weiterhin Reconciliation.
 - Erwarteter Nutzen:
   - Schnellere Suche bei großen Graphen.
   - Weniger Akku-/CPU-Last beim Tippen.

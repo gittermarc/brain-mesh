@@ -68,9 +68,53 @@ actor GraphReadRepository {
         return try fetchEntities(in: scope, context: context)
     }
 
+    func entity(
+        id: UUID,
+        in scope: GraphScope
+    ) async throws -> GraphEntityDTO? {
+        let context = try await makeReadContext()
+        try checkCancellation()
+        let model = try context.fetch(
+            GraphScopedFetches.entity(id: id, in: scope)
+        ).first
+        try checkCancellation()
+        return model.map { GraphReadDTOMapper.entity($0, scope: scope) }
+    }
+
     func attributes(in scope: GraphScope) async throws -> [GraphAttributeDTO] {
         let context = try await makeReadContext()
         return try fetchAttributes(in: scope, context: context)
+    }
+
+    func attribute(
+        id: UUID,
+        in scope: GraphScope
+    ) async throws -> GraphAttributeDTO? {
+        let context = try await makeReadContext()
+        try checkCancellation()
+        let model = try context.fetch(
+            GraphScopedFetches.attribute(id: id, in: scope)
+        ).first
+        try checkCancellation()
+        return model.map { GraphReadDTOMapper.attribute($0, scope: scope) }
+    }
+
+    func attributes(
+        ownerEntityID: UUID,
+        in scope: GraphScope
+    ) async throws -> [GraphAttributeDTO] {
+        let context = try await makeReadContext()
+        try checkCancellation()
+        let models = try context.fetch(GraphScopedFetches.attributes(in: scope))
+        try checkCancellation()
+
+        let matchingModels = models.filter { attribute in
+            attribute.owner?.id == ownerEntityID
+                && attribute.owner?.graphID == scope.graphID
+        }
+        let values = try mapAttributes(matchingModels, scope: scope)
+        try checkCancellation()
+        return values.sorted(by: Self.attributeSort)
     }
 
     func links(in scope: GraphScope) async throws -> [GraphLinkDTO] {
@@ -78,11 +122,68 @@ actor GraphReadRepository {
         return try fetchLinks(in: scope, context: context)
     }
 
+    func link(
+        id: UUID,
+        in scope: GraphScope
+    ) async throws -> GraphLinkDTO? {
+        let context = try await makeReadContext()
+        try checkCancellation()
+        let model = try context.fetch(
+            GraphScopedFetches.link(id: id, in: scope)
+        ).first
+        try checkCancellation()
+        return model.map { GraphReadDTOMapper.link($0, scope: scope) }
+    }
+
+    func links(
+        connectedTo node: NodeRefKey,
+        in scope: GraphScope
+    ) async throws -> [GraphLinkDTO] {
+        let context = try await makeReadContext()
+        try checkCancellation()
+        let outgoing = try context.fetch(
+            GraphScopedFetches.outgoingLinks(from: node, in: scope)
+        )
+        try checkCancellation()
+        let incoming = try context.fetch(
+            GraphScopedFetches.incomingLinks(to: node, in: scope)
+        )
+        try checkCancellation()
+
+        var seen = Set<UUID>()
+        let models = (outgoing + incoming).filter { link in
+            seen.insert(link.id).inserted
+        }
+        var values: [GraphLinkDTO] = []
+        values.reserveCapacity(models.count)
+        for (index, model) in models.enumerated() {
+            try checkCancellation(at: index)
+            values.append(GraphReadDTOMapper.link(model, scope: scope))
+        }
+        try checkCancellation()
+        return values.sorted(by: Self.linkSort)
+    }
+
     func detailFieldDefinitions(
         in scope: GraphScope
     ) async throws -> [GraphDetailFieldDefinitionDTO] {
         let context = try await makeReadContext()
         return try fetchDetailFieldDefinitions(in: scope, context: context)
+    }
+
+    func detailFieldDefinition(
+        id: UUID,
+        in scope: GraphScope
+    ) async throws -> GraphDetailFieldDefinitionDTO? {
+        let context = try await makeReadContext()
+        try checkCancellation()
+        let model = try context.fetch(
+            GraphScopedFetches.detailFieldDefinition(id: id, in: scope)
+        ).first
+        try checkCancellation()
+        return model.map {
+            GraphReadDTOMapper.detailFieldDefinition($0, scope: scope)
+        }
     }
 
     func detailFieldDefinitions(
@@ -106,6 +207,27 @@ actor GraphReadRepository {
     func detailValues(in scope: GraphScope) async throws -> [GraphDetailValueDTO] {
         let context = try await makeReadContext()
         return try fetchDetailValues(in: scope, context: context)
+    }
+
+    func detailValue(
+        id: UUID,
+        in scope: GraphScope
+    ) async throws -> GraphDetailValueDTO? {
+        let context = try await makeReadContext()
+        try checkCancellation()
+        guard
+            let model = try context.fetch(
+                GraphScopedFetches.detailValue(id: id, in: scope)
+            ).first
+        else {
+            return nil
+        }
+        try checkCancellation()
+        return try fetchDetailValues(
+            in: scope,
+            context: context,
+            models: [model]
+        ).first
     }
 
     func detailValues(
@@ -150,6 +272,27 @@ actor GraphReadRepository {
     ) async throws -> [GraphAttachmentMetadataDTO] {
         let context = try await makeReadContext()
         return try fetchAttachmentMetadata(in: scope, context: context)
+    }
+
+    func attachmentMetadata(
+        id: UUID,
+        in scope: GraphScope
+    ) async throws -> GraphAttachmentMetadataDTO? {
+        let context = try await makeReadContext()
+        try checkCancellation()
+        guard
+            let model = try context.fetch(
+                GraphScopedFetches.attachment(id: id, in: scope)
+            ).first
+        else {
+            return nil
+        }
+        try checkCancellation()
+        return try fetchAttachmentMetadata(
+            in: scope,
+            context: context,
+            models: [model]
+        ).first
     }
 
     func attachmentMetadata(

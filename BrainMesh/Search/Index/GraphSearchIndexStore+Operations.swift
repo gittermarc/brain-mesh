@@ -58,6 +58,44 @@ extension GraphSearchIndexStore {
     }
 
     func replaceDocuments(
+        for sourceReference: GraphSearchSourceReference,
+        with documents: [GraphSearchDocument]
+    ) throws {
+        _ = try requireConnection()
+        let startedAt = Self.uptimeNanoseconds()
+
+        for document in documents where document.sourceReference != sourceReference {
+            throw GraphSearchIndexStoreError.invalidSourceReplacement(
+                expected: sourceReference,
+                actual: document.sourceReference
+            )
+        }
+        try validateDocuments(documents)
+
+        try withTransaction(operation: "replace-source") { store in
+            let transactionConnection = try store.requireConnection()
+            try store.cancellationCheck()
+            let deleteStatement = try transactionConnection.prepare(
+                """
+                DELETE FROM graph_search_documents
+                WHERE graph_id = ? AND source_kind = ? AND source_id = ?
+                """,
+                operation: "replace-source-delete"
+            )
+            try deleteStatement.bind(sourceReference.graphID.uuidString.lowercased(), at: 1)
+            try deleteStatement.bind(sourceReference.sourceKind.rawValue, at: 2)
+            try deleteStatement.bind(sourceReference.sourceID.uuidString.lowercased(), at: 3)
+            try deleteStatement.stepExpectingDone()
+            try store.cancellationCheck()
+            try store.writeDocuments(documents, connection: transactionConnection)
+        }
+
+        BMLog.search.info(
+            "Search index replaced source documents=\(documents.count) version=\(GraphSearchIndexSchema.currentVersion) durationMS=\(Self.elapsedMilliseconds(since: startedAt), format: .fixed(precision: 2))"
+        )
+    }
+
+    func replaceDocuments(
         in graphID: UUID,
         with documents: [GraphSearchDocument]
     ) throws {
@@ -165,6 +203,27 @@ extension GraphSearchIndexStore {
         }
     }
 
+    func documents(
+        for sourceReference: GraphSearchSourceReference
+    ) throws -> [GraphSearchDocument] {
+        let connection = try requireConnection()
+        return try mapSQLiteErrors {
+            let statement = try connection.prepare(
+                """
+                SELECT \(Self.documentSelectColumns)
+                FROM graph_search_documents
+                WHERE graph_id = ? AND source_kind = ? AND source_id = ?
+                ORDER BY document_id ASC
+                """,
+                operation: "read-source-documents"
+            )
+            try statement.bind(sourceReference.graphID.uuidString.lowercased(), at: 1)
+            try statement.bind(sourceReference.sourceKind.rawValue, at: 2)
+            try statement.bind(sourceReference.sourceID.uuidString.lowercased(), at: 3)
+            return try decodeAllDocuments(from: statement)
+        }
+    }
+
     func sourceReferences(
         in graphID: UUID
     ) throws -> [GraphSearchSourceReference] {
@@ -202,6 +261,47 @@ extension GraphSearchIndexStore {
                     GraphSearchSourceReference(
                         graphID: graphID,
                         sourceKind: sourceKind,
+                        sourceID: sourceID
+                    )
+                )
+            }
+            return references
+        }
+    }
+
+    func detailValueSourceReferences(
+        in graphID: UUID,
+        fieldID: UUID
+    ) throws -> [GraphSearchSourceReference] {
+        let connection = try requireConnection()
+        return try mapSQLiteErrors {
+            let statement = try connection.prepare(
+                """
+                SELECT DISTINCT source_id
+                FROM graph_search_documents
+                WHERE graph_id = ? AND source_kind = ? AND field_id = ?
+                ORDER BY source_id ASC
+                """,
+                operation: "read-detail-value-source-references"
+            )
+            try statement.bind(graphID.uuidString.lowercased(), at: 1)
+            try statement.bind(GraphSearchSourceKind.detailValue.rawValue, at: 2)
+            try statement.bind(fieldID.uuidString.lowercased(), at: 3)
+
+            var references: [GraphSearchSourceReference] = []
+            while try statement.step() {
+                try cancellationCheck()
+                guard let sourceIDRaw = statement.columnText(at: 0),
+                      let sourceID = UUID(uuidString: sourceIDRaw)
+                else {
+                    throw GraphSearchIndexStoreError.invalidStoredValue(
+                        column: "source_id"
+                    )
+                }
+                references.append(
+                    GraphSearchSourceReference(
+                        graphID: graphID,
+                        sourceKind: .detailValue,
                         sourceID: sourceID
                     )
                 )

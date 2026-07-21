@@ -96,6 +96,18 @@ nonisolated enum GraphScopedFetches {
         )
     }
 
+    static func link(id: UUID, in scope: GraphScope) -> FetchDescriptor<MetaLink> {
+        let graphID = scope.graphID
+        let linkID = id
+        var descriptor = FetchDescriptor<MetaLink>(
+            predicate: #Predicate<MetaLink> { link in
+                link.graphID == graphID && link.id == linkID
+            }
+        )
+        descriptor.fetchLimit = 1
+        return descriptor
+    }
+
     static func outgoingLinks(
         from nodeKey: NodeRefKey,
         in scope: GraphScope
@@ -162,6 +174,21 @@ nonisolated enum GraphScopedFetches {
         )
     }
 
+    static func detailFieldDefinition(
+        id: UUID,
+        in scope: GraphScope
+    ) -> FetchDescriptor<MetaDetailFieldDefinition> {
+        let graphID = scope.graphID
+        let fieldID = id
+        var descriptor = FetchDescriptor<MetaDetailFieldDefinition>(
+            predicate: #Predicate<MetaDetailFieldDefinition> { field in
+                field.graphID == graphID && field.id == fieldID
+            }
+        )
+        descriptor.fetchLimit = 1
+        return descriptor
+    }
+
     static func detailFieldDefinitions(
         entityID: UUID,
         in scope: GraphScope
@@ -214,6 +241,21 @@ nonisolated enum GraphScopedFetches {
         )
     }
 
+    static func detailValue(
+        id: UUID,
+        in scope: GraphScope
+    ) -> FetchDescriptor<MetaDetailFieldValue> {
+        let graphID = scope.graphID
+        let valueID = id
+        var descriptor = FetchDescriptor<MetaDetailFieldValue>(
+            predicate: #Predicate<MetaDetailFieldValue> { value in
+                value.graphID == graphID && value.id == valueID
+            }
+        )
+        descriptor.fetchLimit = 1
+        return descriptor
+    }
+
     static func attachments(in scope: GraphScope) -> FetchDescriptor<MetaAttachment> {
         let graphID = scope.graphID
         return FetchDescriptor<MetaAttachment>(
@@ -222,6 +264,21 @@ nonisolated enum GraphScopedFetches {
             },
             sortBy: [SortDescriptor(\MetaAttachment.createdAt)]
         )
+    }
+
+    static func attachment(
+        id: UUID,
+        in scope: GraphScope
+    ) -> FetchDescriptor<MetaAttachment> {
+        let graphID = scope.graphID
+        let attachmentID = id
+        var descriptor = FetchDescriptor<MetaAttachment>(
+            predicate: #Predicate<MetaAttachment> { attachment in
+                attachment.graphID == graphID && attachment.id == attachmentID
+            }
+        )
+        descriptor.fetchLimit = 1
+        return descriptor
     }
 
     static func attachments(

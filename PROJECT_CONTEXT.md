@@ -254,7 +254,10 @@ BrainMesh ist eine SwiftUI-iOS/iPadOS-App für graphbasiertes Wissens- und Entit
   - Das Indexschema ist separat versioniert und nicht Teil des SwiftData-/CloudKit-Schemas, GraphTransfer oder App-Backups.
   - FTS5 wird zur Laufzeit bevorzugt; ein eigener indexierter n-Gram-Pfad erhält Unicode-, Umlaut-, Case- und Infix-Suche auch ohne FTS5.
   - Attachment-Dokumente enthalten nur Titel, Original-Dateiname, Dateiendung, Content-Type-Identifier, Byte-Anzahl und Content-Kind; Binärdaten, extrahierter Inhalt und OCR-Text sind ausgeschlossen.
-  - Noch fehlen Document Builder, Full Rebuild aus SwiftData, Mutation-Event-Consumer, Reconciliation und der Search-Cutover.
+  - `GraphSearchDocumentBuilder` erzeugt aus den value-only Read-DTOs deterministische Dokument-IDs und SHA-256-Content-Hashes für alle unterstützten Source-Arten.
+  - `GraphSearchIndexer` führt graph-scoped atomare Full Rebuilds aus, coalesced parallele Anforderungen und hält den Index über genau einen zentral gestarteten `GraphMutationEventBus`-Consumer für lokale Mutationen inkrementell aktuell.
+  - Der value-only Indexstatus unterscheidet nicht initialisiert, Aufbau, bereit, veraltet und fehlgeschlagen einschließlich sinnvoller Fortschrittswerte.
+  - Noch fehlen Remote-CloudKit-Reconciliation und der produktive Search-Cutover; `BrainMeshSearchService` nutzt weiterhin den bisherigen Provider-Orchestrator.
 
 ### Migration / Repair
 
@@ -447,7 +450,7 @@ BrainMesh ist eine SwiftUI-iOS/iPadOS-App für graphbasiertes Wissens- und Entit
 
 1. `GraphCanvasDataLoader+Neighborhood.swift` `try? context.fetch` durch `do/catch` mit `BMLog.load` ersetzen, damit Fetch-Fehler nicht still zu leeren Graphen werden.
 2. Bestehende Feature-Loader schrittweise auf die vorhandenen `GraphScopedFetches`, `GraphReadRepository` und `NodeRepository` migrieren, wenn dies ihren Hot Path vereinfacht.
-3. Auf dem vorhandenen `GraphSearchIndexStore` als Nächstes Document Builder, Full Rebuild, Mutation-Event-Consumer und Reconciliation aufbauen und erst danach die Provider schrittweise auf den Index umstellen; aktuell werden Links, Detailwerte und Attachments weiterhin graphweit geladen und in Memory gerankt.
+3. Den vorhandenen `GraphSearchIndexer` um Remote-CloudKit-Reconciliation ergänzen und erst danach die Provider schrittweise auf den lokalen Index umstellen; aktuell werden Links, Detailwerte und Attachments in der produktiven Suche weiterhin graphweit geladen und in Memory gerankt.
 4. `EntitiesHomeCockpitLoader.swift` Snapshot cachen oder inkrementell machen; aktuell lädt Cockpit Entity, Attribute, Links, DetailFields und Attachments graphweit und besitzt keinen langlebigen Derived-State, der invalidiert werden müsste.
 5. `GraphCanvasView+Physics.swift` O(n²)-Pair-Loop durch Grid/Bucket-Approximation ersetzen, mindestens oberhalb von etwa 80 simulierten Nodes.
 6. Readiness-Fehler im App-Root bei Bedarf zusätzlich als sichtbaren Recovery-Zustand darstellen; die awaitbare Konfigurationsbarriere ist vorhanden.
