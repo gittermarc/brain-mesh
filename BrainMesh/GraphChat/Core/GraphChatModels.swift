@@ -72,6 +72,11 @@ nonisolated enum GraphChatErrorCode: String, CaseIterable, Hashable, Sendable {
     case invalidQueryPlan
     case cancelled
     case unavailable
+    case modelUnavailable
+    case toolFailure
+    case toolBudgetExceeded
+    case contextWindowExceeded
+    case concurrentRequest
     case unexpected
 }
 
@@ -148,3 +153,43 @@ nonisolated struct GraphChatFollowUpSuggestion: Hashable, Sendable, Identifiable
         self.prompt = prompt
     }
 }
+
+nonisolated struct GraphChatAnswer: Hashable, Sendable {
+    let directAnswer: String
+    let sections: [GraphChatAnswerSection]
+    let evidence: [GraphEvidence]
+    let appliedFilters: [GraphChatAppliedFilter]
+    let followUpSuggestions: [GraphChatFollowUpSuggestion]
+    let hasInsufficientEvidence: Bool
+
+    var evidenceIDs: [GraphEvidenceID] {
+        evidence.map(\.id)
+    }
+
+    init(
+        directAnswer: String,
+        sections: [GraphChatAnswerSection] = [],
+        evidence: [GraphEvidence] = [],
+        appliedFilters: [GraphChatAppliedFilter] = [],
+        followUpSuggestions: [GraphChatFollowUpSuggestion] = [],
+        hasInsufficientEvidence: Bool
+    ) {
+        self.directAnswer = directAnswer
+        self.sections = sections
+        self.evidence = GraphEvidenceCollection(evidence).values
+        self.appliedFilters = appliedFilters
+        self.followUpSuggestions = followUpSuggestions
+        self.hasInsufficientEvidence = hasInsufficientEvidence
+    }
+}
+
+nonisolated enum GraphChatStreamEvent: Hashable, Sendable {
+    case started(requestID: UUID)
+    case toolActivity(GraphChatToolActivity)
+    case partialAnswer(String)
+    case completed(GraphChatAnswer)
+    case cancelled
+    case failure(GraphChatError)
+}
+
+typealias GraphChatEventStream = AsyncStream<GraphChatStreamEvent>

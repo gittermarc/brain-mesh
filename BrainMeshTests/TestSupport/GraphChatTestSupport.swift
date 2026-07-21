@@ -10,9 +10,10 @@ nonisolated enum GraphChatTestSupport {
     static let personAttributeID = UUID(uuidString: "30000000-0000-0000-0000-000000000002")!
 
     static func makeSchemaContext(
+        graphID requestedGraphID: UUID = graphID,
         choiceOptions: [String] = ["Offen", "In Arbeit", "Fertig"]
     ) -> GraphSchemaContext {
-        let graphScope = GraphScope(graphID: graphID)
+        let graphScope = GraphScope(graphID: requestedGraphID)
         let fieldSpecifications: [(
             GraphFieldAlias,
             UUID,
