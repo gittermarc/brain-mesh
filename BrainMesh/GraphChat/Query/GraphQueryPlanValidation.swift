@@ -384,8 +384,27 @@ nonisolated struct GraphQueryPlanValidator: Sendable {
             fieldID: field.fieldID,
             fieldType: field.type,
             operation: filter.operation,
-            value: value
+            value: value,
+            valueDescription: filterValueDescription(
+                value,
+                operation: filter.operation
+            )
         )
+    }
+
+    private func filterValueDescription(
+        _ value: GraphValidatedFilterValue,
+        operation: GraphQueryFilterOperator
+    ) -> String? {
+        switch (operation, value) {
+        case (.inYear, .dateInterval(let interval)),
+            (.inMonth, .dateInterval(let interval)):
+            return dateInterpreter.intervalDescription(interval)
+        case (.isOverdue, .dateInterval(let interval)):
+            return "vor \(dateInterpreter.dateDescription(interval.upperBoundExclusive))"
+        default:
+            return nil
+        }
     }
 
     private func resolveFilterValue(

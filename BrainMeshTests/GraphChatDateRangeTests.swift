@@ -118,6 +118,37 @@ struct GraphChatDateRangeTests {
     }
 
     @Test
+    func validatedYearDescriptionUsesInjectedTimeZoneBoundaries() throws {
+        let timeZone = try #require(TimeZone(identifier: "Europe/Berlin"))
+        let validator = GraphChatTestSupport.makeValidator(
+            timeZoneIdentifier: "Europe/Berlin"
+        )
+        let plan = GraphQueryPlan(
+            entityAlias: GraphEntityAlias("E1"),
+            filters: [
+                GraphQueryFilter(
+                    fieldAlias: GraphFieldAlias("F5"),
+                    operation: .inYear,
+                    value: .year(2024)
+                )
+            ]
+        )
+        let validated = try validator.validate(
+            plan,
+            against: GraphChatTestSupport.makeSchemaContext()
+        )
+        let description = try #require(validated.filters.first?.valueDescription)
+        let appliedFilters = GraphChatQueryEngine.appliedFilters(
+            validated.filters,
+            fieldMap: [:]
+        )
+
+        #expect(timeZone.identifier == "Europe/Berlin")
+        #expect(description == "2024-01-01 bis vor 2025-01-01")
+        #expect(appliedFilters.first?.valueDescription == description)
+    }
+
+    @Test
     func invalidMonthAndDescendingDateRangeAreRejected() {
         let invalidMonthPlan = GraphQueryPlan(
             entityAlias: GraphEntityAlias("E1"),

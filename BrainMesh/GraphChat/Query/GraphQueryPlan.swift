@@ -159,6 +159,21 @@ nonisolated struct GraphValidatedQueryFilter: Hashable, Sendable {
     let fieldType: DetailFieldType
     let operation: GraphQueryFilterOperator
     let value: GraphValidatedFilterValue
+    let valueDescription: String?
+
+    init(
+        fieldID: UUID,
+        fieldType: DetailFieldType,
+        operation: GraphQueryFilterOperator,
+        value: GraphValidatedFilterValue,
+        valueDescription: String? = nil
+    ) {
+        self.fieldID = fieldID
+        self.fieldType = fieldType
+        self.operation = operation
+        self.value = value
+        self.valueDescription = valueDescription
+    }
 }
 
 nonisolated enum GraphValidatedSortKey: Hashable, Sendable {

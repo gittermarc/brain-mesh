@@ -659,8 +659,12 @@ Ziel: Storage- und Medienpfade entkoppeln.
   - Der promptfähige `GraphSchemaSnapshot` enthält keine Graph-, Entity-, Node- oder Field-UUIDs. `GraphSchemaAliasMap` hält `E1`-/`F1`-Auflösung, Node-Zuordnung und Graph-ID ausschließlich appseitig.
   - `GraphQueryPlanValidator` akzeptiert nur Aliase plus einen explizit graph-scoped App-Scope, prüft Feldbesitz, vollständige Operator-/Typ-Matrix, Choice-Normalisierung, Datumsgrenzen, Aggregationen und harte Limits und erzeugt erst danach einen `ValidatedGraphQueryPlan` mit aufgelösten IDs.
   - Jahres- und Monatsabfragen verwenden einen injizierten `Calendar`, eine injizierte `TimeZone` und halb-offene Grenzen; `isOverdue` wird gegen ein injiziertes Referenzdatum aufgelöst.
+  - `GraphChatQueryEngine` akzeptiert ausschließlich `ValidatedGraphQueryPlan`, lädt nur den ausgewählten Graph-, Entity-, Field- und Attribute-Ausschnitt, wertet alle Operatoren über typisierte `MetaDetailFieldValue`-DTOs aus und liefert stabil sortierte Rows oder Count-/GroupCount-/Minimum-/Maximum-Aggregationen.
+  - `Evidence/` erzeugt stabile Evidence-IDs und revalidiert jede Source unmittelbar vor Rückgabe gegen SwiftData, den aktiven Graphen und Entity-/Node-/Selection-Scope. Attachment-Sources enthalten ausschließlich Metadaten.
+  - `Tools/` definiert eine providerunabhängige read-only Grenze für Schema, lokalen Index, validierte Detailabfragen, Node-Details, direkte Nachbarn und bestehende `GraphStatsService`-Ergebnisse. Ein zentraler Actor erzwingt Call-, Result- und Evidence-Budgets; technische Logs enthalten nur Tooltyp, Dauer, Result Count und Cancellation.
+  - Der lokale Suchindex ist im Chat ausschließlich Candidate-Quelle. Jeder Treffer wird erneut über `GraphReadRepository` aufgelöst; gelöschte oder graphfremde Indexdokumente erzeugen keine Evidence.
 - Bewusste Grenze:
-  - Query-Ausführung, Tools, Foundation Models, Streaming, Chat-UI, Pro-Gating und Schreiboperationen sind nicht Teil dieser Schicht.
+  - Foundation Models, freie Sprachplanung, Streaming, Chat-UI, Pro-Gating, Multi-Hop-Pfadsuche und sämtliche Schreiboperationen sind nicht Teil dieser Schicht.
 
 #### Mutation Events
 

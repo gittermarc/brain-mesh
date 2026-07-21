@@ -30,7 +30,7 @@ BrainMesh ist eine SwiftUI-iOS/iPadOS-App für graphbasiertes Wissens- und Entit
 - **Graph Transfer**: Export/Import für `.bmgraph` und `.bmbackup`, implementiert unter `BrainMesh/GraphTransfer/`.
 - **Command Center**: globale Suche/Aktionen, UI unter `BrainMesh/Search/CommandCenter/`; `BrainMeshSearchService` orchestriert den indexbasierten `IndexedSearchCandidateProvider`, die unveränderte Ranking-Schicht und den transparenten Legacy-Fallback unter `BrainMesh/Search/Candidates/`.
 - **GraphScope / Read Repositories**: `BrainMesh/DataAccess/` stellt eine nicht-optionale Graph-Grenze, zentrale Fetch-Descriptor-Factories und value-only DTO-Repositories für Graph-Snapshots, Node-Lookups und direkte Nachbarschaften bereit.
-- **Graph Chat Domain**: `BrainMesh/GraphChat/` enthält die provider- und UI-unabhängige Chat-Domain, promptfähige Schema-Snapshots ohne rohe UUIDs, appseitige Alias-Auflösung sowie strikt validierte, versionierte Query-Pläne. Query-Ausführung, Foundation Models und Chat-UI sind noch nicht enthalten.
+- **Graph Chat Domain**: `BrainMesh/GraphChat/` enthält die provider- und UI-unabhängige Chat-Domain, promptfähige Schema-Snapshots ohne rohe UUIDs, appseitige Alias-Auflösung, strikt validierte Query-Pläne sowie eine deterministische read-only Faktenebene mit Query Engine, Tools und revalidierter Evidence. Foundation Models, Streaming, Chat-UI und Schreiboperationen sind noch nicht enthalten.
 - **GraphMutationEventBus / GraphMutationCommitter**: actor-sicherer Multicast-Bus plus einzige Save-then-Publish-Grenze unter `BrainMesh/DataAccess/Mutations/`. Main-Actor-UI-Pfade und caller-isolierte GraphTransfer-Kontexte verwenden dieselbe Committer-Implementierung. Basis- und zusammengesetzte Mutationen, Graph-Lifecycle, Dedupe, Bootstrap-/Migrations-Reparaturen sowie Import/Replace publizieren ausschließlich technische graph-scoped Post-Commit-Batches. `GraphMutationCacheInvalidationCoordinator` invalidiert die vorhandenen Home- und Stats-Caches zentral und container-idempotent.
 
 ## Architecture Map
@@ -64,7 +64,9 @@ BrainMesh ist eine SwiftUI-iOS/iPadOS-App für graphbasiertes Wissens- und Entit
 - `BrainMesh/GraphChat/`
   - `Core/` definiert graph-scoped Chat-, Evidence- und Source-Modelle.
   - `Schema/` erzeugt kompakte, deterministisch aliasierte Schema-Snapshots aus `GraphReadRepository`; UUID-Mapping und Node-Zuordnung bleiben ausschließlich appseitig.
-  - `Query/` enthält versionierte Alias-Pläne, Kalender-/Zeitzonenauflösung und die einzige Grenze, die untrusted Pläne in `ValidatedGraphQueryPlan` mit aufgelösten technischen IDs überführt.
+  - `Query/` enthält versionierte Alias-Pläne, Kalender-/Zeitzonenauflösung, die einzige Validierungsgrenze für `ValidatedGraphQueryPlan` sowie die deterministische typed-value Query Engine mit Filtern, stabiler Sortierung und Aggregationen.
+  - `Evidence/` revalidiert jede zurückgegebene Source gegen SwiftData, aktiven Graph und Chat-Scope; stabile Evidence-IDs verknüpfen Result Rows und Navigation.
+  - `Tools/` stellt ausschließlich read-only Tools für Schema, lokalen Index, Detailabfragen, Nodes, direkte Nachbarn und bestehende Graph-Stats bereit; zentrale Call-, Result- und Evidence-Budgets gelten pro Nutzeranfrage.
 
 ### Storage / Sync / Caches
 
@@ -136,7 +138,7 @@ BrainMesh ist eine SwiftUI-iOS/iPadOS-App für graphbasiertes Wissens- und Entit
 | `BrainMesh/Attachments/` | Attachment-Modell, Store, Hydrator, Import, Thumbnails | CloudKit-Assets, lokale Cache-Dateien, 25-MB-Limit |
 | `BrainMesh/Search/` | Search-Orchestrator, Candidate Provider, Ranking, Command Center, lokaler SQLite-Index-Store | Der lokale Index ist nach `ensureReady` die primäre Candidate-Quelle; konkrete Graphen bleiben isoliert, globale Suchen verwenden den Index nur bei vollständiger Readiness aller relevanten Graphen, andernfalls die bestehende Provider-Pipeline |
 | `BrainMesh/DataAccess/` | Graph-scoped Fetch-Factories, Read-Repositories, value-only DTOs und Mutation-Infrastruktur | nicht-optionaler `GraphScope`; actor-sicherer Event-Bus; zentraler Main-Actor-Committer; keine SwiftData-Modelle, Attachment-Binärdaten oder Nutzdaten über Actor-Grenzen |
-| `BrainMesh/GraphChat/` | Chat-Kernmodelle, Schema-Snapshot, Alias-Auflösung und Query-Plan-Validierung | provider- und UI-unabhängig; rohe UUIDs bleiben aus dem promptfähigen Snapshot; nur `ValidatedGraphQueryPlan` enthält aufgelöste technische IDs |
+| `BrainMesh/GraphChat/` | Chat-Kernmodelle, Schema-Snapshot, Query-Plan-Validierung, deterministische Query Engine, read-only Tools und Evidence | provider- und UI-unabhängig; nur validierte Pläne erreichen die Faktenebene; Sources werden vor Rückgabe graph- und scope-scoped gegen SwiftData revalidiert; keine Attachment-Inhalte oder Writes |
 | `BrainMesh/PhotoGallery/` | Galerie-Browser/Viewer/Section | `@Query` über Attachment-Galeriebilder |
 | `BrainMesh/GraphPicker/` | Graph-Auswahl, Löschen, Sheet | Graph-Lifecycle und Pro-Limit |
 | `BrainMesh/Security/` | Graph-Lock, Unlock, Crypto | Zugriffsschutz, ScenePhase-Interaktion |

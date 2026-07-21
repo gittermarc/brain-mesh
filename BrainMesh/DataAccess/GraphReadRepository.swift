@@ -105,14 +105,14 @@ actor GraphReadRepository {
     ) async throws -> [GraphAttributeDTO] {
         let context = try await makeReadContext()
         try checkCancellation()
-        let models = try context.fetch(GraphScopedFetches.attributes(in: scope))
-        try checkCancellation()
-
-        let matchingModels = models.filter { attribute in
-            attribute.owner?.id == ownerEntityID
-                && attribute.owner?.graphID == scope.graphID
+        guard let owner = try context.fetch(
+            GraphScopedFetches.entity(id: ownerEntityID, in: scope)
+        ).first else {
+            return []
         }
-        let values = try mapAttributes(matchingModels, scope: scope)
+        let models = owner.attributesList.filter { $0.graphID == scope.graphID }
+        try checkCancellation()
+        let values = try mapAttributes(models, scope: scope)
         try checkCancellation()
         return values.sorted(by: Self.attributeSort)
     }
