@@ -342,7 +342,6 @@
   - Quellspezifische Provider-Grenze für einen späteren Index.
   - Der lokale, versionierte `GraphSearchIndexStore` wird aus graph-scoped Read-Snapshots atomar aufgebaut und für lokale Mutation-Events inkrementell gepflegt; `BrainMeshSearchService` liest ihn in diesem Stand noch nicht.
 - Refactor-Hebel:
-  - Remote-CloudKit-Reconciliation für Änderungen anderer Geräte.
   - Kontrollierter Search-Cutover an der vorhandenen Provider-Grenze.
 
 ## Sync / Storage Hot Path Analyse
@@ -583,6 +582,8 @@ Ziel: Storage- und Medienpfade entkoppeln.
   - `GraphSearchDocumentBuilder` erzeugt aus den value-only Read-DTOs stabile Dokument-IDs und persistierbare SHA-256-Content-Hashes ausschließlich aus indexrelevanten Werten.
   - `GraphSearchIndexStore` ist ein eigener Actor mit separater SQLite-Datei in Application Support. Batch-Upsert, Source-Delete, Graph-Replace und Graph-Delete sind transaktional; graph-scoped und optionale graphübergreifende Suche, Test-Reads, Counts, Manifest, Clear und physischer Rebuild sind vorhanden.
   - `GraphSearchIndexer` ist ein Actor für coalesced `ensureIndexed`-Aufrufe, atomare graph-scoped Full Rebuilds in begrenzten Source-Batches und präzise Source-Replacements nach lokalen Mutation-Events. Import, Replace, Repair und andere grobe Events führen zu einem Full Rebuild; Graph-Delete entfernt den Index vollständig.
+  - `GraphSearchSourceManifest` speichert pro Graph stabile Source-Hashes, Source-Art-Zähler und Dokument-Fingerprints. Dokumentänderungen und Manifest werden in derselben SQLite-Transaktion veröffentlicht; semantisch abweichende Dokument-Fingerprints werden beim Lesen erkannt.
+  - `GraphSearchIndexReconciler` coalesced parallele `ensureReady`-Aufrufe pro Graph, hält verschiedene Graphen unabhängig, unterstützt waiter-spezifische Cancellation und kann einen zuvor gültigen Index während einer Reparatur beziehungsweise nach einem fehlgeschlagenen Rebuild weiterhin als technisch nutzbar ausweisen.
   - Rename-Folgen aktualisieren denormalisierte Attribute-, Detail- und Link-Labels. Detail-Schema-Events ersetzen Definitionen und synchronisieren alle betroffenen Detailwert-Dokumente einschließlich Löschungen.
   - Der UI-unabhängige, value-only Indexstatus bildet nicht initialisiert, Aufbau mit Fortschritt, bereit, veraltet und fehlgeschlagen ab. Fehler und Cancellation lassen einen vorherigen vollständigen Index bestehen.
   - `AppLoadersConfigurator` startet nach der Service-Konfiguration genau einen idempotenten Mutation-Event-Consumer. Indexfehler blockieren weder App-Start noch Hauptdaten.
@@ -590,10 +591,9 @@ Ziel: Storage- und Medienpfade entkoppeln.
   - Inkompatible Versionen, fehlende Schemaobjekte und beschädigte beziehungsweise logisch ungültige Indexdaten führen zu einem sicheren Index-Rebuild. Der Haupt-SwiftData-Store wird nicht geöffnet oder verändert.
   - Der Index ist vom Backup ausgeschlossen und weder Teil des CloudKit-Hauptschemas noch von GraphTransfer.
 - Noch offen:
-  - Remote-CloudKit-Reconciliation für Änderungen anderer Geräte.
   - Produktiver Cutover von `BrainMeshSearchService` auf den Store.
 - Nutzen:
-  - Der rekonstruierbare Index ist für lokale Änderungen konsistent befüllbar; der direkte Laufzeitnutzen für `BrainMeshSearchService` entsteht mit dem späteren Cutover.
+  - Der rekonstruierbare Index bleibt sowohl bei lokalen Mutationen als auch bei später erkannten externen Änderungen graph-scoped konsistent; der direkte Laufzeitnutzen für `BrainMeshSearchService` entsteht mit dem späteren Cutover.
 
 #### Graph Counts Cache
 
@@ -649,7 +649,7 @@ Ziel: Storage- und Medienpfade entkoppeln.
   - `NodeRenameService`, `NodeNotesPersistence`, `GraphNodeDeletionService`, `BulkLinkExecutor` und `AttachmentMutationService` bauen auf derselben Commit-Grenze auf; es gibt keinen parallelen zweiten Save-then-Publish-Mechanismus.
 - Weiterhin offen:
   - Bestehende Feature-Loader bauen teilweise eigene `FetchDescriptor`-Predicates und können schrittweise auf die Read-Schicht migriert werden.
-  - Remote-CloudKit-Reconciliation, persistente Event-History, GraphCanvas-Reload-Scheduling sowie der produktive Search-Cutover auf den vorhandenen lokalen Search-Index-Store.
+  - Persistente Event-History, GraphCanvas-Reload-Scheduling sowie der produktive Search-Cutover auf den vorhandenen lokalen Search-Index-Store.
 
 #### Mutation Events
 
@@ -658,7 +658,7 @@ Ziel: Storage- und Medienpfade entkoppeln.
   - `GraphMutationEventBus` ist ein actor-sicherer Multicast-Bus mit unabhängigen `AsyncStream`-Subscriptions, deterministischen Sequenznummern und expliziter Buffering-Policy.
   - Die Publisher-API heißt bewusst `publishCommitted(_:)`. `GraphMutationCommitter` ist die einzige Save-then-Publish-Abstraktion: Er prüft Cancellation vor der irreversiblen Commit-Phase, führt `ModelContext.save()` aus und publiziert erst danach genau einen bereits vollständig aus technischen IDs gebauten Batch. Bei Save-Fehlern wird nichts publiziert; Publish-Diagnosen aus dem Receipt machen einen erfolgreichen Save nicht rückwirkend fehlerhaft. Eine Pre-Commit-Publish-API existiert nicht.
   - `GraphMutationBatchFactory` klassifiziert sämtliche integrierten Mutationen ausschließlich aus technischen IDs. Definiert sind unter anderem stabile Reihenfolgen für bidirektionale/Bulk-Links, Rename-Relabels, Detailfeld-/Node-Cleanup, Graph-Lifecycle, Repair sowie Import/Replace.
-  - Der Default-Buffer ist unbounded, da noch keine persistente Event-History existiert. Bounded Policies melden Drops im technischen Publish-Receipt; Subscriber erkennen Lücken über monotone Delivery-Sequenzen und müssen später über Reconciliation abgesichert werden.
+  - Der Default-Buffer ist unbounded, da noch keine persistente Event-History existiert. Bounded Policies melden Drops im technischen Publish-Receipt; Subscriber erkennen Lücken über monotone Delivery-Sequenzen und sichern den Suchindex über den graph-scoped Reconciliation-/Rebuild-Pfad ab.
   - Streams werden bei Cancellation entfernt; der Bus kann beendet und für isolierte Tests deterministisch zurückgesetzt werden.
 - Produktiv integriert:
   - Entity- und Attribute-Erstellung.
@@ -679,7 +679,6 @@ Ziel: Storage- und Medienpfade entkoppeln.
   - `GraphSearchIndexer` startet nach vollständiger Service-Konfiguration zentral und idempotent genau eine weitere unbounded Subscription. Präzise Events ersetzen vollständige Sources; Import, Replace, Repair und Sequenzlücken erzwingen graph-scoped Full Rebuilds.
   - `EntitiesHomeCockpitLoader` und `BrainMeshSearchService` besitzen aktuell keinen langlebigen Cache und erhalten deshalb keinen No-op-Subscriber.
 - Noch nicht integriert:
-  - CloudKit-Reconciliation für Änderungen anderer Geräte.
   - Persistente Event-History und GraphCanvas-Reload-Scheduling.
   - Produktiver Search-Cutover auf den vorhandenen lokalen Search-Index-Store.
 - Nutzen:
@@ -834,13 +833,13 @@ Ziel: Storage- und Medienpfade entkoppeln.
 - Umsetzung:
   - Der verhaltenskompatible Provider-Split ist abgeschlossen; `BrainMeshSearchService` orchestriert die deterministische Candidate-Pipeline.
   - Der lokale, vollständig rekonstruierbare `GraphSearchIndexStore` ist als separate SQLite-/FTS5-Schicht umgesetzt. `GraphSearchDocumentBuilder` und `GraphSearchIndexer` befüllen ihn atomar aus graph-scoped Read-Snapshots und halten ihn für lokale Mutation-Events inkrementell aktuell.
+  - `GraphSearchIndexReconciler` vergleicht einen value-only Source-Manifest-Snapshot mit dem lokal gespeicherten Manifest, upsertet oder löscht kleine Abweichungen atomar und löst bei inkompatiblen, beschädigten oder breiten Inkonsistenzen einen Full Rebuild aus. Der Foreground-Trigger ist graph-scoped, nicht blockierend und zeitlich gedrosselt.
   - Der Indexer verändert weder das SwiftData-/CloudKit-Hauptschema noch GraphTransfer und ist noch nicht an die produktive Suche angebunden.
 - Nächste Schritte:
-  - Remote-CloudKit-Reconciliation ergänzen.
-  - Danach den Search-Cutover an der vorhandenen Provider-Grenze durchführen.
+  - Den Search-Cutover an der vorhandenen Provider-Grenze durchführen.
 - Risiko:
   - Mittel.
-  - Lokale Mutationen, Import/Replace und Repair werden bereits durch Event-Consumer und Full Rebuilds abgedeckt; Remote-CloudKit-Änderungen benötigen weiterhin Reconciliation.
+  - Lokale Mutationen, Import/Replace und Repair werden durch Event-Consumer und Full Rebuilds abgedeckt; Änderungen außerhalb des lokalen EventBus werden beim nächsten `ensureReady`- beziehungsweise Foreground-Pass über das Source-Manifest reconciled.
 - Erwarteter Nutzen:
   - Schnellere Suche bei großen Graphen.
   - Weniger Akku-/CPU-Last beim Tippen.

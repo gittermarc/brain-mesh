@@ -212,6 +212,9 @@ enum AppLoadersConfigurator {
         // A replacement container must never overlap with the previous mutation subscription.
         // The new subscription starts only after every cache owner below points at the new store.
         try Task.checkCancellation()
+        await GraphSearchIndexReconciler.shared.stop()
+
+        try Task.checkCancellation()
         await GraphSearchIndexer.shared.stop()
 
         try Task.checkCancellation()
@@ -222,6 +225,14 @@ enum AppLoadersConfigurator {
 
         try Task.checkCancellation()
         await GraphSearchIndexer.shared.configure(container: container)
+
+        try Task.checkCancellation()
+        await GraphSearchIndexReconciler.shared.configure(container: container)
+
+        try Task.checkCancellation()
+        await GraphSearchIndexer.shared.setReadinessInvalidator(
+            GraphSearchIndexReconciler.shared
+        )
 
         try Task.checkCancellation()
         await NodeRepository.shared.configure(container: container)
@@ -431,6 +442,7 @@ enum AppLoadersConfigurator {
             await task.value
         }
 
+        await GraphSearchIndexReconciler.shared.resetForTesting()
         await GraphSearchIndexer.shared.resetForTesting()
         await GraphMutationCacheInvalidationCoordinator.shared.resetForTesting()
 

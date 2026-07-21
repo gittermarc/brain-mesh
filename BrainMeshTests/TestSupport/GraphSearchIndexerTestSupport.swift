@@ -695,3 +695,77 @@ func waitForGraphSearchIndexerCondition(
     }
     Issue.record("Timed out waiting for graph search indexer test condition.")
 }
+
+actor GraphSearchIndexReadinessInvalidationRecorder: GraphSearchIndexReadinessInvalidating {
+    private var recorded: [(GraphScope, GraphSearchIndexReconciliationReason)] = []
+
+    func invalidate(
+        scope: GraphScope,
+        reason: GraphSearchIndexReconciliationReason
+    ) async {
+        recorded.append((scope, reason))
+    }
+
+    func reasons(for graphID: UUID) -> [GraphSearchIndexReconciliationReason] {
+        recorded.compactMap { scope, reason in
+            scope.graphID == graphID ? reason : nil
+        }
+    }
+}
+
+func withGraphSearchReconcilerTestEnvironment<T>(
+    snapshots: [GraphSourceSnapshotDTO],
+    foregroundMinimumInterval: TimeInterval = GraphSearchIndexReconciler.defaultForegroundMinimumInterval,
+    operation: (
+        GraphSearchIndexReconciler,
+        GraphSearchIndexer,
+        GraphSearchIndexerTestSource,
+        GraphSearchIndexStore,
+        GraphSearchIndexTestLocation
+    ) async throws -> T
+) async throws -> T {
+    let location = try GraphSearchIndexTestSupport.makeLocation()
+    let store = GraphSearchIndexStore(
+        databaseURL: location.databaseURL,
+        backendPreference: .indexedFallback
+    )
+    let source = GraphSearchIndexerTestSource(snapshots: snapshots)
+    let bus = GraphMutationEventBus()
+    let indexer = GraphSearchIndexer(
+        sourceReader: source,
+        store: store,
+        subscriber: bus
+    )
+    let reconciler = GraphSearchIndexReconciler(
+        sourceReader: source,
+        store: store,
+        indexer: indexer,
+        foregroundMinimumInterval: foregroundMinimumInterval
+    )
+    await indexer.setReadinessInvalidator(reconciler)
+
+    do {
+        let result = try await operation(
+            reconciler,
+            indexer,
+            source,
+            store,
+            location
+        )
+        await reconciler.resetForTesting()
+        await indexer.resetForTesting()
+        try await store.close()
+        location.remove()
+        return result
+    } catch {
+        await reconciler.resetForTesting()
+        await indexer.resetForTesting()
+        do {
+            try await store.close()
+        } catch let closeError {
+            Issue.record("Failed to close graph search reconciler test store: \(closeError)")
+        }
+        location.remove()
+        throw error
+    }
+}

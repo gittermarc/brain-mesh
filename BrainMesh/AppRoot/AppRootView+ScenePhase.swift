@@ -3,7 +3,29 @@
 //  BrainMesh
 //
 
+import Foundation
 import SwiftUI
+
+nonisolated enum GraphSearchIndexForegroundReconciliationPolicy {
+    private static let unsetGraphID = UUID(
+        uuidString: "00000000-0000-0000-0000-000000000000"
+    )!
+
+    static func scope(
+        activeGraphIDString: String,
+        isSystemModalPresented: Bool,
+        hasActiveGraphLockRequest: Bool
+    ) -> GraphScope? {
+        guard isSystemModalPresented == false,
+              hasActiveGraphLockRequest == false,
+              let graphID = UUID(uuidString: activeGraphIDString),
+              graphID != unsetGraphID
+        else {
+            return nil
+        }
+        return GraphScope(graphID: graphID)
+    }
+}
 
 extension AppRootView {
 
@@ -80,6 +102,23 @@ extension AppRootView {
             guard observedScenePhase == .background else { return }
 
             graphLock.lockAll()
+        }
+    }
+
+    func scheduleSearchIndexForegroundReconciliation() {
+        guard let scope = GraphSearchIndexForegroundReconciliationPolicy.scope(
+            activeGraphIDString: activeGraphIDString,
+            isSystemModalPresented: systemModals.isSystemModalPresented,
+            hasActiveGraphLockRequest: graphLock.activeRequest != nil
+        ) else {
+            return
+        }
+
+        Task(priority: .utility) {
+            _ = await GraphSearchIndexReconciler.shared.ensureReady(
+                scope: scope,
+                reason: .foreground
+            )
         }
     }
 }

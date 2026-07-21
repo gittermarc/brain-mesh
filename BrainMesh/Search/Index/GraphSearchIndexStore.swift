@@ -46,6 +46,10 @@ nonisolated enum GraphSearchIndexStoreError: Error, Sendable {
         actual: GraphSearchSourceReference
     )
     case incompatibleDocumentSchemaVersion(expected: Int, actual: Int)
+    case sourceManifestMissing(graphID: UUID)
+    case incompatibleSourceManifest(formatVersion: Int, indexSchemaVersion: Int)
+    case sourceManifestChangedDuringReconciliation(graphID: UUID)
+    case invalidSourceManifest(reason: String)
     case invalidStoredValue(column: String)
     case metadataEncoding(type: String)
     case metadataDecoding(type: String)
@@ -66,6 +70,14 @@ extension GraphSearchIndexStoreError: LocalizedError {
             return "A source replacement document belongs to \(actual.sourceKind.rawValue)/\(actual.sourceID.uuidString) instead of \(expected.sourceKind.rawValue)/\(expected.sourceID.uuidString)."
         case .incompatibleDocumentSchemaVersion(let expected, let actual):
             return "The graph search document schema version \(actual) is incompatible with version \(expected)."
+        case .sourceManifestMissing(let graphID):
+            return "The graph search source manifest for \(graphID.uuidString) is missing."
+        case .incompatibleSourceManifest(let formatVersion, let indexSchemaVersion):
+            return "The graph search source manifest format \(formatVersion) or index schema \(indexSchemaVersion) is incompatible."
+        case .sourceManifestChangedDuringReconciliation(let graphID):
+            return "The graph search source manifest for \(graphID.uuidString) changed during reconciliation."
+        case .invalidSourceManifest(let reason):
+            return "The graph search source manifest is invalid: \(reason)"
         case .invalidStoredValue(let column):
             return "The graph search index contains an invalid value in column \(column)."
         case .metadataEncoding(let type):
@@ -81,6 +93,7 @@ extension GraphSearchIndexStoreError: LocalizedError {
 }
 
 actor GraphSearchIndexStore {
+    static let shared = GraphSearchIndexStore()
     static let defaultBatchSize = 128
     static let maximumSearchLimit = 500
 
@@ -148,6 +161,10 @@ actor GraphSearchIndexStore {
         try withTransaction(operation: "clear-store") { store in
             let connection = try store.requireConnection()
             try store.cancellationCheck()
+            try connection.execute(
+                "DELETE FROM graph_search_source_manifests",
+                operation: "clear-source-manifests"
+            )
             try connection.execute(
                 "DELETE FROM graph_search_documents",
                 operation: "clear-documents"

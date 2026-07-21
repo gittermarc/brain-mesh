@@ -26,7 +26,7 @@ nonisolated enum BMLog {
 }
 
 /// Tiny timer helper (DispatchTime based) for cheap duration measurement.
-struct BMDuration {
+nonisolated struct BMDuration {
     private let startUptimeNanos: UInt64
 
     init() {

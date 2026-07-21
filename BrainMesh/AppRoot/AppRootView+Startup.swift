@@ -45,6 +45,7 @@ extension AppRootView {
         await autoHydrateImagesIfDue()
         await enforceLockIfNeeded()
         await maybePresentOnboardingIfNeeded()
+        scheduleSearchIndexForegroundReconciliation()
     }
 
     @MainActor
@@ -57,6 +58,7 @@ extension AppRootView {
         // Keep foreground work lightweight.
         await autoHydrateImagesIfDue()
         await enforceLockIfNeeded()
+        scheduleSearchIndexForegroundReconciliation()
         await maybePresentOnboardingIfNeeded()
     }
 

@@ -51,10 +51,11 @@ actor GraphSearchIndexer {
     private var subscriptionGeneration: UInt = 0
     private var lastDeliverySequenceNumber: UInt64?
     private var processedBatchCount = 0
+    private var readinessInvalidator: (any GraphSearchIndexReadinessInvalidating)?
 
     init(
         sourceReader: any GraphSearchSourceReading = GraphReadRepository.shared,
-        store: GraphSearchIndexStore = GraphSearchIndexStore(),
+        store: GraphSearchIndexStore = GraphSearchIndexStore.shared,
         subscriber: any GraphMutationSubscribing = GraphMutationEventBus.shared,
         builder: GraphSearchDocumentBuilder = GraphSearchDocumentBuilder(),
         sourceBatchSize: Int = GraphSearchIndexer.defaultSourceBatchSize
@@ -79,6 +80,12 @@ actor GraphSearchIndexer {
         } catch {
             logIndexFailure(operation: "open", error: error)
         }
+    }
+
+    func setReadinessInvalidator(
+        _ invalidator: (any GraphSearchIndexReadinessInvalidating)?
+    ) {
+        readinessInvalidator = invalidator
     }
 
     func startEventConsumer() async {
@@ -175,6 +182,21 @@ actor GraphSearchIndexer {
         statuses
     }
 
+    func acceptReconciledIndex(
+        scope: GraphScope,
+        documentCount: Int
+    ) {
+        guard rebuildOperations[scope.graphID] == nil else { return }
+        statuses[scope.graphID] = .ready(documentCount: documentCount)
+    }
+
+    func markStale(scope: GraphScope) {
+        guard rebuildOperations[scope.graphID] == nil else { return }
+        statuses[scope.graphID] = .stale(
+            documentCount: statuses[scope.graphID]?.documentCount
+        )
+    }
+
     func processCommittedBatch(_ batch: GraphMutationBatch) async {
         await process(batch: batch, forceFullRebuild: false)
     }
@@ -197,6 +219,7 @@ actor GraphSearchIndexer {
         completedRebuildCounts.removeAll(keepingCapacity: false)
         processedBatchCount = 0
         configuredContainerID = nil
+        readinessInvalidator = nil
     }
 
     private func startOrJoinRebuild(
@@ -268,6 +291,10 @@ actor GraphSearchIndexer {
                 operationID: operationID,
                 documentCount: documentCount
             )
+            await readinessInvalidator?.didBecomeReady(
+                scope: scope,
+                documentCount: documentCount
+            )
             return documentCount
         } catch is CancellationError {
             finishRebuildCancellation(
@@ -326,11 +353,15 @@ actor GraphSearchIndexer {
 
         var documents: [GraphSearchDocument] = []
         documents.reserveCapacity(snapshot.estimatedSearchDocumentCount)
+        var manifestEntries: [GraphSearchSourceManifestEntry] = []
+        manifestEntries.reserveCapacity(estimatedSources)
         var processedSources = 0
 
         for source in snapshot.entities {
             try validate(sourceScope: source.scope, expected: scope)
-            documents.append(contentsOf: try builder.documents(for: source))
+            let build = try builder.sourceBuild(for: source)
+            documents.append(contentsOf: build.documents)
+            manifestEntries.append(build.manifestEntry)
             processedSources += 1
             try await completeSourceBatchIfNeeded(
                 processedSources: processedSources,
@@ -341,7 +372,9 @@ actor GraphSearchIndexer {
         }
         for source in snapshot.attributes {
             try validate(sourceScope: source.scope, expected: scope)
-            documents.append(contentsOf: try builder.documents(for: source))
+            let build = try builder.sourceBuild(for: source)
+            documents.append(contentsOf: build.documents)
+            manifestEntries.append(build.manifestEntry)
             processedSources += 1
             try await completeSourceBatchIfNeeded(
                 processedSources: processedSources,
@@ -352,7 +385,9 @@ actor GraphSearchIndexer {
         }
         for source in snapshot.links {
             try validate(sourceScope: source.scope, expected: scope)
-            documents.append(contentsOf: try builder.documents(for: source))
+            let build = try builder.sourceBuild(for: source)
+            documents.append(contentsOf: build.documents)
+            manifestEntries.append(build.manifestEntry)
             processedSources += 1
             try await completeSourceBatchIfNeeded(
                 processedSources: processedSources,
@@ -363,7 +398,9 @@ actor GraphSearchIndexer {
         }
         for source in snapshot.detailFieldDefinitions {
             try validate(sourceScope: source.scope, expected: scope)
-            documents.append(try builder.document(for: source))
+            let build = try builder.sourceBuild(for: source)
+            documents.append(contentsOf: build.documents)
+            manifestEntries.append(build.manifestEntry)
             processedSources += 1
             try await completeSourceBatchIfNeeded(
                 processedSources: processedSources,
@@ -374,9 +411,9 @@ actor GraphSearchIndexer {
         }
         for source in snapshot.detailValues {
             try validate(sourceScope: source.scope, expected: scope)
-            if let document = try builder.document(for: source) {
-                documents.append(document)
-            }
+            let build = try builder.sourceBuild(for: source)
+            documents.append(contentsOf: build.documents)
+            manifestEntries.append(build.manifestEntry)
             processedSources += 1
             try await completeSourceBatchIfNeeded(
                 processedSources: processedSources,
@@ -387,7 +424,9 @@ actor GraphSearchIndexer {
         }
         for source in snapshot.attachments {
             try validate(sourceScope: source.scope, expected: scope)
-            documents.append(try builder.document(for: source))
+            let build = try builder.sourceBuild(for: source)
+            documents.append(contentsOf: build.documents)
+            manifestEntries.append(build.manifestEntry)
             processedSources += 1
             try await completeSourceBatchIfNeeded(
                 processedSources: processedSources,
@@ -408,7 +447,15 @@ actor GraphSearchIndexer {
 
         try Task.checkCancellation()
         documents.sort { $0.documentID < $1.documentID }
-        try await store.replaceDocuments(in: scope.graphID, with: documents)
+        let sourceManifest = try GraphSearchSourceManifest(
+            graphID: scope.graphID,
+            entries: manifestEntries
+        )
+        try await store.replaceDocuments(
+            in: scope.graphID,
+            with: documents,
+            sourceManifest: sourceManifest
+        )
 
         BMLog.search.info(
             "Graph search index rebuild completed documents=\(documents.count, privacy: .public) sources=\(processedSources, privacy: .public) durationMS=\(duration.millisecondsElapsed, format: .fixed(precision: 2))"
@@ -572,6 +619,15 @@ actor GraphSearchIndexer {
         }
 
         if containsCoarseMutation {
+            if let reason = reconciliationReason(
+                for: batch,
+                forcedBySequenceGap: forceFullRebuild
+            ) {
+                await readinessInvalidator?.invalidate(
+                    scope: scope,
+                    reason: reason
+                )
+            }
             await rebuildAfterCurrentOperation(scope: scope)
             return
         }
@@ -590,6 +646,10 @@ actor GraphSearchIndexer {
             statuses[scope.graphID] = .failed(
                 error: error,
                 previousDocumentCount: statuses[scope.graphID]?.documentCount
+            )
+            await readinessInvalidator?.invalidate(
+                scope: scope,
+                reason: .indexFailure
             )
             logIndexFailure(operation: "mutation", error: error)
         }
@@ -612,6 +672,26 @@ actor GraphSearchIndexer {
         } catch {
             logIndexFailure(operation: "event-rebuild", error: error)
         }
+    }
+
+    private func reconciliationReason(
+        for batch: GraphMutationBatch,
+        forcedBySequenceGap: Bool
+    ) -> GraphSearchIndexReconciliationReason? {
+        if forcedBySequenceGap {
+            return .indexFailure
+        }
+        if batch.events.contains(where: {
+            $0.kind == .graphImported || $0.kind == .graphReplaced
+        }) {
+            return .importOrReplace
+        }
+        if batch.events.contains(where: {
+            $0.fullRebuildReason != nil
+        }) {
+            return .dedupe
+        }
+        return nil
     }
 
     private func removeIndexForDeletedGraph(scope: GraphScope) async {
@@ -714,7 +794,8 @@ actor GraphSearchIndexer {
                             sourceKind: .link,
                             sourceID: identifier
                         ),
-                        documents: []
+                        documents: [],
+                        sourceExists: false
                     )
                 }
 
@@ -742,7 +823,8 @@ actor GraphSearchIndexer {
                             sourceKind: .detailValue,
                             sourceID: identifier
                         ),
-                        documents: []
+                        documents: [],
+                        sourceExists: false
                     )
                 }
 
@@ -767,7 +849,8 @@ actor GraphSearchIndexer {
                             sourceKind: .attachment,
                             sourceID: identifier
                         ),
-                        documents: []
+                        documents: [],
+                        sourceExists: false
                     )
                 }
 
@@ -796,7 +879,11 @@ actor GraphSearchIndexer {
         )
         let existingDocuments = try await store.documents(for: reference)
         guard let entity = try await sourceReader.entity(id: id, in: scope) else {
-            try await replaceSource(reference: reference, documents: [])
+            try await replaceSource(
+                reference: reference,
+                documents: [],
+                sourceExists: false
+            )
             return
         }
         try validate(sourceScope: entity.scope, expected: scope)
@@ -879,7 +966,11 @@ actor GraphSearchIndexer {
         )
         let existingDocuments = try await store.documents(for: reference)
         guard let attribute = try await sourceReader.attribute(id: id, in: scope) else {
-            try await replaceSource(reference: reference, documents: [])
+            try await replaceSource(
+                reference: reference,
+                documents: [],
+                sourceExists: false
+            )
             return
         }
         try validate(sourceScope: attribute.scope, expected: scope)
@@ -907,7 +998,11 @@ actor GraphSearchIndexer {
             sourceID: id
         )
         guard let link = try await sourceReader.link(id: id, in: scope) else {
-            try await replaceSource(reference: reference, documents: [])
+            try await replaceSource(
+                reference: reference,
+                documents: [],
+                sourceExists: false
+            )
             return
         }
         try validate(sourceScope: link.scope, expected: scope)
@@ -965,7 +1060,8 @@ actor GraphSearchIndexer {
             } else {
                 try await replaceSource(
                     reference: definitionReference,
-                    documents: []
+                    documents: [],
+                    sourceExists: false
                 )
             }
 
@@ -986,7 +1082,8 @@ actor GraphSearchIndexer {
             where currentValueIDs.contains(staleReference.sourceID) == false {
                 try await replaceSource(
                     reference: staleReference,
-                    documents: []
+                    documents: [],
+                    sourceExists: false
                 )
             }
         }
@@ -1003,7 +1100,8 @@ actor GraphSearchIndexer {
                     sourceKind: .detailValue,
                     sourceID: id
                 ),
-                documents: []
+                documents: [],
+                sourceExists: false
             )
             return
         }
@@ -1052,7 +1150,11 @@ actor GraphSearchIndexer {
             id: id,
             in: scope
         ) else {
-            try await replaceSource(reference: reference, documents: [])
+            try await replaceSource(
+                reference: reference,
+                documents: [],
+                sourceExists: false
+            )
             return
         }
         try validate(sourceScope: attachment.scope, expected: scope)
@@ -1064,16 +1166,27 @@ actor GraphSearchIndexer {
 
     private func replaceSource(
         reference: GraphSearchSourceReference,
-        documents: [GraphSearchDocument]
+        documents: [GraphSearchDocument],
+        sourceExists: Bool = true
     ) async throws {
         let sortedDocuments = documents.sorted { $0.documentID < $1.documentID }
+        let manifestEntry = sourceExists
+            ? try GraphSearchSourceManifestEntry.make(
+                reference: reference,
+                documents: sortedDocuments
+            )
+            : nil
         let currentDocuments = try await store.documents(for: reference)
-        guard currentDocuments != sortedDocuments else {
+        let currentManifestEntry = try await store.sourceManifestEntry(for: reference)
+        guard currentDocuments != sortedDocuments
+                || currentManifestEntry != manifestEntry
+        else {
             return
         }
         try await store.replaceDocuments(
             for: reference,
-            with: sortedDocuments
+            with: sortedDocuments,
+            manifestEntry: manifestEntry
         )
     }
 
@@ -1094,7 +1207,8 @@ actor GraphSearchIndexer {
                     sourceKind: sourceKind,
                     sourceID: identifier
                 ),
-                documents: []
+                documents: [],
+                sourceExists: false
             )
         }
     }

@@ -5,10 +5,11 @@
 //  Value-only documents stored in the local, reconstructable graph search index.
 //
 
+import CryptoKit
 import Foundation
 
 nonisolated enum GraphSearchIndexSchema {
-    static let currentVersion = 1
+    static let currentVersion = 2
     static let documentIDVersion = 1
     static let sqliteApplicationID = 1_112_363_859
 }
@@ -335,6 +336,69 @@ nonisolated struct GraphSearchDocument: Identifiable, Hashable, Codable, Sendabl
         ].joined(separator: "|")
     }
 
+    func recomputedContentHash() throws -> String {
+        try Self.makeContentHash(
+            graphID: graphID,
+            documentKind: documentKind,
+            sourceKind: sourceKind,
+            sourceID: sourceID,
+            ownerKindRaw: ownerKindRaw,
+            ownerID: ownerID,
+            nodeKindRaw: nodeKindRaw,
+            nodeID: nodeID,
+            fieldID: fieldID,
+            title: title,
+            subtitle: subtitle,
+            normalizedSearchText: normalizedSearchText,
+            ranking: ranking,
+            navigation: navigation,
+            evidence: evidence,
+            attachmentMetadata: attachmentMetadata,
+            indexSchemaVersion: indexSchemaVersion
+        )
+    }
+
+    static func makeContentHash(
+        graphID: UUID,
+        documentKind: GraphSearchDocumentKind,
+        sourceKind: GraphSearchSourceKind,
+        sourceID: UUID,
+        ownerKindRaw: Int?,
+        ownerID: UUID?,
+        nodeKindRaw: Int?,
+        nodeID: UUID?,
+        fieldID: UUID?,
+        title: String,
+        subtitle: String,
+        normalizedSearchText: String,
+        ranking: GraphSearchRankingMetadata,
+        navigation: GraphSearchNavigationMetadata,
+        evidence: GraphSearchEvidenceMetadata,
+        attachmentMetadata: GraphSearchAttachmentMetadata?,
+        indexSchemaVersion: Int
+    ) throws -> String {
+        let payload = GraphSearchDocumentHashPayload(
+            graphID: graphID.uuidString.lowercased(),
+            documentKind: documentKind.rawValue,
+            sourceKind: sourceKind.rawValue,
+            sourceID: sourceID.uuidString.lowercased(),
+            ownerKindRaw: ownerKindRaw,
+            ownerID: ownerID?.uuidString.lowercased(),
+            nodeKindRaw: nodeKindRaw,
+            nodeID: nodeID?.uuidString.lowercased(),
+            fieldID: fieldID?.uuidString.lowercased(),
+            title: title,
+            subtitle: subtitle,
+            normalizedSearchText: normalizedSearchText,
+            ranking: ranking,
+            navigation: navigation,
+            evidence: evidence,
+            attachmentMetadata: attachmentMetadata,
+            indexSchemaVersion: indexSchemaVersion
+        )
+        return try GraphSearchDocumentContentHasher.hash(payload)
+    }
+
     func validateForStorage() throws {
         guard indexSchemaVersion == GraphSearchIndexSchema.currentVersion else {
             throw GraphSearchIndexStoreError.incompatibleDocumentSchemaVersion(
@@ -361,7 +425,6 @@ nonisolated struct GraphSearchDocument: Identifiable, Hashable, Codable, Sendabl
                 reason: "The content hash must not be empty."
             )
         }
-
         guard (ownerKindRaw == nil) == (ownerID == nil) else {
             throw GraphSearchIndexStoreError.invalidDocument(
                 reason: "Owner kind and owner identifier must either both exist or both be absent."
@@ -623,5 +686,36 @@ nonisolated struct GraphSearchIndexHit: Identifiable, Hashable, Sendable {
 
     var id: String {
         document.documentID
+    }
+}
+
+private nonisolated struct GraphSearchDocumentHashPayload: Encodable {
+    let graphID: String
+    let documentKind: String
+    let sourceKind: String
+    let sourceID: String
+    let ownerKindRaw: Int?
+    let ownerID: String?
+    let nodeKindRaw: Int?
+    let nodeID: String?
+    let fieldID: String?
+    let title: String
+    let subtitle: String
+    let normalizedSearchText: String
+    let ranking: GraphSearchRankingMetadata
+    let navigation: GraphSearchNavigationMetadata
+    let evidence: GraphSearchEvidenceMetadata
+    let attachmentMetadata: GraphSearchAttachmentMetadata?
+    let indexSchemaVersion: Int
+}
+
+private nonisolated enum GraphSearchDocumentContentHasher {
+    static func hash<T: Encodable>(_ value: T) throws -> String {
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.sortedKeys, .withoutEscapingSlashes]
+        let data = try encoder.encode(value)
+        return SHA256.hash(data: data)
+            .map { String(format: "%02x", $0) }
+            .joined()
     }
 }

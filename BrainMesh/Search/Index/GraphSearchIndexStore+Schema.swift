@@ -282,6 +282,53 @@ extension GraphSearchIndexStore {
             """,
             operation: "create-manifest-table"
         )
+        try connection.execute(
+            """
+            CREATE TABLE graph_search_source_manifests (
+                graph_id TEXT PRIMARY KEY NOT NULL,
+                format_version INTEGER NOT NULL,
+                index_schema_version INTEGER NOT NULL,
+                source_count INTEGER NOT NULL,
+                document_count INTEGER NOT NULL,
+                aggregate_hash TEXT NOT NULL,
+                CHECK (source_count >= 0),
+                CHECK (document_count >= 0)
+            ) WITHOUT ROWID
+            """,
+            operation: "create-source-manifests-table"
+        )
+        try connection.execute(
+            """
+            CREATE TABLE graph_search_source_manifest_entries (
+                graph_id TEXT NOT NULL,
+                source_kind TEXT NOT NULL,
+                source_id TEXT NOT NULL,
+                content_hash TEXT NOT NULL,
+                document_count INTEGER NOT NULL,
+                PRIMARY KEY (graph_id, source_kind, source_id),
+                FOREIGN KEY (graph_id)
+                    REFERENCES graph_search_source_manifests(graph_id)
+                    ON DELETE CASCADE,
+                CHECK (document_count >= 0)
+            ) WITHOUT ROWID
+            """,
+            operation: "create-source-manifest-entries-table"
+        )
+        try connection.execute(
+            """
+            CREATE TABLE graph_search_source_manifest_counts (
+                graph_id TEXT NOT NULL,
+                source_kind TEXT NOT NULL,
+                source_count INTEGER NOT NULL,
+                PRIMARY KEY (graph_id, source_kind),
+                FOREIGN KEY (graph_id)
+                    REFERENCES graph_search_source_manifests(graph_id)
+                    ON DELETE CASCADE,
+                CHECK (source_count >= 0)
+            ) WITHOUT ROWID
+            """,
+            operation: "create-source-manifest-counts-table"
+        )
     }
 
     func createSearchBackend(
@@ -479,7 +526,7 @@ extension GraphSearchIndexStore {
         }
 
         let foreignKeyStatement = try connection.prepare(
-            "PRAGMA foreign_key_check(graph_search_ngrams)",
+            "PRAGMA foreign_key_check",
             operation: "foreign-key-check"
         )
         guard try foreignKeyStatement.step() == false else {
@@ -528,6 +575,9 @@ extension GraphSearchIndexStore {
             ("table", "graph_search_documents"),
             ("table", "graph_search_ngrams"),
             ("table", "graph_search_manifest"),
+            ("table", "graph_search_source_manifests"),
+            ("table", "graph_search_source_manifest_entries"),
+            ("table", "graph_search_source_manifest_counts"),
             ("index", "graph_search_documents_graph_idx"),
             ("index", "graph_search_documents_source_idx"),
             ("index", "graph_search_documents_owner_idx"),

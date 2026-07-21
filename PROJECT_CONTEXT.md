@@ -25,7 +25,7 @@ BrainMesh ist eine SwiftUI-iOS/iPadOS-App für graphbasiertes Wissens- und Entit
 - **Header Image**: kleines CloudKit-freundliches Bild direkt auf `MetaEntity.imageData` oder `MetaAttribute.imageData` plus lokaler Cache `imagePath`.
 - **Gallery Image**: Attachment mit `AttachmentContentKind.galleryImage`, nicht für Graph-Rendering gedacht.
 - **Folded Search**: normalisierte Suche über `BMSearch.fold` in `BrainMesh/Models/BMSearch.swift`; gespeicherte Felder wie `nameFolded`, `notesFolded`, `searchLabelFolded`, `noteFolded`.
-- **Local Graph Search Index**: rekonstruierbarer, graph-scoped Suchindex unter `BrainMesh/Search/Index/`. Er liegt als eigene, vom Backup ausgeschlossene SQLite-Datei in Application Support, nutzt FTS5 mit indexiertem n-Gram-Fallback und gehört weder zum SwiftData-/CloudKit-Hauptschema noch zu GraphTransfer. Der Store ist noch nicht an `BrainMeshSearchService` oder Mutation Events angebunden.
+- **Local Graph Search Index**: rekonstruierbarer, graph-scoped Suchindex unter `BrainMesh/Search/Index/`. Er liegt als eigene, vom Backup ausgeschlossene SQLite-Datei in Application Support, nutzt FTS5 mit indexiertem n-Gram-Fallback und gehört weder zum SwiftData-/CloudKit-Hauptschema noch zu GraphTransfer. `GraphSearchIndexer` hält ihn für lokale Mutation Events aktuell; ein deterministisches Source-Manifest und `GraphSearchIndexReconciler.ensureReady` heilen Änderungen, die den lokalen EventBus umgehen. `BrainMeshSearchService` nutzt den Index in diesem Stand noch nicht produktiv.
 - **Graph Lock**: optionaler Schutz mit Biometrie und/oder Passwort über Security-Dateien in `BrainMesh/Security/` und Lock-Felder an Graph/Entity/Attribute.
 - **Graph Transfer**: Export/Import für `.bmgraph` und `.bmbackup`, implementiert unter `BrainMesh/GraphTransfer/`.
 - **Command Center**: globale Suche/Aktionen, UI unter `BrainMesh/Search/CommandCenter/`; `BrainMeshSearchService` orchestriert quellspezifische Candidate Provider unter `BrainMesh/Search/Candidates/`.
@@ -128,7 +128,7 @@ BrainMesh ist eine SwiftUI-iOS/iPadOS-App für graphbasiertes Wissens- und Entit
 | `BrainMesh/Stats/` | Stats, Graph Health, Media/Trend/Structure Snapshots | viele aggregierende Fetches |
 | `BrainMesh/Settings/` | Settings, Sync, Appearance, Display, Guide | Sync-Diagnose und große Guide-View |
 | `BrainMesh/Attachments/` | Attachment-Modell, Store, Hydrator, Import, Thumbnails | CloudKit-Assets, lokale Cache-Dateien, 25-MB-Limit |
-| `BrainMesh/Search/` | Search-Orchestrator, Candidate Provider, Ranking, Command Center, lokaler SQLite-Index-Store | Store-Grenze ist vorhanden und getestet; Document Builder, Rebuild/Event-Consumer und produktiver Cutover fehlen noch, daher scannt die bestehende Suche Links, Detailwerte und Attachments weiterhin graphweit |
+| `BrainMesh/Search/` | Search-Orchestrator, Candidate Provider, Ranking, Command Center, lokaler SQLite-Index-Store | Document Builder, atomarer Rebuild, Mutation-Consumer und Source-Manifest-Reconciliation sind umgesetzt; nur der produktive Search-Cutover fehlt noch, daher nutzt die bestehende Suche weiterhin die Provider-Pipeline |
 | `BrainMesh/DataAccess/` | Graph-scoped Fetch-Factories, Read-Repositories, value-only DTOs und Mutation-Infrastruktur | nicht-optionaler `GraphScope`; actor-sicherer Event-Bus; zentraler Main-Actor-Committer; keine SwiftData-Modelle, Attachment-Binärdaten oder Nutzdaten über Actor-Grenzen |
 | `BrainMesh/PhotoGallery/` | Galerie-Browser/Viewer/Section | `@Query` über Attachment-Galeriebilder |
 | `BrainMesh/GraphPicker/` | Graph-Auswahl, Löschen, Sheet | Graph-Lifecycle und Pro-Limit |
@@ -257,7 +257,8 @@ BrainMesh ist eine SwiftUI-iOS/iPadOS-App für graphbasiertes Wissens- und Entit
   - `GraphSearchDocumentBuilder` erzeugt aus den value-only Read-DTOs deterministische Dokument-IDs und SHA-256-Content-Hashes für alle unterstützten Source-Arten.
   - `GraphSearchIndexer` führt graph-scoped atomare Full Rebuilds aus, coalesced parallele Anforderungen und hält den Index über genau einen zentral gestarteten `GraphMutationEventBus`-Consumer für lokale Mutationen inkrementell aktuell.
   - Der value-only Indexstatus unterscheidet nicht initialisiert, Aufbau, bereit, veraltet und fehlgeschlagen einschließlich sinnvoller Fortschrittswerte.
-  - Noch fehlen Remote-CloudKit-Reconciliation und der produktive Search-Cutover; `BrainMeshSearchService` nutzt weiterhin den bisherigen Provider-Orchestrator.
+  - `GraphSearchSourceManifest` vergleicht pro Graph Source-Art, Source-ID, Dokumentanzahl und stabile Dokument-/Content-Hashes. `GraphSearchIndexReconciler` coalesced `ensureReady`-Aufrufe, repariert externe Änderungen und Löschungen inkrementell, erzwingt bei inkompatiblen oder beschädigten Zuständen einen atomaren Full Rebuild und drosselt den leichtgewichtigen Foreground-Trigger pro Graph.
+  - Noch fehlt der produktive Search-Cutover; `BrainMeshSearchService` nutzt weiterhin den bisherigen Provider-Orchestrator.
 
 ### Migration / Repair
 
@@ -450,7 +451,7 @@ BrainMesh ist eine SwiftUI-iOS/iPadOS-App für graphbasiertes Wissens- und Entit
 
 1. `GraphCanvasDataLoader+Neighborhood.swift` `try? context.fetch` durch `do/catch` mit `BMLog.load` ersetzen, damit Fetch-Fehler nicht still zu leeren Graphen werden.
 2. Bestehende Feature-Loader schrittweise auf die vorhandenen `GraphScopedFetches`, `GraphReadRepository` und `NodeRepository` migrieren, wenn dies ihren Hot Path vereinfacht.
-3. Den vorhandenen `GraphSearchIndexer` um Remote-CloudKit-Reconciliation ergänzen und erst danach die Provider schrittweise auf den lokalen Index umstellen; aktuell werden Links, Detailwerte und Attachments in der produktiven Suche weiterhin graphweit geladen und in Memory gerankt.
+3. Die globale Suche an der bestehenden Candidate-Provider-Grenze auf den nun reconcilierten lokalen Index umstellen; bis zu diesem Cutover verwendet `BrainMeshSearchService` weiterhin die Legacy-Provider und deren In-Memory-Ranking.
 4. `EntitiesHomeCockpitLoader.swift` Snapshot cachen oder inkrementell machen; aktuell lädt Cockpit Entity, Attribute, Links, DetailFields und Attachments graphweit und besitzt keinen langlebigen Derived-State, der invalidiert werden müsste.
 5. `GraphCanvasView+Physics.swift` O(n²)-Pair-Loop durch Grid/Bucket-Approximation ersetzen, mindestens oberhalb von etwa 80 simulierten Nodes.
 6. Readiness-Fehler im App-Root bei Bedarf zusätzlich als sichtbaren Recovery-Zustand darstellen; die awaitbare Konfigurationsbarriere ist vorhanden.

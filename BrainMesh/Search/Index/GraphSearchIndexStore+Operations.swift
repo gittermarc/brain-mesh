@@ -15,9 +15,18 @@ extension GraphSearchIndexStore {
         let startedAt = Self.uptimeNanoseconds()
 
         try validateDocuments(documents)
+        let affectedGraphIDs = Array(Set(documents.map(\.graphID))).sorted {
+            $0.uuidString < $1.uuidString
+        }
         try withTransaction(operation: "upsert-documents") { store in
             let transactionConnection = try store.requireConnection()
             try store.writeDocuments(documents, connection: transactionConnection)
+            for graphID in affectedGraphIDs {
+                try store.deleteSourceManifest(
+                    graphID: graphID,
+                    connection: transactionConnection
+                )
+            }
         }
 
         BMLog.search.info(
@@ -47,8 +56,13 @@ extension GraphSearchIndexStore {
             try statement.bind(sourceReference.sourceKind.rawValue, at: 2)
             try statement.bind(sourceReference.sourceID.uuidString.lowercased(), at: 3)
             try statement.stepExpectingDone()
+            let deletedDocuments = try transactionConnection.changes()
+            try store.deleteSourceManifest(
+                graphID: sourceReference.graphID,
+                connection: transactionConnection
+            )
             try store.cancellationCheck()
-            return try transactionConnection.changes()
+            return deletedDocuments
         }
 
         BMLog.search.info(
@@ -88,6 +102,10 @@ extension GraphSearchIndexStore {
             try deleteStatement.stepExpectingDone()
             try store.cancellationCheck()
             try store.writeDocuments(documents, connection: transactionConnection)
+            try store.deleteSourceManifest(
+                graphID: sourceReference.graphID,
+                connection: transactionConnection
+            )
         }
 
         BMLog.search.info(
@@ -121,6 +139,10 @@ extension GraphSearchIndexStore {
             try deleteStatement.stepExpectingDone()
             try store.cancellationCheck()
             try store.writeDocuments(documents, connection: transactionConnection)
+            try store.deleteSourceManifest(
+                graphID: graphID,
+                connection: transactionConnection
+            )
         }
 
         BMLog.search.info(
@@ -137,14 +159,19 @@ extension GraphSearchIndexStore {
         ) { store in
             let transactionConnection = try store.requireConnection()
             try store.cancellationCheck()
+            try store.deleteSourceManifest(
+                graphID: graphID,
+                connection: transactionConnection
+            )
             let statement = try transactionConnection.prepare(
                 "DELETE FROM graph_search_documents WHERE graph_id = ?",
                 operation: "delete-graph-documents"
             )
             try statement.bind(graphID.uuidString.lowercased(), at: 1)
             try statement.stepExpectingDone()
+            let deletedDocuments = try transactionConnection.changes()
             try store.cancellationCheck()
-            return try transactionConnection.changes()
+            return deletedDocuments
         }
 
         BMLog.search.info(

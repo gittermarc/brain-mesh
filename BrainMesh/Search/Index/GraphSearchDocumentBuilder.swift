@@ -5,7 +5,6 @@
 //  Deterministic value-only conversion from graph read DTOs to local search documents.
 //
 
-import CryptoKit
 import Foundation
 
 nonisolated enum GraphSearchDocumentBuilderError: LocalizedError, Equatable, Sendable {
@@ -15,7 +14,6 @@ nonisolated enum GraphSearchDocumentBuilderError: LocalizedError, Equatable, Sen
     case invalidAttachmentOwnerKind(attachmentID: UUID)
     case invalidAttachmentContentKind(attachmentID: UUID)
     case invalidAttachmentByteCount(attachmentID: UUID)
-    case contentHashEncoding
 
     var errorDescription: String? {
         switch self {
@@ -31,8 +29,6 @@ nonisolated enum GraphSearchDocumentBuilderError: LocalizedError, Equatable, Sen
             return "Ein Anhang besitzt einen ungültigen Inhaltstyp."
         case .invalidAttachmentByteCount:
             return "Ein Anhang besitzt eine ungültige Dateigröße."
-        case .contentHashEncoding:
-            return "Der deterministische Index-Hash konnte nicht erzeugt werden."
         }
     }
 }
@@ -595,16 +591,16 @@ nonisolated struct GraphSearchDocumentBuilder: Sendable {
         attachmentMetadata: GraphSearchAttachmentMetadata? = nil
     ) throws -> GraphSearchDocument {
         let normalizedSearchText = BMSearch.fold(searchableText)
-        let hashPayload = GraphSearchDocumentHashPayload(
-            graphID: graphID.uuidString.lowercased(),
-            documentKind: documentKind.rawValue,
-            sourceKind: sourceKind.rawValue,
-            sourceID: sourceID.uuidString.lowercased(),
+        let contentHash = try GraphSearchDocument.makeContentHash(
+            graphID: graphID,
+            documentKind: documentKind,
+            sourceKind: sourceKind,
+            sourceID: sourceID,
             ownerKindRaw: ownerKind?.rawValue,
-            ownerID: ownerID?.uuidString.lowercased(),
+            ownerID: ownerID,
             nodeKindRaw: nodeKind?.rawValue,
-            nodeID: nodeID?.uuidString.lowercased(),
-            fieldID: fieldID?.uuidString.lowercased(),
+            nodeID: nodeID,
+            fieldID: fieldID,
             title: title,
             subtitle: subtitle,
             normalizedSearchText: normalizedSearchText,
@@ -614,7 +610,6 @@ nonisolated struct GraphSearchDocumentBuilder: Sendable {
             attachmentMetadata: attachmentMetadata,
             indexSchemaVersion: GraphSearchIndexSchema.currentVersion
         )
-        let contentHash = try GraphSearchContentHasher.hash(hashPayload)
 
         return GraphSearchDocument(
             graphID: graphID,
@@ -814,43 +809,6 @@ private nonisolated struct GraphSearchFormattedDetailValue: Sendable {
     let rankingFields: [GraphSearchRankingFieldMetadata]
 }
 
-private nonisolated struct GraphSearchDocumentHashPayload: Encodable {
-    let graphID: String
-    let documentKind: String
-    let sourceKind: String
-    let sourceID: String
-    let ownerKindRaw: Int?
-    let ownerID: String?
-    let nodeKindRaw: Int?
-    let nodeID: String?
-    let fieldID: String?
-    let title: String
-    let subtitle: String
-    let normalizedSearchText: String
-    let ranking: GraphSearchRankingMetadata
-    let navigation: GraphSearchNavigationMetadata
-    let evidence: GraphSearchEvidenceMetadata
-    let attachmentMetadata: GraphSearchAttachmentMetadata?
-    let indexSchemaVersion: Int
-}
-
-private nonisolated enum GraphSearchContentHasher {
-    static func hash<T: Encodable>(_ value: T) throws -> String {
-        let encoder = JSONEncoder()
-        encoder.outputFormatting = [.sortedKeys, .withoutEscapingSlashes]
-
-        let data: Data
-        do {
-            data = try encoder.encode(value)
-        } catch {
-            throw GraphSearchDocumentBuilderError.contentHashEncoding
-        }
-
-        return SHA256.hash(data: data)
-            .map { String(format: "%02x", $0) }
-            .joined()
-    }
-}
 
 private extension GraphSourceSnapshotDTO {
     nonisolated var estimatedIndexDocumentCount: Int {

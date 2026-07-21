@@ -8,11 +8,10 @@
 import Foundation
 import SwiftData
 
-@MainActor
-struct GraphDeletionPostCommitActions {
-    let lockGraph: (GraphLockCoordinator, UUID) -> Void
-    let deleteAttachmentCaches: (AttachmentCleanup.Result) -> Void
-    let deleteImagePath: (String) -> Void
+nonisolated struct GraphDeletionPostCommitActions: Sendable {
+    let lockGraph: @MainActor @Sendable (GraphLockCoordinator, UUID) -> Void
+    let deleteAttachmentCaches: @MainActor @Sendable (AttachmentCleanup.Result) -> Void
+    let deleteImagePath: @MainActor @Sendable (String) -> Void
 
     static let live = GraphDeletionPostCommitActions(
         lockGraph: { graphLock, graphID in
