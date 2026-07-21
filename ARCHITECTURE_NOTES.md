@@ -651,6 +651,17 @@ Ziel: Storage- und Medienpfade entkoppeln.
   - Bestehende Feature-Loader bauen teilweise eigene `FetchDescriptor`-Predicates und können schrittweise auf die Read-Schicht migriert werden.
   - Persistente Event-History und GraphCanvas-Reload-Scheduling. Der produktive Search-Cutover auf den lokalen Index ist abgeschlossen.
 
+#### Graph Chat Query Boundary
+
+- Umgesetzt unter `BrainMesh/GraphChat/`:
+  - `Core/` enthält ausschließlich value-only, `Sendable` Chat-Scopes, Chat-Grundmodelle, Evidence-IDs und technisch eindeutige `GraphSourceReference`-Werte. Jeder Chat-Scope trägt genau einen nicht-optionalen `GraphScope`.
+  - `GraphSchemaService` liest über `GraphReadRepository`, begrenzt Entities, Felder, Choice-Optionen, optionale explizit angeforderte Beispielwerte und Stringlängen deterministisch und ignoriert Attachment-Inhalte vollständig.
+  - Der promptfähige `GraphSchemaSnapshot` enthält keine Graph-, Entity-, Node- oder Field-UUIDs. `GraphSchemaAliasMap` hält `E1`-/`F1`-Auflösung, Node-Zuordnung und Graph-ID ausschließlich appseitig.
+  - `GraphQueryPlanValidator` akzeptiert nur Aliase plus einen explizit graph-scoped App-Scope, prüft Feldbesitz, vollständige Operator-/Typ-Matrix, Choice-Normalisierung, Datumsgrenzen, Aggregationen und harte Limits und erzeugt erst danach einen `ValidatedGraphQueryPlan` mit aufgelösten IDs.
+  - Jahres- und Monatsabfragen verwenden einen injizierten `Calendar`, eine injizierte `TimeZone` und halb-offene Grenzen; `isOverdue` wird gegen ein injiziertes Referenzdatum aufgelöst.
+- Bewusste Grenze:
+  - Query-Ausführung, Tools, Foundation Models, Streaming, Chat-UI, Pro-Gating und Schreiboperationen sind nicht Teil dieser Schicht.
+
 #### Mutation Events
 
 - Umgesetzt unter `BrainMesh/DataAccess/Mutations/`:

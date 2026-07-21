@@ -30,6 +30,7 @@ BrainMesh ist eine SwiftUI-iOS/iPadOS-App für graphbasiertes Wissens- und Entit
 - **Graph Transfer**: Export/Import für `.bmgraph` und `.bmbackup`, implementiert unter `BrainMesh/GraphTransfer/`.
 - **Command Center**: globale Suche/Aktionen, UI unter `BrainMesh/Search/CommandCenter/`; `BrainMeshSearchService` orchestriert den indexbasierten `IndexedSearchCandidateProvider`, die unveränderte Ranking-Schicht und den transparenten Legacy-Fallback unter `BrainMesh/Search/Candidates/`.
 - **GraphScope / Read Repositories**: `BrainMesh/DataAccess/` stellt eine nicht-optionale Graph-Grenze, zentrale Fetch-Descriptor-Factories und value-only DTO-Repositories für Graph-Snapshots, Node-Lookups und direkte Nachbarschaften bereit.
+- **Graph Chat Domain**: `BrainMesh/GraphChat/` enthält die provider- und UI-unabhängige Chat-Domain, promptfähige Schema-Snapshots ohne rohe UUIDs, appseitige Alias-Auflösung sowie strikt validierte, versionierte Query-Pläne. Query-Ausführung, Foundation Models und Chat-UI sind noch nicht enthalten.
 - **GraphMutationEventBus / GraphMutationCommitter**: actor-sicherer Multicast-Bus plus einzige Save-then-Publish-Grenze unter `BrainMesh/DataAccess/Mutations/`. Main-Actor-UI-Pfade und caller-isolierte GraphTransfer-Kontexte verwenden dieselbe Committer-Implementierung. Basis- und zusammengesetzte Mutationen, Graph-Lifecycle, Dedupe, Bootstrap-/Migrations-Reparaturen sowie Import/Replace publizieren ausschließlich technische graph-scoped Post-Commit-Batches. `GraphMutationCacheInvalidationCoordinator` invalidiert die vorhandenen Home- und Stats-Caches zentral und container-idempotent.
 
 ## Architecture Map
@@ -60,6 +61,10 @@ BrainMesh ist eine SwiftUI-iOS/iPadOS-App für graphbasiertes Wissens- und Entit
 - `BrainMesh/DataAccess/`
   - `GraphScope`, graph-scoped `FetchDescriptor`-Factories, `GraphReadRepository`, `NodeRepository` und ausschließlich value-only, `Sendable` Read-DTOs.
   - `Mutations/` enthält den zentralen `GraphMutationEventBus`, den einzigen `GraphMutationCommitter` für Save-then-Publish, value-only Batch-Factories, technische Mutation-Referenzen, atomare `GraphMutationBatch`-Werte ohne Nutzdaten sowie den zentralen Cache-Invalidation-Coordinator.
+- `BrainMesh/GraphChat/`
+  - `Core/` definiert graph-scoped Chat-, Evidence- und Source-Modelle.
+  - `Schema/` erzeugt kompakte, deterministisch aliasierte Schema-Snapshots aus `GraphReadRepository`; UUID-Mapping und Node-Zuordnung bleiben ausschließlich appseitig.
+  - `Query/` enthält versionierte Alias-Pläne, Kalender-/Zeitzonenauflösung und die einzige Grenze, die untrusted Pläne in `ValidatedGraphQueryPlan` mit aufgelösten technischen IDs überführt.
 
 ### Storage / Sync / Caches
 
@@ -106,6 +111,7 @@ BrainMesh ist eine SwiftUI-iOS/iPadOS-App für graphbasiertes Wissens- und Entit
   - `BrainMesh/Search/Index/GraphSearchIndexStore.swift` mit lokaler SQLite-Persistenz, FTS5-/Fallback-Suche und ausschließlich value-only Dokumenten
   - `BrainMesh/DataAccess/GraphReadRepository.swift` für vollständige graph-scoped Source-Snapshots
   - `BrainMesh/DataAccess/NodeRepository.swift` für graph-scoped Node-Lookups und direkte Nachbarschaften
+  - `BrainMesh/GraphChat/Schema/GraphSchemaService.swift` für kompakte, graph-scoped Schema-Snapshots mit deterministischen Entity-/Field-Aliasen und separatem appseitigem Resolution-Kontext
   - `BrainMesh/DataAccess/Mutations/GraphMutationEventBus.swift` und `GraphMutationCommitter.swift` für actor-sichere Multicast-Ereignisse und die einzige Save-then-Publish-Grenze; produktiv angebunden sind lokale Basis-/Composite-Mutationen, Graph-Lifecycle, Dedupe, Bootstrap-/Migrations-Reparaturen sowie Struktur-/Vollbackup-Import und Replace
   - `BrainMesh/Mainscreen/Deletion/GraphNodeDeletionService.swift` für graph-scoped Einzel-/Batch-Löschungen von Entities und Attributen mit deterministischem Link-, Detail-, Attachment- und Dateicache-Cleanup nach genau einem erfolgreichen Commit
   - `BrainMesh/Mainscreen/LinkCleanup.swift` mit `NodeRenameService`, der Node-Änderung und alle tatsächlichen Link-Relabels im selben `ModelContext` vorbereitet und gemeinsam committed
@@ -130,6 +136,7 @@ BrainMesh ist eine SwiftUI-iOS/iPadOS-App für graphbasiertes Wissens- und Entit
 | `BrainMesh/Attachments/` | Attachment-Modell, Store, Hydrator, Import, Thumbnails | CloudKit-Assets, lokale Cache-Dateien, 25-MB-Limit |
 | `BrainMesh/Search/` | Search-Orchestrator, Candidate Provider, Ranking, Command Center, lokaler SQLite-Index-Store | Der lokale Index ist nach `ensureReady` die primäre Candidate-Quelle; konkrete Graphen bleiben isoliert, globale Suchen verwenden den Index nur bei vollständiger Readiness aller relevanten Graphen, andernfalls die bestehende Provider-Pipeline |
 | `BrainMesh/DataAccess/` | Graph-scoped Fetch-Factories, Read-Repositories, value-only DTOs und Mutation-Infrastruktur | nicht-optionaler `GraphScope`; actor-sicherer Event-Bus; zentraler Main-Actor-Committer; keine SwiftData-Modelle, Attachment-Binärdaten oder Nutzdaten über Actor-Grenzen |
+| `BrainMesh/GraphChat/` | Chat-Kernmodelle, Schema-Snapshot, Alias-Auflösung und Query-Plan-Validierung | provider- und UI-unabhängig; rohe UUIDs bleiben aus dem promptfähigen Snapshot; nur `ValidatedGraphQueryPlan` enthält aufgelöste technische IDs |
 | `BrainMesh/PhotoGallery/` | Galerie-Browser/Viewer/Section | `@Query` über Attachment-Galeriebilder |
 | `BrainMesh/GraphPicker/` | Graph-Auswahl, Löschen, Sheet | Graph-Lifecycle und Pro-Limit |
 | `BrainMesh/Security/` | Graph-Lock, Unlock, Crypto | Zugriffsschutz, ScenePhase-Interaktion |
