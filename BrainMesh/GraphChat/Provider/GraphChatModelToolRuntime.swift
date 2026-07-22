@@ -54,6 +54,8 @@ nonisolated struct GraphChatModelToolRuntimeFactory: GraphChatModelToolRunnerFac
         budget: GraphChatToolBudget,
         evidenceRegistry: GraphChatEvidenceRegistry,
         conversationTransaction: GraphChatConversationStateTransaction,
+        conversationContext: GraphChatConversationContextSnapshot,
+        referenceResolver: GraphChatConversationReferenceResolver,
         referenceDate: Date,
         calendar: Calendar,
         timeZone: TimeZone
@@ -64,6 +66,8 @@ nonisolated struct GraphChatModelToolRuntimeFactory: GraphChatModelToolRunnerFac
             budget: budget,
             evidenceRegistry: evidenceRegistry,
             conversationTransaction: conversationTransaction,
+            conversationContext: conversationContext,
+            referenceResolver: referenceResolver,
             validator: GraphQueryPlanValidator(
                 calendar: calendar,
                 timeZone: timeZone,
@@ -90,6 +94,8 @@ actor GraphChatModelToolRuntime: GraphChatModelToolRunning {
     private let context: GraphChatToolContext
     private let evidenceRegistry: GraphChatEvidenceRegistry
     private let conversationTransaction: GraphChatConversationStateTransaction
+    private let conversationContext: GraphChatConversationContextSnapshot
+    private let referenceResolver: GraphChatConversationReferenceResolver
     private let validator: GraphQueryPlanValidator
     private let describeSchemaTool: DescribeGraphSchemaTool
     private let searchGraphTool: SearchGraphTool
@@ -108,6 +114,8 @@ actor GraphChatModelToolRuntime: GraphChatModelToolRunning {
         budget: GraphChatToolBudget,
         evidenceRegistry: GraphChatEvidenceRegistry,
         conversationTransaction: GraphChatConversationStateTransaction,
+        conversationContext: GraphChatConversationContextSnapshot,
+        referenceResolver: GraphChatConversationReferenceResolver,
         validator: GraphQueryPlanValidator,
         describeSchemaTool: DescribeGraphSchemaTool,
         searchGraphTool: SearchGraphTool,
@@ -121,6 +129,8 @@ actor GraphChatModelToolRuntime: GraphChatModelToolRunning {
         self.context = GraphChatToolContext(scope: scope, budget: budget)
         self.evidenceRegistry = evidenceRegistry
         self.conversationTransaction = conversationTransaction
+        self.conversationContext = conversationContext
+        self.referenceResolver = referenceResolver
         self.validator = validator
         self.describeSchemaTool = describeSchemaTool
         self.searchGraphTool = searchGraphTool
@@ -247,7 +257,7 @@ actor GraphChatModelToolRuntime: GraphChatModelToolRunning {
     private func queryDetailValues(
         _ request: GraphChatModelQueryRequest
     ) async throws -> GraphChatModelToolResponse {
-        let plan = try makeQueryPlan(request)
+        let plan = try await makeQueryPlan(request)
         let validatedPlan = try validator.validate(plan, against: schemaContext)
         let result = try await queryDetailValuesTool.execute(
             QueryDetailValuesInput(plan: validatedPlan),
@@ -281,7 +291,7 @@ actor GraphChatModelToolRuntime: GraphChatModelToolRunning {
         alias: String,
         relatedLimit: Int
     ) async throws -> GraphChatModelToolResponse {
-        let node = try resolveNodeAlias(alias)
+        let node = try await resolveNodeAlias(alias)
         let result = try await getNodeTool.execute(
             GetNodeInput(node: node, relatedLimit: relatedLimit),
             context: context
@@ -309,7 +319,7 @@ actor GraphChatModelToolRuntime: GraphChatModelToolRunning {
         alias: String,
         limit: Int
     ) async throws -> GraphChatModelToolResponse {
-        let node = try resolveNodeAlias(alias)
+        let node = try await resolveNodeAlias(alias)
         let result = try await getNeighborsTool.execute(
             GetNeighborsInput(node: node, limit: limit),
             context: context
@@ -377,9 +387,9 @@ actor GraphChatModelToolRuntime: GraphChatModelToolRunning {
 
     private func makeQueryPlan(
         _ request: GraphChatModelQueryRequest
-    ) throws -> GraphQueryPlan {
+    ) async throws -> GraphQueryPlan {
         let entityAlias = GraphEntityAlias(normalizedAlias(request.entityAlias))
-        guard schemaContext.aliases.entity(for: entityAlias) != nil else {
+        guard let entity = schemaContext.aliases.entity(for: entityAlias) else {
             throw invalidInput("Unbekannter Entity-Alias: \(request.entityAlias)")
         }
         guard (1...QueryDetailValuesTool.maximumResultCount).contains(request.limit) else {
@@ -396,9 +406,13 @@ actor GraphChatModelToolRuntime: GraphChatModelToolRunning {
             name: request.aggregation,
             fieldAlias: request.aggregationFieldAlias
         )
+        let queryScope = try await resolvedQueryScope(
+            alias: request.conversationReferenceAlias,
+            expectedEntityID: entity.entityID
+        )
         return GraphQueryPlan(
             entityAlias: entityAlias,
-            scope: scope,
+            scope: queryScope,
             filters: filters,
             sorting: sorting,
             projection: projection,
@@ -605,18 +619,62 @@ actor GraphChatModelToolRuntime: GraphChatModelToolRunning {
         }
     }
 
-    private func resolveNodeAlias(_ rawAlias: String) throws -> NodeRefKey {
+    private func resolveNodeAlias(_ rawAlias: String) async throws -> NodeRefKey {
         let alias = normalizedAlias(rawAlias)
-        guard let node = nodeByAlias[alias] else {
-            throw invalidInput("Unbekannter Node-Alias: \(rawAlias)")
+        if let node = nodeByAlias[alias] {
+            return node
         }
-        guard allows(node) else {
-            throw GraphChatToolError(
-                code: .graphScopeMismatch,
-                message: "Der Node-Alias liegt außerhalb des aktiven Chat-Scopes."
-            )
+        let resolution = try await referenceResolver.resolve(
+            .alias(alias),
+            in: conversationContext,
+            expectedGraphScope: scope.graphScope,
+            expectedChatScope: scope
+        )
+        guard case .resolved(let reference) = resolution,
+              let node = reference.singleNode else {
+            throw invalidInput("Der Conversation-Alias \(rawAlias) ist nicht eindeutig und aktuell auflösbar.")
         }
+        nodeByAlias[alias] = node
+        aliasByNode[node] = alias
         return node
+    }
+
+    private func resolvedQueryScope(
+        alias rawAlias: String?,
+        expectedEntityID: UUID
+    ) async throws -> GraphChatScope {
+        guard let rawAlias, rawAlias.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false else {
+            return scope
+        }
+        let resolution = try await referenceResolver.resolve(
+            .alias(normalizedAlias(rawAlias)),
+            in: conversationContext,
+            expectedGraphScope: scope.graphScope,
+            expectedChatScope: scope,
+            expectedEntityID: expectedEntityID
+        )
+        guard case .resolved(let reference) = resolution else {
+            throw invalidInput("Der Conversation-Alias \(rawAlias) ist für diese Query nicht gültig.")
+        }
+        switch reference.kind {
+        case .entity:
+            guard let entityID = reference.entityID else {
+                throw invalidInput("Der Conversation-Alias enthält keine gültige Entity.")
+            }
+            return .entity(entityID, in: scope.graphScope)
+        case .node:
+            guard let node = reference.singleNode else {
+                throw invalidInput("Der Conversation-Alias enthält keinen einzelnen Node.")
+            }
+            return .node(node, in: scope.graphScope)
+        case .resultSet, .resultSubset, .group, .comparison:
+            guard reference.nodes.isEmpty == false else {
+                throw invalidInput("Die referenzierte Ergebnismenge ist leer.")
+            }
+            return try .selection(reference.nodes, in: scope.graphScope)
+        case .field:
+            throw invalidInput("Ein Feld-Alias kann nicht als Query-Ergebnismenge verwendet werden.")
+        }
     }
 
     private func aliasForReference(

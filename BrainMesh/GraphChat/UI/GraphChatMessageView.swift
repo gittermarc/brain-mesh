@@ -78,7 +78,7 @@ struct GraphChatMessageView: View {
                     }
                 case .partial:
                     partialText(state.text)
-                case .final:
+                case .final, .clarification, .unsupported:
                     if let answer = state.answer {
                         finalAnswer(answer, allowsEvidenceActions: state.allowsEvidenceActions)
                     }
@@ -138,6 +138,33 @@ struct GraphChatMessageView: View {
             .fixedSize(horizontal: false, vertical: true)
             .accessibilityLabel("Antwort")
             .accessibilityValue(answer.directAnswer)
+
+        if case .clarification(let clarification) = answer.state,
+           clarification.options.isEmpty == false {
+            VStack(alignment: .leading, spacing: 8) {
+                ForEach(clarification.options) { option in
+                    Button {
+                        onUseFollowUp(
+                            GraphChatFollowUpSuggestion(
+                                title: option.title,
+                                prompt: option.id
+                            )
+                        )
+                    } label: {
+                        HStack {
+                            Text(option.title)
+                                .multilineTextAlignment(.leading)
+                            Spacer(minLength: 8)
+                            Image(systemName: "checkmark.circle")
+                                .accessibilityHidden(true)
+                        }
+                        .frame(maxWidth: .infinity, minHeight: 44, alignment: .leading)
+                    }
+                    .buttonStyle(.bordered)
+                    .accessibilityHint("Wählt diese Option für die offene Rückfrage aus.")
+                }
+            }
+        }
 
         ForEach(answer.sections) { section in
             VStack(alignment: .leading, spacing: 6) {
@@ -314,8 +341,12 @@ struct GraphChatMessageView: View {
             return "Antwort wird ergänzt"
         case .final:
             return "Antwort"
+        case .clarification:
+            return "Rückfrage"
         case .noResults:
             return "Keine passenden Ergebnisse"
+        case .unsupported:
+            return "Nicht unterstützt"
         case .availabilityError:
             return "On-Device-Modell nicht verfügbar"
         case .technicalError:
@@ -331,8 +362,12 @@ struct GraphChatMessageView: View {
             return "sparkles"
         case .final:
             return "checkmark.bubble"
+        case .clarification:
+            return "questionmark.bubble"
         case .noResults:
             return "magnifyingglass"
+        case .unsupported:
+            return "nosign"
         case .availabilityError:
             return "exclamationmark.triangle"
         case .technicalError:

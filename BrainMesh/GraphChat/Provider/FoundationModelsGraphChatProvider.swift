@@ -45,6 +45,9 @@ private nonisolated struct FoundationGraphChatGeneratedFollowUp {
 
 @Generable
 private nonisolated struct FoundationGraphChatGeneratedAnswer {
+    @Guide(description: "One value: answer, clarification, noResults, or unsupported.")
+    var responseKind: String
+
     @Guide(description: "Direct concise answer based only on tool results.")
     var directAnswer: String
 
@@ -62,6 +65,36 @@ private nonisolated struct FoundationGraphChatGeneratedAnswer {
 
     @Guide(description: "True when tool results do not contain enough evidence for a reliable answer.")
     var hasInsufficientEvidence: Bool
+
+    @Guide(
+        description:
+            "Optional typed reference kind: alias, latestResults, latestResultsSubset, ordinal, lastEntity, lastField, lastGroup, lastNode, or lastCompared. Use an empty string when none is proposed."
+    )
+    var referenceKind: String
+
+    @Guide(description: "Conversation alias for referenceKind alias. Use an empty string otherwise.")
+    var referenceAlias: String
+
+    @Guide(description: "One-based ordinal for referenceKind ordinal. Use zero otherwise.")
+    var referenceOrdinal: Int
+
+    @Guide(description: "Zero-based subset offset for latestResultsSubset. Use zero otherwise.")
+    var referenceOffset: Int
+
+    @Guide(description: "Subset limit for latestResultsSubset. Use zero otherwise.")
+    var referenceLimit: Int
+
+    @Guide(description: "Clarification question when responseKind is clarification. Use an empty string otherwise.")
+    var clarificationQuestion: String
+
+    @Guide(description: "Only validated conversation aliases offered as clarification choices.", .maximumCount(8))
+    var clarificationOptionAliases: [String]
+
+    @Guide(
+        description:
+            "One value for unsupported responses: graphMutation, attachmentContent, multiHop, queryPlanV2, other, or empty."
+    )
+    var unsupportedCapability: String
 }
 
 private actor FoundationGraphChatToolActivityReporter {
@@ -169,12 +202,18 @@ private nonisolated struct FoundationGraphChatQueryFilterArguments {
 
 private nonisolated struct FoundationQueryDetailValuesTool: Tool {
     let name = "queryDetailValues"
-    let description = "Run a validated deterministic query using only E and F aliases within the active scope."
+    let description = "Run a validated deterministic query using E and F aliases, optionally restricted by one app-validated conversation alias."
 
     @Generable
     nonisolated struct Arguments {
         @Guide(description: "E alias from describeGraphSchema.")
         var entityAlias: String
+
+        @Guide(
+            description:
+                "Optional app-validated conversation alias such as CURRENT or a CR/CG/CI alias. Use an empty string to query the active scope."
+        )
+        var conversationReferenceAlias: String
 
         @Guide(description: "Validated filters for this query.", .maximumCount(8))
         var filters: [FoundationGraphChatQueryFilterArguments]
@@ -213,6 +252,7 @@ private nonisolated struct FoundationQueryDetailValuesTool: Tool {
         }
         let request = GraphChatModelQueryRequest(
             entityAlias: arguments.entityAlias,
+            conversationReferenceAlias: nilIfEmpty(arguments.conversationReferenceAlias),
             filters: filters,
             sortFieldAlias: nilIfEmpty(arguments.sortFieldAlias),
             sortDirection: nilIfEmpty(arguments.sortDirection),
@@ -231,7 +271,7 @@ private nonisolated struct FoundationQueryDetailValuesTool: Tool {
 
 private nonisolated struct FoundationGetNodeTool: Tool {
     let name = "getNode"
-    let description = "Read one previously returned E or N node alias, including typed values and attachment metadata only."
+    let description = "Read one E, N, CURRENT, CI, CE, or CN node alias after app-side scope and repository validation, including attachment metadata only."
 
     @Generable
     nonisolated struct Arguments {
@@ -600,20 +640,82 @@ actor FoundationModelsGraphChatProvider: GraphChatModelProvider {
     }
 
     private func prompt(for request: GraphChatModelRequest) -> String {
-        // PR 15 carries a trusted, bounded state snapshot through the provider boundary.
-        // Provider-side reference resolution is intentionally deferred to PR 16.
-        [
-            "SCHEMA SNAPSHOT",
-            request.schemaPrompt,
-            "USER QUESTION",
-            request.question
-        ].joined(separator: "\n\n")
+        let labels = promptLabels(for: request.responseLanguage)
+        var sections = [
+            labels.responseLanguage,
+            GraphChatResponseLocalizer(language: request.responseLanguage).providerInstruction(),
+            labels.schemaSnapshot,
+            request.schemaPrompt
+        ]
+        if let context = request.conversationContext {
+            sections.append(labels.conversationSnapshot)
+            sections.append(
+                GraphChatConversationContextFormatter().format(
+                    context,
+                    language: request.responseLanguage
+                )
+            )
+        }
+        if let operation = request.continuationOperation {
+            sections.append(labels.resolvedClarification)
+            sections.append(
+                continuationInstruction(
+                    operation: operation,
+                    language: request.responseLanguage
+                )
+            )
+        }
+        sections.append(labels.userQuestion)
+        sections.append(request.question)
+        return sections.joined(separator: "\n\n")
+    }
+
+    private func promptLabels(
+        for language: GraphChatResponseLanguage
+    ) -> (
+        responseLanguage: String,
+        schemaSnapshot: String,
+        conversationSnapshot: String,
+        resolvedClarification: String,
+        userQuestion: String
+    ) {
+        switch language {
+        case .german:
+            return (
+                "ANTWORTSPRACHE",
+                "SCHEMA-SNAPSHOT",
+                "KONVERSATIONS-SNAPSHOT",
+                "AUFGELÖSTE KLÄRUNG",
+                "AKTUELLE NUTZERFRAGE"
+            )
+        case .english:
+            return (
+                "RESPONSE LANGUAGE",
+                "SCHEMA SNAPSHOT",
+                "CONVERSATION SNAPSHOT",
+                "RESOLVED CLARIFICATION",
+                "CURRENT USER QUESTION"
+            )
+        }
+    }
+
+    private func continuationInstruction(
+        operation: GraphChatConversationContinuationOperation,
+        language: GraphChatResponseLanguage
+    ) -> String {
+        switch language {
+        case .german:
+            return "Setze ausschließlich die validierte Operation \(operation.rawValue) mit CURRENT fort. Interpretiere die Klärungsantwort nicht erneut frei."
+        case .english:
+            return "Continue only the validated operation \(operation.rawValue) using CURRENT. Do not reinterpret the clarification answer freely."
+        }
     }
 
     private func providerAnswer(
         from generated: FoundationGraphChatGeneratedAnswer
     ) -> GraphChatProviderFinalAnswer {
         GraphChatProviderFinalAnswer(
+            responseState: GraphChatProviderResponseState(rawValue: generated.responseKind) ?? .answer,
             directAnswer: generated.directAnswer,
             sections: generated.sections.map { section in
                 GraphChatProviderAnswerSection(
@@ -636,8 +738,46 @@ actor FoundationModelsGraphChatProvider: GraphChatModelProvider {
                     prompt: followUp.prompt
                 )
             },
-            hasInsufficientEvidence: generated.hasInsufficientEvidence
+            hasInsufficientEvidence: generated.hasInsufficientEvidence,
+            referenceProposal: referenceProposal(from: generated),
+            clarificationQuestion: nilIfEmpty(generated.clarificationQuestion),
+            clarificationOptionAliases: generated.clarificationOptionAliases,
+            unsupportedCapability: GraphChatUnsupportedCapability(
+                rawValue: generated.unsupportedCapability
+            )
         )
+    }
+
+    private func referenceProposal(
+        from generated: FoundationGraphChatGeneratedAnswer
+    ) -> GraphChatConversationReferenceProposal? {
+        switch generated.referenceKind {
+        case "alias":
+            return nilIfEmpty(generated.referenceAlias).map { .alias($0) }
+        case "latestResults":
+            return .latestResults
+        case "latestResultsSubset":
+            guard generated.referenceLimit > 0 else { return nil }
+            return .latestResultsSubset(
+                offset: max(0, generated.referenceOffset),
+                limit: generated.referenceLimit
+            )
+        case "ordinal":
+            guard generated.referenceOrdinal > 0 else { return nil }
+            return .ordinal(generated.referenceOrdinal)
+        case "lastEntity":
+            return .lastEntity
+        case "lastField":
+            return .lastField
+        case "lastGroup":
+            return .lastGroup
+        case "lastNode":
+            return .lastNode
+        case "lastCompared":
+            return .lastCompared
+        default:
+            return nil
+        }
     }
 
     private func providerError(from error: GraphChatToolError) -> GraphChatProviderError {

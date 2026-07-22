@@ -225,6 +225,7 @@ nonisolated enum GraphChatUITestSupport {
     }
 
     static func finalAnswer(
+        state: GraphChatAnswerState = .answer,
         directAnswer: String = "Final answer",
         evidence: [GraphEvidence] = [],
         filters: [GraphChatAppliedFilter] = [],
@@ -232,6 +233,7 @@ nonisolated enum GraphChatUITestSupport {
         insufficient: Bool = false
     ) -> GraphChatAnswer {
         GraphChatAnswer(
+            state: state,
             directAnswer: directAnswer,
             evidence: evidence,
             appliedFilters: filters,

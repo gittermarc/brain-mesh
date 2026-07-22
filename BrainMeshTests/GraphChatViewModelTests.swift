@@ -212,6 +212,7 @@ struct GraphChatViewModelTests {
                     events: [
                         .completed(
                             GraphChatUITestSupport.finalAnswer(
+                                state: .noResults,
                                 directAnswer: "Keine passenden Daten.",
                                 insufficient: true
                             )

@@ -155,6 +155,7 @@ nonisolated struct GraphChatFollowUpSuggestion: Hashable, Sendable, Identifiable
 }
 
 nonisolated struct GraphChatAnswer: Hashable, Sendable {
+    let state: GraphChatAnswerState
     let directAnswer: String
     let sections: [GraphChatAnswerSection]
     let evidence: [GraphEvidence]
@@ -167,6 +168,7 @@ nonisolated struct GraphChatAnswer: Hashable, Sendable {
     }
 
     init(
+        state: GraphChatAnswerState = .answer,
         directAnswer: String,
         sections: [GraphChatAnswerSection] = [],
         evidence: [GraphEvidence] = [],
@@ -174,6 +176,7 @@ nonisolated struct GraphChatAnswer: Hashable, Sendable {
         followUpSuggestions: [GraphChatFollowUpSuggestion] = [],
         hasInsufficientEvidence: Bool
     ) {
+        self.state = state
         self.directAnswer = directAnswer
         self.sections = sections
         self.evidence = GraphEvidenceCollection(evidence).values

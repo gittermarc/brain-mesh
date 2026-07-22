@@ -39,6 +39,7 @@ struct GraphChatMessageStateTests {
         state.apply(
             .completed(
                 GraphChatUITestSupport.finalAnswer(
+                    state: .answer,
                     directAnswer: "Projekt Atlas ist offen.",
                     evidence: [evidence]
                 )
@@ -116,6 +117,7 @@ struct GraphChatMessageStateTests {
         state.apply(
             .completed(
                 GraphChatUITestSupport.finalAnswer(
+                    state: .noResults,
                     directAnswer: "Dafür wurden keine verlässlichen Daten gefunden.",
                     insufficient: true
                 )

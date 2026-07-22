@@ -11,7 +11,9 @@ nonisolated enum GraphChatAssistantPhase: String, Hashable, Sendable {
     case running
     case partial
     case final
+    case clarification
     case noResults
+    case unsupported
     case availabilityError
     case technicalError
     case cancelled
@@ -86,7 +88,7 @@ nonisolated struct GraphChatAssistantMessageState: Hashable, Sendable {
         switch phase {
         case .running, .partial:
             return false
-        case .final, .noResults, .availabilityError, .technicalError, .cancelled:
+        case .final, .clarification, .noResults, .unsupported, .availabilityError, .technicalError, .cancelled:
             return true
         }
     }
@@ -120,9 +122,16 @@ nonisolated struct GraphChatAssistantMessageState: Hashable, Sendable {
             answer = normalized
             text = normalized.directAnswer
             error = nil
-            phase = normalized.hasInsufficientEvidence && normalized.evidence.isEmpty
-                ? .noResults
-                : .final
+            switch normalized.state {
+            case .answer:
+                phase = .final
+            case .clarification:
+                phase = .clarification
+            case .noResults:
+                phase = .noResults
+            case .unsupported:
+                phase = .unsupported
+            }
         case .cancelled:
             phase = .cancelled
             answer = nil
@@ -163,6 +172,7 @@ nonisolated struct GraphChatAssistantMessageState: Hashable, Sendable {
 
     private static func normalized(_ answer: GraphChatAnswer) -> GraphChatAnswer {
         GraphChatAnswer(
+            state: answer.state,
             directAnswer: bounded(answer.directAnswer),
             sections: answer.sections.prefix(maximumSections).map { section in
                 GraphChatAnswerSection(

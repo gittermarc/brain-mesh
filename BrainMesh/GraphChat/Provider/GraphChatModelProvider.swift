@@ -64,18 +64,24 @@ nonisolated struct GraphChatModelRequest: Hashable, Sendable, Identifiable {
     let id: UUID
     let question: String
     let schemaPrompt: String
-    let conversationState: GraphChatConversationStateSnapshot?
+    let conversationContext: GraphChatConversationContextSnapshot?
+    let responseLanguage: GraphChatResponseLanguage
+    let continuationOperation: GraphChatConversationContinuationOperation?
 
     init(
         id: UUID = UUID(),
         question: String,
         schemaPrompt: String,
-        conversationState: GraphChatConversationStateSnapshot? = nil
+        conversationContext: GraphChatConversationContextSnapshot? = nil,
+        responseLanguage: GraphChatResponseLanguage = .english,
+        continuationOperation: GraphChatConversationContinuationOperation? = nil
     ) {
         self.id = id
         self.question = question
         self.schemaPrompt = schemaPrompt
-        self.conversationState = conversationState
+        self.conversationContext = conversationContext
+        self.responseLanguage = responseLanguage
+        self.continuationOperation = continuationOperation
     }
 }
 
@@ -122,13 +128,51 @@ nonisolated struct GraphChatProviderFollowUpSuggestion: Hashable, Sendable {
     let prompt: String
 }
 
+nonisolated enum GraphChatProviderResponseState: String, CaseIterable, Hashable, Sendable {
+    case answer
+    case clarification
+    case noResults
+    case unsupported
+}
+
 nonisolated struct GraphChatProviderFinalAnswer: Hashable, Sendable {
+    let responseState: GraphChatProviderResponseState
     let directAnswer: String
     let sections: [GraphChatProviderAnswerSection]
     let evidenceIDValues: [String]
     let appliedFilters: [GraphChatProviderAppliedFilter]
     let followUpSuggestions: [GraphChatProviderFollowUpSuggestion]
     let hasInsufficientEvidence: Bool
+    let referenceProposal: GraphChatConversationReferenceProposal?
+    let clarificationQuestion: String?
+    let clarificationOptionAliases: [String]
+    let unsupportedCapability: GraphChatUnsupportedCapability?
+
+    init(
+        responseState: GraphChatProviderResponseState = .answer,
+        directAnswer: String,
+        sections: [GraphChatProviderAnswerSection],
+        evidenceIDValues: [String],
+        appliedFilters: [GraphChatProviderAppliedFilter],
+        followUpSuggestions: [GraphChatProviderFollowUpSuggestion],
+        hasInsufficientEvidence: Bool,
+        referenceProposal: GraphChatConversationReferenceProposal? = nil,
+        clarificationQuestion: String? = nil,
+        clarificationOptionAliases: [String] = [],
+        unsupportedCapability: GraphChatUnsupportedCapability? = nil
+    ) {
+        self.responseState = responseState
+        self.directAnswer = directAnswer
+        self.sections = sections
+        self.evidenceIDValues = evidenceIDValues
+        self.appliedFilters = appliedFilters
+        self.followUpSuggestions = followUpSuggestions
+        self.hasInsufficientEvidence = hasInsufficientEvidence
+        self.referenceProposal = referenceProposal
+        self.clarificationQuestion = clarificationQuestion
+        self.clarificationOptionAliases = clarificationOptionAliases
+        self.unsupportedCapability = unsupportedCapability
+    }
 }
 
 nonisolated enum GraphChatProviderStreamEvent: Hashable, Sendable {

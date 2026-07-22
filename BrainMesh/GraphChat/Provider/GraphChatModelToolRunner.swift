@@ -17,6 +17,7 @@ nonisolated struct GraphChatModelQueryFilterRequest: Hashable, Sendable {
 
 nonisolated struct GraphChatModelQueryRequest: Hashable, Sendable {
     let entityAlias: String
+    let conversationReferenceAlias: String?
     let filters: [GraphChatModelQueryFilterRequest]
     let sortFieldAlias: String?
     let sortDirection: String?
@@ -24,6 +25,28 @@ nonisolated struct GraphChatModelQueryRequest: Hashable, Sendable {
     let aggregation: String?
     let aggregationFieldAlias: String?
     let limit: Int
+
+    init(
+        entityAlias: String,
+        conversationReferenceAlias: String? = nil,
+        filters: [GraphChatModelQueryFilterRequest],
+        sortFieldAlias: String?,
+        sortDirection: String?,
+        projectionFieldAliases: [String],
+        aggregation: String?,
+        aggregationFieldAlias: String?,
+        limit: Int
+    ) {
+        self.entityAlias = entityAlias
+        self.conversationReferenceAlias = conversationReferenceAlias
+        self.filters = filters
+        self.sortFieldAlias = sortFieldAlias
+        self.sortDirection = sortDirection
+        self.projectionFieldAliases = projectionFieldAliases
+        self.aggregation = aggregation
+        self.aggregationFieldAlias = aggregationFieldAlias
+        self.limit = limit
+    }
 }
 
 nonisolated enum GraphChatModelToolRequest: Hashable, Sendable {
@@ -74,6 +97,8 @@ nonisolated protocol GraphChatModelToolRunnerFactory: Sendable {
         budget: GraphChatToolBudget,
         evidenceRegistry: GraphChatEvidenceRegistry,
         conversationTransaction: GraphChatConversationStateTransaction,
+        conversationContext: GraphChatConversationContextSnapshot,
+        referenceResolver: GraphChatConversationReferenceResolver,
         referenceDate: Date,
         calendar: Calendar,
         timeZone: TimeZone

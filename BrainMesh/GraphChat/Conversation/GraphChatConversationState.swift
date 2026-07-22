@@ -159,6 +159,7 @@ nonisolated struct GraphChatConversationStateSnapshot: Hashable, Sendable {
     let lastValidatedQueryPlan: ValidatedGraphQueryPlan?
     let lastComparison: GraphChatConversationComparisonContext?
     let referenceTargets: GraphChatConversationReferenceTargets
+    let pendingClarification: GraphChatPendingClarification?
 
     init(state: GraphChatConversationState) {
         self.conversationID = state.conversationID
@@ -173,6 +174,7 @@ nonisolated struct GraphChatConversationStateSnapshot: Hashable, Sendable {
         self.lastValidatedQueryPlan = state.lastValidatedQueryPlan
         self.lastComparison = state.lastComparison
         self.referenceTargets = state.referenceTargets
+        self.pendingClarification = state.pendingClarification
     }
 }
 
@@ -189,6 +191,7 @@ nonisolated struct GraphChatConversationState: Hashable, Sendable {
     var lastValidatedQueryPlan: ValidatedGraphQueryPlan?
     var lastComparison: GraphChatConversationComparisonContext?
     var referenceTargets: GraphChatConversationReferenceTargets
+    var pendingClarification: GraphChatPendingClarification?
     var lastResetReason: GraphChatConversationResetReason?
     var budgetEvictionCount: Int
 
@@ -212,6 +215,7 @@ nonisolated struct GraphChatConversationState: Hashable, Sendable {
             lastValidatedQueryPlan: nil,
             lastComparison: nil,
             referenceTargets: .empty,
+            pendingClarification: nil,
             lastResetReason: resetReason,
             budgetEvictionCount: 0
         )

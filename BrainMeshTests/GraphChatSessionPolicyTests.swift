@@ -21,7 +21,7 @@ struct GraphChatSessionPolicyTests {
 
         let events = await GraphChatProviderTestSupport.collect(
             await orchestrator.streamAnswer(
-                question: "Use the prepared session.",
+                question: "Nutze die vorbereitete Session.",
                 graphScope: graphScope,
                 chatScope: chatScope
             )
@@ -228,8 +228,8 @@ struct GraphChatSessionPolicyTests {
         #expect(snapshot.createdSessions.count == 2)
         #expect(snapshot.streamedSessions.count == 2)
         #expect(snapshot.discardedSessions.count == 2)
-        #expect(snapshot.streamedRequests[0].conversationState != nil)
-        #expect(snapshot.streamedRequests[1].conversationState == nil)
+        #expect(snapshot.streamedRequests[0].conversationContext != nil)
+        #expect(snapshot.streamedRequests[1].conversationContext != nil)
     }
 
     @Test

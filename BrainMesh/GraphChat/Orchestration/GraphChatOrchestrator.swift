@@ -24,6 +24,8 @@ actor GraphChatOrchestrator {
         let budget: GraphChatToolBudget
         let evidenceRegistry: GraphChatEvidenceRegistry
         let conversationBaseState: GraphChatConversationState
+        let conversationContext: GraphChatConversationContextSnapshot
+        let responseLanguage: GraphChatResponseLanguage
         let conversationTransaction: GraphChatConversationStateTransaction
         let toolRunner: any GraphChatModelToolRunning
     }
@@ -41,6 +43,11 @@ actor GraphChatOrchestrator {
     private let toolBudgetPolicy: GraphChatToolBudgetPolicy
     private let concurrentRequestPolicy: GraphChatConcurrentRequestPolicy
     private let conversationStateReducer: GraphChatConversationStateReducer
+    private let conversationContextBuilder: GraphChatConversationContextBuilder
+    private let referenceResolver: GraphChatConversationReferenceResolver
+    private let referenceInterpreter: GraphChatConversationReferenceInterpreter
+    private let unsupportedRequestDetector: GraphChatUnsupportedRequestDetector
+    private let responseLanguageSelector: GraphChatResponseLanguageSelector
     private let referenceDate: @Sendable () -> Date
     private let calendar: Calendar
     private let timeZone: TimeZone
@@ -57,6 +64,11 @@ actor GraphChatOrchestrator {
         toolBudgetPolicy: GraphChatToolBudgetPolicy = .default,
         concurrentRequestPolicy: GraphChatConcurrentRequestPolicy = .cancelPrevious,
         conversationStatePolicy: GraphChatConversationStatePolicy = .default,
+        conversationContextBudget: GraphChatConversationContextBudget = .default,
+        referenceResolver: GraphChatConversationReferenceResolver =
+            GraphChatConversationReferenceResolver(),
+        responseLanguageSelector: GraphChatResponseLanguageSelector =
+            GraphChatResponseLanguageSelector(),
         referenceDate: @escaping @Sendable () -> Date = Date.init,
         calendar: Calendar = Calendar(identifier: .gregorian),
         timeZone: TimeZone = .current
@@ -69,6 +81,13 @@ actor GraphChatOrchestrator {
         self.conversationStateReducer = GraphChatConversationStateReducer(
             policy: conversationStatePolicy
         )
+        self.conversationContextBuilder = GraphChatConversationContextBuilder(
+            budget: conversationContextBudget
+        )
+        self.referenceResolver = referenceResolver
+        self.referenceInterpreter = GraphChatConversationReferenceInterpreter()
+        self.unsupportedRequestDetector = GraphChatUnsupportedRequestDetector()
+        self.responseLanguageSelector = responseLanguageSelector
         self.referenceDate = referenceDate
         self.calendar = calendar
         self.timeZone = timeZone
@@ -87,18 +106,27 @@ actor GraphChatOrchestrator {
         )
 
         if preparedSession?.key == key,
-           preparedSession?.conversationBaseState == baseState {
+            preparedSession?.conversationBaseState == baseState
+        {
             return
         }
 
+        let preparationLanguage = responseLanguageSelector.language(for: "")
+        let preparationContext = conversationContextBuilder.makeSnapshot(
+            from: baseState.snapshot
+        )
         let resources = try await makeSessionResources(
             for: key,
-            conversationBaseState: baseState
+            conversationBaseState: baseState,
+            conversationContext: preparationContext,
+            responseLanguage: preparationLanguage
         )
         do {
             try await provider.prewarm(
                 sessionID: resources.sessionID,
-                promptPrefix: "A read-only question about the active graph will follow."
+                promptPrefix: preparationLanguage == .german
+                    ? "Es folgt eine read-only Frage zum aktiven Graphen."
+                    : "A read-only question about the active graph will follow."
             )
             preparedSession = resources
         } catch {
@@ -214,15 +242,173 @@ actor GraphChatOrchestrator {
 
         do {
             let normalizedQuestion = try validateQuestion(question)
+            let language = responseLanguageSelector.language(for: normalizedQuestion)
+            let localizer = GraphChatResponseLocalizer(language: language)
+
+            if turnStateSnapshot.pendingClarification == nil,
+                let unsupportedCapability = unsupportedRequestDetector.capability(
+                    for: normalizedQuestion
+                )
+            {
+                let answer = GraphChatAnswer(
+                    state: .unsupported(unsupportedCapability),
+                    directAnswer: localizer.unsupported(unsupportedCapability),
+                    hasInsufficientEvidence: false
+                )
+                try await completeLocalAnswer(
+                    answer,
+                    requestID: requestID,
+                    baseState: turnStateSnapshot,
+                    expectedCommittedState: turnStateSnapshot,
+                    pendingClarification: nil,
+                    continuation: continuation
+                )
+                return
+            }
+
+            var requestBaseState = turnStateSnapshot
+            var currentReference: GraphChatResolvedConversationReference?
+            var continuationOperation: GraphChatConversationContinuationOperation?
+            var providerQuestion = normalizedQuestion
+            var context = conversationContextBuilder.makeSnapshot(
+                from: requestBaseState.snapshot
+            )
+
+            if let pending = requestBaseState.pendingClarification {
+                guard
+                    pending.isValid(
+                        at: referenceDate(),
+                        graphScope: key.graphScope,
+                        chatScope: key.chatScope
+                    )
+                else {
+                    requestBaseState = try clearedClarification(in: requestBaseState)
+                    context = conversationContextBuilder.makeSnapshot(
+                        from: requestBaseState.snapshot
+                    )
+                    let answer = GraphChatAnswer(
+                        state: .clarification(
+                            GraphChatClarification(
+                                id: UUID(),
+                                question: localizer.clarificationQuestion(reason: .staleResults),
+                                options: []
+                            )
+                        ),
+                        directAnswer: localizer.clarificationQuestion(reason: .staleResults),
+                        hasInsufficientEvidence: true
+                    )
+                    try await completeLocalAnswer(
+                        answer,
+                        requestID: requestID,
+                        baseState: requestBaseState,
+                        expectedCommittedState: turnStateSnapshot,
+                        pendingClarification: nil,
+                        continuation: continuation
+                    )
+                    return
+                }
+
+                guard
+                    let selectedOption = referenceInterpreter.clarificationSelection(
+                        for: normalizedQuestion,
+                        pending: pending
+                    )
+                else {
+                    let answer = clarificationAnswer(
+                        pending: pending,
+                        question: localizer.clarificationQuestion(reason: .ambiguous)
+                    )
+                    try await completeLocalAnswer(
+                        answer,
+                        requestID: requestID,
+                        baseState: requestBaseState,
+                        expectedCommittedState: turnStateSnapshot,
+                        pendingClarification: nil,
+                        continuation: continuation
+                    )
+                    return
+                }
+
+                let resolution = try await referenceResolver.resolve(
+                    selectedOption.proposal,
+                    in: context,
+                    expectedGraphScope: key.graphScope,
+                    expectedChatScope: key.chatScope
+                )
+                requestBaseState = try clearedClarification(in: requestBaseState)
+                guard case .resolved(let resolved) = resolution else {
+                    let answer = answer(
+                        for: resolution,
+                        language: language,
+                        operation: pending.continuationOperation,
+                        state: requestBaseState,
+                        sourceTurnID: pending.sourceTurnID,
+                        continuationQuestion: pending.continuationQuestion
+                    )
+                    try await completeLocalAnswer(
+                        answer.value,
+                        requestID: requestID,
+                        baseState: requestBaseState,
+                        expectedCommittedState: turnStateSnapshot,
+                        pendingClarification: answer.pending,
+                        continuation: continuation
+                    )
+                    return
+                }
+                currentReference = resolved
+                continuationOperation = pending.continuationOperation
+                providerQuestion = pending.continuationQuestion
+            } else if let interpretation = referenceInterpreter.interpretation(
+                for: normalizedQuestion
+            ) {
+                let resolution = try await referenceResolver.resolve(
+                    interpretation.proposal,
+                    in: context,
+                    expectedGraphScope: key.graphScope,
+                    expectedChatScope: key.chatScope
+                )
+                switch resolution {
+                case .resolved(let resolved):
+                    currentReference = resolved
+                    continuationOperation = interpretation.operation
+                case .clarification, .noResults, .rejected:
+                    let answer = answer(
+                        for: resolution,
+                        language: language,
+                        operation: interpretation.operation,
+                        state: requestBaseState,
+                        sourceTurnID: requestBaseState.turnContexts.last?.id,
+                        continuationQuestion: normalizedQuestion
+                    )
+                    try await completeLocalAnswer(
+                        answer.value,
+                        requestID: requestID,
+                        baseState: requestBaseState,
+                        expectedCommittedState: turnStateSnapshot,
+                        pendingClarification: answer.pending,
+                        continuation: continuation
+                    )
+                    return
+                }
+            }
+
+            context = conversationContextBuilder.makeSnapshot(
+                from: requestBaseState.snapshot,
+                currentReference: currentReference
+            )
             let initialResources = try await takeOrCreateSessionResources(
                 for: key,
-                conversationBaseState: turnStateSnapshot
+                conversationBaseState: requestBaseState,
+                conversationContext: context,
+                responseLanguage: language
             )
             setActiveResources(initialResources, requestID: requestID)
             let answer = try await generateWithSingleContextRetry(
                 resources: initialResources,
-                question: normalizedQuestion,
-                turnStateSnapshot: turnStateSnapshot,
+                question: providerQuestion,
+                conversationContext: context,
+                responseLanguage: language,
+                continuationOperation: continuationOperation,
                 requestID: requestID,
                 continuation: continuation
             )
@@ -252,7 +438,9 @@ actor GraphChatOrchestrator {
     private func generateWithSingleContextRetry(
         resources initialResources: SessionResources,
         question: String,
-        turnStateSnapshot: GraphChatConversationState,
+        conversationContext: GraphChatConversationContextSnapshot,
+        responseLanguage: GraphChatResponseLanguage,
+        continuationOperation: GraphChatConversationContinuationOperation?,
         requestID: UUID,
         continuation: GraphChatEventStream.Continuation
     ) async throws -> GraphChatAnswer {
@@ -261,20 +449,24 @@ actor GraphChatOrchestrator {
 
         while true {
             do {
-                let stateSnapshot = retryCount == 0
-                    ? turnStateSnapshot.snapshot
-                    : nil
+                let context =
+                    retryCount == 0
+                    ? conversationContext
+                    : compactRetryContext(conversationContext)
                 let answer = try await consumeProviderStream(
                     resources: resources,
                     question: question,
-                    conversationState: stateSnapshot,
+                    conversationContext: context,
+                    responseLanguage: responseLanguage,
+                    continuationOperation: continuationOperation,
                     continuation: continuation
                 )
                 await resources.evidenceRegistry.removeAll()
                 await provider.discardSession(sessionID: resources.sessionID)
                 return answer
             } catch let error as GraphChatProviderError
-                where error.code == .contextWindowExceeded && retryCount == 0 {
+                where error.code == .contextWindowExceeded && retryCount == 0
+            {
                 await resources.evidenceRegistry.removeAll()
                 await provider.discardSession(sessionID: resources.sessionID)
                 await resources.conversationTransaction.resetToBase()
@@ -295,16 +487,21 @@ actor GraphChatOrchestrator {
     private func consumeProviderStream(
         resources: SessionResources,
         question: String,
-        conversationState: GraphChatConversationStateSnapshot?,
+        conversationContext: GraphChatConversationContextSnapshot,
+        responseLanguage: GraphChatResponseLanguage,
+        continuationOperation: GraphChatConversationContinuationOperation?,
         continuation: GraphChatEventStream.Continuation
     ) async throws -> GraphChatAnswer {
         let request = GraphChatModelRequest(
             question: question,
             schemaPrompt: schemaPrompt(
                 from: resources.schemaContext,
-                chatScope: resources.key.chatScope
+                chatScope: resources.key.chatScope,
+                language: responseLanguage
             ),
-            conversationState: conversationState
+            conversationContext: conversationContext,
+            responseLanguage: responseLanguage,
+            continuationOperation: continuationOperation
         )
         let providerStream = try await provider.streamResponse(
             sessionID: resources.sessionID,
@@ -344,16 +541,26 @@ actor GraphChatOrchestrator {
                 message: "Das Modell hat keine vollständige strukturierte Antwort geliefert."
             )
         }
-        return await validatedAnswer(
+        return try await validatedAnswer(
             from: finalAnswer,
-            registry: resources.evidenceRegistry
+            registry: resources.evidenceRegistry,
+            transaction: resources.conversationTransaction,
+            context: conversationContext,
+            language: responseLanguage,
+            continuationOperation: continuationOperation,
+            requestQuestion: question
         )
     }
 
     private func validatedAnswer(
         from providerAnswer: GraphChatProviderFinalAnswer,
-        registry: GraphChatEvidenceRegistry
-    ) async -> GraphChatAnswer {
+        registry: GraphChatEvidenceRegistry,
+        transaction: GraphChatConversationStateTransaction,
+        context: GraphChatConversationContextSnapshot,
+        language: GraphChatResponseLanguage,
+        continuationOperation: GraphChatConversationContinuationOperation?,
+        requestQuestion: String
+    ) async throws -> GraphChatAnswer {
         var allEvidence: [GraphEvidence] = await registry.validatedEvidence(
             for: providerAnswer.evidenceIDValues
         )
@@ -383,43 +590,419 @@ actor GraphChatOrchestrator {
                 valueDescription: filter.valueDescription
             )
         }
-        return GraphChatAnswer(
-            directAnswer: providerAnswer.directAnswer,
-            sections: sections,
-            evidence: validatedEvidence,
-            appliedFilters: deterministicFilters.isEmpty
-                ? providerFilters
-                : deterministicFilters,
-            followUpSuggestions: providerAnswer.followUpSuggestions.map { suggestion in
-                GraphChatFollowUpSuggestion(
-                    title: suggestion.title,
-                    prompt: suggestion.prompt
+        let filters =
+            deterministicFilters.isEmpty
+            ? providerFilters
+            : deterministicFilters
+        let followUps = providerAnswer.followUpSuggestions.map { suggestion in
+            GraphChatFollowUpSuggestion(
+                title: suggestion.title,
+                prompt: suggestion.prompt
+            )
+        }
+        let localizer = GraphChatResponseLocalizer(language: language)
+        let candidateState = await transaction.snapshot()
+        let latestToolState = candidateState.resultContexts.last?.state
+
+        switch providerAnswer.responseState {
+        case .answer:
+            if let proposal = providerAnswer.referenceProposal {
+                let resolution = try await referenceResolver.resolve(
+                    proposal,
+                    in: context,
+                    expectedGraphScope: context.graphScope,
+                    expectedChatScope: context.chatScope
                 )
-            },
-            hasInsufficientEvidence: providerAnswer.hasInsufficientEvidence
-                || validatedEvidence.isEmpty
+                if case .resolved = resolution {
+                    // The proposal was app-side validated. The normal answer may be returned.
+                } else {
+                    let fallback = answer(
+                        for: resolution,
+                        language: language,
+                        operation: continuationOperation ?? .answerAboutReference,
+                        state: candidateState,
+                        sourceTurnID: candidateState.turnContexts.last?.id,
+                        continuationQuestion: requestQuestion
+                    )
+                    if let pending = fallback.pending {
+                        try await transaction.apply(
+                            GraphChatConversationTrustedEvent(
+                                graphScope: context.graphScope,
+                                chatScope: context.chatScope,
+                                payload: .clarificationRequested(pending)
+                            )
+                        )
+                    }
+                    return fallback.value
+                }
+            }
+            return GraphChatAnswer(
+                state: .answer,
+                directAnswer: providerAnswer.directAnswer,
+                sections: sections,
+                evidence: validatedEvidence,
+                appliedFilters: filters,
+                followUpSuggestions: followUps,
+                hasInsufficientEvidence: providerAnswer.hasInsufficientEvidence
+                    || validatedEvidence.isEmpty
+            )
+        case .noResults:
+            guard latestToolState == .noResults else {
+                return GraphChatAnswer(
+                    state: .answer,
+                    directAnswer: providerAnswer.directAnswer,
+                    sections: sections,
+                    evidence: validatedEvidence,
+                    appliedFilters: filters,
+                    followUpSuggestions: followUps,
+                    hasInsufficientEvidence: true
+                )
+            }
+            let text =
+                providerAnswer.directAnswer.trimmingCharacters(
+                    in: .whitespacesAndNewlines
+                ).isEmpty
+                ? localizer.noResults()
+                : providerAnswer.directAnswer
+            return GraphChatAnswer(
+                state: .noResults,
+                directAnswer: text,
+                sections: sections,
+                evidence: validatedEvidence,
+                appliedFilters: filters,
+                followUpSuggestions: followUps,
+                hasInsufficientEvidence: true
+            )
+        case .unsupported:
+            let capability = providerAnswer.unsupportedCapability ?? .other
+            let text =
+                providerAnswer.directAnswer.trimmingCharacters(
+                    in: .whitespacesAndNewlines
+                ).isEmpty
+                ? localizer.unsupported(capability)
+                : providerAnswer.directAnswer
+            return GraphChatAnswer(
+                state: .unsupported(capability),
+                directAnswer: text,
+                sections: [],
+                evidence: [],
+                appliedFilters: [],
+                followUpSuggestions: [],
+                hasInsufficientEvidence: false
+            )
+        case .clarification:
+            let options = try await validatedClarificationOptions(
+                providerAnswer: providerAnswer,
+                context: context
+            )
+            let normalizedQuestion = providerAnswer.clarificationQuestion?.trimmingCharacters(
+                in: .whitespacesAndNewlines
+            )
+            let question =
+                normalizedQuestion?.isEmpty == false
+                ? normalizedQuestion!
+                : localizer.clarificationQuestion(reason: .ambiguous)
+            let pending = makePendingClarification(
+                options: options,
+                operation: continuationOperation ?? .answerAboutReference,
+                state: candidateState,
+                continuationQuestion: requestQuestion
+            )
+            if let pending {
+                try await transaction.apply(
+                    GraphChatConversationTrustedEvent(
+                        graphScope: context.graphScope,
+                        chatScope: context.chatScope,
+                        payload: .clarificationRequested(pending)
+                    )
+                )
+            }
+            return GraphChatAnswer(
+                state: .clarification(
+                    GraphChatClarification(
+                        id: pending?.id ?? UUID(),
+                        question: question,
+                        options: options.map {
+                            GraphChatClarificationOption(id: $0.id, title: $0.title)
+                        }
+                    )
+                ),
+                directAnswer: question,
+                sections: [],
+                evidence: [],
+                appliedFilters: [],
+                followUpSuggestions: [],
+                hasInsufficientEvidence: true
+            )
+        }
+    }
+
+    private func validatedClarificationOptions(
+        providerAnswer: GraphChatProviderFinalAnswer,
+        context: GraphChatConversationContextSnapshot
+    ) async throws -> [GraphChatPendingClarificationOption] {
+        var options: [GraphChatPendingClarificationOption] = []
+        var seen = Set<String>()
+
+        for rawAlias in providerAnswer.clarificationOptionAliases.prefix(8) {
+            guard let alias = context.alias(rawAlias) else {
+                continue
+            }
+            let resolution = try await referenceResolver.resolve(
+                .alias(alias.alias),
+                in: context,
+                expectedGraphScope: context.graphScope,
+                expectedChatScope: context.chatScope
+            )
+            guard case .resolved = resolution, seen.insert(alias.alias).inserted else {
+                continue
+            }
+            options.append(
+                GraphChatPendingClarificationOption(
+                    id: alias.alias,
+                    title: alias.label,
+                    proposal: .alias(alias.alias)
+                )
+            )
+        }
+
+        if options.isEmpty, let proposal = providerAnswer.referenceProposal {
+            let resolution = try await referenceResolver.resolve(
+                proposal,
+                in: context,
+                expectedGraphScope: context.graphScope,
+                expectedChatScope: context.chatScope
+            )
+            if case .clarification(let clarification) = resolution {
+                options = clarification.options
+            }
+        }
+        return Array(options.prefix(8))
+    }
+
+    private func completeLocalAnswer(
+        _ answer: GraphChatAnswer,
+        requestID: UUID,
+        baseState: GraphChatConversationState,
+        expectedCommittedState: GraphChatConversationState,
+        pendingClarification: GraphChatPendingClarification?,
+        continuation: GraphChatEventStream.Continuation
+    ) async throws {
+        let transaction = GraphChatConversationStateTransaction(
+            baseState: baseState,
+            reducer: conversationStateReducer
+        )
+        if let pendingClarification {
+            try await transaction.apply(
+                GraphChatConversationTrustedEvent(
+                    graphScope: baseState.graphScope,
+                    chatScope: baseState.chatScope,
+                    payload: .clarificationRequested(pendingClarification)
+                )
+            )
+        }
+        let candidate = try await transaction.finalizedState(
+            requestID: requestID,
+            completedAt: referenceDate(),
+            validatedEvidenceIDs: answer.evidenceIDs
+        )
+        try Task.checkCancellation()
+        guard conversationState == expectedCommittedState else {
+            throw CancellationError()
+        }
+        conversationState = candidate
+        continuation.yield(.completed(answer))
+    }
+
+    private func answer(
+        for resolution: GraphChatConversationReferenceResolution,
+        language: GraphChatResponseLanguage,
+        operation: GraphChatConversationContinuationOperation,
+        state: GraphChatConversationState,
+        sourceTurnID: UUID?,
+        continuationQuestion: String
+    ) -> (value: GraphChatAnswer, pending: GraphChatPendingClarification?) {
+        let localizer = GraphChatResponseLocalizer(language: language)
+        switch resolution {
+        case .resolved:
+            return (
+                GraphChatAnswer(
+                    state: .answer,
+                    directAnswer: "",
+                    hasInsufficientEvidence: false
+                ),
+                nil
+            )
+        case .noResults(let issue):
+            let text =
+                issue == .emptyResults
+                ? localizer.noResults()
+                : localizer.clarificationQuestion(reason: issue)
+            return (
+                GraphChatAnswer(
+                    state: .noResults,
+                    directAnswer: text,
+                    hasInsufficientEvidence: true
+                ),
+                nil
+            )
+        case .rejected(let issue):
+            let question = localizer.clarificationQuestion(reason: issue)
+            return (
+                GraphChatAnswer(
+                    state: .clarification(
+                        GraphChatClarification(
+                            id: UUID(),
+                            question: question,
+                            options: []
+                        )
+                    ),
+                    directAnswer: question,
+                    hasInsufficientEvidence: true
+                ),
+                nil
+            )
+        case .clarification(let clarification):
+            let question = localizer.clarificationQuestion(reason: clarification.issue)
+            let pending = makePendingClarification(
+                options: clarification.options,
+                operation: operation,
+                state: state,
+                sourceTurnID: sourceTurnID,
+                continuationQuestion: continuationQuestion
+            )
+            return (
+                GraphChatAnswer(
+                    state: .clarification(
+                        GraphChatClarification(
+                            id: pending?.id ?? UUID(),
+                            question: question,
+                            options: clarification.options.map {
+                                GraphChatClarificationOption(id: $0.id, title: $0.title)
+                            }
+                        )
+                    ),
+                    directAnswer: question,
+                    hasInsufficientEvidence: true
+                ),
+                pending
+            )
+        }
+    }
+
+    private func clarificationAnswer(
+        pending: GraphChatPendingClarification,
+        question: String
+    ) -> GraphChatAnswer {
+        GraphChatAnswer(
+            state: .clarification(
+                GraphChatClarification(
+                    id: pending.id,
+                    question: question,
+                    options: pending.options.map {
+                        GraphChatClarificationOption(id: $0.id, title: $0.title)
+                    }
+                )
+            ),
+            directAnswer: question,
+            hasInsufficientEvidence: true
+        )
+    }
+
+    private func makePendingClarification(
+        options: [GraphChatPendingClarificationOption],
+        operation: GraphChatConversationContinuationOperation,
+        state: GraphChatConversationState,
+        sourceTurnID: UUID? = nil,
+        continuationQuestion: String
+    ) -> GraphChatPendingClarification? {
+        guard options.isEmpty == false else {
+            return nil
+        }
+        let now = referenceDate()
+        return GraphChatPendingClarification(
+            id: UUID(),
+            decision: .conversationReference,
+            options: Array(options.prefix(8)),
+            sourceTurnID: sourceTurnID ?? state.turnContexts.last?.id,
+            graphScope: state.graphScope,
+            chatScope: state.chatScope,
+            continuationOperation: operation,
+            continuationQuestion: bounded(continuationQuestion, limit: 500),
+            createdAt: now,
+            expiresAt: now.addingTimeInterval(10 * 60)
+        )
+    }
+
+    private func clearedClarification(
+        in state: GraphChatConversationState
+    ) throws -> GraphChatConversationState {
+        try conversationStateReducer.reduce(
+            state,
+            event: GraphChatConversationTrustedEvent(
+                graphScope: state.graphScope,
+                chatScope: state.chatScope,
+                payload: .clarificationResolved
+            )
+        ).state
+    }
+
+    private func compactRetryContext(
+        _ context: GraphChatConversationContextSnapshot
+    ) -> GraphChatConversationContextSnapshot {
+        GraphChatConversationContextSnapshot(
+            conversationID: context.conversationID,
+            graphScope: context.graphScope,
+            chatScope: context.chatScope,
+            aliases: context.aliases,
+            results: Array(context.results.suffix(1)),
+            turns: [],
+            latestResultAlias: context.latestResultAlias,
+            lastEntityAlias: context.lastEntityAlias,
+            lastFieldAlias: context.lastFieldAlias,
+            lastGroupAlias: context.lastGroupAlias,
+            lastNodeAlias: context.lastNodeAlias,
+            lastComparisonAlias: context.lastComparisonAlias,
+            currentReferenceAlias: context.currentReferenceAlias,
+            lastValidatedQuery: context.lastValidatedQuery,
+            resultRevalidations: context.resultRevalidations,
+            pendingClarificationID: context.pendingClarificationID
         )
     }
 
     private func takeOrCreateSessionResources(
         for key: ScopeKey,
-        conversationBaseState: GraphChatConversationState
+        conversationBaseState: GraphChatConversationState,
+        conversationContext: GraphChatConversationContextSnapshot,
+        responseLanguage: GraphChatResponseLanguage
     ) async throws -> SessionResources {
         if let preparedSession,
-           preparedSession.key == key,
-           preparedSession.conversationBaseState == conversationBaseState {
+            preparedSession.key == key,
+            preparedSession.conversationBaseState == conversationBaseState,
+            preparedSession.conversationContext == conversationContext,
+            preparedSession.responseLanguage == responseLanguage
+        {
             self.preparedSession = nil
             return preparedSession
         }
+        if let preparedSession {
+            await preparedSession.evidenceRegistry.removeAll()
+            await provider.discardSession(sessionID: preparedSession.sessionID)
+            self.preparedSession = nil
+        }
         return try await makeSessionResources(
             for: key,
-            conversationBaseState: conversationBaseState
+            conversationBaseState: conversationBaseState,
+            conversationContext: conversationContext,
+            responseLanguage: responseLanguage
         )
     }
 
     private func makeSessionResources(
         for key: ScopeKey,
-        conversationBaseState: GraphChatConversationState
+        conversationBaseState: GraphChatConversationState,
+        conversationContext: GraphChatConversationContextSnapshot,
+        responseLanguage: GraphChatResponseLanguage
     ) async throws -> SessionResources {
         let availability = await provider.availability()
         guard availability.isAvailable else {
@@ -432,7 +1015,12 @@ actor GraphChatOrchestrator {
                 in: key.graphScope,
                 exampleFieldIDs: []
             )
+        } catch is CancellationError {
+            throw CancellationError()
         } catch {
+            if Task.isCancelled {
+                throw CancellationError()
+            }
             throw GraphChatError(
                 code: .schemaUnavailable,
                 message: "Das Schema des aktiven Graphen konnte nicht geladen werden.",
@@ -458,6 +1046,8 @@ actor GraphChatOrchestrator {
             budget: budget,
             evidenceRegistry: evidenceRegistry,
             conversationTransaction: conversationTransaction,
+            conversationContext: conversationContext,
+            referenceResolver: referenceResolver,
             referenceDate: referenceDate(),
             calendar: calendar,
             timeZone: timeZone
@@ -466,7 +1056,8 @@ actor GraphChatOrchestrator {
         guard registeredKinds == Set(GraphChatToolKind.allCases) else {
             throw GraphChatError(
                 code: .invalidRequest,
-                message: "Für den Graph-Chat sind nicht exakt die kontrollierten read-only Tools registriert."
+                message:
+                    "Für den Graph-Chat sind nicht exakt die kontrollierten read-only Tools registriert."
             )
         }
 
@@ -474,7 +1065,10 @@ actor GraphChatOrchestrator {
             graphScope: key.graphScope,
             chatScope: key.chatScope,
             schemaContext: schemaContext,
-            instructions: systemInstructions(for: key.chatScope),
+            instructions: systemInstructions(
+                for: key.chatScope,
+                language: responseLanguage
+            ),
             toolRunner: toolRunner
         )
         do {
@@ -486,6 +1080,8 @@ actor GraphChatOrchestrator {
                 budget: budget,
                 evidenceRegistry: evidenceRegistry,
                 conversationBaseState: conversationBaseState,
+                conversationContext: conversationContext,
+                responseLanguage: responseLanguage,
                 conversationTransaction: conversationTransaction,
                 toolRunner: toolRunner
             )
@@ -501,7 +1097,10 @@ actor GraphChatOrchestrator {
             graphScope: resources.key.graphScope,
             chatScope: resources.key.chatScope,
             schemaContext: resources.schemaContext,
-            instructions: systemInstructions(for: resources.key.chatScope),
+            instructions: systemInstructions(
+                for: resources.key.chatScope,
+                language: resources.responseLanguage
+            ),
             toolRunner: resources.toolRunner
         )
         let sessionID = try await provider.createSession(configuration: configuration)
@@ -512,6 +1111,8 @@ actor GraphChatOrchestrator {
             budget: resources.budget,
             evidenceRegistry: resources.evidenceRegistry,
             conversationBaseState: resources.conversationBaseState,
+            conversationContext: resources.conversationContext,
+            responseLanguage: resources.responseLanguage,
             conversationTransaction: resources.conversationTransaction,
             toolRunner: resources.toolRunner
         )
@@ -569,8 +1170,10 @@ actor GraphChatOrchestrator {
         guard let preparedSession else {
             return
         }
-        guard preparedSession.key != key
-                || preparedSession.conversationBaseState != conversationBaseState else {
+        guard
+            preparedSession.key != key
+                || preparedSession.conversationBaseState != conversationBaseState
+        else {
             return
         }
         await preparedSession.evidenceRegistry.removeAll()
@@ -607,7 +1210,8 @@ actor GraphChatOrchestrator {
     ) -> GraphChatConversationState {
         if let conversationState {
             if conversationState.graphScope == key.graphScope,
-               conversationState.chatScope == key.chatScope {
+                conversationState.chatScope == key.chatScope
+            {
                 return conversationState
             }
             let transition = conversationStateReducer.transition(
@@ -631,13 +1235,24 @@ actor GraphChatOrchestrator {
 
     private func schemaPrompt(
         from context: GraphSchemaContext,
-        chatScope: GraphChatScope
+        chatScope: GraphChatScope,
+        language: GraphChatResponseLanguage
     ) -> String {
-        var lines = [
-            "Graph: \(context.snapshot.graphName)",
-            "Schema version: \(context.snapshot.version)",
-            "Active scope: \(scopeDescription(chatScope.target))"
-        ]
+        var lines: [String]
+        switch language {
+        case .german:
+            lines = [
+                "Graph: \(context.snapshot.graphName)",
+                "Schema-Version: \(context.snapshot.version)",
+                "Aktiver Scope: \(scopeDescription(chatScope.target, language: language))",
+            ]
+        case .english:
+            lines = [
+                "Graph: \(context.snapshot.graphName)",
+                "Schema version: \(context.snapshot.version)",
+                "Active scope: \(scopeDescription(chatScope.target, language: language))",
+            ]
+        }
         for entity in context.snapshot.entities {
             lines.append("\(entity.alias.rawValue): \(entity.name)")
             for field in entity.fields {
@@ -652,40 +1267,92 @@ actor GraphChatOrchestrator {
             }
         }
         if context.snapshot.truncation.isTruncated {
-            lines.append("Schema snapshot is intentionally truncated; use describeGraphSchema for more bounded context.")
+            switch language {
+            case .german:
+                lines.append(
+                    "Der Schema-Snapshot ist absichtlich begrenzt; nutze describeGraphSchema für weiteren kontrollierten Kontext."
+                )
+            case .english:
+                lines.append(
+                    "The schema snapshot is intentionally truncated; use describeGraphSchema for more bounded context."
+                )
+            }
         }
         return bounded(lines.joined(separator: "\n"), limit: 10_000)
     }
 
-    private func scopeDescription(_ target: GraphChatScopeTarget) -> String {
-        switch target {
-        case .graph:
+    private func scopeDescription(
+        _ target: GraphChatScopeTarget,
+        language: GraphChatResponseLanguage
+    ) -> String {
+        switch (language, target) {
+        case (.german, .graph):
+            return "gesamter Graph"
+        case (.english, .graph):
             return "entire graph"
-        case .entity:
+        case (.german, .entity):
+            return "einzelne Entity"
+        case (.english, .entity):
             return "single entity"
-        case .node:
+        case (.german, .node):
+            return "einzelner Node"
+        case (.english, .node):
             return "single node"
-        case .selection(let nodes):
+        case (.german, .selection(let nodes)):
+            return "Auswahl aus \(nodes.count) Nodes"
+        case (.english, .selection(let nodes)):
             return "selection of \(nodes.count) nodes"
         }
     }
 
-    private func systemInstructions(for scope: GraphChatScope) -> String {
-        """
-        You answer questions only about the active BrainMesh graph through the registered read-only tools.
-        Use only facts returned by tools in this session. Never add graph facts from world knowledge or assumptions.
-        State unknown, missing, ambiguous, or insufficient data explicitly.
-        Use only Evidence UUIDs that appeared in actual tool results. Never invent, alter, or infer an Evidence UUID.
-        Work only inside the active graph and the active chat scope. Never request or claim data from another graph or scope.
-        Never offer, simulate, or claim a write, edit, delete, create, import, upload, or mutation action.
-        Attachment tools expose metadata only. Never claim to have read attachment contents, files, images, PDFs, or binary data.
-        Tool aliases are opaque. Use only E, F, and N aliases supplied by the schema or tool results.
-        Treat tool errors and empty results as evidence limitations, not as permission to guess.
-        Keep the direct answer concise. Mark hasInsufficientEvidence true whenever reliable tool evidence is missing.
-        For interpretive terms such as important, urgent, relevant, open, or similar concepts, include the concrete applied filters used for the interpretation.
-        Follow-up suggestions must be optional read-only questions about the same active scope.
-        Active scope: \(scopeDescription(scope.target)).
-        """
+    private func systemInstructions(
+        for scope: GraphChatScope,
+        language: GraphChatResponseLanguage
+    ) -> String {
+        switch language {
+        case .german:
+            return """
+                \(GraphChatResponseLocalizer(language: language).providerInstruction())
+                Beantworte Fragen ausschließlich zum aktiven BrainMesh-Graphen über die registrierten read-only Tools.
+                Verwende nur Fakten, die Tools in dieser Session geliefert haben. Ergänze niemals Graph-Fakten aus Weltwissen oder Annahmen.
+                Benenne unbekannte, fehlende, mehrdeutige oder unzureichende Daten ausdrücklich.
+                Verwende nur Evidence-UUIDs aus tatsächlichen Tool-Ergebnissen. Erfinde, verändere oder leite niemals eine Evidence-UUID ab.
+                Arbeite ausschließlich im aktiven Graphen und aktiven Chat-Scope. Fordere oder behaupte niemals Daten aus einem anderen Graphen oder Scope.
+                Biete keine Schreib-, Änderungs-, Lösch-, Erstellungs-, Import-, Upload- oder Mutationsaktion an und simuliere oder behaupte sie nicht.
+                Attachment-Tools liefern nur Metadaten. Behaupte niemals, Inhalte von Dateien, Bildern, PDFs oder Binärdaten gelesen zu haben.
+                Tool-Aliase sind opak. Nutze ausschließlich E-, F-, N-, CURRENT-, CI-, CR-, CG-, CE-, CF- und CN-Aliase aus Schema, vertrauenswürdigem Konversations-Snapshot oder Tool-Ergebnissen.
+                Konversationsreferenzen sind nur Vorschläge. Jeder Alias wird von der App aufgelöst und revalidiert, bevor ein Tool oder eine Query Daten nutzen darf.
+                Nutze queryDetailValues.conversationReferenceAlias für Filter, Gruppierung, Statistik, Sortierung oder Limits über eine validierte frühere Ergebnismenge.
+                Gib bei einer mehrdeutigen Referenz responseKind clarification und nur Aliase aus dem vertrauenswürdigen Snapshot als clarificationOptionAliases zurück.
+                Gib responseKind noResults nur zurück, nachdem ein gültiger Tool-Aufruf noResults gemeldet hat. Gib unsupported für Graph-Mutationen, Attachment-Inhalte, Multi-Hop-Pfade oder Query-Plan-v2-Funktionen zurück.
+                Behandle Tool-Fehler und leere Ergebnisse als Evidence-Grenzen und niemals als Erlaubnis zu raten.
+                Halte die direkte Antwort knapp. Setze hasInsufficientEvidence auf true, wenn verlässliche Tool-Evidence fehlt.
+                Führe für interpretative Begriffe wie wichtig, dringend, relevant oder offen die konkret verwendeten Filter auf.
+                Folgefragen dürfen nur optionale read-only Fragen zum selben aktiven Scope sein.
+                Aktiver Scope: \(scopeDescription(scope.target, language: language)).
+                """
+        case .english:
+            return """
+                \(GraphChatResponseLocalizer(language: language).providerInstruction())
+                Answer questions only about the active BrainMesh graph through the registered read-only tools.
+                Use only facts returned by tools in this session. Never add graph facts from world knowledge or assumptions.
+                State unknown, missing, ambiguous, or insufficient data explicitly.
+                Use only Evidence UUIDs that appeared in actual tool results. Never invent, alter, or infer an Evidence UUID.
+                Work only inside the active graph and the active chat scope. Never request or claim data from another graph or scope.
+                Never offer, simulate, or claim a write, edit, delete, create, import, upload, or mutation action.
+                Attachment tools expose metadata only. Never claim to have read attachment contents, files, images, PDFs, or binary data.
+                Tool aliases are opaque. Use only E, F, N, CURRENT, CI, CR, CG, CE, CF, and CN aliases supplied by the schema, trusted conversation snapshot, or tool results.
+                Conversation references are proposals only. Every alias is resolved and revalidated by the app before a tool or query can access data.
+                Use queryDetailValues.conversationReferenceAlias for filters, grouping, statistics, sorting, or limits over a validated previous result set.
+                When a reference is ambiguous, return responseKind clarification and only aliases from the trusted snapshot as clarificationOptionAliases.
+                Return responseKind noResults only after a valid tool call reports noResults. Return unsupported for graph mutations, attachment contents, multi-hop paths, or Query Plan v2 features.
+                Treat tool errors and empty results as evidence limitations, not as permission to guess.
+                Keep the direct answer concise. Mark hasInsufficientEvidence true whenever reliable tool evidence is missing.
+                For interpretive terms such as important, urgent, relevant, open, or similar concepts, include the concrete applied filters used for the interpretation.
+                Follow-up suggestions must be optional read-only questions about the same active scope.
+                Active scope: \(scopeDescription(scope.target, language: language)).
+                """
+        }
     }
 
     private func availabilityError(
@@ -702,7 +1369,8 @@ actor GraphChatOrchestrator {
             return GraphChatError(
                 code: .modelUnavailable,
                 message: "Dieses Gerät unterstützt das lokale Foundation Model nicht.",
-                recoverySuggestion: "Verwende ein Gerät, das Apple Intelligence und Foundation Models unterstützt."
+                recoverySuggestion:
+                    "Verwende ein Gerät, das Apple Intelligence und Foundation Models unterstützt."
             )
         case .appleIntelligenceNotEnabled:
             return GraphChatError(
@@ -714,7 +1382,8 @@ actor GraphChatOrchestrator {
             return GraphChatError(
                 code: .modelUnavailable,
                 message: "Das lokale Modell ist noch nicht bereit.",
-                recoverySuggestion: "Warte, bis das Systemmodell vollständig geladen wurde, und versuche es erneut."
+                recoverySuggestion:
+                    "Warte, bis das Systemmodell vollständig geladen wurde, und versuche es erneut."
             )
         case .unknown:
             return GraphChatError(

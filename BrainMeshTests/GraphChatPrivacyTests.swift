@@ -46,6 +46,7 @@ struct GraphChatPrivacyTests {
                         ),
                         .completed(
                             GraphChatUITestSupport.finalAnswer(
+                                state: .noResults,
                                 directAnswer: answerSentinel,
                                 evidence: [],
                                 insufficient: true

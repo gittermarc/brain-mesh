@@ -569,9 +569,12 @@ final class GraphChatViewModel: ObservableObject {
                 toolKinds: toolKinds,
                 evidenceCount: answer.evidence.count,
                 usedIndexFallback: usedIndexFallback,
-                outcome: answer.hasInsufficientEvidence && answer.evidence.isEmpty
-                    ? .noResults
-                    : .completed,
+                outcome: {
+                    if case .noResults = answer.state {
+                        return .noResults
+                    }
+                    return .completed
+                }(),
                 errorCode: nil
             )
         case .cancelled:

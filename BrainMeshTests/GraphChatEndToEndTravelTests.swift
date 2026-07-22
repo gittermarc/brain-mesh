@@ -265,6 +265,7 @@ struct GraphChatEndToEndTravelTests {
                         .event(
                             .completed(
                                 GraphChatProviderTestSupport.makeFinalAnswer(
+                                    responseState: .noResults,
                                     directAnswer: "Für 2030 wurden keine dokumentierten Reisen gefunden.",
                                     hasInsufficientEvidence: true
                                 )

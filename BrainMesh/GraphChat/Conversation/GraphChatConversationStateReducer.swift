@@ -75,6 +75,8 @@ nonisolated enum GraphChatConversationTrustedPayload: Sendable {
         references: [GraphChatConversationReference],
         technicalDescription: String
     )
+    case clarificationRequested(GraphChatPendingClarification)
+    case clarificationResolved
     case turnCompleted(GraphChatConversationTurnCompletion)
 
     var toolKind: GraphChatToolKind? {
@@ -93,7 +95,7 @@ nonisolated enum GraphChatConversationTrustedPayload: Sendable {
             return .graphStats
         case .validatedEvidence(let tool, _, _):
             return tool
-        case .comparisonResolved, .turnCompleted:
+        case .comparisonResolved, .clarificationRequested, .clarificationResolved, .turnCompleted:
             return nil
         }
     }
@@ -165,10 +167,12 @@ nonisolated struct GraphChatConversationStateReducer: Sendable {
             guard plan.graphScope == state.graphScope else {
                 throw GraphChatConversationStateError.graphScopeMismatch
             }
-            guard GraphChatScopeAuthorization.allows(
-                plan: plan,
-                within: state.chatScope
-            ) else {
+            guard
+                GraphChatScopeAuthorization.allows(
+                    plan: plan,
+                    within: state.chatScope
+                )
+            else {
                 throw GraphChatConversationStateError.chatScopeMismatch
             }
             try validate(schemaContext: schemaContext, evidence: result.evidence, state: state)
@@ -221,6 +225,16 @@ nonisolated struct GraphChatConversationStateReducer: Sendable {
                 technicalDescription: technicalDescription,
                 to: &candidate
             )
+        case .clarificationRequested(let clarification):
+            guard clarification.graphScope == state.graphScope else {
+                throw GraphChatConversationStateError.graphScopeMismatch
+            }
+            guard clarification.chatScope == state.chatScope else {
+                throw GraphChatConversationStateError.chatScopeMismatch
+            }
+            candidate.pendingClarification = sanitizedClarification(clarification)
+        case .clarificationResolved:
+            candidate.pendingClarification = nil
         case .turnCompleted(let completion):
             applyTurnCompletion(completion, to: &candidate)
         }
@@ -272,6 +286,7 @@ nonisolated struct GraphChatConversationStateReducer: Sendable {
             lastValidatedQueryPlan: nil,
             lastComparison: nil,
             referenceTargets: .empty,
+            pendingClarification: nil,
             lastResetReason: reason,
             budgetEvictionCount: state.budgetEvictionCount
         )
@@ -299,13 +314,15 @@ nonisolated struct GraphChatConversationStateReducer: Sendable {
             }
         }
 
-        let priorCount = state.turnContexts.count
+        let priorCount =
+            state.turnContexts.count
             + state.nodeReferences.count
             + state.entityReferences.count
             + state.fieldReferences.count
             + state.resultContexts.count
             + state.groupReferences.count
-        let retainedCount = transitioned.nodeReferences.count
+        let retainedCount =
+            transitioned.nodeReferences.count
             + transitioned.entityReferences.count
             + transitioned.fieldReferences.count
         let evicted = max(0, priorCount - retainedCount)
@@ -322,7 +339,8 @@ nonisolated struct GraphChatConversationStateReducer: Sendable {
         state: GraphChatConversationState
     ) throws {
         guard schemaContext.graphScope == state.graphScope,
-              schemaContext.aliases.graphScope == state.graphScope else {
+            schemaContext.aliases.graphScope == state.graphScope
+        else {
             throw GraphChatConversationStateError.schemaGraphMismatch
         }
         try validate(evidence: evidence, state: state)
@@ -332,9 +350,11 @@ nonisolated struct GraphChatConversationStateReducer: Sendable {
         evidence: [GraphEvidence],
         state: GraphChatConversationState
     ) throws {
-        guard evidence.allSatisfy({
-            $0.sourceReference.graphID == state.graphScope.graphID
-        }) else {
+        guard
+            evidence.allSatisfy({
+                $0.sourceReference.graphID == state.graphScope.graphID
+            })
+        else {
             throw GraphChatConversationStateError.evidenceGraphMismatch
         }
     }
@@ -420,8 +440,10 @@ nonisolated struct GraphChatConversationStateReducer: Sendable {
         var references: [GraphChatConversationResultReference] = []
         references.reserveCapacity(hits.count)
         for hit in hits {
-            guard let node = hit.sourceReference.node?.nodeKey
-                    ?? inferredNode(from: hit.sourceReference) else {
+            guard
+                let node = hit.sourceReference.node?.nodeKey
+                    ?? inferredNode(from: hit.sourceReference)
+            else {
                 continue
             }
             let nodeReference = makeNodeReference(
@@ -483,7 +505,8 @@ nonisolated struct GraphChatConversationStateReducer: Sendable {
         let usedFieldIDs = fieldIDs(in: plan)
         for resolution in schemaContext.aliases.fieldsByAlias.values
             .filter({ usedFieldIDs.contains($0.fieldID) })
-            .sorted(by: { $0.alias.rawValue < $1.alias.rawValue }) {
+            .sorted(by: { $0.alias.rawValue < $1.alias.rawValue })
+        {
             upsertField(fieldReference(from: resolution), in: &state)
         }
 
@@ -761,8 +784,10 @@ nonisolated struct GraphChatConversationStateReducer: Sendable {
         var references: [GraphChatConversationResultReference] = []
         references.reserveCapacity(evidence.count)
         for item in evidence {
-            guard let node = item.sourceReference.node?.nodeKey
-                    ?? inferredNode(from: item.sourceReference) else {
+            guard
+                let node = item.sourceReference.node?.nodeKey
+                    ?? inferredNode(from: item.sourceReference)
+            else {
                 if let fieldID = item.sourceReference.fieldID {
                     references.append(
                         GraphChatConversationResultReference(
@@ -957,12 +982,42 @@ nonisolated struct GraphChatConversationStateReducer: Sendable {
         state.groupReferences = state.groupReferences.map(sanitizedGroup)
 
         state.referenceTargets = sanitizedTargets(state.referenceTargets, state: state)
+        if let clarification = state.pendingClarification {
+            let known = knownReferenceKeys(in: state)
+            let options = clarification.options.filter { option in
+                switch option.proposal {
+                case .alias:
+                    return true
+                case .latestResults, .latestResultsSubset, .ordinal, .lastEntity, .lastField, .lastGroup,
+                    .lastNode, .lastCompared:
+                    return known.isEmpty == false
+                }
+            }
+            state.pendingClarification =
+                options.isEmpty
+                ? nil
+                : sanitizedClarification(
+                    GraphChatPendingClarification(
+                        id: clarification.id,
+                        decision: clarification.decision,
+                        options: options,
+                        sourceTurnID: clarification.sourceTurnID,
+                        graphScope: clarification.graphScope,
+                        chatScope: clarification.chatScope,
+                        continuationOperation: clarification.continuationOperation,
+                        continuationQuestion: clarification.continuationQuestion,
+                        createdAt: clarification.createdAt,
+                        expiresAt: clarification.expiresAt
+                    )
+                )
+        }
         if let comparison = state.lastComparison {
             let known = knownReferenceKeys(in: state)
             let references = comparison.references.filter {
                 known.contains($0.stableKey)
             }
-            state.lastComparison = references.isEmpty
+            state.lastComparison =
+                references.isEmpty
                 ? nil
                 : GraphChatConversationComparisonContext(
                     references: Array(references.prefix(policy.maximumComparisonReferences)),
@@ -1094,7 +1149,8 @@ nonisolated struct GraphChatConversationStateReducer: Sendable {
             upsertEntity(existing, in: &state)
             return
         }
-        let name = fallbackName
+        let name =
+            fallbackName
             ?? (node.node.kind == .entity ? node.label : "Entity")
         upsertEntity(
             GraphChatConversationEntityReference(
@@ -1158,8 +1214,8 @@ nonisolated struct GraphChatConversationStateReducer: Sendable {
             case .count:
                 break
             case .groupCount(let fieldID),
-                 .minimum(let fieldID),
-                 .maximum(let fieldID):
+                .minimum(let fieldID),
+                .maximum(let fieldID):
                 ids.insert(fieldID)
             }
         }
@@ -1185,11 +1241,11 @@ nonisolated struct GraphChatConversationStateReducer: Sendable {
                     }
             }
             let valueDescription = valueDescription(group.value)
-            let stableID = [
-                aggregation.fieldID?.uuidString ?? "none",
-                GraphChatQueryValueFormatting.stableKey(group.value),
-                String(index)
-            ].joined(separator: ":")
+            let stableID = GraphChatConversationGroupIdentity.make(
+                fieldID: aggregation.fieldID,
+                value: group.value,
+                index: index
+            )
             return GraphChatConversationGroupReference(
                 id: stableID,
                 fieldID: aggregation.fieldID,
@@ -1223,7 +1279,8 @@ nonisolated struct GraphChatConversationStateReducer: Sendable {
         _ result: GraphChatQueryResult
     ) -> String {
         if let aggregation = result.aggregation {
-            return "Validierte Query-Aggregation \(aggregation.kind.rawValue) mit \(aggregation.groups.count) Gruppen"
+            return
+                "Validierte Query-Aggregation \(aggregation.kind.rawValue) mit \(aggregation.groups.count) Gruppen"
         }
         return "Validierte Query-Ergebnismenge mit \(result.rows.count) geordneten Rows"
     }
@@ -1304,7 +1361,8 @@ nonisolated struct GraphChatConversationStateReducer: Sendable {
                 return [node.id]
             }
             if let entityID = schemaContext.aliases.owningEntityID(for: node)
-                ?? state.nodeReferences.first(where: { $0.node == node })?.ownerEntityID {
+                ?? state.nodeReferences.first(where: { $0.node == node })?.ownerEntityID
+            {
                 return [entityID]
             }
             return []
@@ -1338,27 +1396,34 @@ nonisolated struct GraphChatConversationStateReducer: Sendable {
     private func knownReferenceKeys(
         in state: GraphChatConversationState
     ) -> Set<String> {
-        var keys = Set(state.nodeReferences.map {
-            GraphChatConversationReference.node($0.node).stableKey
-        })
-        keys.formUnion(state.entityReferences.map {
-            GraphChatConversationReference.entity($0.entityID).stableKey
-        })
-        keys.formUnion(state.fieldReferences.map {
-            GraphChatConversationReference.field($0.fieldID).stableKey
-        })
-        keys.formUnion(state.resultContexts.map {
-            GraphChatConversationReference.result($0.id).stableKey
-        })
-        keys.formUnion(state.resultContexts.flatMap(\.references).map {
-            $0.reference.stableKey
-        })
-        keys.formUnion(state.resultContexts.flatMap(\.groupReferences).map {
-            GraphChatConversationReference.group($0.id).stableKey
-        })
-        keys.formUnion(state.groupReferences.map {
-            GraphChatConversationReference.group($0.id).stableKey
-        })
+        var keys = Set(
+            state.nodeReferences.map {
+                GraphChatConversationReference.node($0.node).stableKey
+            })
+        keys.formUnion(
+            state.entityReferences.map {
+                GraphChatConversationReference.entity($0.entityID).stableKey
+            })
+        keys.formUnion(
+            state.fieldReferences.map {
+                GraphChatConversationReference.field($0.fieldID).stableKey
+            })
+        keys.formUnion(
+            state.resultContexts.map {
+                GraphChatConversationReference.result($0.id).stableKey
+            })
+        keys.formUnion(
+            state.resultContexts.flatMap(\.references).map {
+                $0.reference.stableKey
+            })
+        keys.formUnion(
+            state.resultContexts.flatMap(\.groupReferences).map {
+                GraphChatConversationReference.group($0.id).stableKey
+            })
+        keys.formUnion(
+            state.groupReferences.map {
+                GraphChatConversationReference.group($0.id).stableKey
+            })
         return keys
     }
 
@@ -1394,6 +1459,30 @@ nonisolated struct GraphChatConversationStateReducer: Sendable {
     ) -> [GraphChatConversationReference] {
         var seen = Set<String>()
         return references.filter { seen.insert($0.stableKey).inserted }
+    }
+
+    private func sanitizedClarification(
+        _ clarification: GraphChatPendingClarification
+    ) -> GraphChatPendingClarification {
+        let options = Array(clarification.options.prefix(8)).map { option in
+            GraphChatPendingClarificationOption(
+                id: bounded(option.id, limit: 64),
+                title: boundedLabel(option.title),
+                proposal: option.proposal
+            )
+        }
+        return GraphChatPendingClarification(
+            id: clarification.id,
+            decision: clarification.decision,
+            options: options,
+            sourceTurnID: clarification.sourceTurnID,
+            graphScope: clarification.graphScope,
+            chatScope: clarification.chatScope,
+            continuationOperation: clarification.continuationOperation,
+            continuationQuestion: bounded(clarification.continuationQuestion, limit: 500),
+            createdAt: clarification.createdAt,
+            expiresAt: clarification.expiresAt
+        )
     }
 
     private func boundedEvidenceIDs(

@@ -86,6 +86,8 @@ nonisolated struct EvidenceRegisteringFakeToolRunnerFactory: GraphChatModelToolR
         budget: GraphChatToolBudget,
         evidenceRegistry: GraphChatEvidenceRegistry,
         conversationTransaction: GraphChatConversationStateTransaction,
+        conversationContext: GraphChatConversationContextSnapshot,
+        referenceResolver: GraphChatConversationReferenceResolver,
         referenceDate: Date,
         calendar: Calendar,
         timeZone: TimeZone
@@ -213,20 +215,30 @@ nonisolated enum GraphChatProviderTestSupport {
     }
 
     static func makeFinalAnswer(
+        responseState: GraphChatProviderResponseState = .answer,
         directAnswer: String = "Validated answer",
         evidenceIDs: [GraphEvidenceID] = [],
         sections: [GraphChatProviderAnswerSection] = [],
         appliedFilters: [GraphChatProviderAppliedFilter] = [],
         followUpSuggestions: [GraphChatProviderFollowUpSuggestion] = [],
-        hasInsufficientEvidence: Bool = false
+        hasInsufficientEvidence: Bool = false,
+        referenceProposal: GraphChatConversationReferenceProposal? = nil,
+        clarificationQuestion: String? = nil,
+        clarificationOptionAliases: [String] = [],
+        unsupportedCapability: GraphChatUnsupportedCapability? = nil
     ) -> GraphChatProviderFinalAnswer {
         GraphChatProviderFinalAnswer(
+            responseState: responseState,
             directAnswer: directAnswer,
             sections: sections,
             evidenceIDValues: evidenceIDs.map { $0.rawValue.uuidString },
             appliedFilters: appliedFilters,
             followUpSuggestions: followUpSuggestions,
-            hasInsufficientEvidence: hasInsufficientEvidence
+            hasInsufficientEvidence: hasInsufficientEvidence,
+            referenceProposal: referenceProposal,
+            clarificationQuestion: clarificationQuestion,
+            clarificationOptionAliases: clarificationOptionAliases,
+            unsupportedCapability: unsupportedCapability
         )
     }
 
@@ -235,7 +247,9 @@ nonisolated enum GraphChatProviderTestSupport {
         factory: any GraphChatModelToolRunnerFactory,
         graphIDs: [UUID] = [GraphChatTestSupport.graphID],
         budgetPolicy: GraphChatToolBudgetPolicy = .default,
-        conversationStatePolicy: GraphChatConversationStatePolicy = .default
+        conversationStatePolicy: GraphChatConversationStatePolicy = .default,
+        referenceResolver: GraphChatConversationReferenceResolver = GraphChatConversationReferenceResolver(),
+        responseLanguageSelector: GraphChatResponseLanguageSelector = GraphChatResponseLanguageSelector(fallback: .german)
     ) -> GraphChatOrchestrator {
         let contexts = graphIDs.map { GraphChatTestSupport.makeSchemaContext(graphID: $0) }
         return GraphChatOrchestrator(
@@ -244,6 +258,8 @@ nonisolated enum GraphChatProviderTestSupport {
             toolRunnerFactory: factory,
             toolBudgetPolicy: budgetPolicy,
             conversationStatePolicy: conversationStatePolicy,
+            referenceResolver: referenceResolver,
+            responseLanguageSelector: responseLanguageSelector,
             referenceDate: { Date(timeIntervalSince1970: 1_735_732_800) },
             calendar: Calendar(identifier: .gregorian),
             timeZone: TimeZone(identifier: "Europe/Berlin")!

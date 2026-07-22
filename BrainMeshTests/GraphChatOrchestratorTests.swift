@@ -232,9 +232,9 @@ struct GraphChatOrchestratorTests {
         let providerRequest: GraphChatModelRequest = try #require(
             providerSnapshot.streamedRequests.first
         )
-        #expect(providerRequest.conversationState?.conversationID == state.conversationID)
-        #expect(providerRequest.conversationState?.turnContexts.isEmpty == true)
-        #expect(providerRequest.conversationState?.nodeReferences.isEmpty == true)
+        #expect(providerRequest.conversationContext?.conversationID == state.conversationID)
+        #expect(providerRequest.conversationContext?.turns.isEmpty == true)
+        #expect(providerRequest.conversationContext?.aliases.isEmpty == true)
     }
 
     @Test
@@ -415,7 +415,7 @@ struct GraphChatOrchestratorTests {
 
         _ = await GraphChatProviderTestSupport.collect(
             await orchestrator.streamAnswer(
-                question: "Commit the first turn",
+                question: "Commit a baseline turn",
                 graphScope: graphScope,
                 chatScope: chatScope
             )
@@ -423,7 +423,7 @@ struct GraphChatOrchestratorTests {
         let committedSnapshot: GraphChatConversationState? = await orchestrator.conversationStateSnapshot()
         let committed = try #require(committedSnapshot)
         let stream = await orchestrator.streamAnswer(
-            question: "Cancel the second turn",
+            question: "Cancel the active generation",
             graphScope: graphScope,
             chatScope: chatScope
         )
@@ -438,7 +438,12 @@ struct GraphChatOrchestratorTests {
         let inFlightRequest: GraphChatModelRequest = try #require(
             inFlightProviderSnapshot.streamedRequests.last
         )
-        #expect(inFlightRequest.conversationState == committed.snapshot)
+        #expect(
+            inFlightRequest.conversationContext
+                == GraphChatConversationContextBuilder().makeSnapshot(
+                    from: committed.snapshot
+                )
+        )
         #expect(await orchestrator.conversationStateSnapshot() == committed)
 
         await orchestrator.cancelCurrentGeneration()

@@ -325,6 +325,8 @@ nonisolated struct FakeGraphChatModelToolRunnerFactory: GraphChatModelToolRunner
         budget: GraphChatToolBudget,
         evidenceRegistry: GraphChatEvidenceRegistry,
         conversationTransaction: GraphChatConversationStateTransaction,
+        conversationContext: GraphChatConversationContextSnapshot,
+        referenceResolver: GraphChatConversationReferenceResolver,
         referenceDate: Date,
         calendar: Calendar,
         timeZone: TimeZone
