@@ -2,13 +2,16 @@
 //  GraphChatMessageView.swift
 //  BrainMesh
 //
-//  User and assistant transcript rendering for every stream state.
+//  User and assistant transcript rendering with centralized, context-sensitive actions.
 //
 
 import SwiftUI
 
 struct GraphChatMessageView: View {
     let message: GraphChatTranscriptMessage
+    let actionAvailability: GraphChatMessageActionAvailability
+    let selectedFeedback: GraphChatFeedbackCategory?
+    let onAction: (GraphChatMessageAction) -> Void
     let onRetry: (UUID) -> Void
     let onOpenEvidence: (GraphChatEvidencePresentation) -> Void
     let onShowEvidenceInGraph: (GraphChatEvidencePresentation) -> Void
@@ -26,17 +29,39 @@ struct GraphChatMessageView: View {
     private func userQuestion(_ question: String) -> some View {
         HStack(alignment: .top) {
             Spacer(minLength: 40)
-            Text(question)
-                .font(.body)
-                .fixedSize(horizontal: false, vertical: true)
-                .padding(.horizontal, 15)
-                .padding(.vertical, 11)
-                .background(.tint, in: RoundedRectangle(cornerRadius: 18))
-                .foregroundStyle(.white)
-                .frame(maxWidth: 620, alignment: .trailing)
-                .accessibilityLabel("Deine Frage")
-                .accessibilityValue(question)
-                .accessibilitySortPriority(2)
+            VStack(alignment: .trailing, spacing: 6) {
+                Text(question)
+                    .font(.body)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .padding(.horizontal, 15)
+                    .padding(.vertical, 11)
+                    .background(.tint, in: RoundedRectangle(cornerRadius: 18))
+                    .foregroundStyle(.white)
+                    .frame(maxWidth: 620, alignment: .trailing)
+                    .accessibilityLabel("Deine Frage")
+                    .accessibilityValue(question)
+                    .accessibilitySortPriority(2)
+
+                if actionAvailability.canEditAndResend {
+                    Menu {
+                        Button {
+                            onAction(.editAndResend)
+                        } label: {
+                            Label(
+                                GraphChatMessageAction.editAndResend.title,
+                                systemImage: GraphChatMessageAction.editAndResend.systemImage
+                            )
+                        }
+                    } label: {
+                        Image(systemName: "ellipsis")
+                            .frame(width: 44, height: 44)
+                            .contentShape(Rectangle())
+                    }
+                    .buttonStyle(.plain)
+                    .accessibilityLabel(GraphChatMessageActionAccessibility.userMessageMenuLabel)
+                    .accessibilityHint(GraphChatMessageActionAccessibility.userMessageMenuHint)
+                }
+            }
         }
     }
 
@@ -91,6 +116,16 @@ struct GraphChatMessageView: View {
                 case .cancelled:
                     cancelled(state)
                 }
+
+                if let selectedFeedback {
+                    Label(
+                        "Feedback: \(selectedFeedback.title)",
+                        systemImage: "checkmark.circle.fill"
+                    )
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .accessibilityLabel("Ausgewähltes Feedback: \(selectedFeedback.title)")
+                }
             }
             .frame(maxWidth: 720, alignment: .leading)
             .padding(16)
@@ -115,9 +150,75 @@ struct GraphChatMessageView: View {
             Text(phaseTitle(state.phase))
                 .font(.caption.weight(.semibold))
                 .foregroundStyle(.secondary)
+            Spacer(minLength: 8)
+            if actionAvailability.hasAnyAction {
+                assistantActionMenu
+            }
         }
-        .accessibilityElement(children: .combine)
-        .accessibilityLabel(phaseTitle(state.phase))
+        .accessibilityElement(children: .contain)
+    }
+
+    private var assistantActionMenu: some View {
+        Menu {
+            if actionAvailability.canCopy {
+                Button {
+                    onAction(.copy)
+                } label: {
+                    Label(
+                        GraphChatMessageAction.copy.title,
+                        systemImage: GraphChatMessageAction.copy.systemImage
+                    )
+                }
+            }
+
+            if actionAvailability.canRegenerate {
+                Button {
+                    onAction(.regenerate)
+                } label: {
+                    Label(
+                        GraphChatMessageAction.regenerate.title,
+                        systemImage: GraphChatMessageAction.regenerate.systemImage
+                    )
+                }
+            }
+
+            if actionAvailability.canGiveFeedback {
+                Section("Feedback") {
+                    ForEach(GraphChatFeedbackCategory.allCases, id: \.self) { category in
+                        Button {
+                            onAction(.feedback(category))
+                        } label: {
+                            if selectedFeedback == category {
+                                Label(category.title, systemImage: "checkmark")
+                            } else {
+                                Label(
+                                    GraphChatMessageAction.feedback(category).title,
+                                    systemImage: GraphChatMessageAction.feedback(category).systemImage
+                                )
+                            }
+                        }
+                    }
+
+                    if selectedFeedback != nil {
+                        Button(role: .destructive) {
+                            onAction(.removeFeedback)
+                        } label: {
+                            Label(
+                                GraphChatMessageAction.removeFeedback.title,
+                                systemImage: GraphChatMessageAction.removeFeedback.systemImage
+                            )
+                        }
+                    }
+                }
+            }
+        } label: {
+            Image(systemName: "ellipsis.circle")
+                .frame(width: 44, height: 44)
+                .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel(GraphChatMessageActionAccessibility.assistantMessageMenuLabel)
+        .accessibilityHint(GraphChatMessageActionAccessibility.assistantMessageMenuHint)
     }
 
     private func partialText(_ text: String) -> some View {

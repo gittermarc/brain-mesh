@@ -207,15 +207,21 @@ nonisolated struct GraphChatTranscriptMessage: Hashable, Sendable, Identifiable 
     let id: UUID
     let createdAt: Date
     var state: GraphChatMessageState
+    var conversationCheckpointBeforeTurn: GraphChatConversationCheckpoint?
+    var conversationCheckpointAfterTurn: GraphChatConversationCheckpoint?
 
     init(
         id: UUID = UUID(),
         createdAt: Date = Date(),
-        state: GraphChatMessageState
+        state: GraphChatMessageState,
+        conversationCheckpointBeforeTurn: GraphChatConversationCheckpoint? = nil,
+        conversationCheckpointAfterTurn: GraphChatConversationCheckpoint? = nil
     ) {
         self.id = id
         self.createdAt = createdAt
         self.state = state
+        self.conversationCheckpointBeforeTurn = conversationCheckpointBeforeTurn
+        self.conversationCheckpointAfterTurn = conversationCheckpointAfterTurn
     }
 }
 

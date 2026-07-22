@@ -9,6 +9,7 @@ import SwiftUI
 
 struct GraphChatView: View {
     @StateObject private var viewModel: GraphChatViewModel
+    @State private var isConfirmingNewChat = false
 
     init(viewModel: @autoclosure @escaping () -> GraphChatViewModel) {
         _viewModel = StateObject(wrappedValue: viewModel())
@@ -28,12 +29,38 @@ struct GraphChatView: View {
                 ),
                 isGenerating: viewModel.isGenerating,
                 canSend: viewModel.canSend,
+                editingState: viewModel.editingState,
+                isPerformingSessionMutation: viewModel.isPerformingSessionMutation,
                 onSend: viewModel.send,
-                onCancel: viewModel.cancelGeneration
+                onCancel: viewModel.cancelGeneration,
+                onCancelEditing: viewModel.cancelEditing
             )
         }
+        .overlay(alignment: .top) {
+            if let notice = viewModel.actionNotice {
+                actionNotice(notice)
+                    .padding(.top, 8)
+                    .transition(.move(edge: .top).combined(with: .opacity))
+                    .allowsHitTesting(false)
+            }
+        }
+        .animation(.easeInOut(duration: 0.2), value: viewModel.actionNotice?.id)
         .navigationTitle("Graph Chat")
         .navigationBarTitleDisplayMode(.inline)
+        .confirmationDialog(
+            "Neuen Chat beginnen?",
+            isPresented: $isConfirmingNewChat,
+            titleVisibility: .visible
+        ) {
+            Button(GraphChatMessageAction.startNewChat.title, role: .destructive) {
+                viewModel.performChatAction(.startNewChat)
+            }
+            Button("Abbrechen", role: .cancel) {}
+        } message: {
+            Text(
+                "Der aktuelle Verlauf, Conversation State und das sessionlokale Feedback werden gelöscht. Graph und Scope bleiben erhalten."
+            )
+        }
         .task {
             await viewModel.load()
         }
@@ -54,6 +81,7 @@ struct GraphChatView: View {
                     )
                 }
                 Spacer(minLength: 12)
+                newChatButton
             }
 
             ViewThatFits(in: .horizontal) {
@@ -75,6 +103,32 @@ struct GraphChatView: View {
         .accessibilityElement(children: .contain)
     }
 
+    private var newChatButton: some View {
+        ViewThatFits(in: .horizontal) {
+            Button {
+                isConfirmingNewChat = true
+            } label: {
+                Label(GraphChatMessageAction.startNewChat.title, systemImage: GraphChatMessageAction.startNewChat.systemImage)
+            }
+            .buttonStyle(.bordered)
+            .disabled(viewModel.canStartNewChat == false)
+            .keyboardShortcut("n", modifiers: [.command, .shift])
+
+            Button {
+                isConfirmingNewChat = true
+            } label: {
+                Image(systemName: GraphChatMessageAction.startNewChat.systemImage)
+                    .frame(width: 36, height: 32)
+            }
+            .buttonStyle(.bordered)
+            .disabled(viewModel.canStartNewChat == false)
+            .keyboardShortcut("n", modifiers: [.command, .shift])
+        }
+        .accessibilityLabel(GraphChatMessageActionAccessibility.newChatLabel)
+        .accessibilityHint(GraphChatMessageActionAccessibility.newChatHint)
+        .accessibilityIdentifier("graph-chat-new-chat")
+    }
+
     private var transcript: some View {
         ScrollViewReader { proxy in
             ScrollView {
@@ -94,6 +148,18 @@ struct GraphChatView: View {
                         ForEach(viewModel.messages) { message in
                             GraphChatMessageView(
                                 message: message,
+                                actionAvailability: viewModel.messageActionAvailability(
+                                    for: message.id
+                                ),
+                                selectedFeedback: viewModel.feedbackCategory(
+                                    for: message.id
+                                ),
+                                onAction: { action in
+                                    viewModel.performMessageAction(
+                                        action,
+                                        messageID: message.id
+                                    )
+                                },
                                 onRetry: viewModel.retry,
                                 onOpenEvidence: viewModel.openEntry,
                                 onShowEvidenceInGraph: viewModel.showInGraph,
@@ -122,5 +188,21 @@ struct GraphChatView: View {
                 }
             }
         }
+    }
+
+    private func actionNotice(
+        _ notice: GraphChatActionNotice
+    ) -> some View {
+        Label(notice.message, systemImage: notice.systemImage)
+            .font(.callout.weight(.semibold))
+            .padding(.horizontal, 14)
+            .padding(.vertical, 10)
+            .background(.regularMaterial, in: Capsule())
+            .overlay {
+                Capsule()
+                    .stroke(.quaternary, lineWidth: 1)
+            }
+            .shadow(radius: 8, y: 3)
+            .accessibilityElement(children: .combine)
     }
 }

@@ -10,6 +10,8 @@ import Foundation
 import SwiftUI
 
 private actor GraphChatPreviewOrchestrator: GraphChatOrchestrating {
+    private var conversationState: GraphChatConversationState?
+
     func streamAnswer(
         question: String,
         graphScope: GraphScope,
@@ -51,6 +53,29 @@ private actor GraphChatPreviewOrchestrator: GraphChatOrchestrating {
             ],
             hasInsufficientEvidence: false
         )
+        var state: GraphChatConversationState
+        if let existing = conversationState,
+           existing.graphScope == graphScope,
+           existing.chatScope == chatScope {
+            state = existing
+        } else {
+            state = .initial(
+                graphScope: graphScope,
+                chatScope: chatScope
+            )
+        }
+        state.turnContexts.append(
+            GraphChatConversationTurnContext(
+                id: UUID(),
+                completedAt: Date(),
+                toolKinds: [.searchGraph],
+                resultContextIDs: [],
+                evidenceIDs: answer.evidenceIDs,
+                technicalDescription: "Validated preview answer"
+            )
+        )
+        conversationState = state
+
         return AsyncStream { continuation in
             continuation.yield(.started(requestID: UUID()))
             continuation.yield(.partialAnswer("Projekt Atlas befindet sich"))
@@ -60,7 +85,33 @@ private actor GraphChatPreviewOrchestrator: GraphChatOrchestrating {
     }
 
     func cancelCurrentGeneration() async {}
-    func discardSession() async {}
+
+    func discardSession() async {
+        conversationState = nil
+    }
+
+    func conversationStateSnapshot() async -> GraphChatConversationState? {
+        conversationState
+    }
+
+    func restoreConversationState(
+        from checkpoint: GraphChatConversationCheckpoint
+    ) async throws {
+        guard checkpoint.belongsTo(
+            graphScope: checkpoint.graphScope,
+            chatScope: checkpoint.chatScope
+        ) else {
+            throw GraphChatError(
+                code: .invalidRequest,
+                message: "Ungültiger Preview-Checkpoint."
+            )
+        }
+        conversationState = checkpoint.state
+            ?? .initial(
+                graphScope: checkpoint.graphScope,
+                chatScope: checkpoint.chatScope
+            )
+    }
 }
 
 private actor GraphChatPreviewSchemaProvider: GraphSchemaSnapshotProviding {

@@ -227,6 +227,49 @@ actor GraphChatOrchestrator {
         conversationState
     }
 
+    func restoreConversationState(
+        from checkpoint: GraphChatConversationCheckpoint
+    ) async throws {
+        let key = try validatedKey(
+            graphScope: checkpoint.graphScope,
+            chatScope: checkpoint.chatScope
+        )
+        guard checkpoint.belongsTo(
+            graphScope: key.graphScope,
+            chatScope: key.chatScope
+        ) else {
+            throw GraphChatError(
+                code: .invalidRequest,
+                message: "Der Conversation-State gehört nicht zum aktiven Graph-Chat-Scope."
+            )
+        }
+
+        await cancelCurrentGeneration()
+        if let preparedSession {
+            await preparedSession.evidenceRegistry.removeAll()
+            await provider.discardSession(sessionID: preparedSession.sessionID)
+            self.preparedSession = nil
+        }
+
+        if let state = checkpoint.state {
+            guard state.graphScope == key.graphScope,
+                  state.chatScope == key.chatScope else {
+                throw GraphChatError(
+                    code: .invalidRequest,
+                    message: "Der wiederherzustellende Conversation-State ist scopefremd."
+                )
+            }
+            conversationState = state
+        } else {
+            conversationState = GraphChatConversationState.initial(
+                graphScope: key.graphScope,
+                chatScope: key.chatScope,
+                resetReason: .newConversation
+            )
+        }
+        pendingResetReason = .newConversation
+    }
+
     private func performRequest(
         requestID: UUID,
         question: String,

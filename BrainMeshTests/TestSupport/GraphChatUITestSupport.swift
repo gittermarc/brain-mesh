@@ -22,6 +22,8 @@ nonisolated struct GraphChatUIOrchestratorSnapshot: Sendable {
     let cancellationCount: Int
     let discardCount: Int
     let discardReasons: [GraphChatConversationResetReason]
+    let restoredCheckpoints: [GraphChatConversationCheckpoint]
+    let conversationState: GraphChatConversationState?
 }
 
 actor GraphChatUIFakeOrchestrator: GraphChatOrchestrating {
@@ -30,10 +32,17 @@ actor GraphChatUIFakeOrchestrator: GraphChatOrchestrating {
     private var cancellationCount = 0
     private var discardCount = 0
     private var discardReasons: [GraphChatConversationResetReason] = []
+    private var restoredCheckpoints: [GraphChatConversationCheckpoint] = []
+    private var conversationState: GraphChatConversationState?
     private var activeTask: Task<Void, Never>?
+    private let restoreDelayNanoseconds: UInt64
 
-    init(scripts: [GraphChatUIFakeScript]) {
+    init(
+        scripts: [GraphChatUIFakeScript],
+        restoreDelayNanoseconds: UInt64 = 0
+    ) {
         self.scripts = scripts
+        self.restoreDelayNanoseconds = restoreDelayNanoseconds
     }
 
     func streamAnswer(
@@ -42,6 +51,10 @@ actor GraphChatUIFakeOrchestrator: GraphChatOrchestrating {
         chatScope: GraphChatScope
     ) async -> GraphChatEventStream {
         questions.append(question)
+        prepareConversationStateIfNeeded(
+            graphScope: graphScope,
+            chatScope: chatScope
+        )
         let script = scripts.isEmpty
             ? GraphChatUIFakeScript(
                 events: [
@@ -58,10 +71,21 @@ actor GraphChatUIFakeOrchestrator: GraphChatOrchestrating {
 
         let task = Task { [weak self] in
             do {
+                var toolKinds: Set<GraphChatToolKind> = []
                 for event in script.events {
                     try Task.checkCancellation()
                     if script.delayNanoseconds > 0 {
                         try await Task.sleep(nanoseconds: script.delayNanoseconds)
+                    }
+                    if case .toolActivity(let activity) = event {
+                        toolKinds.insert(activity.tool)
+                    }
+                    if case .completed(let answer) = event {
+                        await self?.commitConversationTurn(
+                            question: question,
+                            answer: answer,
+                            toolKinds: toolKinds
+                        )
                     }
                     pair.continuation.yield(event)
                 }
@@ -92,6 +116,35 @@ actor GraphChatUIFakeOrchestrator: GraphChatOrchestrating {
         return pair.stream
     }
 
+    func conversationStateSnapshot() async -> GraphChatConversationState? {
+        conversationState
+    }
+
+    func restoreConversationState(
+        from checkpoint: GraphChatConversationCheckpoint
+    ) async throws {
+        if restoreDelayNanoseconds > 0 {
+            try await Task.sleep(nanoseconds: restoreDelayNanoseconds)
+        }
+        guard checkpoint.belongsTo(
+            graphScope: checkpoint.graphScope,
+            chatScope: checkpoint.chatScope
+        ) else {
+            throw GraphChatError(
+                code: .invalidRequest,
+                message: "Invalid fake conversation checkpoint."
+            )
+        }
+        await cancelCurrentGeneration()
+        restoredCheckpoints.append(checkpoint)
+        conversationState = checkpoint.state
+            ?? .initial(
+                graphScope: checkpoint.graphScope,
+                chatScope: checkpoint.chatScope,
+                resetReason: .newConversation
+            )
+    }
+
     func cancelCurrentGeneration() async {
         cancellationCount += 1
         let task = activeTask
@@ -102,6 +155,7 @@ actor GraphChatUIFakeOrchestrator: GraphChatOrchestrating {
     func discardSession() async {
         discardCount += 1
         discardReasons.append(.sessionDiscarded)
+        conversationState = nil
     }
 
     func discardSession(
@@ -109,6 +163,7 @@ actor GraphChatUIFakeOrchestrator: GraphChatOrchestrating {
     ) async {
         discardCount += 1
         discardReasons.append(reason)
+        conversationState = nil
     }
 
     func snapshot() -> GraphChatUIOrchestratorSnapshot {
@@ -116,8 +171,75 @@ actor GraphChatUIFakeOrchestrator: GraphChatOrchestrating {
             questions: questions,
             cancellationCount: cancellationCount,
             discardCount: discardCount,
-            discardReasons: discardReasons
+            discardReasons: discardReasons,
+            restoredCheckpoints: restoredCheckpoints,
+            conversationState: conversationState
         )
+    }
+
+    private func prepareConversationStateIfNeeded(
+        graphScope: GraphScope,
+        chatScope: GraphChatScope
+    ) {
+        guard conversationState?.graphScope != graphScope
+                || conversationState?.chatScope != chatScope else {
+            return
+        }
+        conversationState = .initial(
+            graphScope: graphScope,
+            chatScope: chatScope
+        )
+    }
+
+    private func commitConversationTurn(
+        question: String,
+        answer: GraphChatAnswer,
+        toolKinds: Set<GraphChatToolKind>
+    ) {
+        guard var state = conversationState else {
+            return
+        }
+        let turnID = UUID()
+        let completedAt = Date()
+        state.turnContexts.append(
+            GraphChatConversationTurnContext(
+                id: turnID,
+                completedAt: completedAt,
+                toolKinds: toolKinds.sorted { $0.rawValue < $1.rawValue },
+                resultContextIDs: [],
+                evidenceIDs: answer.evidenceIDs,
+                technicalDescription: "Validated fake turn for: \(question)"
+            )
+        )
+        if case .clarification(let clarification) = answer.state {
+            state.pendingClarification = GraphChatPendingClarification(
+                id: clarification.id,
+                decision: .conversationReference,
+                options: clarification.options.map { option in
+                    GraphChatPendingClarificationOption(
+                        id: option.id,
+                        title: option.title,
+                        proposal: .alias(option.title)
+                    )
+                },
+                sourceTurnID: turnID,
+                graphScope: state.graphScope,
+                chatScope: state.chatScope,
+                continuationOperation: .answerAboutReference,
+                continuationQuestion: clarification.question,
+                createdAt: completedAt,
+                expiresAt: completedAt.addingTimeInterval(300)
+            )
+        } else {
+            state.pendingClarification = nil
+        }
+        if state.turnContexts.count > GraphChatConversationStatePolicy.default.maximumTurnContexts {
+            state.turnContexts.removeFirst(
+                state.turnContexts.count
+                    - GraphChatConversationStatePolicy.default.maximumTurnContexts
+            )
+        }
+        conversationState = state
     }
 
     private func clearActiveTask() {
@@ -191,25 +313,58 @@ final class GraphChatUINavigationRecorder {
     }
 }
 
+@MainActor
+final class GraphChatUITestClipboardWriter: GraphChatClipboardWriting {
+    private(set) var values: [String] = []
+
+    func write(_ text: String) {
+        values.append(text)
+    }
+}
+
+@MainActor
+final class GraphChatUITestAccessibilityAnnouncer: GraphChatAccessibilityAnnouncing {
+    private(set) var announcements: [String] = []
+
+    func announce(_ message: String) {
+        announcements.append(message)
+    }
+}
+
 nonisolated enum GraphChatUITestSupport {
     @MainActor
     static func makeViewModel(
         graphID: UUID = GraphChatTestSupport.graphID,
         chatScope: GraphChatScope? = nil,
         scripts: [GraphChatUIFakeScript],
+        restoreDelayNanoseconds: UInt64 = 0,
         availability: GraphChatModelAvailability = .available,
         indexState: GraphChatIndexPresentationState = .ready(documentCount: 12),
         historyStore: any GraphChatHistoryStoring = InMemoryGraphChatHistoryStore(),
+        feedbackStore: (any GraphChatFeedbackStoring)? = nil,
+        clipboardWriter: GraphChatUITestClipboardWriter? = nil,
+        accessibilityAnnouncer: GraphChatUITestAccessibilityAnnouncer? = nil,
         navigationActions: GraphChatNavigationActions = .disabled,
+        accessDecisionProvider: (@MainActor () -> GraphChatAccessDecision)? = nil,
         schemaContext: GraphSchemaContext? = nil
     ) -> (
         viewModel: GraphChatViewModel,
-        orchestrator: GraphChatUIFakeOrchestrator
+        orchestrator: GraphChatUIFakeOrchestrator,
+        feedbackStore: any GraphChatFeedbackStoring,
+        clipboardWriter: GraphChatUITestClipboardWriter,
+        accessibilityAnnouncer: GraphChatUITestAccessibilityAnnouncer
     ) {
         let graphScope = GraphScope(graphID: graphID)
         let resolvedChatScope = chatScope ?? .entireGraph(graphScope)
         let context = schemaContext ?? GraphChatTestSupport.makeSchemaContext(graphID: graphID)
-        let orchestrator = GraphChatUIFakeOrchestrator(scripts: scripts)
+        let orchestrator = GraphChatUIFakeOrchestrator(
+            scripts: scripts,
+            restoreDelayNanoseconds: restoreDelayNanoseconds
+        )
+        let resolvedFeedbackStore = feedbackStore ?? InMemoryGraphChatFeedbackStore()
+        let resolvedClipboardWriter = clipboardWriter ?? GraphChatUITestClipboardWriter()
+        let resolvedAccessibilityAnnouncer = accessibilityAnnouncer
+            ?? GraphChatUITestAccessibilityAnnouncer()
         let viewModel = GraphChatViewModel(
             graphScope: graphScope,
             chatScope: resolvedChatScope,
@@ -219,9 +374,19 @@ nonisolated enum GraphChatUITestSupport {
             availabilityProvider: GraphChatUIFakeAvailabilityProvider(value: availability),
             indexStatusProvider: GraphChatUIFakeIndexProvider(value: indexState),
             historyStore: historyStore,
-            navigationActions: navigationActions
+            feedbackStore: resolvedFeedbackStore,
+            clipboardWriter: resolvedClipboardWriter,
+            accessibilityAnnouncer: resolvedAccessibilityAnnouncer,
+            navigationActions: navigationActions,
+            accessDecisionProvider: accessDecisionProvider
         )
-        return (viewModel, orchestrator)
+        return (
+            viewModel,
+            orchestrator,
+            resolvedFeedbackStore,
+            resolvedClipboardWriter,
+            resolvedAccessibilityAnnouncer
+        )
     }
 
     static func finalAnswer(

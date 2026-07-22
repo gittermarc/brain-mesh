@@ -23,6 +23,7 @@ final class GraphChatSessionStore: ObservableObject {
     private let schemaProvider: any GraphSchemaSnapshotProviding
     private let indexStatusProvider: any GraphChatIndexStatusProviding
     private let historyStore: any GraphChatHistoryStoring
+    private let feedbackStore: any GraphChatFeedbackStoring
     private let observability: any GraphChatObservabilityRecording
     private let mutationSubscriber: any GraphMutationSubscribing
 
@@ -41,6 +42,7 @@ final class GraphChatSessionStore: ObservableObject {
         schemaProvider: any GraphSchemaSnapshotProviding = GraphSchemaService.shared,
         indexStatusProvider: any GraphChatIndexStatusProviding = LiveGraphChatIndexStatusProvider(),
         historyStore: any GraphChatHistoryStoring = InMemoryGraphChatHistoryStore(),
+        feedbackStore: any GraphChatFeedbackStoring = InMemoryGraphChatFeedbackStore(),
         observability: any GraphChatObservabilityRecording = GraphChatTechnicalObservabilityRecorder(),
         mutationSubscriber: any GraphMutationSubscribing = GraphMutationEventBus.shared
     ) {
@@ -63,6 +65,7 @@ final class GraphChatSessionStore: ObservableObject {
         self.schemaProvider = schemaProvider
         self.indexStatusProvider = indexStatusProvider
         self.historyStore = historyStore
+        self.feedbackStore = feedbackStore
         self.observability = observability
         self.mutationSubscriber = mutationSubscriber
         startMutationObservation()
@@ -74,6 +77,7 @@ final class GraphChatSessionStore: ObservableObject {
         schemaProvider: any GraphSchemaSnapshotProviding,
         indexStatusProvider: any GraphChatIndexStatusProviding,
         historyStore: any GraphChatHistoryStoring = InMemoryGraphChatHistoryStore(),
+        feedbackStore: any GraphChatFeedbackStoring = InMemoryGraphChatFeedbackStore(),
         observability: any GraphChatObservabilityRecording = NoOpGraphChatObservabilityRecorder(),
         mutationSubscriber: any GraphMutationSubscribing = GraphMutationEventBus.shared
     ) {
@@ -87,6 +91,7 @@ final class GraphChatSessionStore: ObservableObject {
         self.schemaProvider = schemaProvider
         self.indexStatusProvider = indexStatusProvider
         self.historyStore = historyStore
+        self.feedbackStore = feedbackStore
         self.observability = observability
         self.mutationSubscriber = mutationSubscriber
         startMutationObservation()
@@ -215,11 +220,12 @@ final class GraphChatSessionStore: ObservableObject {
             || currentViewModel == nil {
             if currentViewModel != nil || currentScope != nil {
                 let discardedScope = currentScope
-                currentViewModel?.discardSensitiveState()
+                let pendingLocalTasks = currentViewModel?.discardSensitiveState() ?? []
                 scheduleRuntimeCleanup(
                     removeHistory: false,
                     scope: discardedScope,
-                    resetReason: .scopeChanged
+                    resetReason: .scopeChanged,
+                    pendingLocalTasks: pendingLocalTasks
                 )
             }
             let model = GraphChatViewModel(
@@ -232,6 +238,7 @@ final class GraphChatSessionStore: ObservableObject {
                 availabilityProvider: availabilityProvider,
                 indexStatusProvider: indexStatusProvider,
                 historyStore: historyStore,
+                feedbackStore: feedbackStore,
                 navigationActions: navigationActions,
                 accessDecisionProvider: { [weak self] in
                     guard let self,
@@ -280,7 +287,9 @@ final class GraphChatSessionStore: ObservableObject {
         accessDecision = .denied
         isGenerationAuthorized = false
         isGenerationRunning = false
-        currentViewModel?.discardSensitiveState(preserveDraft: preserveDraft)
+        let pendingLocalTasks = currentViewModel?.discardSensitiveState(
+            preserveDraft: preserveDraft
+        ) ?? []
         currentViewModel = nil
         currentScope = nil
         currentLaunchContext = nil
@@ -290,7 +299,8 @@ final class GraphChatSessionStore: ObservableObject {
         scheduleRuntimeCleanup(
             removeHistory: removeHistory,
             scope: discardedScope,
-            resetReason: resetReason
+            resetReason: resetReason,
+            pendingLocalTasks: pendingLocalTasks
         )
     }
 
@@ -414,7 +424,8 @@ final class GraphChatSessionStore: ObservableObject {
     private func scheduleRuntimeCleanup(
         removeHistory: Bool,
         scope: GraphChatScope?,
-        resetReason: GraphChatConversationResetReason
+        resetReason: GraphChatConversationResetReason,
+        pendingLocalTasks: [Task<Void, Never>] = []
     ) {
         accessRevision &+= 1
         executionGate.revoke()
@@ -425,12 +436,17 @@ final class GraphChatSessionStore: ObservableObject {
         let previousCleanup = cleanupTask
         let orchestrator = self.orchestrator
         let historyStore = self.historyStore
+        let feedbackStore = self.feedbackStore
         cleanupTask = Task {
             await previousCleanup?.value
+            for pendingLocalTask in pendingLocalTasks {
+                await pendingLocalTask.value
+            }
             await orchestrator.cancelCurrentGeneration()
             await orchestrator.discardSession(reason: resetReason)
             if removeHistory, let scope {
                 await historyStore.removeMessages(for: scope)
+                await feedbackStore.removeAll(for: scope)
             }
         }
     }

@@ -146,6 +146,57 @@ nonisolated struct GraphChatConversationTurnContext: Hashable, Sendable, Identif
     let technicalDescription: String
 }
 
+nonisolated struct GraphChatConversationCheckpoint: Hashable, Sendable {
+    let graphScope: GraphScope
+    let chatScope: GraphChatScope
+    let state: GraphChatConversationState?
+
+    init(
+        graphScope: GraphScope,
+        chatScope: GraphChatScope,
+        state: GraphChatConversationState?
+    ) {
+        precondition(graphScope == chatScope.graphScope)
+        if let state {
+            precondition(state.graphScope == graphScope)
+            precondition(state.chatScope == chatScope)
+        }
+        self.graphScope = graphScope
+        self.chatScope = chatScope
+        self.state = state
+    }
+
+    static func initial(
+        graphScope: GraphScope,
+        chatScope: GraphChatScope
+    ) -> GraphChatConversationCheckpoint {
+        GraphChatConversationCheckpoint(
+            graphScope: graphScope,
+            chatScope: chatScope,
+            state: nil
+        )
+    }
+
+    static func committed(
+        _ state: GraphChatConversationState
+    ) -> GraphChatConversationCheckpoint {
+        GraphChatConversationCheckpoint(
+            graphScope: state.graphScope,
+            chatScope: state.chatScope,
+            state: state
+        )
+    }
+
+    func belongsTo(
+        graphScope: GraphScope,
+        chatScope: GraphChatScope
+    ) -> Bool {
+        self.graphScope == graphScope
+            && self.chatScope == chatScope
+            && chatScope.graphScope == graphScope
+    }
+}
+
 nonisolated struct GraphChatConversationStateSnapshot: Hashable, Sendable {
     let conversationID: UUID
     let graphScope: GraphScope

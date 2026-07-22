@@ -127,7 +127,7 @@ struct BulkLinkPlanner {
     }
 
 
-    private static func stableTargetOrder(_ lhs: NodeRef, _ rhs: NodeRef) -> Bool {
+    private nonisolated static func stableTargetOrder(_ lhs: NodeRef, _ rhs: NodeRef) -> Bool {
         if lhs.kind.rawValue != rhs.kind.rawValue {
             return lhs.kind.rawValue < rhs.kind.rawValue
         }

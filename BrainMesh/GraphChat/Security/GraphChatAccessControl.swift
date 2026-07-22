@@ -110,6 +110,26 @@ actor AccessControlledGraphChatOrchestrator: GraphChatOrchestrating {
     ) async {
         await base.discardSession(reason: reason)
     }
+
+    func conversationStateSnapshot() async -> GraphChatConversationState? {
+        await base.conversationStateSnapshot()
+    }
+
+    func restoreConversationState(
+        from checkpoint: GraphChatConversationCheckpoint
+    ) async throws {
+        guard await gate.permits(
+            graphScope: checkpoint.graphScope,
+            chatScope: checkpoint.chatScope
+        ) else {
+            throw GraphChatError(
+                code: .unavailable,
+                message: "Graph Chat ist für diesen Graphen nicht freigeschaltet.",
+                recoverySuggestion: "Prüfe Pro-Status, aktiven Graphen, Graph-Sperre, Modell und lokalen Index."
+            )
+        }
+        try await base.restoreConversationState(from: checkpoint)
+    }
 }
 
 nonisolated enum GraphChatEntitlementAccessState: Hashable, Sendable {
