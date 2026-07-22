@@ -85,6 +85,7 @@ nonisolated struct EvidenceRegisteringFakeToolRunnerFactory: GraphChatModelToolR
         schemaContext: GraphSchemaContext,
         budget: GraphChatToolBudget,
         evidenceRegistry: GraphChatEvidenceRegistry,
+        conversationTransaction: GraphChatConversationStateTransaction,
         referenceDate: Date,
         calendar: Calendar,
         timeZone: TimeZone
@@ -93,6 +94,7 @@ nonisolated struct EvidenceRegisteringFakeToolRunnerFactory: GraphChatModelToolR
             scope: scope,
             budget: budget,
             evidenceRegistry: evidenceRegistry,
+            conversationTransaction: conversationTransaction,
             recorder: recorder,
             evidenceByTool: evidenceByTool,
             responseTextByTool: responseTextByTool,
@@ -106,6 +108,7 @@ private actor EvidenceRegisteringFakeToolRunner: GraphChatModelToolRunning {
     private let scope: GraphChatScope
     private let budget: GraphChatToolBudget
     private let evidenceRegistry: GraphChatEvidenceRegistry
+    private let conversationTransaction: GraphChatConversationStateTransaction
     private let recorder: GraphChatFakeToolRunnerRecorder
     private let evidenceByTool: [GraphChatToolKind: [GraphEvidence]]
     private let responseTextByTool: [GraphChatToolKind: String]
@@ -116,6 +119,7 @@ private actor EvidenceRegisteringFakeToolRunner: GraphChatModelToolRunning {
         scope: GraphChatScope,
         budget: GraphChatToolBudget,
         evidenceRegistry: GraphChatEvidenceRegistry,
+        conversationTransaction: GraphChatConversationStateTransaction,
         recorder: GraphChatFakeToolRunnerRecorder,
         evidenceByTool: [GraphChatToolKind: [GraphEvidence]],
         responseTextByTool: [GraphChatToolKind: String],
@@ -125,6 +129,7 @@ private actor EvidenceRegisteringFakeToolRunner: GraphChatModelToolRunning {
         self.scope = scope
         self.budget = budget
         self.evidenceRegistry = evidenceRegistry
+        self.conversationTransaction = conversationTransaction
         self.recorder = recorder
         self.evidenceByTool = evidenceByTool
         self.responseTextByTool = responseTextByTool
@@ -170,6 +175,17 @@ private actor EvidenceRegisteringFakeToolRunner: GraphChatModelToolRunning {
         }
         try await evidenceRegistry.register(evidence)
         try await budget.consumeEvidence(evidence.count)
+        try await conversationTransaction.apply(
+            GraphChatConversationTrustedEvent(
+                graphScope: scope.graphScope,
+                chatScope: scope,
+                payload: .validatedEvidence(
+                    tool: request.kind,
+                    state: evidence.isEmpty ? .noEvidence : .success,
+                    evidence: evidence
+                )
+            )
+        )
         return GraphChatModelToolResponse(
             tool: request.kind,
             state: evidence.isEmpty ? .noEvidence : .success,
@@ -218,7 +234,8 @@ nonisolated enum GraphChatProviderTestSupport {
         provider: any GraphChatModelProvider,
         factory: any GraphChatModelToolRunnerFactory,
         graphIDs: [UUID] = [GraphChatTestSupport.graphID],
-        budgetPolicy: GraphChatToolBudgetPolicy = .default
+        budgetPolicy: GraphChatToolBudgetPolicy = .default,
+        conversationStatePolicy: GraphChatConversationStatePolicy = .default
     ) -> GraphChatOrchestrator {
         let contexts = graphIDs.map { GraphChatTestSupport.makeSchemaContext(graphID: $0) }
         return GraphChatOrchestrator(
@@ -226,6 +243,7 @@ nonisolated enum GraphChatProviderTestSupport {
             schemaProvider: FakeGraphSchemaSnapshotProvider(contexts: contexts),
             toolRunnerFactory: factory,
             toolBudgetPolicy: budgetPolicy,
+            conversationStatePolicy: conversationStatePolicy,
             referenceDate: { Date(timeIntervalSince1970: 1_735_732_800) },
             calendar: Calendar(identifier: .gregorian),
             timeZone: TimeZone(identifier: "Europe/Berlin")!

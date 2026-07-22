@@ -53,6 +53,7 @@ nonisolated struct GraphChatModelToolRuntimeFactory: GraphChatModelToolRunnerFac
         schemaContext: GraphSchemaContext,
         budget: GraphChatToolBudget,
         evidenceRegistry: GraphChatEvidenceRegistry,
+        conversationTransaction: GraphChatConversationStateTransaction,
         referenceDate: Date,
         calendar: Calendar,
         timeZone: TimeZone
@@ -62,6 +63,7 @@ nonisolated struct GraphChatModelToolRuntimeFactory: GraphChatModelToolRunnerFac
             schemaContext: schemaContext,
             budget: budget,
             evidenceRegistry: evidenceRegistry,
+            conversationTransaction: conversationTransaction,
             validator: GraphQueryPlanValidator(
                 calendar: calendar,
                 timeZone: timeZone,
@@ -87,6 +89,7 @@ actor GraphChatModelToolRuntime: GraphChatModelToolRunning {
     private let schemaContext: GraphSchemaContext
     private let context: GraphChatToolContext
     private let evidenceRegistry: GraphChatEvidenceRegistry
+    private let conversationTransaction: GraphChatConversationStateTransaction
     private let validator: GraphQueryPlanValidator
     private let describeSchemaTool: DescribeGraphSchemaTool
     private let searchGraphTool: SearchGraphTool
@@ -104,6 +107,7 @@ actor GraphChatModelToolRuntime: GraphChatModelToolRunning {
         schemaContext: GraphSchemaContext,
         budget: GraphChatToolBudget,
         evidenceRegistry: GraphChatEvidenceRegistry,
+        conversationTransaction: GraphChatConversationStateTransaction,
         validator: GraphQueryPlanValidator,
         describeSchemaTool: DescribeGraphSchemaTool,
         searchGraphTool: SearchGraphTool,
@@ -116,6 +120,7 @@ actor GraphChatModelToolRuntime: GraphChatModelToolRunning {
         self.schemaContext = schemaContext
         self.context = GraphChatToolContext(scope: scope, budget: budget)
         self.evidenceRegistry = evidenceRegistry
+        self.conversationTransaction = conversationTransaction
         self.validator = validator
         self.describeSchemaTool = describeSchemaTool
         self.searchGraphTool = searchGraphTool
@@ -178,6 +183,19 @@ actor GraphChatModelToolRuntime: GraphChatModelToolRunning {
             context: context
         )
         try await register(result.evidence)
+        if let snapshot = result.payload?.snapshot {
+            try await record(
+                .schemaResolved(
+                    schemaContext: GraphSchemaContext(
+                        graphScope: schemaContext.graphScope,
+                        snapshot: snapshot,
+                        aliases: schemaContext.aliases
+                    ),
+                    state: result.state,
+                    evidence: result.evidence
+                )
+            )
+        }
         return GraphChatModelToolResponse(
             tool: .describeGraphSchema,
             state: result.state,
@@ -195,6 +213,15 @@ actor GraphChatModelToolRuntime: GraphChatModelToolRunning {
             context: context
         )
         try await register(result.evidence)
+        if let output = result.payload {
+            try await record(
+                .searchResolved(
+                    output: output,
+                    state: result.state,
+                    evidence: result.evidence
+                )
+            )
+        }
         let content = result.payload.map { output in
             let lines = output.hits.map { hit in
                 let nodeAlias = aliasForReference(hit.sourceReference)
@@ -231,6 +258,13 @@ actor GraphChatModelToolRuntime: GraphChatModelToolRunning {
             try await evidenceRegistry.registerAppliedFilters(
                 output.result.appliedFilters
             )
+            try await record(
+                .queryResolved(
+                    plan: validatedPlan,
+                    result: output.result,
+                    schemaContext: schemaContext
+                )
+            )
         }
         let content = result.payload.map { output in
             formatQueryResult(output.result)
@@ -253,6 +287,15 @@ actor GraphChatModelToolRuntime: GraphChatModelToolRunning {
             context: context
         )
         try await register(result.evidence)
+        if let output = result.payload {
+            try await record(
+                .nodeResolved(
+                    output: output,
+                    state: result.state,
+                    evidence: result.evidence
+                )
+            )
+        }
         let content = result.payload.map(formatNode) ?? "Node nicht im aktiven Scope gefunden."
         return GraphChatModelToolResponse(
             tool: .getNode,
@@ -272,6 +315,15 @@ actor GraphChatModelToolRuntime: GraphChatModelToolRunning {
             context: context
         )
         try await register(result.evidence)
+        if let output = result.payload {
+            try await record(
+                .neighborsResolved(
+                    output: output,
+                    state: result.state,
+                    evidence: result.evidence
+                )
+            )
+        }
         let content = result.payload.map(formatNeighbors) ?? "Keine direkten Nachbarn im aktiven Scope."
         return GraphChatModelToolResponse(
             tool: .getNeighbors,
@@ -289,6 +341,15 @@ actor GraphChatModelToolRuntime: GraphChatModelToolRunning {
             context: context
         )
         try await register(result.evidence)
+        if let output = result.payload {
+            try await record(
+                .statsResolved(
+                    output: output,
+                    state: result.state,
+                    evidence: result.evidence
+                )
+            )
+        }
         let content = result.payload.map(formatStats) ?? "Keine validierte Graph-Statistik verfügbar."
         return GraphChatModelToolResponse(
             tool: .graphStats,
@@ -300,6 +361,18 @@ actor GraphChatModelToolRuntime: GraphChatModelToolRunning {
 
     private func register(_ evidence: [GraphEvidence]) async throws {
         try await evidenceRegistry.register(evidence)
+    }
+
+    private func record(
+        _ payload: GraphChatConversationTrustedPayload
+    ) async throws {
+        try await conversationTransaction.apply(
+            GraphChatConversationTrustedEvent(
+                graphScope: scope.graphScope,
+                chatScope: scope,
+                payload: payload
+            )
+        )
     }
 
     private func makeQueryPlan(

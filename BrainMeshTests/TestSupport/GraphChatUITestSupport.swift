@@ -21,6 +21,7 @@ nonisolated struct GraphChatUIOrchestratorSnapshot: Sendable {
     let questions: [String]
     let cancellationCount: Int
     let discardCount: Int
+    let discardReasons: [GraphChatConversationResetReason]
 }
 
 actor GraphChatUIFakeOrchestrator: GraphChatOrchestrating {
@@ -28,6 +29,7 @@ actor GraphChatUIFakeOrchestrator: GraphChatOrchestrating {
     private var questions: [String] = []
     private var cancellationCount = 0
     private var discardCount = 0
+    private var discardReasons: [GraphChatConversationResetReason] = []
     private var activeTask: Task<Void, Never>?
 
     init(scripts: [GraphChatUIFakeScript]) {
@@ -99,13 +101,22 @@ actor GraphChatUIFakeOrchestrator: GraphChatOrchestrating {
 
     func discardSession() async {
         discardCount += 1
+        discardReasons.append(.sessionDiscarded)
+    }
+
+    func discardSession(
+        reason: GraphChatConversationResetReason
+    ) async {
+        discardCount += 1
+        discardReasons.append(reason)
     }
 
     func snapshot() -> GraphChatUIOrchestratorSnapshot {
         GraphChatUIOrchestratorSnapshot(
             questions: questions,
             cancellationCount: cancellationCount,
-            discardCount: discardCount
+            discardCount: discardCount,
+            discardReasons: discardReasons
         )
     }
 

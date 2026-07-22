@@ -11,36 +11,6 @@ nonisolated enum GraphChatConcurrentRequestPolicy: String, CaseIterable, Hashabl
     case cancelPrevious
 }
 
-nonisolated struct GraphChatConversationContextPolicy: Hashable, Sendable {
-    let maximumSummaryLength: Int
-    let maximumQuestionLength: Int
-    let maximumAnswerLength: Int
-    let maximumEvidenceSummaries: Int
-
-    static let `default` = GraphChatConversationContextPolicy(
-        maximumSummaryLength: 2_000,
-        maximumQuestionLength: 400,
-        maximumAnswerLength: 900,
-        maximumEvidenceSummaries: 12
-    )
-
-    init(
-        maximumSummaryLength: Int,
-        maximumQuestionLength: Int,
-        maximumAnswerLength: Int,
-        maximumEvidenceSummaries: Int
-    ) {
-        precondition(maximumSummaryLength > 0)
-        precondition(maximumQuestionLength > 0)
-        precondition(maximumAnswerLength > 0)
-        precondition(maximumEvidenceSummaries > 0)
-        self.maximumSummaryLength = maximumSummaryLength
-        self.maximumQuestionLength = maximumQuestionLength
-        self.maximumAnswerLength = maximumAnswerLength
-        self.maximumEvidenceSummaries = maximumEvidenceSummaries
-    }
-}
-
 actor GraphChatOrchestrator {
     private struct ScopeKey: Hashable, Sendable {
         let graphScope: GraphScope
@@ -53,6 +23,8 @@ actor GraphChatOrchestrator {
         let schemaContext: GraphSchemaContext
         let budget: GraphChatToolBudget
         let evidenceRegistry: GraphChatEvidenceRegistry
+        let conversationBaseState: GraphChatConversationState
+        let conversationTransaction: GraphChatConversationStateTransaction
         let toolRunner: any GraphChatModelToolRunning
     }
 
@@ -68,15 +40,15 @@ actor GraphChatOrchestrator {
     private let toolRunnerFactory: any GraphChatModelToolRunnerFactory
     private let toolBudgetPolicy: GraphChatToolBudgetPolicy
     private let concurrentRequestPolicy: GraphChatConcurrentRequestPolicy
-    private let contextPolicy: GraphChatConversationContextPolicy
+    private let conversationStateReducer: GraphChatConversationStateReducer
     private let referenceDate: @Sendable () -> Date
     private let calendar: Calendar
     private let timeZone: TimeZone
 
     private var preparedSession: SessionResources?
     private var activeGeneration: ActiveGeneration?
-    private var conversationScopeKey: ScopeKey?
-    private var conversationSummary: String?
+    private var conversationState: GraphChatConversationState?
+    private var pendingResetReason: GraphChatConversationResetReason = .newConversation
 
     init(
         provider: any GraphChatModelProvider,
@@ -84,7 +56,7 @@ actor GraphChatOrchestrator {
         toolRunnerFactory: any GraphChatModelToolRunnerFactory,
         toolBudgetPolicy: GraphChatToolBudgetPolicy = .default,
         concurrentRequestPolicy: GraphChatConcurrentRequestPolicy = .cancelPrevious,
-        contextPolicy: GraphChatConversationContextPolicy = .default,
+        conversationStatePolicy: GraphChatConversationStatePolicy = .default,
         referenceDate: @escaping @Sendable () -> Date = Date.init,
         calendar: Calendar = Calendar(identifier: .gregorian),
         timeZone: TimeZone = .current
@@ -94,7 +66,9 @@ actor GraphChatOrchestrator {
         self.toolRunnerFactory = toolRunnerFactory
         self.toolBudgetPolicy = toolBudgetPolicy
         self.concurrentRequestPolicy = concurrentRequestPolicy
-        self.contextPolicy = contextPolicy
+        self.conversationStateReducer = GraphChatConversationStateReducer(
+            policy: conversationStatePolicy
+        )
         self.referenceDate = referenceDate
         self.calendar = calendar
         self.timeZone = timeZone
@@ -106,13 +80,21 @@ actor GraphChatOrchestrator {
     ) async throws {
         let key = try validatedKey(graphScope: graphScope, chatScope: chatScope)
         try await cancelActiveGenerationForNewRequest()
-        await discardPreparedSession(unlessMatching: key)
+        let baseState = conversationStateForTurn(for: key)
+        await discardPreparedSession(
+            unlessMatching: key,
+            conversationBaseState: baseState
+        )
 
-        if preparedSession?.key == key {
+        if preparedSession?.key == key,
+           preparedSession?.conversationBaseState == baseState {
             return
         }
 
-        let resources = try await makeSessionResources(for: key)
+        let resources = try await makeSessionResources(
+            for: key,
+            conversationBaseState: baseState
+        )
         do {
             try await provider.prewarm(
                 sessionID: resources.sessionID,
@@ -136,8 +118,11 @@ actor GraphChatOrchestrator {
         do {
             try await cancelActiveGenerationForNewRequest()
             let key = try validatedKey(graphScope: graphScope, chatScope: chatScope)
-            await discardPreparedSession(unlessMatching: key)
-            resetConversationContextIfNeeded(for: key)
+            let turnStateSnapshot = conversationStateForTurn(for: key)
+            await discardPreparedSession(
+                unlessMatching: key,
+                conversationBaseState: turnStateSnapshot
+            )
 
             let task = Task { [weak self] in
                 guard let self else {
@@ -156,6 +141,7 @@ actor GraphChatOrchestrator {
                     requestID: requestID,
                     question: question,
                     key: key,
+                    turnStateSnapshot: turnStateSnapshot,
                     continuation: pair.continuation
                 )
             }
@@ -193,20 +179,31 @@ actor GraphChatOrchestrator {
     }
 
     func discardSession() async {
+        await discardSession(reason: .sessionDiscarded)
+    }
+
+    func discardSession(
+        reason: GraphChatConversationResetReason
+    ) async {
         await cancelCurrentGeneration()
         if let preparedSession {
             await preparedSession.evidenceRegistry.removeAll()
             await provider.discardSession(sessionID: preparedSession.sessionID)
             self.preparedSession = nil
         }
-        conversationScopeKey = nil
-        conversationSummary = nil
+        conversationState = nil
+        pendingResetReason = reason
+    }
+
+    func conversationStateSnapshot() -> GraphChatConversationState? {
+        conversationState
     }
 
     private func performRequest(
         requestID: UUID,
         question: String,
         key: ScopeKey,
+        turnStateSnapshot: GraphChatConversationState,
         continuation: GraphChatEventStream.Continuation
     ) async {
         continuation.yield(.started(requestID: requestID))
@@ -217,20 +214,29 @@ actor GraphChatOrchestrator {
 
         do {
             let normalizedQuestion = try validateQuestion(question)
-            let initialResources = try await takeOrCreateSessionResources(for: key)
+            let initialResources = try await takeOrCreateSessionResources(
+                for: key,
+                conversationBaseState: turnStateSnapshot
+            )
             setActiveResources(initialResources, requestID: requestID)
             let answer = try await generateWithSingleContextRetry(
                 resources: initialResources,
                 question: normalizedQuestion,
+                turnStateSnapshot: turnStateSnapshot,
                 requestID: requestID,
                 continuation: continuation
             )
             try Task.checkCancellation()
-            updateConversationContext(
-                key: key,
-                question: normalizedQuestion,
-                answer: answer
+            let candidateState = try await initialResources.conversationTransaction.finalizedState(
+                requestID: requestID,
+                completedAt: referenceDate(),
+                validatedEvidenceIDs: answer.evidenceIDs
             )
+            try Task.checkCancellation()
+            guard conversationState == turnStateSnapshot else {
+                throw CancellationError()
+            }
+            conversationState = candidateState
             continuation.yield(.completed(answer))
         } catch is CancellationError {
             continuation.yield(.cancelled)
@@ -246,6 +252,7 @@ actor GraphChatOrchestrator {
     private func generateWithSingleContextRetry(
         resources initialResources: SessionResources,
         question: String,
+        turnStateSnapshot: GraphChatConversationState,
         requestID: UUID,
         continuation: GraphChatEventStream.Continuation
     ) async throws -> GraphChatAnswer {
@@ -254,11 +261,13 @@ actor GraphChatOrchestrator {
 
         while true {
             do {
-                let summary = retryCount == 0 ? conversationSummary : nil
+                let stateSnapshot = retryCount == 0
+                    ? turnStateSnapshot.snapshot
+                    : nil
                 let answer = try await consumeProviderStream(
                     resources: resources,
                     question: question,
-                    conversationSummary: summary,
+                    conversationState: stateSnapshot,
                     continuation: continuation
                 )
                 await resources.evidenceRegistry.removeAll()
@@ -268,6 +277,7 @@ actor GraphChatOrchestrator {
                 where error.code == .contextWindowExceeded && retryCount == 0 {
                 await resources.evidenceRegistry.removeAll()
                 await provider.discardSession(sessionID: resources.sessionID)
+                await resources.conversationTransaction.resetToBase()
                 retryCount += 1
                 resources = try await replaceSession(in: resources)
                 setActiveResources(resources, requestID: requestID)
@@ -285,7 +295,7 @@ actor GraphChatOrchestrator {
     private func consumeProviderStream(
         resources: SessionResources,
         question: String,
-        conversationSummary: String?,
+        conversationState: GraphChatConversationStateSnapshot?,
         continuation: GraphChatEventStream.Continuation
     ) async throws -> GraphChatAnswer {
         let request = GraphChatModelRequest(
@@ -294,7 +304,7 @@ actor GraphChatOrchestrator {
                 from: resources.schemaContext,
                 chatScope: resources.key.chatScope
             ),
-            conversationSummary: conversationSummary
+            conversationState: conversationState
         )
         let providerStream = try await provider.streamResponse(
             sessionID: resources.sessionID,
@@ -392,17 +402,24 @@ actor GraphChatOrchestrator {
     }
 
     private func takeOrCreateSessionResources(
-        for key: ScopeKey
+        for key: ScopeKey,
+        conversationBaseState: GraphChatConversationState
     ) async throws -> SessionResources {
-        if let preparedSession, preparedSession.key == key {
+        if let preparedSession,
+           preparedSession.key == key,
+           preparedSession.conversationBaseState == conversationBaseState {
             self.preparedSession = nil
             return preparedSession
         }
-        return try await makeSessionResources(for: key)
+        return try await makeSessionResources(
+            for: key,
+            conversationBaseState: conversationBaseState
+        )
     }
 
     private func makeSessionResources(
-        for key: ScopeKey
+        for key: ScopeKey,
+        conversationBaseState: GraphChatConversationState
     ) async throws -> SessionResources {
         let availability = await provider.availability()
         guard availability.isAvailable else {
@@ -431,11 +448,16 @@ actor GraphChatOrchestrator {
 
         let budget = GraphChatToolBudget(policy: toolBudgetPolicy)
         let evidenceRegistry = GraphChatEvidenceRegistry(scope: key.chatScope)
+        let conversationTransaction = GraphChatConversationStateTransaction(
+            baseState: conversationBaseState,
+            reducer: conversationStateReducer
+        )
         let toolRunner = toolRunnerFactory.makeRunner(
             scope: key.chatScope,
             schemaContext: schemaContext,
             budget: budget,
             evidenceRegistry: evidenceRegistry,
+            conversationTransaction: conversationTransaction,
             referenceDate: referenceDate(),
             calendar: calendar,
             timeZone: timeZone
@@ -463,6 +485,8 @@ actor GraphChatOrchestrator {
                 schemaContext: schemaContext,
                 budget: budget,
                 evidenceRegistry: evidenceRegistry,
+                conversationBaseState: conversationBaseState,
+                conversationTransaction: conversationTransaction,
                 toolRunner: toolRunner
             )
         } catch {
@@ -487,6 +511,8 @@ actor GraphChatOrchestrator {
             schemaContext: resources.schemaContext,
             budget: resources.budget,
             evidenceRegistry: resources.evidenceRegistry,
+            conversationBaseState: resources.conversationBaseState,
+            conversationTransaction: resources.conversationTransaction,
             toolRunner: resources.toolRunner
         )
     }
@@ -536,8 +562,15 @@ actor GraphChatOrchestrator {
         activeGeneration = nil
     }
 
-    private func discardPreparedSession(unlessMatching key: ScopeKey) async {
-        guard let preparedSession, preparedSession.key != key else {
+    private func discardPreparedSession(
+        unlessMatching key: ScopeKey,
+        conversationBaseState: GraphChatConversationState
+    ) async {
+        guard let preparedSession else {
+            return
+        }
+        guard preparedSession.key != key
+                || preparedSession.conversationBaseState != conversationBaseState else {
             return
         }
         await preparedSession.evidenceRegistry.removeAll()
@@ -569,35 +602,31 @@ actor GraphChatOrchestrator {
         return String(normalized.prefix(4_000))
     }
 
-    private func resetConversationContextIfNeeded(for key: ScopeKey) {
-        guard conversationScopeKey != key else {
-            return
-        }
-        conversationScopeKey = key
-        conversationSummary = nil
-    }
-
-    private func updateConversationContext(
-        key: ScopeKey,
-        question: String,
-        answer: GraphChatAnswer
-    ) {
-        let evidenceLines = answer.evidence
-            .prefix(contextPolicy.maximumEvidenceSummaries)
-            .map { evidence in
-                "- \(evidence.id.rawValue.uuidString): \(bounded(evidence.summary, limit: 180))"
+    private func conversationStateForTurn(
+        for key: ScopeKey
+    ) -> GraphChatConversationState {
+        if let conversationState {
+            if conversationState.graphScope == key.graphScope,
+               conversationState.chatScope == key.chatScope {
+                return conversationState
             }
-        let summary = [
-            "Previous question: \(bounded(question, limit: contextPolicy.maximumQuestionLength))",
-            "Validated answer: \(bounded(answer.directAnswer, limit: contextPolicy.maximumAnswerLength))",
-            "Validated evidence:",
-            evidenceLines.isEmpty ? "- none" : evidenceLines.joined(separator: "\n")
-        ].joined(separator: "\n")
-        conversationScopeKey = key
-        conversationSummary = bounded(
-            summary,
-            limit: contextPolicy.maximumSummaryLength
+            let transition = conversationStateReducer.transition(
+                conversationState,
+                to: key.chatScope
+            )
+            self.conversationState = transition.state
+            pendingResetReason = .newConversation
+            return transition.state
+        }
+
+        let initial = GraphChatConversationState.initial(
+            graphScope: key.graphScope,
+            chatScope: key.chatScope,
+            resetReason: pendingResetReason
         )
+        conversationState = initial
+        pendingResetReason = .newConversation
+        return initial
     }
 
     private func schemaPrompt(

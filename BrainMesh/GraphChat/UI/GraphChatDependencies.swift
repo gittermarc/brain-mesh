@@ -16,9 +16,16 @@ nonisolated protocol GraphChatOrchestrating: Sendable {
 
     func cancelCurrentGeneration() async
     func discardSession() async
+    func discardSession(reason: GraphChatConversationResetReason) async
 }
 
 extension GraphChatOrchestrator: GraphChatOrchestrating {}
+
+nonisolated extension GraphChatOrchestrating {
+    func discardSession(reason: GraphChatConversationResetReason) async {
+        await discardSession()
+    }
+}
 
 nonisolated protocol GraphChatAvailabilityProviding: Sendable {
     func availability() async -> GraphChatModelAvailability

@@ -263,6 +263,7 @@ final class GraphChatViewModel: ObservableObject {
         generationTask = nil
         setGenerationState(false)
         await orchestrator.cancelCurrentGeneration()
+        await orchestrator.discardSession(reason: .newConversation)
         messages = []
         scrollAnchorToken = UUID()
         await historyStore.removeMessages(for: chatScope)

@@ -64,18 +64,18 @@ nonisolated struct GraphChatModelRequest: Hashable, Sendable, Identifiable {
     let id: UUID
     let question: String
     let schemaPrompt: String
-    let conversationSummary: String?
+    let conversationState: GraphChatConversationStateSnapshot?
 
     init(
         id: UUID = UUID(),
         question: String,
         schemaPrompt: String,
-        conversationSummary: String? = nil
+        conversationState: GraphChatConversationStateSnapshot? = nil
     ) {
         self.id = id
         self.question = question
         self.schemaPrompt = schemaPrompt
-        self.conversationSummary = conversationSummary
+        self.conversationState = conversationState
     }
 }
 

@@ -215,7 +215,8 @@ final class GraphChatSessionStore: ObservableObject {
                 currentViewModel?.discardSensitiveState()
                 scheduleRuntimeCleanup(
                     removeHistory: false,
-                    scope: discardedScope
+                    scope: discardedScope,
+                    resetReason: .scopeChanged
                 )
             }
             let model = GraphChatViewModel(
@@ -266,7 +267,8 @@ final class GraphChatSessionStore: ObservableObject {
 
     func invalidate(
         removeHistory: Bool = false,
-        preserveDraft: Bool = false
+        preserveDraft: Bool = false,
+        resetReason: GraphChatConversationResetReason = .sessionDiscarded
     ) {
         let discardedScope = currentScope
         executionGate.revoke()
@@ -281,17 +283,24 @@ final class GraphChatSessionStore: ObservableObject {
         appliedLaunchRequestID = nil
         scheduleRuntimeCleanup(
             removeHistory: removeHistory,
-            scope: discardedScope
+            scope: discardedScope,
+            resetReason: resetReason
         )
     }
 
     func handleActiveGraphChange() {
         indexState = .loading
-        invalidate(removeHistory: true)
+        invalidate(
+            removeHistory: true,
+            resetReason: .graphChanged
+        )
     }
 
     func handleEntitlementRevocation() {
-        invalidate(removeHistory: true)
+        invalidate(
+            removeHistory: true,
+            resetReason: .accessRevoked
+        )
     }
 
     func handleSecurityLock(graphID: UUID? = nil) {
@@ -301,11 +310,17 @@ final class GraphChatSessionStore: ObservableObject {
                 return
             }
         }
-        invalidate(removeHistory: true)
+        invalidate(
+            removeHistory: true,
+            resetReason: .graphLocked
+        )
     }
 
     func handleAppTermination() {
-        invalidate(removeHistory: true)
+        invalidate(
+            removeHistory: true,
+            resetReason: .sessionDiscarded
+        )
     }
 
     private func handleAvailabilityStateChanged(
@@ -380,13 +395,20 @@ final class GraphChatSessionStore: ObservableObject {
         guard invalidatesSession else {
             return
         }
+        let resetReason: GraphChatConversationResetReason = delivery.batch.events.contains {
+            $0.kind == .graphDeleted
+        } ? .graphDeleted : .sessionDiscarded
         indexState = .stale(documentCount: indexState.documentCount)
-        invalidate(removeHistory: true)
+        invalidate(
+            removeHistory: true,
+            resetReason: resetReason
+        )
     }
 
     private func scheduleRuntimeCleanup(
         removeHistory: Bool,
-        scope: GraphChatScope?
+        scope: GraphChatScope?,
+        resetReason: GraphChatConversationResetReason
     ) {
         accessRevision &+= 1
         executionGate.revoke()
@@ -400,7 +422,7 @@ final class GraphChatSessionStore: ObservableObject {
         cleanupTask = Task {
             await previousCleanup?.value
             await orchestrator.cancelCurrentGeneration()
-            await orchestrator.discardSession()
+            await orchestrator.discardSession(reason: resetReason)
             if removeHistory, let scope {
                 await historyStore.removeMessages(for: scope)
             }

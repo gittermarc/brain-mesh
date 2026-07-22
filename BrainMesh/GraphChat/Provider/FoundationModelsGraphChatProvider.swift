@@ -600,17 +600,14 @@ actor FoundationModelsGraphChatProvider: GraphChatModelProvider {
     }
 
     private func prompt(for request: GraphChatModelRequest) -> String {
-        var parts = [
+        // PR 15 carries a trusted, bounded state snapshot through the provider boundary.
+        // Provider-side reference resolution is intentionally deferred to PR 16.
+        [
             "SCHEMA SNAPSHOT",
-            request.schemaPrompt
-        ]
-        if let summary = request.conversationSummary, summary.isEmpty == false {
-            parts.append("EVIDENCE-BASED CONVERSATION SUMMARY")
-            parts.append(summary)
-        }
-        parts.append("USER QUESTION")
-        parts.append(request.question)
-        return parts.joined(separator: "\n\n")
+            request.schemaPrompt,
+            "USER QUESTION",
+            request.question
+        ].joined(separator: "\n\n")
     }
 
     private func providerAnswer(

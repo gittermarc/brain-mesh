@@ -73,6 +73,7 @@ nonisolated protocol GraphChatModelToolRunnerFactory: Sendable {
         schemaContext: GraphSchemaContext,
         budget: GraphChatToolBudget,
         evidenceRegistry: GraphChatEvidenceRegistry,
+        conversationTransaction: GraphChatConversationStateTransaction,
         referenceDate: Date,
         calendar: Calendar,
         timeZone: TimeZone

@@ -104,6 +104,12 @@ actor AccessControlledGraphChatOrchestrator: GraphChatOrchestrating {
     func discardSession() async {
         await base.discardSession()
     }
+
+    func discardSession(
+        reason: GraphChatConversationResetReason
+    ) async {
+        await base.discardSession(reason: reason)
+    }
 }
 
 nonisolated enum GraphChatEntitlementAccessState: Hashable, Sendable {

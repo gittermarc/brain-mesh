@@ -166,7 +166,9 @@ struct GraphChatSessionSecurityTests {
         )
 
         #expect(setup.store.isGenerationAuthorized)
-        #expect((await setup.orchestrator.snapshot()).discardCount > 0)
+        let snapshot = await setup.orchestrator.snapshot()
+        #expect(snapshot.discardCount > 0)
+        #expect(snapshot.discardReasons.last == .scopeChanged)
     }
 
     @Test
@@ -197,7 +199,9 @@ struct GraphChatSessionSecurityTests {
         #expect(viewModel.composerState.text.isEmpty)
         #expect(viewModel.messages.isEmpty)
         #expect(setup.store.isGenerationAuthorized == false)
-        #expect((await waitForDiscard(on: setup.orchestrator)).discardCount > 0)
+        let snapshot = await waitForDiscard(on: setup.orchestrator)
+        #expect(snapshot.discardCount > 0)
+        #expect(snapshot.discardReasons.last == .accessRevoked)
     }
 
     @Test
@@ -230,7 +234,9 @@ struct GraphChatSessionSecurityTests {
 
         #expect(viewModel.composerState.text.isEmpty)
         #expect(setup.store.isGenerationAuthorized == false)
-        #expect((await waitForDiscard(on: setup.orchestrator)).discardCount > 0)
+        let lockedSnapshot = await waitForDiscard(on: setup.orchestrator)
+        #expect(lockedSnapshot.discardCount > 0)
+        #expect(lockedSnapshot.discardReasons.last == .graphLocked)
     }
 
     @Test
@@ -277,6 +283,7 @@ struct GraphChatSessionSecurityTests {
         let snapshot = await waitForDiscard(on: setup.orchestrator)
         #expect(snapshot.cancellationCount > 0)
         #expect(snapshot.discardCount > 0)
+        #expect(snapshot.discardReasons.last == .graphChanged)
     }
 
     @Test
@@ -322,7 +329,9 @@ struct GraphChatSessionSecurityTests {
         #expect(viewModel.messages.isEmpty)
         #expect(viewModel.composerState.text.isEmpty)
         #expect(setup.store.isGenerationAuthorized == false)
-        #expect((await waitForDiscard(on: setup.orchestrator)).discardCount > 0)
+        let snapshot = await waitForDiscard(on: setup.orchestrator)
+        #expect(snapshot.discardCount > 0)
+        #expect(snapshot.discardReasons.last == .graphLocked)
     }
 
     private func makeSessionStore(

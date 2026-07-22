@@ -228,6 +228,8 @@ struct GraphChatSessionPolicyTests {
         #expect(snapshot.createdSessions.count == 2)
         #expect(snapshot.streamedSessions.count == 2)
         #expect(snapshot.discardedSessions.count == 2)
+        #expect(snapshot.streamedRequests[0].conversationState != nil)
+        #expect(snapshot.streamedRequests[1].conversationState == nil)
     }
 
     @Test
@@ -267,6 +269,51 @@ struct GraphChatSessionPolicyTests {
         #expect(error.code == .contextWindowExceeded)
         #expect(snapshot.createdSessions.count == 2)
         #expect(snapshot.streamedSessions.count == 2)
+    }
+
+    @Test
+    func contextRetryDiscardsPartiallyReducedConversationCandidate() async throws {
+        let evidence = GraphChatProviderTestSupport.makeEvidence(
+            sourceID: UUID(uuidString: "50000000-0000-0000-0000-000000000021")!
+        )
+        let provider = FakeGraphChatModelProvider(
+            scripts: [
+                FakeGraphChatProviderScript(
+                    steps: [
+                        .toolRequest(.searchGraph(query: "partial", limit: 1)),
+                        .failure(
+                            GraphChatProviderError(
+                                code: .contextWindowExceeded,
+                                message: "Context window exceeded"
+                            )
+                        )
+                    ]
+                ),
+                Self.successfulEmptyScript("Recovered without tools")
+            ]
+        )
+        let orchestrator = GraphChatProviderTestSupport.makeOrchestrator(
+            provider: provider,
+            factory: EvidenceRegisteringFakeToolRunnerFactory(
+                evidenceByTool: [.searchGraph: [evidence]]
+            )
+        )
+        let graphScope = GraphScope(graphID: GraphChatTestSupport.graphID)
+
+        _ = await GraphChatProviderTestSupport.collect(
+            await orchestrator.streamAnswer(
+                question: "Retry without retaining partial state.",
+                graphScope: graphScope,
+                chatScope: .entireGraph(graphScope)
+            )
+        )
+
+        let stateSnapshot: GraphChatConversationState? = await orchestrator.conversationStateSnapshot()
+        let state = try #require(stateSnapshot)
+        #expect(state.turnContexts.count == 1)
+        #expect(state.turnContexts[0].toolKinds.isEmpty)
+        #expect(state.nodeReferences.isEmpty)
+        #expect(state.resultContexts.isEmpty)
     }
 
     private static func successfulEmptyScript(
