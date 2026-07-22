@@ -9,6 +9,7 @@ import SwiftData
 import SwiftUI
 
 struct GraphChatTabView: View {
+    @Environment(\.modelContext) private var modelContext
     @EnvironmentObject private var launchCoordinator: GraphChatLaunchCoordinator
     @EnvironmentObject private var sessionStore: GraphChatSessionStore
     @EnvironmentObject private var proStore: ProEntitlementStore
@@ -24,6 +25,9 @@ struct GraphChatTabView: View {
     @State private var previewSuggestions: [GraphChatEmptyStateSuggestion] = []
     @State private var previewGraphID: UUID?
     @State private var previewErrorMessage: String?
+    @State private var validatedRequest: GraphChatLaunchRequest?
+    @State private var validatedSourceRequestID: UUID?
+    @State private var launchValidationMessage: String?
 
     private var activeGraphID: UUID? {
         UUID(uuidString: activeGraphIDString)
@@ -36,11 +40,22 @@ struct GraphChatTabView: View {
         return graphs.first { $0.id == activeGraphID }
     }
 
-    private var effectiveRequest: GraphChatLaunchRequest? {
+    private var sourceRequest: GraphChatLaunchRequest? {
         guard let activeGraphID else {
             return nil
         }
         return launchCoordinator.requestForActiveGraph(activeGraphID)
+    }
+
+    private var effectiveRequest: GraphChatLaunchRequest? {
+        guard validatedSourceRequestID == sourceRequest?.id else {
+            return nil
+        }
+        return validatedRequest
+    }
+
+    private var isLaunchValidationPending: Bool {
+        sourceRequest != nil && validatedSourceRequestID != sourceRequest?.id
     }
 
     private var isGraphUnlocked: Bool {
@@ -56,7 +71,7 @@ struct GraphChatTabView: View {
             GraphChatAccessPolicyInput(
                 activeGraphID: activeGraphID,
                 graphExists: activeGraph != nil,
-                requestedScope: effectiveRequest?.scope,
+                requestedScope: effectiveRequest?.scope ?? sourceRequest?.scope,
                 entitlement: entitlementAccessState,
                 graphRequiresUnlock: activeGraph?.isProtected == true,
                 isGraphUnlocked: isGraphUnlocked,
@@ -79,11 +94,20 @@ struct GraphChatTabView: View {
     private var accessTaskID: String {
         [
             runtimeTaskID,
-            effectiveRequest?.id.uuidString ?? "none",
+            sourceRequest?.id.uuidString ?? "none",
+            effectiveRequest?.id.uuidString ?? "unvalidated",
             String(describing: sessionStore.availabilityState),
             String(describing: sessionStore.indexState),
             String(sessionStore.isGenerationRunning),
             String(describing: accessDecision.route)
+        ].joined(separator: "|")
+    }
+
+    private var launchValidationTaskID: String {
+        [
+            activeGraphIDString,
+            sourceRequest?.id.uuidString ?? "none",
+            String(graphLock.lockRevision)
         ].joined(separator: "|")
     }
 
@@ -103,10 +127,30 @@ struct GraphChatTabView: View {
         }
     }
 
+    private var interfaceLanguage: GraphChatResponseLanguage {
+        GraphChatResponseLanguageSelector.systemFallback()
+    }
+
     var body: some View {
         NavigationStack {
             Group {
-                switch accessDecision.route {
+                if isLaunchValidationPending, activeGraph != nil {
+                    statusView(
+                        icon: "scope",
+                        title: localized(
+                            german: "Chat-Kontext wird geprüft",
+                            english: "Checking chat context"
+                        ),
+                        message: localized(
+                            german: "BrainMesh prüft, ob alle referenzierten Elemente noch zum aktiven Graphen gehören.",
+                            english: "BrainMesh is checking whether every referenced item still belongs to the active graph."
+                        ),
+                        showsProgress: true
+                    )
+                } else if let launchValidationMessage {
+                    invalidLaunchView(message: launchValidationMessage)
+                } else {
+                    switch accessDecision.route {
                 case .noActiveGraph:
                     statusView(
                         icon: "square.stack.3d.up.slash",
@@ -176,10 +220,14 @@ struct GraphChatTabView: View {
 
                 case .ready:
                     readyChat
+                    }
                 }
             }
             .navigationTitle("Graph Chat")
             .navigationBarTitleDisplayMode(.inline)
+        }
+        .task(id: launchValidationTaskID) {
+            validateLaunchRequest()
         }
         .task(id: runtimeTaskID) {
             await refreshRuntimeStates()
@@ -192,6 +240,9 @@ struct GraphChatTabView: View {
             previewSuggestions = []
             previewGraphID = nil
             previewErrorMessage = nil
+            validatedRequest = nil
+            validatedSourceRequestID = nil
+            launchValidationMessage = nil
             sessionStore.handleActiveGraphChange()
         }
         .sheet(isPresented: $isShowingPaywall, onDismiss: refreshAfterPaywall) {
@@ -213,7 +264,7 @@ struct GraphChatTabView: View {
                     }
                 )
             )
-            .id(request.scope)
+            .id(request.id)
         } else {
             statusView(
                 icon: "square.stack.3d.up.slash",
@@ -319,6 +370,47 @@ struct GraphChatTabView: View {
                 Label("Graph entsperren", systemImage: "lock.open")
             }
             .buttonStyle(.borderedProminent)
+        }
+        .padding(20)
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+    }
+
+    private func invalidLaunchView(message: String) -> some View {
+        VStack(spacing: 18) {
+            statusCard(
+                icon: "exclamationmark.triangle",
+                title: localized(
+                    german: "Chat-Kontext nicht mehr verfügbar",
+                    english: "Chat context is no longer available"
+                ),
+                message: message
+            )
+
+            Button {
+                guard let activeGraphID else {
+                    return
+                }
+                launchValidationMessage = nil
+                validatedRequest = nil
+                validatedSourceRequestID = nil
+                launchCoordinator.resetToWholeGraph(activeGraphID)
+            } label: {
+                Label(
+                    localized(
+                        german: "Mit gesamtem Graphen fortfahren",
+                        english: "Continue with entire graph"
+                    ),
+                    systemImage: "square.stack.3d.up"
+                )
+            }
+            .buttonStyle(.borderedProminent)
+            .controlSize(.large)
+            .accessibilityHint(
+                localized(
+                    german: "Öffnet Graph Chat ohne die nicht mehr verfügbare Kontextreferenz.",
+                    english: "Opens Graph Chat without the unavailable context reference."
+                )
+            )
         }
         .padding(20)
         .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -452,6 +544,58 @@ struct GraphChatTabView: View {
         return isGraphUnlocked
     }
 
+    private func validateLaunchRequest() {
+        guard let activeGraphID,
+              let sourceRequest else {
+            validatedRequest = nil
+            validatedSourceRequestID = sourceRequest?.id
+            launchValidationMessage = nil
+            return
+        }
+
+        guard isGraphUnlocked else {
+            validatedRequest = sourceRequest
+            validatedSourceRequestID = sourceRequest.id
+            launchValidationMessage = nil
+            return
+        }
+
+        let result = GraphChatLaunchRequestValidator(
+            modelContext: modelContext
+        ).validate(sourceRequest, activeGraphID: activeGraphID)
+
+        switch result {
+        case .valid(let request):
+            validatedRequest = request
+            validatedSourceRequestID = sourceRequest.id
+            launchValidationMessage = nil
+            if request != sourceRequest {
+                launchCoordinator.replaceRequest(request)
+            }
+
+        case .invalid(let failure):
+            validatedRequest = nil
+            validatedSourceRequestID = sourceRequest.id
+            switch failure {
+            case .graphMismatch:
+                launchValidationMessage = localized(
+                    german: "Der Einstieg gehört zu einem anderen Graphen. Öffne den gewünschten Kontext im aktiven Graphen erneut.",
+                    english: "This entry belongs to another graph. Open the intended context again in the active graph."
+                )
+            case .emptySelection:
+                launchValidationMessage = localized(
+                    german: "Die Canvas-Auswahl ist leer oder enthält keine noch vorhandenen Nodes.",
+                    english: "The canvas selection is empty or no longer contains any existing nodes."
+                )
+            case .contextUnavailable:
+                launchValidationMessage = localized(
+                    german: "Mindestens ein referenziertes Element wurde gelöscht oder ist im aktiven Graphen nicht mehr zugänglich.",
+                    english: "At least one referenced item was deleted or is no longer accessible in the active graph."
+                )
+            }
+        }
+    }
+
     private func refreshRuntimeStates() async {
         await sessionStore.refreshAvailability()
         let mayPrepareIndex = proStore.entitlement == .pro
@@ -529,9 +673,19 @@ struct GraphChatTabView: View {
                   isGraphUnlocked else {
                 return
             }
+            let previewRequest = effectiveRequest ?? GraphChatLaunchRequest(
+                scope: .entireGraph(context.graphScope),
+                context: .graph(name: context.snapshot.graphName)
+            )
             previewSuggestions = GraphChatEmptyStateSuggestionBuilder.suggestions(
-                for: context.snapshot,
-                scope: .entireGraph(context.graphScope)
+                for: GraphChatSuggestionContext(
+                    schema: context,
+                    scope: previewRequest.scope,
+                    launchContext: previewRequest.context,
+                    availableTools: Set(GraphChatToolKind.allCases),
+                    modelAvailability: sessionStore.availabilityState,
+                    language: GraphChatResponseLanguageSelector.systemFallback()
+                )
             )
             previewGraphID = activeGraphID
             previewErrorMessage = nil
@@ -551,6 +705,13 @@ struct GraphChatTabView: View {
             await proStore.refreshEntitlements()
             await refreshRuntimeStates()
         }
+    }
+
+    private func localized(
+        german: String,
+        english: String
+    ) -> String {
+        interfaceLanguage == .german ? german : english
     }
 
     private func availabilityTitle(

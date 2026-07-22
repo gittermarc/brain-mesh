@@ -10,6 +10,27 @@ struct GraphCanvasActionRailModel: Equatable, Sendable {
     let isPinned: Bool
     let hiddenLinkCount: Int
     let showsAllLinks: Bool
+    let selectionCount: Int
+    let isPrimaryRetained: Bool
+    let language: GraphChatResponseLanguage
+
+    init(
+        nodeKind: NodeKind,
+        isPinned: Bool,
+        hiddenLinkCount: Int,
+        showsAllLinks: Bool,
+        selectionCount: Int = 1,
+        isPrimaryRetained: Bool = false,
+        language: GraphChatResponseLanguage = GraphChatResponseLanguageSelector.systemFallback()
+    ) {
+        self.nodeKind = nodeKind
+        self.isPinned = isPinned
+        self.hiddenLinkCount = hiddenLinkCount
+        self.showsAllLinks = showsAllLinks
+        self.selectionCount = max(1, selectionCount)
+        self.isPrimaryRetained = isPrimaryRetained
+        self.language = language
+    }
 
     var nodeKindTitle: String {
         switch nodeKind {
@@ -21,10 +42,19 @@ struct GraphCanvasActionRailModel: Equatable, Sendable {
     var actions: [GraphCanvasActionRailAction] {
         var result: [GraphCanvasActionRailAction] = [
             .openDetails,
-            .askGraph,
-            .center,
-            .expandNeighbors
+            .askGraph
         ]
+
+        result.append(
+            isPrimaryRetained
+                ? .removeFromSelection(language: language)
+                : .addToSelection(language: language)
+        )
+        if selectionCount > 1 {
+            result.append(.chatWithSelection(count: selectionCount, language: language))
+        }
+
+        result.append(contentsOf: [.center, .expandNeighbors])
 
         if nodeKind == .entity {
             result.append(.setFocus)
@@ -44,6 +74,9 @@ struct GraphCanvasActionRailModel: Equatable, Sendable {
 enum GraphCanvasActionRailActionKind: Hashable, Sendable {
     case openDetails
     case askGraph
+    case addToSelection
+    case removeFromSelection
+    case chatWithSelection
     case center
     case expandNeighbors
     case setFocus
@@ -66,6 +99,9 @@ struct GraphCanvasActionRailAction: Identifiable, Equatable, Sendable {
         switch kind {
         case .openDetails: return "openDetails"
         case .askGraph: return "askGraph"
+        case .addToSelection: return "addToSelection"
+        case .removeFromSelection: return "removeFromSelection"
+        case .chatWithSelection: return "chatWithSelection"
         case .center: return "center"
         case .expandNeighbors: return "expandNeighbors"
         case .setFocus: return "setFocus"
@@ -94,6 +130,48 @@ struct GraphCanvasActionRailAction: Identifiable, Equatable, Sendable {
         accessibilityLabel: "Graph Chat zu diesem Node öffnen",
         badgeText: nil
     )
+
+    static func addToSelection(language: GraphChatResponseLanguage) -> GraphCanvasActionRailAction {
+        GraphCanvasActionRailAction(
+            kind: .addToSelection,
+            title: language == .german ? "Zur Auswahl hinzufügen" : "Add to selection",
+            compactTitle: language == .german ? "Hinzufügen" : "Add",
+            systemImage: "checkmark.circle",
+            accessibilityLabel: language == .german
+                ? "Aktuellen Node zur Canvas-Auswahl hinzufügen"
+                : "Add current node to the Canvas selection",
+            badgeText: nil
+        )
+    }
+
+    static func removeFromSelection(language: GraphChatResponseLanguage) -> GraphCanvasActionRailAction {
+        GraphCanvasActionRailAction(
+            kind: .removeFromSelection,
+            title: language == .german ? "Aus Auswahl entfernen" : "Remove from selection",
+            compactTitle: language == .german ? "Entfernen" : "Remove",
+            systemImage: "minus.circle",
+            accessibilityLabel: language == .german
+                ? "Aktuellen Node aus der Canvas-Auswahl entfernen"
+                : "Remove current node from the Canvas selection",
+            badgeText: nil
+        )
+    }
+
+    static func chatWithSelection(
+        count: Int,
+        language: GraphChatResponseLanguage
+    ) -> GraphCanvasActionRailAction {
+        GraphCanvasActionRailAction(
+            kind: .chatWithSelection,
+            title: language == .german ? "Mit Auswahl chatten" : "Chat with selection",
+            compactTitle: language == .german ? "Auswahl-Chat" : "Selection chat",
+            systemImage: "bubble.left.and.text.bubble.right",
+            accessibilityLabel: language == .german
+                ? "Graph Chat mit \(count) ausgewählten Nodes öffnen"
+                : "Open Graph Chat with \(count) selected nodes",
+            badgeText: "\(count)"
+        )
+    }
 
     static let center = GraphCanvasActionRailAction(
         kind: .center,
@@ -219,6 +297,20 @@ struct GraphCanvasActionRail<SupplementaryContent: View>: View {
             }
 
             Spacer(minLength: 8)
+
+            if model.selectionCount > 1 {
+                Label("\(model.selectionCount)", systemImage: "checkmark.circle.fill")
+                    .font(.caption.weight(.semibold))
+                    .labelStyle(.titleAndIcon)
+                    .padding(.horizontal, 9)
+                    .padding(.vertical, 5)
+                    .background(.ultraThinMaterial, in: Capsule())
+                    .accessibilityLabel(
+                        model.language == .german
+                            ? "\(model.selectionCount) Nodes ausgewählt"
+                            : "\(model.selectionCount) nodes selected"
+                    )
+            }
 
             if model.isPinned {
                 Label("Gepinnt", systemImage: "pin.fill")

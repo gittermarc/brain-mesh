@@ -314,6 +314,25 @@ nonisolated struct GraphChatConversationStateReducer: Sendable {
             }
         }
 
+        switch newScope.context {
+        case .detailField(let entityID, let fieldID):
+            transitioned.nodeReferences = []
+            transitioned.entityReferences = transitioned.entityReferences.filter {
+                $0.entityID == entityID
+            }
+            transitioned.fieldReferences = transitioned.fieldReferences.filter {
+                $0.entityID == entityID && $0.fieldID == fieldID
+            }
+
+        case .healthFinding(_, let affectedNodes) where affectedNodes.isEmpty:
+            transitioned.nodeReferences = []
+            transitioned.entityReferences = []
+            transitioned.fieldReferences = []
+
+        case .graph, .entity, .node, .selection, .healthFinding:
+            break
+        }
+
         let priorCount =
             state.turnContexts.count
             + state.nodeReferences.count

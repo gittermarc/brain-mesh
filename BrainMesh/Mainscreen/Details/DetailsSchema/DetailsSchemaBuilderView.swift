@@ -10,6 +10,10 @@ import SwiftData
 
 struct DetailsSchemaBuilderView: View {
     @Environment(\.modelContext) private var modelContext
+    @EnvironmentObject private var graphChatLaunchCoordinator: GraphChatLaunchCoordinator
+    @EnvironmentObject private var tabRouter: RootTabRouter
+
+    @AppStorage(BMAppStorageKeys.activeGraphID) private var activeGraphIDString: String = ""
 
     @Bindable var entity: MetaEntity
 
@@ -75,6 +79,7 @@ struct DetailsSchemaBuilderView: View {
                 onEditField: { field in
                     editField = field
                 },
+                onChatWithField: openGraphChat,
                 onMove: { source, destination in
                     performMutation {
                         _ = try await DetailsSchemaActions.moveFields(
@@ -166,6 +171,28 @@ struct DetailsSchemaBuilderView: View {
                 )
             }
         }
+    }
+
+    private func openGraphChat(for field: MetaDetailFieldDefinition) {
+        guard let graphID = entity.graphID,
+              UUID(uuidString: activeGraphIDString) == graphID,
+              field.graphID == graphID,
+              field.entityID == entity.id else {
+            return
+        }
+        let launch = GraphChatContextEntryPoint.detailField(
+            graphID: graphID,
+            entityID: entity.id,
+            entityName: entity.name,
+            fieldID: field.id,
+            fieldName: field.name,
+            fieldType: field.type
+        )
+        graphChatLaunchCoordinator.launch(
+            launch,
+            presentationStyle: .rootTab
+        )
+        tabRouter.openChat()
     }
 
     private func performMutation(

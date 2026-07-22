@@ -74,9 +74,29 @@ struct GraphCanvasScreen: View {
     // ✅ Notizen GERICHETET: source -> target
     @State var directedEdgeNotes: [DirectedEdgeKey: String] = [:]
 
-    // Pinning + Selection
+    // Pinning + Selection. This remains the single Canvas selection store.
     @State var pinned: Set<NodeKey> = []
-    @State var selection: NodeKey? = nil
+    @State var canvasSelection = GraphCanvasSelectionState()
+
+    var selection: NodeKey? {
+        get { canvasSelection.primary }
+        nonmutating set {
+            var updatedSelection = canvasSelection
+            updatedSelection.setPrimary(newValue)
+            canvasSelection = updatedSelection
+        }
+    }
+
+    var selectionBinding: Binding<NodeKey?> {
+        Binding(
+            get: { canvasSelection.primary },
+            set: { newValue in
+                var updatedSelection = canvasSelection
+                updatedSelection.setPrimary(newValue)
+                canvasSelection = updatedSelection
+            }
+        )
+    }
 
     // ✅ Details Peek (Selection chip)
     // Precomputed on selection change to keep the render path cheap.

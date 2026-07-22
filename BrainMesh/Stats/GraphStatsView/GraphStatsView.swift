@@ -174,24 +174,35 @@ struct GraphStatsView: View {
               dashboardGraphID == graphID else {
             return
         }
-        let primaryNode: NodeKey?
-        if let rawKind = issue.primaryNodeKindRaw,
-           let kind = NodeKind(rawValue: rawKind),
-           let nodeID = issue.primaryNodeID {
-            primaryNode = NodeKey(kind: kind, uuid: nodeID)
-        } else {
-            primaryNode = nil
+        let affectedNodes = issue.affectedItems.compactMap { item -> GraphChatNodeContextReference? in
+            if let rawKind = item.nodeKindRaw,
+               let kind = NodeKind(rawValue: rawKind),
+               let nodeID = item.nodeID {
+                return GraphChatNodeContextReference(
+                    node: NodeRefKey(kind: kind, id: nodeID),
+                    label: item.label
+                )
+            }
+            if let rawKind = item.ownerKindRaw,
+               let kind = NodeKind(rawValue: rawKind),
+               let ownerID = item.ownerID {
+                return GraphChatNodeContextReference(
+                    node: NodeRefKey(kind: kind, id: ownerID),
+                    label: item.ownerLabel ?? item.label
+                )
+            }
+            return nil
         }
         let launch = GraphChatContextEntryPoint.statsFinding(
             graphID: graphID,
+            findingID: issue.id,
             title: issue.title,
             message: issue.message,
             count: issue.count,
-            primaryNode: primaryNode
+            affectedNodes: affectedNodes
         )
         graphChatLaunchCoordinator.launch(
-            scope: launch.scope,
-            prefilledQuestion: launch.prefilledQuestion,
+            launch,
             presentationStyle: .rootTab
         )
         tabRouter.openChat()

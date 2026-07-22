@@ -94,6 +94,35 @@ struct GraphCanvasActionRailModelTests {
         #expect(unpinAction.systemImage == "pin.slash")
     }
 
+    @Test
+    func productiveSelectionActionsUseTheExistingSelectionCount() throws {
+        let single = GraphCanvasActionRailModel(
+            nodeKind: .attribute,
+            isPinned: false,
+            hiddenLinkCount: 0,
+            showsAllLinks: false,
+            selectionCount: 1,
+            isPrimaryRetained: false,
+            language: .german
+        )
+        let multiple = GraphCanvasActionRailModel(
+            nodeKind: .attribute,
+            isPinned: false,
+            hiddenLinkCount: 0,
+            showsAllLinks: false,
+            selectionCount: 3,
+            isPrimaryRetained: true,
+            language: .english
+        )
+
+        #expect(kinds(single).contains(.addToSelection))
+        #expect(kinds(single).contains(.chatWithSelection) == false)
+        #expect(kinds(multiple).contains(.removeFromSelection))
+        let chat = try #require(action(.chatWithSelection, in: multiple))
+        #expect(chat.badgeText == "3")
+        #expect(chat.title == "Chat with selection")
+    }
+
     private func kinds(_ model: GraphCanvasActionRailModel) -> [GraphCanvasActionRailActionKind] {
         model.actions.map(\.kind)
     }

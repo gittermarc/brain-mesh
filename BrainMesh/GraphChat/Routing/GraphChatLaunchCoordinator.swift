@@ -16,17 +16,20 @@ nonisolated enum GraphChatPresentationStyle: String, Hashable, Sendable {
 nonisolated struct GraphChatLaunchRequest: Identifiable, Hashable, Sendable {
     let id: UUID
     let scope: GraphChatScope
+    let context: GraphChatLaunchContext
     let prefilledQuestion: String?
     let presentationStyle: GraphChatPresentationStyle
 
     init(
         id: UUID = UUID(),
         scope: GraphChatScope,
+        context: GraphChatLaunchContext? = nil,
         prefilledQuestion: String? = nil,
         presentationStyle: GraphChatPresentationStyle = .rootTab
     ) {
         self.id = id
         self.scope = scope
+        self.context = context ?? .inferred(from: scope)
         self.prefilledQuestion = Self.normalized(prefilledQuestion)
         self.presentationStyle = presentationStyle
     }
@@ -52,11 +55,13 @@ final class GraphChatLaunchCoordinator: ObservableObject {
 
     func launch(
         scope: GraphChatScope,
+        context: GraphChatLaunchContext? = nil,
         prefilledQuestion: String? = nil,
         presentationStyle: GraphChatPresentationStyle = .rootTab
     ) {
         let request = GraphChatLaunchRequest(
             scope: scope,
+            context: context,
             prefilledQuestion: prefilledQuestion,
             presentationStyle: presentationStyle
         )
@@ -65,11 +70,24 @@ final class GraphChatLaunchCoordinator: ObservableObject {
         draftText = request.prefilledQuestion ?? ""
     }
 
+    func launch(
+        _ contextualLaunch: GraphChatContextLaunch,
+        presentationStyle: GraphChatPresentationStyle = .rootTab
+    ) {
+        launch(
+            scope: contextualLaunch.scope,
+            context: contextualLaunch.context,
+            prefilledQuestion: contextualLaunch.prefilledQuestion,
+            presentationStyle: presentationStyle
+        )
+    }
+
     func requestForActiveGraph(_ graphID: UUID) -> GraphChatLaunchRequest {
         if let request, request.scope.graphScope.graphID == graphID {
             return GraphChatLaunchRequest(
                 id: request.id,
                 scope: request.scope,
+                context: request.context,
                 prefilledQuestion: draft(for: request.scope),
                 presentationStyle: request.presentationStyle
             )
@@ -79,6 +97,7 @@ final class GraphChatLaunchCoordinator: ObservableObject {
         return GraphChatLaunchRequest(
             id: graphID,
             scope: scope,
+            context: .graph(name: nil),
             prefilledQuestion: draft(for: scope),
             presentationStyle: .rootTab
         )
@@ -115,6 +134,7 @@ final class GraphChatLaunchCoordinator: ObservableObject {
         let scope = GraphChatScope.entireGraph(GraphScope(graphID: graphID))
         request = GraphChatLaunchRequest(
             scope: scope,
+            context: .graph(name: nil),
             prefilledQuestion: draft(for: scope),
             presentationStyle: .rootTab
         )
@@ -122,6 +142,13 @@ final class GraphChatLaunchCoordinator: ObservableObject {
             draftScope = scope
             draftText = ""
         }
+    }
+
+    func replaceRequest(_ request: GraphChatLaunchRequest) {
+        let preservedDraft = draft(for: request.scope)
+        self.request = request
+        draftScope = request.scope
+        draftText = request.prefilledQuestion ?? preservedDraft ?? ""
     }
 
     func invalidate(clearDraft: Bool = true) {

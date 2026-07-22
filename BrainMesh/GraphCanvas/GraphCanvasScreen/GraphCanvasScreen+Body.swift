@@ -36,7 +36,7 @@ extension GraphCanvasScreen {
                         positions: $positions,
                         velocities: $velocities,
                         pinned: $pinned,
-                        selection: $selection,
+                        selection: selectionBinding,
                         scale: $scale,
                         pan: $pan,
                         cameraCommand: $cameraCommand,
@@ -175,6 +175,7 @@ extension GraphCanvasScreen {
             .onChange(of: activeGraphIDString) { _, _ in
                 // Reset anything that is graph-scoped.
                 clearFocusEntity(scheduleReload: false)
+                canvasSelection.clear()
                 pinned.removeAll()
                 detailsFocusState = nil
                 detailsFocusPreparedState = .empty

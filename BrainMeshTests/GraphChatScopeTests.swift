@@ -49,4 +49,19 @@ struct GraphChatScopeTests {
             try GraphChatScope.selection([entityNode, entityNode], in: graphScope)
         }
     }
+
+    @Test
+    func incompatibleVisibleContextIsRejected() throws {
+        let graphScope = GraphScope(graphID: UUID())
+        let entityID = UUID()
+        let otherEntityID = UUID()
+
+        #expect(throws: GraphChatScopeError.incompatibleContext) {
+            try GraphChatScope(
+                graphScope: graphScope,
+                target: .entity(entityID),
+                context: .entity(otherEntityID)
+            )
+        }
+    }
 }

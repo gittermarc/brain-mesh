@@ -21,7 +21,10 @@ extension GraphCanvasScreen {
             nodeKind: node.key.kind,
             isPinned: pinned.contains(node.key),
             hiddenLinkCount: hiddenLinks,
-            showsAllLinks: showAllLinksForSelection
+            showsAllLinks: showAllLinksForSelection,
+            selectionCount: canvasSelection.chatNodeCount,
+            isPrimaryRetained: canvasSelection.isPrimaryRetained,
+            language: GraphChatResponseLanguageSelector.systemFallback()
         )
 
         return GraphCanvasActionRail(
@@ -58,6 +61,10 @@ extension GraphCanvasScreen {
             openDetails(for: node.key)
         case .askGraph:
             openGraphChat(for: node.key)
+        case .addToSelection, .removeFromSelection:
+            canvasSelection.togglePrimaryRetention()
+        case .chatWithSelection:
+            openGraphChatForSelection()
         case .center:
             cameraCommand = CameraCommand(kind: .center(node.key))
         case .expandNeighbors:
@@ -137,16 +144,58 @@ extension GraphCanvasScreen {
         guard let activeGraphID else {
             return
         }
+        let reference = graphChatReference(for: key)
         let launch = GraphChatContextEntryPoint.graphNode(
             graphID: activeGraphID,
-            node: key
+            node: key,
+            label: reference.label,
+            entityID: reference.entityID,
+            entityName: reference.entityName
         )
         graphChatLaunchCoordinator.launch(
-            scope: launch.scope,
-            prefilledQuestion: launch.prefilledQuestion,
+            launch,
             presentationStyle: .rootTab
         )
         tabRouter.openChat()
+    }
+
+    func openGraphChatForSelection() {
+        guard let activeGraphID else {
+            return
+        }
+        let references = canvasSelection.chatNodes.map(graphChatReference)
+        guard let launch = GraphChatContextEntryPoint.selection(
+            graphID: activeGraphID,
+            nodes: references
+        ) else {
+            return
+        }
+        graphChatLaunchCoordinator.launch(
+            launch,
+            presentationStyle: .rootTab
+        )
+        tabRouter.openChat()
+    }
+
+    func graphChatReference(for key: NodeKey) -> GraphChatNodeContextReference {
+        switch key.kind {
+        case .entity:
+            let entity = fetchEntity(id: key.uuid)
+            return GraphChatNodeContextReference(
+                node: NodeRefKey(kind: key.kind, id: key.uuid),
+                label: entity?.name ?? labelCache[key] ?? "Entity",
+                entityID: entity?.id,
+                entityName: entity?.name
+            )
+        case .attribute:
+            let attribute = fetchAttribute(id: key.uuid)
+            return GraphChatNodeContextReference(
+                node: NodeRefKey(kind: key.kind, id: key.uuid),
+                label: attribute?.name ?? labelCache[key] ?? "Attribut",
+                entityID: attribute?.owner?.id,
+                entityName: attribute?.owner?.name
+            )
+        }
     }
 
     func openDetails(for key: NodeKey) {

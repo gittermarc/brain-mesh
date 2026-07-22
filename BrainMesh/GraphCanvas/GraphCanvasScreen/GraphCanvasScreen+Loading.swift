@@ -63,8 +63,6 @@ extension GraphCanvasScreen {
             let nodeKeys = Set(snapshot.nodes.map(\.key))
 
             let newPinned = pinned.intersection(nodeKeys)
-            var newSelection = selection
-            if let sel = newSelection, !nodeKeys.contains(sel) { newSelection = nil }
 
             let validDirected = Set(snapshot.edges.flatMap {
                 [
@@ -83,7 +81,7 @@ extension GraphCanvasScreen {
             detailsFocusPreparedState = snapshot.detailsFocusPreparedState
             loadSummary = snapshot.loadSummary
             pinned = newPinned
-            selection = newSelection
+            canvasSelection.retainAvailableNodes(nodeKeys)
             directedEdgeNotes = newDirectedNotes
 
             // If another load was scheduled while we were applying the result, ignore any further work.

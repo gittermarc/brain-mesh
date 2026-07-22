@@ -59,11 +59,11 @@ extension EntityDetailView {
         }
         let launch = GraphChatContextEntryPoint.entity(
             graphID: graphID,
-            entityID: entity.id
+            entityID: entity.id,
+            entityName: entity.name
         )
         graphChatLaunchCoordinator.launch(
-            scope: launch.scope,
-            prefilledQuestion: launch.prefilledQuestion,
+            launch,
             presentationStyle: .rootTab
         )
         tabRouter.openChat()

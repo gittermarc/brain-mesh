@@ -210,8 +210,7 @@ struct CommandCenterView: View {
                     return
                 }
                 graphChatLaunchCoordinator.launch(
-                    scope: launch.scope,
-                    prefilledQuestion: launch.prefilledQuestion,
+                    launch,
                     presentationStyle: .rootTab
                 )
                 commandCenter.dismiss()

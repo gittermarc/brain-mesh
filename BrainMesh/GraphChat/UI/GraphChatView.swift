@@ -49,9 +49,9 @@ struct GraphChatView: View {
                     Text(viewModel.graphName)
                         .font(.title2.weight(.bold))
                         .lineLimit(2)
-                    Label(viewModel.scopeTitle, systemImage: "scope")
-                        .font(.subheadline)
-                        .foregroundStyle(.secondary)
+                    GraphChatScopeChip(
+                        presentation: viewModel.scopePresentation
+                    )
                 }
                 Spacer(minLength: 12)
             }
@@ -82,8 +82,12 @@ struct GraphChatView: View {
                     if viewModel.messages.isEmpty {
                         GraphChatEmptyState(
                             graphName: viewModel.graphName,
+                            scopePresentation: viewModel.scopePresentation,
+                            language: viewModel.interfaceLanguage,
                             suggestions: viewModel.suggestions,
                             schemaErrorMessage: viewModel.schemaErrorMessage,
+                            isLoadingSuggestions: viewModel.schemaContext == nil
+                                && viewModel.schemaErrorMessage == nil,
                             onSelectSuggestion: viewModel.useSuggestion
                         )
                     } else {

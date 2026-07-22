@@ -62,11 +62,13 @@ extension AttributeDetailView {
         }
         let launch = GraphChatContextEntryPoint.attribute(
             graphID: graphID,
-            attributeID: attribute.id
+            attributeID: attribute.id,
+            attributeName: attribute.name,
+            entityID: attribute.owner?.id,
+            entityName: attribute.owner?.name
         )
         graphChatLaunchCoordinator.launch(
-            scope: launch.scope,
-            prefilledQuestion: launch.prefilledQuestion,
+            launch,
             presentationStyle: .rootTab
         )
         tabRouter.openChat()

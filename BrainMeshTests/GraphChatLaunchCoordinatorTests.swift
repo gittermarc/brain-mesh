@@ -41,6 +41,41 @@ struct GraphChatLaunchCoordinatorTests {
         #expect(coordinator.request?.presentationStyle == .rootTab)
     }
 
+
+    @Test
+    func contextualLaunchStoresActualContextAndClearsAnIncompatibleDraft() throws {
+        let graphID = UUID()
+        let entityID = UUID()
+        let coordinator = GraphChatLaunchCoordinator()
+        let entityLaunch = GraphChatContextEntryPoint.entity(
+            graphID: graphID,
+            entityID: entityID,
+            entityName: "Projects"
+        )
+        coordinator.launch(
+            scope: entityLaunch.scope,
+            context: entityLaunch.context,
+            prefilledQuestion: "Old entity draft"
+        )
+        let previousRequestID = try #require(coordinator.request?.id)
+
+        let fieldLaunch = GraphChatContextEntryPoint.detailField(
+            graphID: graphID,
+            entityID: entityID,
+            entityName: "Projects",
+            fieldID: UUID(),
+            fieldName: "Status",
+            fieldType: .singleChoice
+        )
+        coordinator.launch(fieldLaunch)
+
+        let request = try #require(coordinator.request)
+        #expect(request.id != previousRequestID)
+        #expect(request.scope == fieldLaunch.scope)
+        #expect(request.context == fieldLaunch.context)
+        #expect(coordinator.draft(for: fieldLaunch.scope) == nil)
+    }
+
     @Test
     func activeGraphChangeResetsToWholeGraphScope() throws {
         let oldGraphID = UUID()

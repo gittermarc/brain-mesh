@@ -791,6 +791,115 @@ struct GraphChatConversationStateTests {
         #expect(graphTransition.lastResetReason == .graphChanged)
     }
 
+    @Test
+    func detailFieldContextRemovesIncompatibleConversationReferences() throws {
+        let graphScope = GraphScope(graphID: GraphChatTestSupport.graphID)
+        let entityScope = GraphChatScope.entity(
+            GraphChatTestSupport.projectEntityID,
+            in: graphScope
+        )
+        let retainedFieldID = UUID(uuidString: "40000000-0000-0000-0000-000000000101")!
+        let discardedFieldID = UUID(uuidString: "40000000-0000-0000-0000-000000000102")!
+        let node = NodeRefKey(
+            kind: .attribute,
+            id: GraphChatTestSupport.projectAttributeID
+        )
+        let reducer = GraphChatConversationStateReducer()
+        var state = GraphChatConversationState.initial(
+            graphScope: graphScope,
+            chatScope: entityScope
+        )
+
+        let nodeEvidence = makeNodeEvidence(
+            node: node,
+            ownerEntityID: GraphChatTestSupport.projectEntityID,
+            suffix: "project-node"
+        )
+        let retainedFieldEvidence = makeFieldEvidence(
+            node: node,
+            ownerEntityID: GraphChatTestSupport.projectEntityID,
+            fieldID: retainedFieldID,
+            suffix: "retained-field"
+        )
+        let discardedFieldEvidence = makeFieldEvidence(
+            node: node,
+            ownerEntityID: GraphChatTestSupport.projectEntityID,
+            fieldID: discardedFieldID,
+            suffix: "discarded-field"
+        )
+        let output = GetNodeOutput(
+            node: node,
+            label: "Project Alpha",
+            notes: "",
+            owner: GraphChatNodeOwner(
+                entityID: GraphChatTestSupport.projectEntityID,
+                label: "Projects"
+            ),
+            detailValues: [
+                GraphChatNodeDetailValue(
+                    valueID: UUID(),
+                    fieldID: retainedFieldID,
+                    fieldName: "Status",
+                    fieldType: .singleChoice,
+                    unit: nil,
+                    value: .choice("Active"),
+                    evidenceID: retainedFieldEvidence.id
+                ),
+                GraphChatNodeDetailValue(
+                    valueID: UUID(),
+                    fieldID: discardedFieldID,
+                    fieldName: "Effort",
+                    fieldType: .numberInt,
+                    unit: "h",
+                    value: .integer(8),
+                    evidenceID: discardedFieldEvidence.id
+                )
+            ],
+            links: [],
+            attachments: [],
+            evidenceIDs: [
+                nodeEvidence.id,
+                retainedFieldEvidence.id,
+                discardedFieldEvidence.id
+            ]
+        )
+        state = try reducer.reduce(
+            state,
+            event: GraphChatConversationTrustedEvent(
+                graphScope: graphScope,
+                chatScope: entityScope,
+                payload: .nodeResolved(
+                    output: output,
+                    state: .success,
+                    evidence: [
+                        nodeEvidence,
+                        retainedFieldEvidence,
+                        discardedFieldEvidence
+                    ]
+                )
+            )
+        ).state
+
+        #expect(Set(state.fieldReferences.map(\.fieldID)) == [retainedFieldID, discardedFieldID])
+
+        let fieldScope = GraphChatScope.detailField(
+            retainedFieldID,
+            entityID: GraphChatTestSupport.projectEntityID,
+            in: graphScope
+        )
+        let transitioned = reducer.transition(state, to: fieldScope).state
+
+        #expect(transitioned.chatScope == fieldScope)
+        #expect(transitioned.nodeReferences.isEmpty)
+        #expect(transitioned.entityReferences.allSatisfy {
+            $0.entityID == GraphChatTestSupport.projectEntityID
+        })
+        #expect(transitioned.fieldReferences.map(\.fieldID) == [retainedFieldID])
+        #expect(transitioned.resultContexts.isEmpty)
+        #expect(transitioned.referenceTargets == .empty)
+        #expect(transitioned.lastResetReason == .scopeChanged)
+    }
+
     private func requireSendable<T: Sendable>(_ value: T) {
         _ = value
     }

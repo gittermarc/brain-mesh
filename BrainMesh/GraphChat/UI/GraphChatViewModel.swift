@@ -15,12 +15,16 @@ final class GraphChatViewModel: ObservableObject {
     @Published private(set) var availabilityState: GraphChatAvailabilityPresentationState = .loading
     @Published private(set) var indexState: GraphChatIndexPresentationState = .loading
     @Published private(set) var schemaSnapshot: GraphSchemaSnapshot?
+    @Published private(set) var schemaContext: GraphSchemaContext?
     @Published private(set) var schemaErrorMessage: String?
     @Published private(set) var scrollAnchorToken = UUID()
 
     let graphScope: GraphScope
     let chatScope: GraphChatScope
     let configuredGraphName: String
+    let launchContext: GraphChatLaunchContext
+    let interfaceLanguage: GraphChatResponseLanguage
+    let availableTools: Set<GraphChatToolKind>
 
     private let orchestrator: any GraphChatOrchestrating
     private let schemaProvider: any GraphSchemaSnapshotProviding
@@ -44,6 +48,9 @@ final class GraphChatViewModel: ObservableObject {
         graphScope: GraphScope,
         chatScope: GraphChatScope,
         graphName: String,
+        launchContext: GraphChatLaunchContext? = nil,
+        interfaceLanguage: GraphChatResponseLanguage = GraphChatResponseLanguageSelector.systemFallback(),
+        availableTools: Set<GraphChatToolKind> = Set(GraphChatToolKind.allCases),
         orchestrator: any GraphChatOrchestrating,
         schemaProvider: any GraphSchemaSnapshotProviding,
         availabilityProvider: any GraphChatAvailabilityProviding,
@@ -65,6 +72,9 @@ final class GraphChatViewModel: ObservableObject {
         self.graphScope = graphScope
         self.chatScope = chatScope
         self.configuredGraphName = graphName
+        self.launchContext = launchContext ?? .inferred(from: chatScope)
+        self.interfaceLanguage = interfaceLanguage
+        self.availableTools = availableTools
         self.orchestrator = orchestrator
         self.schemaProvider = schemaProvider
         self.availabilityProvider = availabilityProvider
@@ -88,8 +98,16 @@ final class GraphChatViewModel: ObservableObject {
         schemaSnapshot?.graphName ?? configuredGraphName
     }
 
+    var scopePresentation: GraphChatScopePresentationModel {
+        GraphChatScopePresentation.model(
+            for: launchContext,
+            scope: chatScope,
+            language: interfaceLanguage
+        )
+    }
+
     var scopeTitle: String {
-        GraphChatScopePresentation.title(for: chatScope)
+        scopePresentation.title
     }
 
     var isGenerating: Bool {
@@ -101,12 +119,18 @@ final class GraphChatViewModel: ObservableObject {
     }
 
     var suggestions: [GraphChatEmptyStateSuggestion] {
-        guard let schemaSnapshot else {
+        guard let schemaContext else {
             return []
         }
         return GraphChatEmptyStateSuggestionBuilder.suggestions(
-            for: schemaSnapshot,
-            scope: chatScope
+            for: GraphChatSuggestionContext(
+                schema: schemaContext,
+                scope: chatScope,
+                launchContext: launchContext,
+                availableTools: availableTools,
+                modelAvailability: availabilityState,
+                language: interfaceLanguage
+            )
         )
     }
 
@@ -138,11 +162,13 @@ final class GraphChatViewModel: ObservableObject {
                     message: "Das geladene Schema gehört nicht zum aktiven Graphen."
                 )
             }
+            schemaContext = context
             schemaSnapshot = context.snapshot
             schemaErrorMessage = nil
         } catch is CancellationError {
             return
         } catch {
+            schemaContext = nil
             schemaSnapshot = nil
             schemaErrorMessage = error.localizedDescription
         }
@@ -278,6 +304,7 @@ final class GraphChatViewModel: ObservableObject {
             draftChangeHandler("")
         }
         messages = []
+        schemaContext = nil
         schemaSnapshot = nil
         schemaErrorMessage = nil
         indexState = .loading

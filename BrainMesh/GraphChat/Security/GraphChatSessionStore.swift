@@ -28,6 +28,7 @@ final class GraphChatSessionStore: ObservableObject {
 
     private var currentViewModel: GraphChatViewModel?
     private var currentScope: GraphChatScope?
+    private var currentLaunchContext: GraphChatLaunchContext?
     private var authorizedGraphID: UUID?
     private var authorizedScope: GraphChatScope?
     private var appliedLaunchRequestID: UUID?
@@ -209,7 +210,9 @@ final class GraphChatSessionStore: ObservableObject {
         draftChangeHandler: @escaping @MainActor (String) -> Void = { _ in }
     ) -> GraphChatViewModel {
         let scope = request.scope
-        if currentScope != scope || currentViewModel == nil {
+        if currentScope != scope
+            || currentLaunchContext != request.context
+            || currentViewModel == nil {
             if currentViewModel != nil || currentScope != nil {
                 let discardedScope = currentScope
                 currentViewModel?.discardSensitiveState()
@@ -223,6 +226,7 @@ final class GraphChatSessionStore: ObservableObject {
                 graphScope: scope.graphScope,
                 chatScope: scope,
                 graphName: graphName,
+                launchContext: request.context,
                 orchestrator: orchestrator,
                 schemaProvider: schemaProvider,
                 availabilityProvider: availabilityProvider,
@@ -251,6 +255,7 @@ final class GraphChatSessionStore: ObservableObject {
             )
             currentViewModel = model
             currentScope = scope
+            currentLaunchContext = request.context
             appliedLaunchRequestID = nil
         }
 
@@ -278,6 +283,7 @@ final class GraphChatSessionStore: ObservableObject {
         currentViewModel?.discardSensitiveState(preserveDraft: preserveDraft)
         currentViewModel = nil
         currentScope = nil
+        currentLaunchContext = nil
         authorizedGraphID = nil
         authorizedScope = nil
         appliedLaunchRequestID = nil

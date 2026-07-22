@@ -9,6 +9,7 @@ struct DetailsSchemaFieldsList: View {
     @Bindable var entity: MetaEntity
 
     let onEditField: (MetaDetailFieldDefinition) -> Void
+    let onChatWithField: (MetaDetailFieldDefinition) -> Void
     let onMove: (IndexSet, Int) -> Void
     let onDelete: (IndexSet) -> Void
 
@@ -29,6 +30,23 @@ struct DetailsSchemaFieldsList: View {
                         DetailsFieldRow(field: field)
                     }
                     .buttonStyle(.plain)
+                    .contextMenu {
+                        Button {
+                            onChatWithField(field)
+                        } label: {
+                            Label(
+                                GraphChatResponseLanguageSelector.systemFallback() == .german
+                                    ? "Mit Feld chatten"
+                                    : "Chat with field",
+                                systemImage: "bubble.left.and.text.bubble.right"
+                            )
+                        }
+                        .accessibilityLabel(
+                            GraphChatResponseLanguageSelector.systemFallback() == .german
+                                ? "Mit dem Detailfeld \(field.name) chatten"
+                                : "Chat with the \(field.name) detail field"
+                        )
+                    }
                 }
                 .onMove(perform: onMove)
                 .onDelete(perform: onDelete)
