@@ -36,6 +36,18 @@ nonisolated protocol GraphChatIndexStatusProviding: Sendable {
     func presentationState(
         for scope: GraphScope
     ) async -> GraphChatIndexPresentationState
+
+    func prepareIndex(
+        for scope: GraphScope
+    ) async -> GraphChatIndexPresentationState
+}
+
+nonisolated extension GraphChatIndexStatusProviding {
+    func prepareIndex(
+        for scope: GraphScope
+    ) async -> GraphChatIndexPresentationState {
+        await presentationState(for: scope)
+    }
 }
 
 nonisolated struct LiveGraphChatIndexStatusProvider: GraphChatIndexStatusProviding {
@@ -55,6 +67,10 @@ nonisolated struct LiveGraphChatIndexStatusProvider: GraphChatIndexStatusProvidi
     ) async -> GraphChatIndexPresentationState {
         let status = await indexer.status(for: scope)
         let readiness = await reconciler.readiness(for: scope)
+
+        if readiness.state == .reconciling {
+            return .reconciling(documentCount: readiness.documentCount)
+        }
 
         switch status.state {
         case .notInitialized:
@@ -76,6 +92,16 @@ nonisolated struct LiveGraphChatIndexStatusProvider: GraphChatIndexStatusProvidi
                 documentCount: status.documentCount ?? readiness.documentCount
             )
         }
+    }
+
+    func prepareIndex(
+        for scope: GraphScope
+    ) async -> GraphChatIndexPresentationState {
+        _ = await reconciler.ensureReady(
+            scope: scope,
+            reason: .chatSession
+        )
+        return await presentationState(for: scope)
     }
 }
 

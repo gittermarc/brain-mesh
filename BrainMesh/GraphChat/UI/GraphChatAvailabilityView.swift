@@ -74,7 +74,7 @@ struct GraphChatAvailabilityView: View {
         case .appleIntelligenceNotEnabled:
             return "Aktiviere Apple Intelligence in den Systemeinstellungen."
         case .modelNotReady:
-            return "Versuche es erneut, sobald das Systemmodell vollständig geladen wurde."
+            return "Graph Chat wird verfügbar, sobald das Systemmodell vollständig geladen wurde."
         case .unknown:
             return "Das lokale Foundation Model ist derzeit nicht verwendbar."
         }

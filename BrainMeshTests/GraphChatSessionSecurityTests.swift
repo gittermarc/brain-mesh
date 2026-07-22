@@ -18,13 +18,21 @@ struct GraphChatSessionSecurityTests {
         )
         let registry = GraphChatEvidenceRegistry(scope: scope)
 
+        let appliedFilter = GraphChatAppliedFilter(
+            fieldName: "Status",
+            operationDescription: "ist gleich",
+            valueDescription: "Offen"
+        )
         try await registry.register([evidence])
+        try await registry.registerAppliedFilters([appliedFilter, appliedFilter])
         #expect(await registry.contains(evidence.id))
+        #expect(await registry.filtersForAnswer().count == 1)
 
         await registry.removeAll()
 
         #expect(await registry.contains(evidence.id) == false)
         #expect(await registry.snapshotForTesting().isEmpty)
+        #expect(await registry.filtersForAnswer().isEmpty)
     }
 
     @Test

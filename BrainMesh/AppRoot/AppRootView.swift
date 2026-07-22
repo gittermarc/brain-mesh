@@ -7,6 +7,7 @@
 
 import SwiftUI
 import SwiftData
+import UIKit
 
 struct AppRootView: View {
     @Environment(\.modelContext) var modelContext
@@ -57,6 +58,14 @@ struct AppRootView: View {
                 // Avoid forcing lock sheets on top of system pickers.
                 guard systemModals.isSystemModalPresented == false else { return }
                 Task { await enforceLockIfNeeded() }
+            }
+            .onReceive(
+                NotificationCenter.default.publisher(
+                    for: UIApplication.willTerminateNotification
+                )
+            ) { _ in
+                graphChatSessionStore.handleAppTermination()
+                graphChatLaunchCoordinator.handleAppTermination()
             }
             .onChange(of: proStore.entitlement) { _, entitlement in
                 guard entitlement != .pro else {

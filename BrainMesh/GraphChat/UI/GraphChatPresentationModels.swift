@@ -253,9 +253,78 @@ nonisolated enum GraphChatIndexPresentationState: Hashable, Sendable {
     case loading
     case notReady(documentCount: Int?)
     case building(processed: Int, estimated: Int?, documentCount: Int?)
+    case reconciling(documentCount: Int?)
     case ready(documentCount: Int?)
     case stale(documentCount: Int?)
     case failed(message: String, isUsable: Bool, documentCount: Int?)
+
+    var documentCount: Int? {
+        switch self {
+        case .loading:
+            return nil
+        case .notReady(let documentCount),
+             .reconciling(let documentCount),
+             .ready(let documentCount),
+             .stale(let documentCount):
+            return documentCount
+        case .building(_, _, let documentCount),
+             .failed(_, _, let documentCount):
+            return documentCount
+        }
+    }
+
+    var requiresPreparation: Bool {
+        switch self {
+        case .loading, .notReady, .building, .reconciling, .stale:
+            return true
+        case .ready:
+            return false
+        case .failed(_, let isUsable, _):
+            return isUsable == false
+        }
+    }
+
+    var shouldStartPreparation: Bool {
+        switch self {
+        case .notReady, .stale:
+            return true
+        case .loading, .building, .reconciling, .ready, .failed:
+            return false
+        }
+    }
+
+    var preparationInProgressState: GraphChatIndexPresentationState {
+        switch self {
+        case .loading:
+            return .loading
+        case .notReady(let documentCount):
+            return .building(
+                processed: 0,
+                estimated: nil,
+                documentCount: documentCount
+            )
+        case .building, .reconciling, .ready:
+            return self
+        case .stale(let documentCount):
+            return .reconciling(documentCount: documentCount)
+        case .failed(let message, let isUsable, let documentCount):
+            guard isUsable == false else {
+                return self
+            }
+            return .building(
+                processed: 0,
+                estimated: nil,
+                documentCount: documentCount
+            )
+        }
+    }
+
+    var isReconciliationRunning: Bool {
+        if case .reconciling = self {
+            return true
+        }
+        return false
+    }
 }
 
 nonisolated struct GraphChatEvidenceValuePresentation: Hashable, Sendable, Identifiable {

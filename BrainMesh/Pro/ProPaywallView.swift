@@ -195,6 +195,16 @@ struct ProPaywallView: View {
             Text("• Entsperren geschützter Graphen bleibt immer möglich (auch ohne Pro).")
                 .font(.footnote)
                 .foregroundStyle(.secondary)
+
+            if feature == .chatWithGraph {
+                Text("• Chat with your Graph benötigt zusätzlich ein unterstütztes Gerät, aktiviertes Apple Intelligence, ein verfügbares Systemmodell und einen bereiten lokalen Index.")
+                    .font(.footnote)
+                    .foregroundStyle(.secondary)
+
+                Text("• Eine vor dem Kauf eingegebene Frage wird nicht automatisch gesendet.")
+                    .font(.footnote)
+                    .foregroundStyle(.secondary)
+            }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
         .padding(16)

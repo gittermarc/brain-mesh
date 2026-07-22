@@ -23,6 +23,7 @@ nonisolated enum BMLog {
         subsystem: subsystem,
         category: "mutation-events"
     )
+    static let chat = Logger(subsystem: subsystem, category: "chat")
 }
 
 /// Tiny timer helper (DispatchTime based) for cheap duration measurement.

@@ -34,6 +34,8 @@ nonisolated struct FakeGraphChatModelProviderSnapshot: Sendable {
     let cancelledSessions: [GraphChatModelSessionID]
     let discardedSessions: [GraphChatModelSessionID]
     let sessionConfigurations: [GraphChatModelSessionID: GraphChatModelSessionConfiguration]
+    let streamedRequests: [GraphChatModelRequest]
+    let toolResponses: [GraphChatModelToolResponse]
 }
 
 actor FakeGraphChatModelProvider: GraphChatModelProvider {
@@ -51,6 +53,8 @@ actor FakeGraphChatModelProvider: GraphChatModelProvider {
     private var cancelledSessions: [GraphChatModelSessionID] = []
     private var discardedSessions: [GraphChatModelSessionID] = []
     private var sessionConfigurations: [GraphChatModelSessionID: GraphChatModelSessionConfiguration] = [:]
+    private var streamedRequests: [GraphChatModelRequest] = []
+    private var toolResponses: [GraphChatModelToolResponse] = []
 
     init(
         availability: GraphChatModelAvailability = .available,
@@ -118,6 +122,7 @@ actor FakeGraphChatModelProvider: GraphChatModelProvider {
             ? FakeGraphChatProviderScript(steps: [])
             : queuedScripts.removeFirst()
         streamedSessions.append(sessionID)
+        streamedRequests.append(request)
 
         var continuationReference: GraphChatProviderEventStream.Continuation?
         let stream = GraphChatProviderEventStream { continuation in
@@ -152,7 +157,8 @@ actor FakeGraphChatModelProvider: GraphChatModelProvider {
                                 )
                             )
                         )
-                        _ = try await runner.run(toolRequest)
+                        let response = try await runner.run(toolRequest)
+                        toolResponses.append(response)
                         continuation.yield(
                             .toolActivity(
                                 GraphChatToolActivity(
@@ -207,7 +213,9 @@ actor FakeGraphChatModelProvider: GraphChatModelProvider {
             streamedSessions: streamedSessions,
             cancelledSessions: cancelledSessions,
             discardedSessions: discardedSessions,
-            sessionConfigurations: sessionConfigurations
+            sessionConfigurations: sessionConfigurations,
+            streamedRequests: streamedRequests,
+            toolResponses: toolResponses
         )
     }
 

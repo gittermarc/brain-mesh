@@ -200,14 +200,16 @@ nonisolated enum GraphChatProviderTestSupport {
         directAnswer: String = "Validated answer",
         evidenceIDs: [GraphEvidenceID] = [],
         sections: [GraphChatProviderAnswerSection] = [],
+        appliedFilters: [GraphChatProviderAppliedFilter] = [],
+        followUpSuggestions: [GraphChatProviderFollowUpSuggestion] = [],
         hasInsufficientEvidence: Bool = false
     ) -> GraphChatProviderFinalAnswer {
         GraphChatProviderFinalAnswer(
             directAnswer: directAnswer,
             sections: sections,
             evidenceIDValues: evidenceIDs.map { $0.rawValue.uuidString },
-            appliedFilters: [],
-            followUpSuggestions: [],
+            appliedFilters: appliedFilters,
+            followUpSuggestions: followUpSuggestions,
             hasInsufficientEvidence: hasInsufficientEvidence
         )
     }
@@ -249,6 +251,64 @@ nonisolated enum GraphChatProviderTestSupport {
                 return
             }
             await Task.yield()
+        }
+    }
+}
+
+extension GraphChatProviderTestSupport {
+    @MainActor
+    static func makeRealRuntimeFactory(
+        store: BrainMeshTestStore,
+        schemaService: GraphSchemaService,
+        repository: GraphReadRepository
+    ) -> GraphChatModelToolRuntimeFactory {
+        let validator = GraphEvidenceSourceValidator(repository: repository)
+        let noOpLogger = NoOpGraphChatToolLogger()
+        return GraphChatModelToolRuntimeFactory(
+            describeSchemaTool: DescribeGraphSchemaTool(
+                schemaService: schemaService,
+                evidenceValidator: validator,
+                logger: noOpLogger
+            ),
+            searchGraphTool: SearchGraphTool(logger: noOpLogger),
+            queryDetailValuesTool: QueryDetailValuesTool(
+                queryEngine: GraphChatQueryEngine(
+                    repository: repository,
+                    evidenceValidator: validator
+                ),
+                logger: noOpLogger
+            ),
+            getNodeTool: GetNodeTool(
+                repository: repository,
+                evidenceValidator: validator,
+                logger: noOpLogger
+            ),
+            getNeighborsTool: GetNeighborsTool(
+                repository: NodeRepository(
+                    container: AnyModelContainer(store.container)
+                ),
+                evidenceValidator: validator,
+                logger: noOpLogger
+            ),
+            graphStatsTool: GraphStatsTool(
+                reader: GraphStatsServiceReader(
+                    container: AnyModelContainer(store.container)
+                ),
+                evidenceValidator: validator,
+                logger: noOpLogger
+            )
+        )
+    }
+
+    static func providerFilters(
+        _ filters: [GraphChatAppliedFilter]
+    ) -> [GraphChatProviderAppliedFilter] {
+        filters.map { filter in
+            GraphChatProviderAppliedFilter(
+                fieldName: filter.fieldName,
+                operationDescription: filter.operationDescription,
+                valueDescription: filter.valueDescription
+            )
         }
     }
 }

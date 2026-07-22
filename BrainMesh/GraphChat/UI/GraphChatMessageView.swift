@@ -233,7 +233,7 @@ struct GraphChatMessageView: View {
                     .fixedSize(horizontal: false, vertical: true)
             }
             Label(
-                "Für eine verlässliche Antwort wurden keine passenden Quellen gefunden.",
+                "Es wurden keine passenden dokumentierten Graphdaten gefunden. Nicht dokumentierte Informationen wurden nicht berücksichtigt.",
                 systemImage: "magnifyingglass"
             )
             .font(.callout)

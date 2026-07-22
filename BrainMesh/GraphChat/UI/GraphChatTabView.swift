@@ -2,7 +2,7 @@
 //  GraphChatTabView.swift
 //  BrainMesh
 //
-//  Productive graph-chat host with active-graph, lock, Pro, and model gates.
+//  Productive graph-chat host driven by the central access policy.
 //
 
 import SwiftData
@@ -51,24 +51,39 @@ struct GraphChatTabView: View {
             || graphLock.isUnlocked(graphID: activeGraph.id)
     }
 
-    private var accessRoute: GraphChatAccessRoute {
-        GraphChatAccessRouter.route(
-            activeGraphID: activeGraph?.id,
-            requestedScope: effectiveRequest?.scope,
-            entitlement: entitlementAccessState,
-            graphRequiresUnlock: activeGraph?.isProtected == true,
-            isGraphUnlocked: isGraphUnlocked,
-            availability: sessionStore.availabilityState
+    private var accessDecision: GraphChatAccessDecision {
+        GraphChatAccessPolicy.evaluate(
+            GraphChatAccessPolicyInput(
+                activeGraphID: activeGraphID,
+                graphExists: activeGraph != nil,
+                requestedScope: effectiveRequest?.scope,
+                entitlement: entitlementAccessState,
+                graphRequiresUnlock: activeGraph?.isProtected == true,
+                isGraphUnlocked: isGraphUnlocked,
+                availability: sessionStore.availabilityState,
+                indexState: sessionStore.indexState,
+                isReconciliationRunning: sessionStore.isReconciliationRunning,
+                isGenerationRunning: sessionStore.isGenerationRunning
+            )
         )
+    }
+
+    private var runtimeTaskID: String {
+        [
+            activeGraphIDString,
+            entitlementKey,
+            String(graphLock.lockRevision)
+        ].joined(separator: "|")
     }
 
     private var accessTaskID: String {
         [
-            activeGraphIDString,
+            runtimeTaskID,
             effectiveRequest?.id.uuidString ?? "none",
-            entitlementKey,
-            String(graphLock.lockRevision),
-            String(describing: sessionStore.availabilityState)
+            String(describing: sessionStore.availabilityState),
+            String(describing: sessionStore.indexState),
+            String(sessionStore.isGenerationRunning),
+            String(describing: accessDecision.route)
         ].joined(separator: "|")
     }
 
@@ -91,12 +106,19 @@ struct GraphChatTabView: View {
     var body: some View {
         NavigationStack {
             Group {
-                switch accessRoute {
+                switch accessDecision.route {
                 case .noActiveGraph:
                     statusView(
                         icon: "square.stack.3d.up.slash",
                         title: "Kein aktiver Graph",
                         message: "Wähle zuerst einen Graphen aus, um Graph Chat zu verwenden."
+                    )
+
+                case .graphNotFound:
+                    statusView(
+                        icon: "exclamationmark.triangle",
+                        title: "Graph nicht gefunden",
+                        message: "Der ausgewählte Graph existiert nicht mehr. Wähle einen anderen aktiven Graphen."
                     )
 
                 case .entitlementLoading:
@@ -117,18 +139,39 @@ struct GraphChatTabView: View {
                     statusView(
                         icon: "apple.intelligence",
                         title: "On-Device-Modell wird geprüft",
-                        message: "BrainMesh prüft, ob Foundation Models auf diesem Gerät verfügbar ist.",
+                        message: "BrainMesh prüft, ob das Systemmodell auf diesem Gerät verfügbar ist.",
                         showsProgress: true
                     )
 
                 case .modelUnavailable(let reason):
                     unavailableModelView(reason: reason)
 
-                case .modelAvailabilityFailed(let message):
+                case .modelAvailabilityFailed:
                     statusView(
                         icon: "exclamationmark.triangle",
-                        title: "Modellstatus nicht verfügbar",
-                        message: message
+                        title: "Modellstatus vorübergehend unklar",
+                        message: "Der Modellstatus konnte technisch nicht geprüft werden. Öffne Graph Chat später erneut."
+                    )
+
+                case .indexPreparing(let state):
+                    indexStatusView(
+                        state: state,
+                        title: "Lokaler Index wird vorbereitet",
+                        message: "BrainMesh bereitet die dokumentierten Graphdaten für eine begrenzte, quellenbasierte Suche vor."
+                    )
+
+                case .reconciliationRunning:
+                    indexStatusView(
+                        state: sessionStore.indexState,
+                        title: "Graphdaten werden abgeglichen",
+                        message: "Lokaler Index und aktueller Graph werden vor der nächsten Frage konsistent abgeglichen."
+                    )
+
+                case .indexUnavailable(let message):
+                    statusView(
+                        icon: "exclamationmark.triangle",
+                        title: "Lokaler Index nicht verfügbar",
+                        message: "\(message) Graph Chat startet erst wieder, wenn der lokale Index sicher nutzbar ist."
                     )
 
                 case .ready:
@@ -138,8 +181,8 @@ struct GraphChatTabView: View {
             .navigationTitle("Graph Chat")
             .navigationBarTitleDisplayMode(.inline)
         }
-        .task(id: activeGraphIDString) {
-            await sessionStore.refreshAvailability()
+        .task(id: runtimeTaskID) {
+            await refreshRuntimeStates()
         }
         .task(id: accessTaskID) {
             await synchronizeSessionAccess()
@@ -151,7 +194,7 @@ struct GraphChatTabView: View {
             previewErrorMessage = nil
             sessionStore.handleActiveGraphChange()
         }
-        .sheet(isPresented: $isShowingPaywall, onDismiss: resetAfterAccessBoundary) {
+        .sheet(isPresented: $isShowingPaywall, onDismiss: refreshAfterPaywall) {
             ProPaywallView(feature: .chatWithGraph)
         }
         .accessibilityIdentifier("graph-chat-tab")
@@ -164,10 +207,13 @@ struct GraphChatTabView: View {
                 viewModel: sessionStore.viewModel(
                     request: request,
                     graphName: activeGraph.name,
-                    navigationActions: navigationActions(activeGraphID: activeGraph.id)
+                    navigationActions: navigationActions(activeGraphID: activeGraph.id),
+                    draftChangeHandler: { text in
+                        launchCoordinator.updateDraft(text, for: request.scope)
+                    }
                 )
             )
-            .id(request.id)
+            .id(request.scope)
         } else {
             statusView(
                 icon: "square.stack.3d.up.slash",
@@ -183,19 +229,48 @@ struct GraphChatTabView: View {
                 statusCard(
                     icon: "sparkles.rectangle.stack",
                     title: "Chat with your Graph",
-                    message: "Stelle Fragen an deinen aktiven Graphen und erhalte nachvollziehbare Antworten mit Quellen. Die Verarbeitung bleibt vollständig auf dem Gerät."
+                    message: "Stelle natürliche Fragen an deinen aktiven Graphen und erhalte nachvollziehbare Antworten mit direkten Quellen."
                 )
+
+                if let request = effectiveRequest {
+                    VStack(alignment: .leading, spacing: 8) {
+                        Text("Deine Frage")
+                            .font(.headline)
+                        TextField(
+                            "Was möchtest du in deinem Graphen finden?",
+                            text: draftBinding(for: request.scope),
+                            axis: .vertical
+                        )
+                        .lineLimit(2...6)
+                        .textFieldStyle(.roundedBorder)
+                        .accessibilityIdentifier("graph-chat-free-draft")
+                        Text("Der Draft bleibt nur im Speicher. Nach dem Kauf entscheidest du selbst, ob du ihn sendest.")
+                            .font(.footnote)
+                            .foregroundStyle(.secondary)
+                    }
+                }
 
                 if previewGraphID == activeGraphID, previewSuggestions.isEmpty == false {
                     VStack(alignment: .leading, spacing: 10) {
                         Text("Beispielfragen für diesen Graphen")
                             .font(.headline)
                         ForEach(previewSuggestions.prefix(4)) { suggestion in
-                            Label(suggestion.prompt, systemImage: "text.bubble")
-                                .font(.subheadline)
-                                .frame(maxWidth: .infinity, alignment: .leading)
-                                .padding(12)
-                                .background(.thinMaterial, in: RoundedRectangle(cornerRadius: 14))
+                            Button {
+                                guard let request = effectiveRequest else {
+                                    return
+                                }
+                                launchCoordinator.updateDraft(
+                                    suggestion.prompt,
+                                    for: request.scope
+                                )
+                            } label: {
+                                Label(suggestion.prompt, systemImage: "text.bubble")
+                                    .font(.subheadline)
+                                    .frame(maxWidth: .infinity, alignment: .leading)
+                                    .padding(12)
+                                    .background(.thinMaterial, in: RoundedRectangle(cornerRadius: 14))
+                            }
+                            .buttonStyle(.plain)
                         }
                     }
                 } else if let previewErrorMessage {
@@ -205,10 +280,6 @@ struct GraphChatTabView: View {
                 }
 
                 Button {
-                    sessionStore.invalidate()
-                    if let activeGraphID {
-                        launchCoordinator.resetToWholeGraph(activeGraphID)
-                    }
                     isShowingPaywall = true
                 } label: {
                     Label("Mit BrainMesh Pro freischalten", systemImage: "lock.open")
@@ -217,7 +288,7 @@ struct GraphChatTabView: View {
                 .buttonStyle(.borderedProminent)
                 .accessibilityIdentifier("graph-chat-open-paywall")
 
-                Text("Die Vorschau erzeugt keine Graphantwort und liest keine Attachment-Inhalte.")
+                Text("On-Device-Verarbeitung ist verfügbar, wenn das Gerät Apple Intelligence und das Systemmodell unterstützt. Die Vorschau liest keine Attachment-Inhalte.")
                     .font(.footnote)
                     .foregroundStyle(.secondary)
             }
@@ -242,9 +313,7 @@ struct GraphChatTabView: View {
                 graphLock.requestUnlock(
                     for: activeGraph,
                     purpose: .enterActiveGraph,
-                    onSuccess: {
-                        launchCoordinator.resetToWholeGraph(activeGraph.id)
-                    }
+                    onSuccess: {}
                 )
             } label: {
                 Label("Graph entsperren", systemImage: "lock.open")
@@ -261,10 +330,27 @@ struct GraphChatTabView: View {
         VStack(spacing: 18) {
             statusCard(
                 icon: "apple.intelligence",
-                title: "On-Device-Modell nicht verfügbar",
+                title: availabilityTitle(for: reason),
                 message: availabilityMessage(for: reason)
             )
             GraphChatAvailabilityView(state: .unavailable(reason: reason))
+        }
+        .padding(20)
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+    }
+
+    private func indexStatusView(
+        state: GraphChatIndexPresentationState,
+        title: String,
+        message: String
+    ) -> some View {
+        VStack(spacing: 16) {
+            GraphChatIndexStateView(state: state)
+            statusCard(
+                icon: "arrow.triangle.2.circlepath",
+                title: title,
+                message: message
+            )
         }
         .padding(20)
         .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -306,6 +392,17 @@ struct GraphChatTabView: View {
         .padding(20)
         .frame(maxWidth: 620)
         .background(.thinMaterial, in: RoundedRectangle(cornerRadius: 20))
+    }
+
+    private func draftBinding(for scope: GraphChatScope) -> Binding<String> {
+        Binding(
+            get: {
+                launchCoordinator.draft(for: scope) ?? ""
+            },
+            set: { value in
+                launchCoordinator.updateDraft(value, for: scope)
+            }
+        )
     }
 
     private func navigationActions(
@@ -355,27 +452,61 @@ struct GraphChatTabView: View {
         return isGraphUnlocked
     }
 
-    private func synchronizeSessionAccess() async {
-        let scope = effectiveRequest?.scope
-        let hasPro = proStore.entitlement == .pro
-        let unlocked = activeGraph.map {
-            $0.isProtected == false || graphLock.isUnlocked(graphID: $0.id)
-        } ?? false
+    private func refreshRuntimeStates() async {
+        await sessionStore.refreshAvailability()
+        let mayPrepareIndex = proStore.entitlement == .pro
+            && isGraphUnlocked
+            && sessionStore.availabilityState.isAvailable
+        await sessionStore.refreshIndex(
+            for: activeGraph.map { GraphScope(graphID: $0.id) },
+            prepareIfNeeded: mayPrepareIndex
+        )
+    }
 
+    private func synchronizeSessionAccess() async {
+        let request = effectiveRequest
+        let decision = accessDecision
         await sessionStore.synchronizeAccess(
+            decision: decision,
             activeGraphID: activeGraph?.id,
-            scope: accessRoute == .ready ? scope : nil,
-            hasProEntitlement: hasPro,
-            isGraphUnlocked: unlocked
+            scope: request?.scope,
+            isGraphUnlocked: isGraphUnlocked
         )
 
-        if accessRoute != .ready {
-            sessionStore.invalidate()
+        if decision.canPresentChat == false,
+           sessionStore.hasActiveSession {
+            sessionStore.invalidate(
+                removeHistory: false,
+                preserveDraft: shouldPreserveDraft(for: decision.route)
+            )
+        }
+
+        guard case .indexPreparing(let state) = decision.route,
+              state.shouldStartPreparation,
+              let activeGraph else {
+            return
+        }
+        await sessionStore.refreshIndex(
+            for: GraphScope(graphID: activeGraph.id),
+            prepareIfNeeded: true
+        )
+    }
+
+    private func shouldPreserveDraft(
+        for route: GraphChatAccessRoute
+    ) -> Bool {
+        switch route {
+        case .modelAvailabilityLoading, .modelUnavailable, .modelAvailabilityFailed,
+             .indexPreparing, .reconciliationRunning, .indexUnavailable, .proRequired,
+             .entitlementLoading:
+            return true
+        case .noActiveGraph, .graphNotFound, .graphLocked, .ready:
+            return false
         }
     }
 
     private func loadPreviewSuggestionsIfAllowed() async {
-        guard accessRoute == .proRequired,
+        guard accessDecision.route == .proRequired,
               isGraphUnlocked,
               let activeGraphID = activeGraph?.id else {
             previewSuggestions = []
@@ -394,7 +525,7 @@ struct GraphChatTabView: View {
             )
             guard context.graphScope.graphID == activeGraphID,
                   UUID(uuidString: activeGraphIDString) == activeGraphID,
-                  accessRoute == .proRequired,
+                  accessDecision.route == .proRequired,
                   isGraphUnlocked else {
                 return
             }
@@ -415,12 +546,25 @@ struct GraphChatTabView: View {
         }
     }
 
-    private func resetAfterAccessBoundary() {
-        sessionStore.invalidate()
-        if let activeGraphID {
-            launchCoordinator.resetToWholeGraph(activeGraphID)
-        } else {
-            launchCoordinator.invalidate()
+    private func refreshAfterPaywall() {
+        Task {
+            await proStore.refreshEntitlements()
+            await refreshRuntimeStates()
+        }
+    }
+
+    private func availabilityTitle(
+        for reason: GraphChatModelUnavailableReason
+    ) -> String {
+        switch reason {
+        case .deviceNotEligible:
+            return "Gerät nicht geeignet"
+        case .appleIntelligenceNotEnabled:
+            return "Apple Intelligence ist deaktiviert"
+        case .modelNotReady:
+            return "Systemmodell noch nicht bereit"
+        case .unknown:
+            return "On-Device-Modell vorübergehend nicht verfügbar"
         }
     }
 
@@ -429,13 +573,13 @@ struct GraphChatTabView: View {
     ) -> String {
         switch reason {
         case .deviceNotEligible:
-            return "Dieses Gerät unterstützt Apples lokale Foundation Models nicht. Ein Pro-Abo kann diese Geräteanforderung nicht umgehen."
+            return "Dieses Gerät unterstützt Apples lokale Foundation Models nicht. Ein Pro-Abo ändert diese Geräteanforderung nicht."
         case .appleIntelligenceNotEnabled:
-            return "Aktiviere Apple Intelligence in den Systemeinstellungen, um Graph Chat lokal zu verwenden."
+            return "Aktiviere Apple Intelligence in den Systemeinstellungen. Kehre danach zu Graph Chat zurück."
         case .modelNotReady:
-            return "Das lokale Sprachmodell wird noch vorbereitet. Versuche es nach Abschluss des Downloads erneut."
+            return "Das Systemmodell wird noch vorbereitet. Graph Chat ist verfügbar, sobald iOS die lokale Bereitstellung abgeschlossen hat."
         case .unknown:
-            return "Foundation Models meldet aktuell keinen nutzbaren lokalen Modellzustand."
+            return "iOS meldet derzeit kein nutzbares lokales Modell. Öffne Graph Chat später erneut."
         }
     }
 }

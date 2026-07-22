@@ -227,6 +227,11 @@ actor GraphChatModelToolRuntime: GraphChatModelToolRunning {
             context: context
         )
         try await register(result.evidence)
+        if let output = result.payload {
+            try await evidenceRegistry.registerAppliedFilters(
+                output.result.appliedFilters
+            )
+        }
         let content = result.payload.map { output in
             formatQueryResult(output.result)
         } ?? "Keine validierten Detailwerte im aktiven Scope."

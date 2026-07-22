@@ -2,13 +2,14 @@
 //  GraphChatComposer.swift
 //  BrainMesh
 //
-//  Multiline composer with deterministic send and cancellation controls.
+//  Multiline composer with deterministic send, cancellation, and keyboard dismissal controls.
 //
 
 import SwiftUI
 
 struct GraphChatComposer: View {
     @Binding var text: String
+    @FocusState private var isComposerFocused: Bool
 
     let isGenerating: Bool
     let canSend: Bool
@@ -22,6 +23,7 @@ struct GraphChatComposer: View {
                 text: $text,
                 axis: .vertical
             )
+            .focused($isComposerFocused)
             .lineLimit(1...6)
             .textFieldStyle(.plain)
             .padding(.horizontal, 14)
@@ -32,6 +34,7 @@ struct GraphChatComposer: View {
                 guard canSend else {
                     return
                 }
+                isComposerFocused = false
                 onSend()
             }
             .disabled(isGenerating)
@@ -43,7 +46,10 @@ struct GraphChatComposer: View {
             )
 
             if isGenerating {
-                Button(action: onCancel) {
+                Button {
+                    isComposerFocused = false
+                    onCancel()
+                } label: {
                     Image(systemName: "stop.fill")
                         .frame(width: 44, height: 44)
                 }
@@ -51,7 +57,10 @@ struct GraphChatComposer: View {
                 .accessibilityLabel("Antwort abbrechen")
                 .accessibilityHint("Beendet die laufende On-Device-Generierung.")
             } else {
-                Button(action: onSend) {
+                Button {
+                    isComposerFocused = false
+                    onSend()
+                } label: {
                     Image(systemName: "arrow.up")
                         .frame(width: 44, height: 44)
                 }
@@ -69,5 +78,16 @@ struct GraphChatComposer: View {
         .padding(.horizontal)
         .padding(.vertical, 10)
         .background(.bar)
+        .toolbar {
+            ToolbarItemGroup(placement: .keyboard) {
+                Spacer()
+                Button {
+                    isComposerFocused = false
+                } label: {
+                    Label("Tastatur ausblenden", systemImage: "keyboard.chevron.compact.down")
+                }
+                .accessibilityIdentifier("graph-chat-dismiss-keyboard")
+            }
+        }
     }
 }

@@ -8,8 +8,18 @@
 import Foundation
 
 actor GraphChatEvidenceRegistry {
+    private struct AppliedFilterKey: Hashable {
+        let fieldName: String
+        let operationDescription: String
+        let valueDescription: String?
+    }
+
+    private static let maximumAppliedFilterCount = 24
+
     private let scope: GraphChatScope
     private var evidenceByID: [GraphEvidenceID: GraphEvidence] = [:]
+    private var appliedFilters: [GraphChatAppliedFilter] = []
+    private var appliedFilterKeys: Set<AppliedFilterKey> = []
 
     init(scope: GraphChatScope) {
         self.scope = scope
@@ -44,12 +54,33 @@ actor GraphChatEvidenceRegistry {
         return result
     }
 
+    func registerAppliedFilters(_ filters: [GraphChatAppliedFilter]) throws {
+        try Task.checkCancellation()
+        for filter in filters where appliedFilters.count < Self.maximumAppliedFilterCount {
+            let key = AppliedFilterKey(
+                fieldName: filter.fieldName,
+                operationDescription: filter.operationDescription,
+                valueDescription: filter.valueDescription
+            )
+            guard appliedFilterKeys.insert(key).inserted else {
+                continue
+            }
+            appliedFilters.append(filter)
+        }
+    }
+
+    func filtersForAnswer() -> [GraphChatAppliedFilter] {
+        appliedFilters
+    }
+
     func contains(_ id: GraphEvidenceID) -> Bool {
         evidenceByID[id] != nil
     }
 
     func removeAll() {
         evidenceByID.removeAll(keepingCapacity: false)
+        appliedFilters.removeAll(keepingCapacity: false)
+        appliedFilterKeys.removeAll(keepingCapacity: false)
     }
 
     func snapshotForTesting() -> [GraphEvidence] {

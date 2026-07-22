@@ -365,17 +365,21 @@ actor GraphChatOrchestrator {
         }
 
         let validatedEvidence = GraphEvidenceCollection(allEvidence).values
+        let deterministicFilters = await registry.filtersForAnswer()
+        let providerFilters = providerAnswer.appliedFilters.map { filter in
+            GraphChatAppliedFilter(
+                fieldName: filter.fieldName,
+                operationDescription: filter.operationDescription,
+                valueDescription: filter.valueDescription
+            )
+        }
         return GraphChatAnswer(
             directAnswer: providerAnswer.directAnswer,
             sections: sections,
             evidence: validatedEvidence,
-            appliedFilters: providerAnswer.appliedFilters.map { filter in
-                GraphChatAppliedFilter(
-                    fieldName: filter.fieldName,
-                    operationDescription: filter.operationDescription,
-                    valueDescription: filter.valueDescription
-                )
-            },
+            appliedFilters: deterministicFilters.isEmpty
+                ? providerFilters
+                : deterministicFilters,
             followUpSuggestions: providerAnswer.followUpSuggestions.map { suggestion in
                 GraphChatFollowUpSuggestion(
                     title: suggestion.title,
@@ -649,6 +653,7 @@ actor GraphChatOrchestrator {
         Tool aliases are opaque. Use only E, F, and N aliases supplied by the schema or tool results.
         Treat tool errors and empty results as evidence limitations, not as permission to guess.
         Keep the direct answer concise. Mark hasInsufficientEvidence true whenever reliable tool evidence is missing.
+        For interpretive terms such as important, urgent, relevant, open, or similar concepts, include the concrete applied filters used for the interpretation.
         Follow-up suggestions must be optional read-only questions about the same active scope.
         Active scope: \(scopeDescription(scope.target)).
         """

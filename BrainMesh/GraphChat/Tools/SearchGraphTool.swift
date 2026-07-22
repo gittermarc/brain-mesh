@@ -76,6 +76,7 @@ nonisolated struct SearchGraphTool: GraphChatTool {
         context: GraphChatToolContext
     ) async throws -> GraphChatToolResult<SearchGraphOutput> {
         let timer = GraphChatToolTimer()
+        var usedIndexFallback = false
         do {
             let foldedQuery = BMSearch.fold(input.query)
             guard foldedQuery.isEmpty == false else {
@@ -105,6 +106,7 @@ nonisolated struct SearchGraphTool: GraphChatTool {
                     message: "Der lokale Suchindex ist für diesen Graphen nicht verfügbar."
                 )
             }
+            usedIndexFallback = readiness.outcome == .failed
 
             let candidateLimit = min(
                 Self.maximumResultCount,
@@ -150,7 +152,14 @@ nonisolated struct SearchGraphTool: GraphChatTool {
             }
 
             guard resolved.isEmpty == false else {
-                logger.record(timer.metric(tool: kind, resultCount: 0, wasCancelled: false))
+                logger.record(
+                    timer.metric(
+                        tool: kind,
+                        resultCount: 0,
+                        wasCancelled: false,
+                        usedIndexFallback: usedIndexFallback
+                    )
+                )
                 return .noResults()
             }
 
@@ -175,20 +184,48 @@ nonisolated struct SearchGraphTool: GraphChatTool {
             }
 
             guard hits.isEmpty == false else {
-                logger.record(timer.metric(tool: kind, resultCount: 0, wasCancelled: false))
+                logger.record(
+                    timer.metric(
+                        tool: kind,
+                        resultCount: 0,
+                        wasCancelled: false,
+                        usedIndexFallback: usedIndexFallback
+                    )
+                )
                 return .noResults()
             }
             try await context.budget.consumeEvidence(evidence.count)
-            logger.record(timer.metric(tool: kind, resultCount: hits.count, wasCancelled: false))
+            logger.record(
+                timer.metric(
+                    tool: kind,
+                    resultCount: hits.count,
+                    wasCancelled: false,
+                    usedIndexFallback: usedIndexFallback
+                )
+            )
             return .success(
                 SearchGraphOutput(query: foldedQuery, hits: hits),
                 evidence: evidence
             )
         } catch is CancellationError {
-            logger.record(timer.metric(tool: kind, resultCount: 0, wasCancelled: true))
+            logger.record(
+                timer.metric(
+                    tool: kind,
+                    resultCount: 0,
+                    wasCancelled: true,
+                    usedIndexFallback: usedIndexFallback
+                )
+            )
             throw GraphChatToolError.cancelled()
         } catch {
-            logger.record(timer.metric(tool: kind, resultCount: 0, wasCancelled: false))
+            logger.record(
+                timer.metric(
+                    tool: kind,
+                    resultCount: 0,
+                    wasCancelled: false,
+                    usedIndexFallback: usedIndexFallback
+                )
+            )
             throw error
         }
     }

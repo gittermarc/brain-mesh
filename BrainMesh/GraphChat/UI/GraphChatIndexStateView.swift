@@ -29,6 +29,12 @@ struct GraphChatIndexStateView: View {
                         .accessibilityLabel("Fortschritt des lokalen Indexaufbaus")
                         .accessibilityValue(progressText(processed: processed, estimated: estimated))
                 }
+            case .reconciling:
+                Label {
+                    Text("Index wird abgeglichen")
+                } icon: {
+                    ProgressView()
+                }
             case .ready(let documentCount):
                 Label(readyTitle(documentCount), systemImage: "checkmark.circle")
             case .stale:
@@ -55,7 +61,7 @@ struct GraphChatIndexStateView: View {
             return .primary
         case .failed:
             return .orange
-        case .loading, .notReady, .building, .stale:
+        case .loading, .notReady, .building, .reconciling, .stale:
             return .secondary
         }
     }

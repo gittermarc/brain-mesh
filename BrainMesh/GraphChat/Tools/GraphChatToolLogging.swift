@@ -6,15 +6,14 @@
 //
 
 import Foundation
-#if canImport(os)
 import os
-#endif
 
 nonisolated struct GraphChatToolExecutionMetric: Hashable, Sendable {
     let tool: GraphChatToolKind
     let durationMilliseconds: Double
     let resultCount: Int
     let wasCancelled: Bool
+    let usedIndexFallback: Bool
 }
 
 nonisolated protocol GraphChatToolLogging: Sendable {
@@ -23,12 +22,9 @@ nonisolated protocol GraphChatToolLogging: Sendable {
 
 nonisolated struct GraphChatTechnicalLogger: GraphChatToolLogging {
     func record(_ metric: GraphChatToolExecutionMetric) {
-        #if canImport(os)
-        let logger = Logger(subsystem: "BrainMesh", category: "GraphChatTools")
-        logger.info(
-            "Tool completed type=\(metric.tool.rawValue, privacy: .public) results=\(metric.resultCount) cancelled=\(metric.wasCancelled) durationMS=\(metric.durationMilliseconds, format: .fixed(precision: 2))"
+        BMLog.chat.info(
+            "Tool completed type=\(metric.tool.rawValue, privacy: .public) results=\(metric.resultCount) cancelled=\(metric.wasCancelled) indexFallback=\(metric.usedIndexFallback) durationMS=\(metric.durationMilliseconds, format: .fixed(precision: 2))"
         )
-        #endif
     }
 }
 
@@ -42,7 +38,8 @@ nonisolated struct GraphChatToolTimer: Sendable {
     func metric(
         tool: GraphChatToolKind,
         resultCount: Int,
-        wasCancelled: Bool
+        wasCancelled: Bool,
+        usedIndexFallback: Bool = false
     ) -> GraphChatToolExecutionMetric {
         let duration = startedAt.duration(to: ContinuousClock().now)
         let components = duration.components
@@ -52,7 +49,8 @@ nonisolated struct GraphChatToolTimer: Sendable {
             tool: tool,
             durationMilliseconds: max(0, milliseconds),
             resultCount: resultCount,
-            wasCancelled: wasCancelled
+            wasCancelled: wasCancelled,
+            usedIndexFallback: usedIndexFallback
         )
     }
 }

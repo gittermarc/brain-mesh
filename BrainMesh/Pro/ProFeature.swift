@@ -36,7 +36,7 @@ enum ProFeature: String, Identifiable, Sendable {
         case .graphProtection:
             return "Schütze deine Graphen mit Systemschutz oder Passwort."
         case .chatWithGraph:
-            return "Frage deinen aktiven Graphen mit Apples lokalem Foundation Model."
+            return "Stelle natürliche Fragen an deinen Graphen und erhalte nachvollziehbare Antworten mit direkten Quellen."
         }
     }
 
@@ -56,9 +56,10 @@ enum ProFeature: String, Identifiable, Sendable {
             ]
         case .chatWithGraph:
             return [
-                "On-Device-Antworten ohne Cloud-Verarbeitung",
-                "Quellenkarten mit sicheren Detail- und Graph-Routen",
-                "Kontextfragen zu Entitäten, Attributen und Befunden"
+                "Natürliche Fragen an den aktiven, entsperrten Graphen",
+                "Direkte Quellen sowie sichtbare Zeit-, Status- und Bedeutungsfilter",
+                "Zeiträume, Status und Zusammenhänge schneller in dokumentierten Daten finden",
+                "On-Device-Verarbeitung, wenn Apple Intelligence und das Systemmodell verfügbar sind"
             ]
         }
     }

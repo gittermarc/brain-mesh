@@ -204,3 +204,161 @@ extension GraphSchemaContext {
             .alias
     }
 }
+
+struct GraphChatMixedKnowledgeFixture {
+    let graph: MetaGraph
+    let peopleEntity: MetaEntity
+    let topicsEntity: MetaEntity
+    let person: MetaAttribute
+    let topic: MetaAttribute
+    let link: MetaLink
+    let attachment: MetaAttachment
+    let attachmentPayload: Data
+}
+
+struct GraphChatLargeGraphFixture {
+    let graph: MetaGraph
+    let entity: MetaEntity
+    let statusField: MetaDetailFieldDefinition
+    let sequenceField: MetaDetailFieldDefinition
+    let firstAttribute: MetaAttribute
+    let lastAttribute: MetaAttribute
+    let attributeCount: Int
+    let detailValueCount: Int
+    let linkCount: Int
+}
+
+extension BrainMeshFixtureBuilder {
+    func makeGraphChatMixedKnowledgeFixture() -> GraphChatMixedKnowledgeFixture {
+        let graph = makeGraph(name: "Gemischtes Wissen")
+        let people = makeEntity(
+            name: "Personen",
+            in: graph,
+            notes: "Verantwortlichkeiten und dokumentierte Zuständigkeiten"
+        )
+        let topics = makeEntity(
+            name: "Themen",
+            in: graph,
+            notes: "Dokumentierte Wissensgebiete"
+        )
+        let role = makeDetailField(
+            owner: people,
+            name: "Rolle",
+            type: .singleLineText,
+            sortIndex: 0,
+            isPinned: true
+        )
+        let classification = makeDetailField(
+            owner: topics,
+            name: "Klassifikation",
+            type: .singleChoice,
+            sortIndex: 0,
+            options: ["Intern", "Vertraulich"],
+            isPinned: true
+        )
+        let person = makeAttribute(
+            name: "Ada Lovelace",
+            owner: people,
+            notes: "Pflegt die dokumentierten Modellierungsregeln."
+        )
+        let topic = makeAttribute(
+            name: "Graph Governance",
+            owner: topics,
+            notes: "Regeln für Ownership, Links und Re-Zertifizierung."
+        )
+        makeDetailValue(attribute: person, field: role, stringValue: "Owner")
+        makeDetailValue(attribute: topic, field: classification, stringValue: "Intern")
+        let link = makeLink(
+            source: .attribute(person),
+            target: .attribute(topic),
+            note: "Ist fachlich verantwortlich",
+            graphID: graph.id
+        )
+        let payload = Data([0x42, 0x4D, 0x00, 0xFF, 0x13, 0x37, 0xA5, 0x5A])
+        let attachment = makeAttachment(
+            owner: .attribute(topic),
+            contentKind: .file,
+            title: "Governance-Handbuch",
+            originalFilename: "governance-private.bin",
+            contentTypeIdentifier: "application/octet-stream",
+            fileExtension: "bin",
+            fileData: payload
+        )
+        return GraphChatMixedKnowledgeFixture(
+            graph: graph,
+            peopleEntity: people,
+            topicsEntity: topics,
+            person: person,
+            topic: topic,
+            link: link,
+            attachment: attachment,
+            attachmentPayload: payload
+        )
+    }
+
+    func makeGraphChatLargeGraphFixture(
+        attributeCount: Int = 2_400
+    ) -> GraphChatLargeGraphFixture {
+        precondition(attributeCount >= 2_000)
+        let graph = makeGraph(name: "Large Graph Release Fixture")
+        let entity = makeEntity(name: "Large Items", in: graph)
+        let status = makeDetailField(
+            owner: entity,
+            name: "Status",
+            type: .singleChoice,
+            sortIndex: 0,
+            options: ["Open", "Closed"],
+            isPinned: true
+        )
+        let sequence = makeDetailField(
+            owner: entity,
+            name: "Sequence",
+            type: .numberInt,
+            sortIndex: 1,
+            isPinned: true
+        )
+
+        var first: MetaAttribute?
+        var previous: MetaAttribute?
+        var last: MetaAttribute?
+        for index in 0..<attributeCount {
+            let attribute = makeAttribute(
+                name: String(format: "Large Item %04d", index),
+                owner: entity,
+                notes: "Documented large-graph fixture row \(index)"
+            )
+            makeDetailValue(
+                attribute: attribute,
+                field: status,
+                stringValue: index.isMultiple(of: 2) ? "Open" : "Closed"
+            )
+            makeDetailValue(
+                attribute: attribute,
+                field: sequence,
+                intValue: index
+            )
+            if let previous {
+                makeLink(
+                    source: .attribute(previous),
+                    target: .attribute(attribute),
+                    graphID: graph.id
+                )
+            }
+            first = first ?? attribute
+            previous = attribute
+            last = attribute
+        }
+
+        return GraphChatLargeGraphFixture(
+            graph: graph,
+            entity: entity,
+            statusField: status,
+            sequenceField: sequence,
+            firstAttribute: first!,
+            lastAttribute: last!,
+            attributeCount: attributeCount,
+            detailValueCount: attributeCount * 2,
+            linkCount: attributeCount - 1
+        )
+    }
+}

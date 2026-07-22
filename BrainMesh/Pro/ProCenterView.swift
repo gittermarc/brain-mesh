@@ -74,7 +74,7 @@ struct ProCenterView: View {
                 statusBadge
             }
 
-            Text("Pro erweitert BrainMesh um mehr Arbeitsbereiche und Graph-Schutz. Deine vorhandenen Daten bleiben erhalten; Kauf, Wiederherstellung und Verwaltung laufen sicher über den App Store.")
+            Text("Pro erweitert BrainMesh um mehr Arbeitsbereiche, Graph-Schutz und den quellenbasierten Chat mit deinem Graphen. Deine vorhandenen Daten bleiben erhalten; Kauf, Wiederherstellung und Verwaltung laufen sicher über den App Store.")
                 .font(.footnote)
                 .foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
@@ -166,8 +166,7 @@ struct ProCenterView: View {
                     onTap: { openPaywall(for: .graphProtection) }
                 )
 
-                ProFeatureCard(
-                    feature: .chatWithGraph,
+                GraphChatProFeatureCard(
                     isProActive: proStore.isProActive,
                     onTap: { openPaywall(for: .chatWithGraph) }
                 )
@@ -221,6 +220,84 @@ struct ProCenterView: View {
     }
 }
 
+private struct GraphChatProFeatureCard: View {
+    let isProActive: Bool
+    let onTap: () -> Void
+
+    var body: some View {
+        Button(action: onTap) {
+            VStack(alignment: .leading, spacing: 14) {
+                HStack(alignment: .top, spacing: 12) {
+                    ZStack {
+                        RoundedRectangle(cornerRadius: 14, style: .continuous)
+                            .fill(Color.accentColor.opacity(0.18))
+                            .frame(width: 50, height: 50)
+                        Image(systemName: "sparkles.rectangle.stack.fill")
+                            .symbolRenderingMode(.hierarchical)
+                            .font(.system(size: 20, weight: .semibold))
+                            .foregroundStyle(.tint)
+                    }
+
+                    VStack(alignment: .leading, spacing: 4) {
+                        HStack(spacing: 8) {
+                            Text(ProFeature.chatWithGraph.title)
+                                .font(.headline)
+                                .foregroundStyle(.primary)
+                            Text("ON DEVICE")
+                                .font(.caption2.weight(.bold))
+                                .padding(.horizontal, 7)
+                                .padding(.vertical, 4)
+                                .background(.ultraThinMaterial, in: Capsule())
+                                .foregroundStyle(.secondary)
+                        }
+                        Text(ProFeature.chatWithGraph.subtitle)
+                            .font(.subheadline)
+                            .foregroundStyle(.secondary)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+
+                    Spacer(minLength: 0)
+                    if isProActive {
+                        Image(systemName: "checkmark.seal.fill")
+                            .foregroundStyle(.secondary)
+                            .accessibilityLabel("In Pro enthalten")
+                    } else {
+                        Image(systemName: "chevron.right")
+                            .font(.caption.weight(.semibold))
+                            .foregroundStyle(.secondary)
+                            .accessibilityHidden(true)
+                    }
+                }
+
+                HStack(spacing: 12) {
+                    Label("Direkte Quellen", systemImage: "checkmark.seal")
+                    Label("Sichtbare Filter", systemImage: "line.3.horizontal.decrease.circle")
+                }
+                .font(.caption.weight(.semibold))
+                .foregroundStyle(.secondary)
+
+                Text("Das Systemmodell wird nur auf unterstützten Geräten verwendet. Attachment-Inhalte und Cloud-Provider gehören nicht zu diesem MVP.")
+                    .font(.footnote)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            .padding(16)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background {
+                RoundedRectangle(cornerRadius: 20, style: .continuous)
+                    .fill(Color.accentColor.opacity(0.08))
+            }
+            .overlay {
+                RoundedRectangle(cornerRadius: 20, style: .continuous)
+                    .strokeBorder(Color.accentColor.opacity(0.25), lineWidth: 0.8)
+            }
+            .contentShape(RoundedRectangle(cornerRadius: 20, style: .continuous))
+        }
+        .buttonStyle(.plain)
+        .disabled(isProActive)
+        .accessibilityElement(children: .combine)
+    }
+}
 
 private struct ProStatusMessageCard: View {
     let message: String
