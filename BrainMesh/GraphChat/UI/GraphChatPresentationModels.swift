@@ -180,7 +180,10 @@ nonisolated struct GraphChatAssistantMessageState: Hashable, Sendable {
                     id: section.id,
                     title: section.title.map(bounded),
                     text: bounded(section.text),
-                    evidenceIDs: Array(section.evidenceIDs.prefix(maximumEvidence))
+                    evidenceIDs: Array(section.evidenceIDs.prefix(maximumEvidence)),
+                    artifactIDs: Array(section.artifactIDs.prefix(maximumArtifacts)),
+                    querySummary: section.querySummary,
+                    state: section.state
                 )
             },
             evidence: Array(answer.evidence.prefix(maximumEvidence)),

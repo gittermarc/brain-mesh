@@ -115,6 +115,19 @@ nonisolated struct GraphChatProviderAnswerSection: Hashable, Sendable {
     let title: String?
     let text: String
     let evidenceIDValues: [String]
+    let artifactIDValues: [String]
+
+    init(
+        title: String?,
+        text: String,
+        evidenceIDValues: [String],
+        artifactIDValues: [String] = []
+    ) {
+        self.title = title
+        self.text = text
+        self.evidenceIDValues = evidenceIDValues
+        self.artifactIDValues = artifactIDValues
+    }
 }
 
 nonisolated struct GraphChatProviderAppliedFilter: Hashable, Sendable {

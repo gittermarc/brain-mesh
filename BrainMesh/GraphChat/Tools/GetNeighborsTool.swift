@@ -39,6 +39,19 @@ nonisolated struct GetNeighborsOutput: Sendable {
     let center: GraphNodeSummaryDTO
     let connections: [GraphChatNeighborConnection]
     let evidenceIDs: [GraphEvidenceID]
+    let resultWindow: GraphChatResultWindow
+
+    init(
+        center: GraphNodeSummaryDTO,
+        connections: [GraphChatNeighborConnection],
+        evidenceIDs: [GraphEvidenceID],
+        resultWindow: GraphChatResultWindow? = nil
+    ) {
+        self.center = center
+        self.connections = connections
+        self.evidenceIDs = evidenceIDs
+        self.resultWindow = resultWindow ?? .complete(totalCount: connections.count)
+    }
 }
 
 nonisolated struct GetNeighborsTool: GraphChatTool {
@@ -96,6 +109,16 @@ nonisolated struct GetNeighborsTool: GraphChatTool {
             var connections: [GraphChatNeighborConnection] = []
 
             let outgoing = neighborhood.outgoingLinks.sorted(by: Self.linkSort)
+            let incoming = neighborhood.incomingLinks.sorted(by: Self.linkSort)
+            let eligibleConnectionCount = outgoing.reduce(into: 0) { count, link in
+                if let target = link.targetNodeKey, target != input.node {
+                    count += 1
+                }
+            } + incoming.reduce(into: 0) { count, link in
+                if let source = link.sourceNodeKey, source != input.node {
+                    count += 1
+                }
+            }
             for link in outgoing {
                 try Task.checkCancellation()
                 guard connections.count < limit,
@@ -122,7 +145,6 @@ nonisolated struct GetNeighborsTool: GraphChatTool {
             }
 
             if connections.count < limit {
-                let incoming = neighborhood.incomingLinks.sorted(by: Self.linkSort)
                 for link in incoming {
                     try Task.checkCancellation()
                     guard connections.count < limit,
@@ -172,7 +194,18 @@ nonisolated struct GetNeighborsTool: GraphChatTool {
             let output = GetNeighborsOutput(
                 center: neighborhood.center,
                 connections: validatedConnections,
-                evidenceIDs: validatedEvidence.map(\.id)
+                evidenceIDs: validatedEvidence.map(\.id),
+                resultWindow: GraphChatResultWindow(
+                    totalCount: validatedConnections.count == connections.count
+                        ? eligibleConnectionCount
+                        : nil,
+                    returnedCount: validatedConnections.count,
+                    limit: limit,
+                    limitReached: eligibleConnectionCount > limit
+                        || validatedConnections.count < connections.count,
+                    limitSources: (eligibleConnectionCount > limit ? [.tool] : [])
+                        + (validatedConnections.count < connections.count ? [.source] : [])
+                )
             )
             if validatedConnections.isEmpty {
                 return GraphChatToolResult(

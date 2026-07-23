@@ -111,7 +111,14 @@ actor GraphChatQueryEngine {
                 rows: [],
                 aggregation: nil,
                 appliedFilters: appliedFilters,
-                evidence: []
+                evidence: [],
+                resultWindow: GraphChatResultWindow(
+                    totalCount: 0,
+                    returnedCount: 0,
+                    limit: plan.limit,
+                    limitReached: false,
+                    limitSource: .query
+                )
             )
         }
 
@@ -141,12 +148,21 @@ actor GraphChatQueryEngine {
             )
         }
 
+        let sourceLimited = validatedRows.count < limitedRows.count
         return GraphChatQueryResult(
             state: validatedRows.isEmpty ? .noEvidence : .success,
             rows: validatedRows,
             aggregation: nil,
             appliedFilters: appliedFilters,
-            evidence: validatedEvidence
+            evidence: validatedEvidence,
+            resultWindow: GraphChatResultWindow(
+                totalCount: sourceLimited ? nil : sortedRows.count,
+                returnedCount: validatedRows.count,
+                limit: plan.limit,
+                limitReached: sortedRows.count > plan.limit || sourceLimited,
+                limitSources: (sortedRows.count > plan.limit ? [.query] : [])
+                    + (sourceLimited ? [.source] : [])
+            )
         )
     }
 
@@ -223,12 +239,24 @@ actor GraphChatQueryEngine {
             finalState = build.state
         }
 
+        let groupSourceLimited = build.result.kind == .groupCount
+            && groups.count < build.resultWindow.returnedCount
         return GraphChatQueryResult(
             state: finalState,
             rows: [],
             aggregation: aggregationResult,
             appliedFilters: appliedFilters,
-            evidence: validatedEvidence
+            evidence: validatedEvidence,
+            resultWindow: GraphChatResultWindow(
+                totalCount: groupSourceLimited ? nil : build.resultWindow.totalCount,
+                returnedCount: build.result.kind == .groupCount
+                    ? groups.count
+                    : build.resultWindow.returnedCount,
+                limit: build.resultWindow.limit,
+                limitReached: build.resultWindow.limitReached || groupSourceLimited,
+                limitSources: build.resultWindow.limitSources
+                    + (groupSourceLimited ? [.source] : [])
+            )
         )
     }
 

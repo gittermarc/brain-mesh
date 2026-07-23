@@ -105,17 +105,29 @@ nonisolated struct GraphChatAnswerSection: Hashable, Sendable, Identifiable {
     let title: String?
     let text: String
     let evidenceIDs: [GraphEvidenceID]
+    let artifactIDs: [GraphChatAnswerArtifactID]
+    let querySummary: GraphChatAnswerArtifactQuerySummary?
+    let state: GraphChatAnswerState
 
     init(
         id: UUID = UUID(),
         title: String? = nil,
         text: String,
-        evidenceIDs: [GraphEvidenceID] = []
+        evidenceIDs: [GraphEvidenceID] = [],
+        artifactIDs: [GraphChatAnswerArtifactID] = [],
+        querySummary: GraphChatAnswerArtifactQuerySummary? = nil,
+        state: GraphChatAnswerState = .answer
     ) {
         self.id = id
         self.title = title
         self.text = text
         self.evidenceIDs = evidenceIDs
+        var seenArtifactIDs = Set<GraphChatAnswerArtifactID>()
+        self.artifactIDs = artifactIDs.filter {
+            seenArtifactIDs.insert($0).inserted
+        }
+        self.querySummary = querySummary
+        self.state = state
     }
 }
 
@@ -187,6 +199,35 @@ nonisolated struct GraphChatAnswer: Hashable, Sendable {
         self.appliedFilters = appliedFilters
         self.followUpSuggestions = followUpSuggestions
         self.hasInsufficientEvidence = hasInsufficientEvidence
+    }
+
+    func retainingArtifactIDs(
+        _ retainedIDs: Set<GraphChatAnswerArtifactID>
+    ) -> GraphChatAnswer {
+        let retainedSections = sections.map { section in
+            let retainedSectionIDs = section.artifactIDs.filter {
+                retainedIDs.contains($0)
+            }
+            return GraphChatAnswerSection(
+                id: section.id,
+                title: section.title,
+                text: section.text,
+                evidenceIDs: section.evidenceIDs,
+                artifactIDs: retainedSectionIDs,
+                querySummary: retainedSectionIDs.isEmpty ? nil : section.querySummary,
+                state: section.state
+            )
+        }
+        return GraphChatAnswer(
+            state: state,
+            directAnswer: directAnswer,
+            sections: retainedSections,
+            evidence: evidence,
+            artifactIDs: artifactIDs.filter { retainedIDs.contains($0) },
+            appliedFilters: appliedFilters,
+            followUpSuggestions: followUpSuggestions,
+            hasInsufficientEvidence: hasInsufficientEvidence
+        )
     }
 }
 

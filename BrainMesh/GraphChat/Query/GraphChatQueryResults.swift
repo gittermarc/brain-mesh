@@ -79,6 +79,25 @@ nonisolated struct GraphChatQueryResult: Hashable, Sendable {
     let aggregation: GraphChatAggregationResult?
     let appliedFilters: [GraphChatAppliedFilter]
     let evidence: [GraphEvidence]
+    let resultWindow: GraphChatResultWindow
+
+    init(
+        state: GraphChatResultState,
+        rows: [GraphChatQueryResultRow],
+        aggregation: GraphChatAggregationResult?,
+        appliedFilters: [GraphChatAppliedFilter],
+        evidence: [GraphEvidence],
+        resultWindow: GraphChatResultWindow? = nil
+    ) {
+        self.state = state
+        self.rows = rows
+        self.aggregation = aggregation
+        self.appliedFilters = appliedFilters
+        self.evidence = evidence
+        self.resultWindow = resultWindow ?? GraphChatResultWindow.complete(
+            totalCount: aggregation == nil ? rows.count : aggregation?.groups.count ?? 1
+        )
+    }
 }
 
 nonisolated enum GraphChatQueryEngineError: Error, LocalizedError, Equatable, Sendable {

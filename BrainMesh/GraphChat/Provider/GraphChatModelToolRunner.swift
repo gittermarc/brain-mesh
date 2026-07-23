@@ -80,13 +80,20 @@ nonisolated struct GraphChatModelToolResponse: Hashable, Sendable {
     let state: GraphChatToolResultState
     let content: String
     let evidenceIDs: [GraphEvidenceID]
-    let artifactID: GraphChatAnswerArtifactID?
+    let artifactIDs: [GraphChatAnswerArtifactID]
+
+    var artifactID: GraphChatAnswerArtifactID? {
+        artifactIDs.first
+    }
 
     var modelContent: String {
-        guard let artifactID else {
+        guard artifactIDs.isEmpty == false else {
             return content
         }
-        return "\(content)\nartifactID=\(artifactID.rawValue.uuidString)"
+        let references = artifactIDs.map {
+            "artifactID=\($0.rawValue.uuidString)"
+        }
+        return ([content] + references).joined(separator: "\n")
     }
 
     init(
@@ -94,13 +101,18 @@ nonisolated struct GraphChatModelToolResponse: Hashable, Sendable {
         state: GraphChatToolResultState,
         content: String,
         evidenceIDs: [GraphEvidenceID],
-        artifactID: GraphChatAnswerArtifactID? = nil
+        artifactID: GraphChatAnswerArtifactID? = nil,
+        artifactIDs: [GraphChatAnswerArtifactID] = []
     ) {
         self.tool = tool
         self.state = state
         self.content = content
         self.evidenceIDs = evidenceIDs
-        self.artifactID = artifactID
+        var seen = Set<GraphChatAnswerArtifactID>()
+        let candidateArtifactIDs = artifactIDs + (artifactID.map { [$0] } ?? [])
+        self.artifactIDs = candidateArtifactIDs.filter {
+            seen.insert($0).inserted
+        }
     }
 }
 
@@ -123,6 +135,7 @@ nonisolated protocol GraphChatModelToolRunnerFactory: Sendable {
         conversationTransaction: GraphChatConversationStateTransaction,
         conversationContext: GraphChatConversationContextSnapshot,
         referenceResolver: GraphChatConversationReferenceResolver,
+        responseLanguage: GraphChatResponseLanguage,
         referenceDate: Date,
         calendar: Calendar,
         timeZone: TimeZone

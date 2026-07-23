@@ -59,6 +59,7 @@ actor GraphChatOrchestrator {
     private let referenceInterpreter: GraphChatConversationReferenceInterpreter
     private let unsupportedRequestDetector: GraphChatUnsupportedRequestDetector
     private let responseLanguageSelector: GraphChatResponseLanguageSelector
+    private let artifactRevalidator: any GraphChatAnswerArtifactRevalidating
     private let referenceDate: @Sendable () -> Date
     private let calendar: Calendar
     private let timeZone: TimeZone
@@ -81,6 +82,8 @@ actor GraphChatOrchestrator {
             GraphChatConversationReferenceResolver(),
         responseLanguageSelector: GraphChatResponseLanguageSelector =
             GraphChatResponseLanguageSelector(),
+        artifactRevalidator: any GraphChatAnswerArtifactRevalidating =
+            GraphChatLiveAnswerArtifactRevalidator(),
         referenceDate: @escaping @Sendable () -> Date = Date.init,
         calendar: Calendar = Calendar(identifier: .gregorian),
         timeZone: TimeZone = .current
@@ -100,6 +103,7 @@ actor GraphChatOrchestrator {
         self.referenceInterpreter = GraphChatConversationReferenceInterpreter()
         self.unsupportedRequestDetector = GraphChatUnsupportedRequestDetector()
         self.responseLanguageSelector = responseLanguageSelector
+        self.artifactRevalidator = artifactRevalidator
         self.referenceDate = referenceDate
         self.calendar = calendar
         self.timeZone = timeZone
@@ -492,7 +496,7 @@ actor GraphChatOrchestrator {
                 transactionID: initialResources.artifactTransactionID
             )
             setActiveResources(initialResources, requestID: requestID)
-            let answer = try await generateWithSingleContextRetry(
+            var answer = try await generateWithSingleContextRetry(
                 resources: initialResources,
                 question: providerQuestion,
                 conversationContext: context,
@@ -511,10 +515,11 @@ actor GraphChatOrchestrator {
             guard conversationState == turnStateSnapshot else {
                 throw CancellationError()
             }
-            try await initialResources.artifactRegistry.commit(
+            let committedArtifactIDs = try await initialResources.artifactRegistry.commit(
                 transactionID: initialResources.artifactTransactionID,
                 retaining: answer.artifactIDs
             )
+            answer = answer.retainingArtifactIDs(Set(committedArtifactIDs))
             artifactCommitContext = nil
             conversationState = candidateState
             continuation.yield(.completed(answer))
@@ -671,12 +676,15 @@ actor GraphChatOrchestrator {
         continuationOperation: GraphChatConversationContinuationOperation?,
         requestQuestion: String
     ) async throws -> GraphChatAnswer {
+        let requestedArtifactIDValues = providerAnswer.artifactIDValues
+            + providerAnswer.sections.flatMap(\.artifactIDValues)
         let artifacts = try await artifactRegistry.validatedArtifacts(
-            for: providerAnswer.artifactIDValues,
+            for: requestedArtifactIDValues,
             graphScope: context.graphScope,
             sessionID: artifactSessionID,
             transactionID: artifactTransactionID
         )
+        let artifactsByID = Dictionary(uniqueKeysWithValues: artifacts.map { ($0.id, $0) })
         var allEvidence: [GraphEvidence] = await registry.validatedEvidence(
             for: providerAnswer.evidenceIDValues
         )
@@ -694,12 +702,29 @@ actor GraphChatOrchestrator {
             let sectionEvidence = await registry.validatedEvidence(
                 for: section.evidenceIDValues
             )
+            let sectionArtifactIDs = validatedArtifactIDs(
+                from: section.artifactIDValues,
+                artifactsByID: artifactsByID
+            )
+            let sectionArtifactEvidence = await registry.validatedEvidence(
+                for: sectionArtifactIDs.flatMap { artifactsByID[$0]?.allEvidenceIDs ?? [] }.map {
+                    $0.rawValue.uuidString
+                }
+            )
             allEvidence.append(contentsOf: sectionEvidence)
+            allEvidence.append(contentsOf: sectionArtifactEvidence)
             sections.append(
                 GraphChatAnswerSection(
                     title: section.title,
                     text: section.text,
-                    evidenceIDs: sectionEvidence.map(\.id)
+                    evidenceIDs: GraphEvidenceCollection(
+                        sectionEvidence + sectionArtifactEvidence
+                    ).values.map(\.id),
+                    artifactIDs: sectionArtifactIDs,
+                    querySummary: sectionArtifactIDs.compactMap {
+                        artifactsByID[$0]?.querySummary
+                    }.first,
+                    state: sectionAnswerState(for: providerAnswer.responseState)
                 )
             )
         }
@@ -1181,6 +1206,7 @@ actor GraphChatOrchestrator {
             conversationTransaction: conversationTransaction,
             conversationContext: conversationContext,
             referenceResolver: referenceResolver,
+            responseLanguage: responseLanguage,
             referenceDate: referenceDate(),
             calendar: calendar,
             timeZone: timeZone
@@ -1348,7 +1374,9 @@ actor GraphChatOrchestrator {
             sessionID: sessionID,
             registry: GraphChatAnswerArtifactRegistry(
                 graphScope: key.graphScope,
-                sessionID: sessionID
+                scope: key.chatScope,
+                sessionID: sessionID,
+                revalidator: artifactRevalidator
             )
         )
         artifactSession = resources
@@ -1522,7 +1550,8 @@ actor GraphChatOrchestrator {
                 Verwende nur Fakten, die Tools in dieser Session geliefert haben. Ergänze niemals Graph-Fakten aus Weltwissen oder Annahmen.
                 Benenne unbekannte, fehlende, mehrdeutige oder unzureichende Daten ausdrücklich.
                 Verwende nur Evidence-UUIDs aus tatsächlichen Tool-Ergebnissen. Erfinde, verändere oder leite niemals eine Evidence-UUID ab.
-                Übernimm nur artifactID-UUIDs, die ein Tool in dieser Anfrage ausdrücklich geliefert hat, unverändert in artifactIDs. Erfinde keine Artifact-ID und erzeuge, verändere oder rekonstruiere niemals Artifact-Payloads.
+                Übernimm nur artifactID-UUIDs, die ein Tool in dieser Anfrage ausdrücklich geliefert hat, unverändert in artifactIDs. Ordne eine Artifact-ID dem passenden Abschnitt zu, wenn der Abschnitt dieses Ergebnis einordnet. Erfinde keine Artifact-ID und erzeuge, verändere oder rekonstruiere niemals Artifact-Payloads.
+                Tabellen, Rankings, Gruppen, Kennzahlen, Timelines und Ergebniszeilen stammen ausschließlich aus Artifacts. Wiederhole bei vorhandenem Artifact nicht sämtliche Zeilen im Fließtext und erfinde keine strukturierten Werte.
                 Arbeite ausschließlich im aktiven Graphen und aktiven Chat-Scope. Fordere oder behaupte niemals Daten aus einem anderen Graphen oder Scope.
                 Biete keine Schreib-, Änderungs-, Lösch-, Erstellungs-, Import-, Upload- oder Mutationsaktion an und simuliere oder behaupte sie nicht.
                 Attachment-Tools liefern nur Metadaten. Behaupte niemals, Inhalte von Dateien, Bildern, PDFs oder Binärdaten gelesen zu haben.
@@ -1544,7 +1573,8 @@ actor GraphChatOrchestrator {
                 Use only facts returned by tools in this session. Never add graph facts from world knowledge or assumptions.
                 State unknown, missing, ambiguous, or insufficient data explicitly.
                 Use only Evidence UUIDs that appeared in actual tool results. Never invent, alter, or infer an Evidence UUID.
-                Copy only artifactID UUIDs explicitly returned by a tool in this request, unchanged, into artifactIDs. Never invent an Artifact ID or create, modify, or reconstruct an Artifact payload.
+                Copy only artifactID UUIDs explicitly returned by a tool in this request, unchanged, into artifactIDs. Associate an Artifact ID with the section that interprets that result when applicable. Never invent an Artifact ID or create, modify, or reconstruct an Artifact payload.
+                Tables, rankings, groups, metrics, timelines, and result rows come only from Artifacts. When an Artifact exists, do not repeat every row in prose and never invent structured values.
                 Work only inside the active graph and the active chat scope. Never request or claim data from another graph or scope.
                 Never offer, simulate, or claim a write, edit, delete, create, import, upload, or mutation action.
                 Attachment tools expose metadata only. Never claim to have read attachment contents, files, images, PDFs, or binary data.
@@ -1559,6 +1589,38 @@ actor GraphChatOrchestrator {
                 Follow-up suggestions must be optional read-only questions about the same active scope.
                 Active scope: \(scopeDescription(scope.target, language: language)).
                 """
+        }
+    }
+
+    private func validatedArtifactIDs(
+        from rawValues: [String],
+        artifactsByID: [GraphChatAnswerArtifactID: GraphChatAnswerArtifact]
+    ) -> [GraphChatAnswerArtifactID] {
+        var seen = Set<GraphChatAnswerArtifactID>()
+        return rawValues.compactMap { rawValue in
+            guard let uuid = UUID(uuidString: rawValue) else {
+                return nil
+            }
+            let id = GraphChatAnswerArtifactID(rawValue: uuid)
+            guard artifactsByID[id] != nil, seen.insert(id).inserted else {
+                return nil
+            }
+            return id
+        }
+    }
+
+    private func sectionAnswerState(
+        for providerState: GraphChatProviderResponseState
+    ) -> GraphChatAnswerState {
+        switch providerState {
+        case .answer:
+            return .answer
+        case .noResults:
+            return .noResults
+        case .unsupported:
+            return .unsupported(.other)
+        case .clarification:
+            return .answer
         }
     }
 

@@ -112,7 +112,7 @@ struct GraphChatToolsTests {
             logger: NoOpGraphChatToolLogger()
         )
         let result = try await tool.execute(
-            SearchGraphInput(query: "source", limit: 1),
+            SearchGraphInput(query: "source", limit: 2),
             context: context(graphID: graph.id)
         )
 
@@ -122,6 +122,9 @@ struct GraphChatToolsTests {
         #expect(result.payload?.hits.map(\.subtitle) == ["Entity"])
         #expect(result.evidence.map(\.sourceReference.sourceID) == [entity.id])
         #expect(result.evidence.contains { $0.sourceReference.sourceID == staleID } == false)
+        #expect(result.payload?.resultWindow.totalCount == nil)
+        #expect(result.payload?.resultWindow.returnedCount == 1)
+        #expect(result.payload?.resultWindow.limitSources == [.source])
     }
 
     @Test
@@ -180,6 +183,23 @@ struct GraphChatToolsTests {
             }
             return false
         } == false)
+
+        let zeroLimitResult = try await GetNodeTool(
+            repository: repository,
+            evidenceValidator: GraphEvidenceSourceValidator(repository: repository),
+            logger: NoOpGraphChatToolLogger()
+        ).execute(
+            GetNodeInput(
+                node: NodeRefKey(kind: .attribute, id: attribute.id),
+                relatedLimit: 0
+            ),
+            context: context(graphID: graph.id)
+        )
+        let zeroLimitOutput = try #require(zeroLimitResult.payload)
+        #expect(zeroLimitOutput.detailValues.isEmpty)
+        #expect(zeroLimitOutput.detailValueWindow.totalCount == 1)
+        #expect(zeroLimitOutput.detailValueWindow.returnedCount == 0)
+        #expect(zeroLimitOutput.detailValueWindow.limitSources == [.tool])
     }
 
     @Test
@@ -331,6 +351,62 @@ struct GraphChatToolsTests {
         #expect(output.isolatedNodeCount == structure.isolatedNodeCount)
         #expect(output.hubs.map(\.node.id) == [hubID])
         #expect(output.healthScore == health.score.value)
+        #expect(output.hubWindow.totalCount == 8)
+        #expect(output.hubWindow.returnedCount == 1)
+        #expect(output.hubWindow.limitSources == [.tool])
+    }
+
+    @Test
+    func statsToolMarksTheExistingTopHubSourceCapWithoutInventingCompleteness() async throws {
+        let graphID = UUID()
+        let counts = GraphCounts(
+            entities: 12,
+            attributes: 0,
+            links: 12,
+            notes: 0,
+            images: 0,
+            attachments: 0,
+            attachmentBytes: 0
+        )
+        let topHubs = (0..<10).map { index in
+            GraphHubItem(
+                id: UUID(),
+                label: "Hub \(index)",
+                kind: .entity,
+                degree: 20 - index
+            )
+        }
+        let structure = GraphStructureSnapshot(
+            nodeCount: 12,
+            linkCount: 12,
+            isolatedNodeCount: 0,
+            topHubs: topHubs
+        )
+        let health = GraphHealthSnapshot(
+            graphID: graphID,
+            counts: counts,
+            score: GraphHealthScore.make(counts: counts, issues: []),
+            issues: []
+        )
+        let result = try await GraphStatsTool(
+            reader: GraphChatStatsReaderSpy(
+                value: GraphChatStatsSnapshot(
+                    counts: counts,
+                    structure: structure,
+                    health: health
+                )
+            ),
+            evidenceValidator: PassthroughGraphEvidenceValidator(),
+            logger: NoOpGraphChatToolLogger()
+        ).execute(
+            GraphStatsInput(hubLimit: 25),
+            context: context(graphID: graphID)
+        )
+
+        let output = try #require(result.payload)
+        #expect(output.hubWindow.totalCount == 12)
+        #expect(output.hubWindow.returnedCount == 10)
+        #expect(output.hubWindow.limitSources == [.source])
     }
 
     private func context(graphID: UUID) -> GraphChatToolContext {

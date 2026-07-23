@@ -81,6 +81,16 @@ actor GraphChatEvidenceRegistry {
         ids.allSatisfy { evidenceByID[$0] != nil }
     }
 
+    func evidence(for ids: [GraphEvidenceID]) -> [GraphEvidence] {
+        var seen = Set<GraphEvidenceID>()
+        return ids.compactMap { id in
+            guard seen.insert(id).inserted else {
+                return nil
+            }
+            return evidenceByID[id]
+        }
+    }
+
     func removeAll() {
         evidenceByID.removeAll(keepingCapacity: false)
         appliedFilters.removeAll(keepingCapacity: false)

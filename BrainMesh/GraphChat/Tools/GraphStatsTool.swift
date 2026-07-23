@@ -95,6 +95,29 @@ nonisolated struct GraphStatsOutput: Sendable {
     let healthScore: Int
     let healthIssueCount: Int
     let evidenceIDs: [GraphEvidenceID]
+    let hubWindow: GraphChatResultWindow
+
+    init(
+        counts: GraphChatStatsCounts,
+        nodeCount: Int,
+        linkCount: Int,
+        isolatedNodeCount: Int,
+        hubs: [GraphChatStatsHub],
+        healthScore: Int,
+        healthIssueCount: Int,
+        evidenceIDs: [GraphEvidenceID],
+        hubWindow: GraphChatResultWindow? = nil
+    ) {
+        self.counts = counts
+        self.nodeCount = nodeCount
+        self.linkCount = linkCount
+        self.isolatedNodeCount = isolatedNodeCount
+        self.hubs = hubs
+        self.healthScore = healthScore
+        self.healthIssueCount = healthIssueCount
+        self.evidenceIDs = evidenceIDs
+        self.hubWindow = hubWindow ?? .complete(totalCount: hubs.count)
+    }
 }
 
 nonisolated struct GraphStatsTool: GraphChatTool {
@@ -198,6 +221,14 @@ nonisolated struct GraphStatsTool: GraphChatTool {
                 return .noEvidence()
             }
             let validHubs = hubs.filter { validIDs.contains($0.evidenceID) }
+            let totalHubCount = max(
+                0,
+                snapshot.structure.nodeCount - snapshot.structure.isolatedNodeCount
+            )
+            let evidenceLimited = validHubs.count < hubs.count
+            let toolLimitReached = totalHubCount > hubLimit
+            let sourceLimitReached = snapshot.structure.topHubs.count
+                < min(totalHubCount, hubLimit)
             let output = GraphStatsOutput(
                 counts: GraphChatStatsCounts(
                     entities: snapshot.counts.entities,
@@ -214,7 +245,15 @@ nonisolated struct GraphStatsTool: GraphChatTool {
                 hubs: validHubs,
                 healthScore: snapshot.health.score.value,
                 healthIssueCount: snapshot.health.issues.count,
-                evidenceIDs: [graphEvidence.id] + validHubs.map(\.evidenceID)
+                evidenceIDs: [graphEvidence.id] + validHubs.map(\.evidenceID),
+                hubWindow: GraphChatResultWindow(
+                    totalCount: evidenceLimited ? nil : totalHubCount,
+                    returnedCount: validHubs.count,
+                    limit: hubLimit,
+                    limitReached: toolLimitReached || sourceLimitReached || evidenceLimited,
+                    limitSources: (toolLimitReached ? [.tool] : [])
+                        + (sourceLimitReached || evidenceLimited ? [.source] : [])
+                )
             )
             try await context.budget.consumeEvidence(validatedEvidence.count)
             let resultCount = 1 + validHubs.count

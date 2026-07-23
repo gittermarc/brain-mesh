@@ -58,6 +58,7 @@ nonisolated struct GraphChatModelToolRuntimeFactory: GraphChatModelToolRunnerFac
         conversationTransaction: GraphChatConversationStateTransaction,
         conversationContext: GraphChatConversationContextSnapshot,
         referenceResolver: GraphChatConversationReferenceResolver,
+        responseLanguage: GraphChatResponseLanguage,
         referenceDate: Date,
         calendar: Calendar,
         timeZone: TimeZone
@@ -72,6 +73,7 @@ nonisolated struct GraphChatModelToolRuntimeFactory: GraphChatModelToolRunnerFac
             conversationTransaction: conversationTransaction,
             conversationContext: conversationContext,
             referenceResolver: referenceResolver,
+            responseLanguage: responseLanguage,
             validator: GraphQueryPlanValidator(
                 calendar: calendar,
                 timeZone: timeZone,
@@ -102,6 +104,7 @@ actor GraphChatModelToolRuntime: GraphChatModelToolRunning {
     private let conversationTransaction: GraphChatConversationStateTransaction
     private let conversationContext: GraphChatConversationContextSnapshot
     private let referenceResolver: GraphChatConversationReferenceResolver
+    private let responseLanguage: GraphChatResponseLanguage
     private let validator: GraphQueryPlanValidator
     private let describeSchemaTool: DescribeGraphSchemaTool
     private let searchGraphTool: SearchGraphTool
@@ -124,6 +127,7 @@ actor GraphChatModelToolRuntime: GraphChatModelToolRunning {
         conversationTransaction: GraphChatConversationStateTransaction,
         conversationContext: GraphChatConversationContextSnapshot,
         referenceResolver: GraphChatConversationReferenceResolver,
+        responseLanguage: GraphChatResponseLanguage,
         validator: GraphQueryPlanValidator,
         describeSchemaTool: DescribeGraphSchemaTool,
         searchGraphTool: SearchGraphTool,
@@ -141,6 +145,7 @@ actor GraphChatModelToolRuntime: GraphChatModelToolRunning {
         self.conversationTransaction = conversationTransaction
         self.conversationContext = conversationContext
         self.referenceResolver = referenceResolver
+        self.responseLanguage = responseLanguage
         self.validator = validator
         self.describeSchemaTool = describeSchemaTool
         self.searchGraphTool = searchGraphTool
@@ -216,11 +221,26 @@ actor GraphChatModelToolRuntime: GraphChatModelToolRunning {
                 )
             )
         }
+        let artifactIDs = try await stageArtifacts(
+            result.payload.flatMap {
+                GraphChatAnswerArtifactFactory.schemaOverview(
+                    output: $0,
+                    schemaContext: GraphSchemaContext(
+                        graphScope: schemaContext.graphScope,
+                        snapshot: $0.snapshot,
+                        aliases: schemaContext.aliases
+                    ),
+                    evidenceIDs: result.evidence.map(\.id),
+                    language: responseLanguage
+                )
+            }.map { [$0] } ?? []
+        )
         return GraphChatModelToolResponse(
             tool: .describeGraphSchema,
             state: result.state,
             content: formatSchema(result.payload?.snapshot),
-            evidenceIDs: result.evidence.map(\.id)
+            evidenceIDs: result.evidence.map(\.id),
+            artifactIDs: artifactIDs
         )
     }
 
@@ -247,7 +267,8 @@ actor GraphChatModelToolRuntime: GraphChatModelToolRunning {
                 GraphChatAnswerArtifactFactory.searchResults(
                     output: $0,
                     graphScope: scope.graphScope,
-                    requestedLimit: limit
+                    requestedLimit: limit,
+                    language: responseLanguage
                 )
             }
         )
@@ -301,7 +322,8 @@ actor GraphChatModelToolRuntime: GraphChatModelToolRunning {
                 GraphChatAnswerArtifactFactory.queryResult(
                     $0.result,
                     plan: validatedPlan,
-                    schemaContext: schemaContext
+                    schemaContext: schemaContext,
+                    language: responseLanguage
                 )
             }
         )
@@ -340,7 +362,8 @@ actor GraphChatModelToolRuntime: GraphChatModelToolRunning {
             result.payload.flatMap {
                 GraphChatAnswerArtifactFactory.nodeDetails(
                     output: $0,
-                    graphScope: scope.graphScope
+                    graphScope: scope.graphScope,
+                    language: responseLanguage
                 )
             }
         )
@@ -378,7 +401,8 @@ actor GraphChatModelToolRuntime: GraphChatModelToolRunning {
                 GraphChatAnswerArtifactFactory.neighbors(
                     output: $0,
                     graphScope: scope.graphScope,
-                    requestedLimit: limit
+                    requestedLimit: limit,
+                    language: responseLanguage
                 )
             }
         )
@@ -409,14 +433,15 @@ actor GraphChatModelToolRuntime: GraphChatModelToolRunning {
                 )
             )
         }
-        let artifactID = try await stageArtifact(
-            result.payload.flatMap {
+        let artifactIDs = try await stageArtifacts(
+            result.payload.map {
                 GraphChatAnswerArtifactFactory.statistics(
                     output: $0,
                     graphScope: scope.graphScope,
-                    requestedHubLimit: hubLimit
+                    requestedHubLimit: hubLimit,
+                    language: responseLanguage
                 )
-            }
+            } ?? []
         )
         let content = result.payload.map(formatStats) ?? "Keine validierte Graph-Statistik verfügbar."
         return GraphChatModelToolResponse(
@@ -424,7 +449,7 @@ actor GraphChatModelToolRuntime: GraphChatModelToolRunning {
             state: result.state,
             content: content,
             evidenceIDs: result.evidence.map(\.id),
-            artifactID: artifactID
+            artifactIDs: artifactIDs
         )
     }
 
@@ -438,17 +463,29 @@ actor GraphChatModelToolRuntime: GraphChatModelToolRunning {
         guard let draft else {
             return nil
         }
-        do {
-            return try await artifactRegistry.stage(
-                draft,
-                transactionID: artifactTransactionID,
-                evidenceRegistry: evidenceRegistry
-            )
-        } catch is CancellationError {
-            throw CancellationError()
-        } catch {
-            return nil
+        return try await stageArtifacts([draft]).first
+    }
+
+    private func stageArtifacts(
+        _ drafts: [GraphChatAnswerArtifactDraft]
+    ) async throws -> [GraphChatAnswerArtifactID] {
+        var artifactIDs: [GraphChatAnswerArtifactID] = []
+        artifactIDs.reserveCapacity(drafts.count)
+        for draft in drafts {
+            do {
+                let artifactID = try await artifactRegistry.stage(
+                    draft,
+                    transactionID: artifactTransactionID,
+                    evidenceRegistry: evidenceRegistry
+                )
+                artifactIDs.append(artifactID)
+            } catch is CancellationError {
+                throw CancellationError()
+            } catch {
+                continue
+            }
         }
+        return artifactIDs
     }
 
     private func record(

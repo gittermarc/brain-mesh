@@ -33,6 +33,17 @@ nonisolated struct GraphChatSearchHit: Hashable, Sendable, Identifiable {
 nonisolated struct SearchGraphOutput: Sendable {
     let query: String
     let hits: [GraphChatSearchHit]
+    let resultWindow: GraphChatResultWindow
+
+    init(
+        query: String,
+        hits: [GraphChatSearchHit],
+        resultWindow: GraphChatResultWindow? = nil
+    ) {
+        self.query = query
+        self.hits = hits
+        self.resultWindow = resultWindow ?? .complete(totalCount: hits.count)
+    }
 }
 
 nonisolated struct SearchGraphTool: GraphChatTool {
@@ -121,6 +132,7 @@ nonisolated struct SearchGraphTool: GraphChatTool {
             let sortedCandidates = BrainMeshSearchRanking.sortedCandidates(response.candidates)
 
             var resolved: [ResolvedCandidate] = []
+            var sourceCandidateWasRemoved = false
             resolved.reserveCapacity(min(limit, sortedCandidates.count))
             for (index, candidate) in sortedCandidates.enumerated() {
                 if index.isMultiple(of: 16) {
@@ -129,11 +141,15 @@ nonisolated struct SearchGraphTool: GraphChatTool {
                 guard resolved.count < limit else {
                     break
                 }
-                guard candidate.result.graphID == context.scope.graphScope.graphID,
-                      let source = try await resolvedSource(
-                        for: candidate.result,
-                        graphScope: context.scope.graphScope
-                      ) else {
+                guard candidate.result.graphID == context.scope.graphScope.graphID else {
+                    sourceCandidateWasRemoved = true
+                    continue
+                }
+                guard let source = try await resolvedSource(
+                    for: candidate.result,
+                    graphScope: context.scope.graphScope
+                ) else {
+                    sourceCandidateWasRemoved = true
                     continue
                 }
                 let evidence = GraphEvidence(
@@ -203,8 +219,24 @@ nonisolated struct SearchGraphTool: GraphChatTool {
                     usedIndexFallback: usedIndexFallback
                 )
             )
+            let evidenceLimited = hits.count < resolved.count
+            let sourceLimited = sourceCandidateWasRemoved || evidenceLimited
+            let toolLimitReached = hits.count >= limit
+                && (sortedCandidates.count > hits.count
+                    || response.indexDocumentCount >= candidateLimit)
             return .success(
-                SearchGraphOutput(query: foldedQuery, hits: hits),
+                SearchGraphOutput(
+                    query: foldedQuery,
+                    hits: hits,
+                    resultWindow: GraphChatResultWindow(
+                        totalCount: nil,
+                        returnedCount: hits.count,
+                        limit: limit,
+                        limitReached: toolLimitReached || sourceLimited,
+                        limitSources: (toolLimitReached ? [.tool] : [])
+                            + (sourceLimited ? [.source] : [])
+                    )
+                ),
                 evidence: evidence
             )
         } catch is CancellationError {

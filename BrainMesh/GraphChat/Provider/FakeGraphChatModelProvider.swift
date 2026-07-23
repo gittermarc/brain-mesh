@@ -329,6 +329,7 @@ nonisolated struct FakeGraphChatModelToolRunnerFactory: GraphChatModelToolRunner
         conversationTransaction: GraphChatConversationStateTransaction,
         conversationContext: GraphChatConversationContextSnapshot,
         referenceResolver: GraphChatConversationReferenceResolver,
+        responseLanguage: GraphChatResponseLanguage,
         referenceDate: Date,
         calendar: Calendar,
         timeZone: TimeZone

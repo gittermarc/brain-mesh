@@ -160,6 +160,7 @@ nonisolated enum GraphChatAnswerArtifactNavigationTarget: Hashable, Sendable {
 nonisolated enum GraphChatAnswerArtifactTruncationReason: String, CaseIterable, Hashable, Sendable {
     case toolLimit
     case queryLimit
+    case uiLimit
     case registryBudget
     case sourceLimited
     case unknown
@@ -168,12 +169,15 @@ nonisolated enum GraphChatAnswerArtifactTruncationReason: String, CaseIterable, 
 nonisolated struct GraphChatAnswerArtifactTruncation: Hashable, Sendable {
     let isTruncated: Bool
     let omittedCount: Int?
-    let reason: GraphChatAnswerArtifactTruncationReason?
+    let omittedColumnCount: Int?
+    let reasons: [GraphChatAnswerArtifactTruncationReason]
+
+    var reason: GraphChatAnswerArtifactTruncationReason? {
+        reasons.first
+    }
 
     static let complete = GraphChatAnswerArtifactTruncation(
-        isTruncated: false,
-        omittedCount: nil,
-        reason: nil
+        isTruncated: false
     )
 
     init(
@@ -181,24 +185,58 @@ nonisolated struct GraphChatAnswerArtifactTruncation: Hashable, Sendable {
         omittedCount: Int? = nil,
         reason: GraphChatAnswerArtifactTruncationReason? = nil
     ) {
-        self.isTruncated = isTruncated
-        self.omittedCount = isTruncated ? omittedCount.map { max(0, $0) } : nil
-        self.reason = isTruncated ? reason : nil
+        self.init(
+            reasons: isTruncated ? reason.map { [$0] } ?? [.unknown] : [],
+            omittedCount: omittedCount,
+            omittedColumnCount: nil
+        )
+    }
+
+    init(
+        reasons: [GraphChatAnswerArtifactTruncationReason],
+        omittedCount: Int? = nil,
+        omittedColumnCount: Int? = nil
+    ) {
+        var seen = Set<GraphChatAnswerArtifactTruncationReason>()
+        let normalizedReasons = reasons.filter { seen.insert($0).inserted }
+        self.isTruncated = normalizedReasons.isEmpty == false
+        self.omittedCount = normalizedReasons.isEmpty
+            ? nil
+            : omittedCount.map { max(0, $0) }
+        self.omittedColumnCount = normalizedReasons.isEmpty
+            ? nil
+            : omittedColumnCount.map { max(0, $0) }
+        self.reasons = normalizedReasons
     }
 }
 
 nonisolated struct GraphChatAnswerArtifactResultMetadata: Hashable, Sendable {
-    let resultCount: Int
+    let totalCount: Int?
     let returnedCount: Int
     let truncation: GraphChatAnswerArtifactTruncation
 
+    var resultCount: Int? {
+        totalCount
+    }
+
+    var totalCountIsKnown: Bool {
+        totalCount != nil
+    }
+
+    var isComplete: Bool {
+        guard let totalCount else {
+            return false
+        }
+        return truncation.isTruncated == false && returnedCount == totalCount
+    }
+
     init(
-        resultCount: Int,
+        resultCount: Int?,
         returnedCount: Int,
         truncation: GraphChatAnswerArtifactTruncation = .complete
     ) {
         let normalizedReturnedCount = max(0, returnedCount)
-        self.resultCount = max(normalizedReturnedCount, resultCount)
+        self.totalCount = resultCount.map { max(normalizedReturnedCount, $0) }
         self.returnedCount = normalizedReturnedCount
         self.truncation = truncation
     }
@@ -236,12 +274,56 @@ nonisolated enum GraphChatAnswerArtifactColumnRole: String, CaseIterable, Hashab
     case other
 }
 
+nonisolated enum GraphChatAnswerArtifactDateFormat: String, CaseIterable, Hashable, Sendable {
+    case localizedDate
+    case localizedDateTime
+}
+
+nonisolated struct GraphChatAnswerArtifactValuePresentation: Hashable, Sendable {
+    let missingLabel: String
+    let booleanTrueLabel: String
+    let booleanFalseLabel: String
+    let dateFormat: GraphChatAnswerArtifactDateFormat?
+    let choiceLabels: [GraphChatAnswerArtifactChoiceValue]
+
+    init(
+        missingLabel: String = "Missing",
+        booleanTrueLabel: String = "Yes",
+        booleanFalseLabel: String = "No",
+        dateFormat: GraphChatAnswerArtifactDateFormat? = nil,
+        choiceLabels: [GraphChatAnswerArtifactChoiceValue] = []
+    ) {
+        self.missingLabel = missingLabel
+        self.booleanTrueLabel = booleanTrueLabel
+        self.booleanFalseLabel = booleanFalseLabel
+        self.dateFormat = dateFormat
+        self.choiceLabels = choiceLabels
+    }
+}
+
 nonisolated struct GraphChatAnswerArtifactTableColumn: Hashable, Sendable, Identifiable {
     let id: GraphChatAnswerArtifactItemID
     let key: String
     let title: String
     let role: GraphChatAnswerArtifactColumnRole
     let unit: String?
+    let valuePresentation: GraphChatAnswerArtifactValuePresentation
+
+    init(
+        id: GraphChatAnswerArtifactItemID,
+        key: String,
+        title: String,
+        role: GraphChatAnswerArtifactColumnRole,
+        unit: String?,
+        valuePresentation: GraphChatAnswerArtifactValuePresentation = GraphChatAnswerArtifactValuePresentation()
+    ) {
+        self.id = id
+        self.key = key
+        self.title = title
+        self.role = role
+        self.unit = unit
+        self.valuePresentation = valuePresentation
+    }
 }
 
 nonisolated struct GraphChatAnswerArtifactTableCell: Hashable, Sendable, Identifiable {
@@ -423,25 +505,82 @@ nonisolated enum GraphChatAnswerArtifactKind: String, CaseIterable, Hashable, Se
     case timeline
 }
 
+
+nonisolated struct GraphChatAnswerArtifactQueryFieldSummary: Hashable, Sendable, Identifiable {
+    let fieldID: UUID
+    let label: String
+
+    var id: UUID {
+        fieldID
+    }
+}
+
+nonisolated struct GraphChatAnswerArtifactQueryFilterSummary: Hashable, Sendable, Identifiable {
+    let field: GraphChatAnswerArtifactQueryFieldSummary
+    let operation: GraphQueryFilterOperator
+    let operationLabel: String
+    let values: [GraphChatAnswerArtifactValue]
+    let valueDescription: String?
+
+    var id: String {
+        "\(field.fieldID.uuidString):\(operation.rawValue):\(valueDescription ?? "")"
+    }
+}
+
+nonisolated struct GraphChatAnswerArtifactQuerySortSummary: Hashable, Sendable, Identifiable {
+    let key: String
+    let label: String
+    let direction: GraphChatAnswerArtifactSortDirection
+    let directionLabel: String
+
+    var id: String {
+        "\(key):\(direction.rawValue)"
+    }
+}
+
+nonisolated enum GraphChatAnswerArtifactQueryAggregationSummary: Hashable, Sendable {
+    case count(label: String)
+    case minimum(field: GraphChatAnswerArtifactQueryFieldSummary, label: String)
+    case maximum(field: GraphChatAnswerArtifactQueryFieldSummary, label: String)
+    case groupCount(field: GraphChatAnswerArtifactQueryFieldSummary, label: String)
+}
+
+nonisolated struct GraphChatAnswerArtifactQuerySummary: Hashable, Sendable {
+    let language: GraphChatResponseLanguage
+    let entityID: UUID
+    let entityLabel: String
+    let filters: [GraphChatAnswerArtifactQueryFilterSummary]
+    let grouping: GraphChatAnswerArtifactQueryFieldSummary?
+    let sorting: [GraphChatAnswerArtifactQuerySortSummary]
+    let projection: [GraphChatAnswerArtifactQueryFieldSummary]
+    let includesNodeIdentity: Bool
+    let limit: Int
+    let aggregation: GraphChatAnswerArtifactQueryAggregationSummary?
+    let displayText: String
+}
+
 nonisolated struct GraphChatAnswerArtifactDraft: Hashable, Sendable {
     let graphScope: GraphScope
     let title: String
     let payload: GraphChatAnswerArtifactPayload
     let evidence: GraphChatAnswerArtifactEvidenceBinding
     let navigationTargets: [GraphChatAnswerArtifactNavigationTarget]
+    let querySummary: GraphChatAnswerArtifactQuerySummary?
 
     init(
         graphScope: GraphScope,
         title: String,
         payload: GraphChatAnswerArtifactPayload,
         evidence: GraphChatAnswerArtifactEvidenceBinding,
-        navigationTargets: [GraphChatAnswerArtifactNavigationTarget] = []
+        navigationTargets: [GraphChatAnswerArtifactNavigationTarget] = [],
+        querySummary: GraphChatAnswerArtifactQuerySummary? = nil
     ) {
         self.graphScope = graphScope
         self.title = title
         self.payload = payload
         self.evidence = evidence
         self.navigationTargets = navigationTargets
+        self.querySummary = querySummary
     }
 
     var allNavigationTargets: [GraphChatAnswerArtifactNavigationTarget] {
@@ -457,6 +596,27 @@ nonisolated struct GraphChatAnswerArtifact: Hashable, Sendable, Identifiable {
     let payload: GraphChatAnswerArtifactPayload
     let evidence: GraphChatAnswerArtifactEvidenceBinding
     let navigationTargets: [GraphChatAnswerArtifactNavigationTarget]
+    let querySummary: GraphChatAnswerArtifactQuerySummary?
+
+    init(
+        id: GraphChatAnswerArtifactID,
+        sessionID: GraphChatAnswerArtifactSessionID,
+        graphScope: GraphScope,
+        title: String,
+        payload: GraphChatAnswerArtifactPayload,
+        evidence: GraphChatAnswerArtifactEvidenceBinding,
+        navigationTargets: [GraphChatAnswerArtifactNavigationTarget],
+        querySummary: GraphChatAnswerArtifactQuerySummary? = nil
+    ) {
+        self.id = id
+        self.sessionID = sessionID
+        self.graphScope = graphScope
+        self.title = title
+        self.payload = payload
+        self.evidence = evidence
+        self.navigationTargets = navigationTargets
+        self.querySummary = querySummary
+    }
 
     var kind: GraphChatAnswerArtifactKind {
         switch payload {

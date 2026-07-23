@@ -15,11 +15,14 @@ private nonisolated struct FoundationGraphChatGeneratedSection {
     @Guide(description: "Short optional section title. Use an empty string when no title is needed.")
     var title: String
 
-    @Guide(description: "Section text based only on tool results.")
+    @Guide(description: "Section text based only on tool results. When artifactIDs are present, interpret the result without repeating every structured row.")
     var text: String
 
     @Guide(description: "Evidence UUID strings that were present in tool results.", .maximumCount(20))
     var evidenceIDs: [String]
+
+    @Guide(description: "Only artifactID UUID strings returned by tools that support this section. Never invent or modify an artifact ID.", .maximumCount(6))
+    var artifactIDs: [String]
 }
 
 @Generable
@@ -48,7 +51,7 @@ private nonisolated struct FoundationGraphChatGeneratedAnswer {
     @Guide(description: "One value: answer, clarification, noResults, or unsupported.")
     var responseKind: String
 
-    @Guide(description: "Direct concise answer based only on tool results.")
+    @Guide(description: "Direct concise answer based only on tool results. Do not recreate tables, rankings, groups, metrics, timelines, or result rows in prose.")
     var directAnswer: String
 
     @Guide(description: "Optional supporting answer sections.", .maximumCount(6))
@@ -724,7 +727,8 @@ actor FoundationModelsGraphChatProvider: GraphChatModelProvider {
                 GraphChatProviderAnswerSection(
                     title: nilIfEmpty(section.title),
                     text: section.text,
-                    evidenceIDValues: section.evidenceIDs
+                    evidenceIDValues: section.evidenceIDs,
+                    artifactIDValues: section.artifactIDs
                 )
             },
             evidenceIDValues: generated.evidenceIDs,

@@ -17,6 +17,7 @@ nonisolated extension GraphChatQueryEngine {
         let state: GraphChatResultState
         let result: GraphChatAggregationResult
         let evidence: [GraphEvidence]
+        let resultWindow: GraphChatResultWindow
     }
 
     static func makeResultRows(
@@ -151,7 +152,8 @@ nonisolated extension GraphChatQueryEngine {
                     value: nil,
                     evidenceIDs: deduplicatedEvidence.map(\.id)
                 ),
-                evidence: deduplicatedEvidence
+                evidence: deduplicatedEvidence,
+                resultWindow: .complete(totalCount: 1)
             )
 
         case .groupCount(let fieldID):
@@ -228,7 +230,14 @@ nonisolated extension GraphChatQueryEngine {
                     value: nil,
                     evidenceIDs: [aggregateEvidence.id] + groups.flatMap(\.evidenceIDs)
                 ),
-                evidence: GraphEvidenceCollection(evidence).values
+                evidence: GraphEvidenceCollection(evidence).values,
+                resultWindow: GraphChatResultWindow(
+                    totalCount: sortedKeys.count,
+                    returnedCount: groups.count,
+                    limit: limit,
+                    limitReached: sortedKeys.count > limit,
+                    limitSource: .query
+                )
             )
 
         case .minimum(let fieldID), .maximum(let fieldID):
@@ -281,7 +290,8 @@ nonisolated extension GraphChatQueryEngine {
                     value: selectedValue,
                     evidenceIDs: evidence.map(\.id)
                 ),
-                evidence: GraphEvidenceCollection(evidence).values
+                evidence: GraphEvidenceCollection(evidence).values,
+                resultWindow: .complete(totalCount: selectedValue == nil ? 0 : 1)
             )
         }
     }

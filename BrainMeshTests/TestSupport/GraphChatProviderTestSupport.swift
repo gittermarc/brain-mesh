@@ -63,6 +63,7 @@ nonisolated struct EvidenceRegisteringFakeToolRunnerFactory: GraphChatModelToolR
     let recorder: GraphChatFakeToolRunnerRecorder
     let evidenceByTool: [GraphChatToolKind: [GraphEvidence]]
     let responseTextByTool: [GraphChatToolKind: String]
+    let artifactDraftsByTool: [GraphChatToolKind: [GraphChatAnswerArtifactDraft]]
     let registeredKinds: Set<GraphChatToolKind>
     let delayNanoseconds: UInt64
 
@@ -70,12 +71,14 @@ nonisolated struct EvidenceRegisteringFakeToolRunnerFactory: GraphChatModelToolR
         recorder: GraphChatFakeToolRunnerRecorder = GraphChatFakeToolRunnerRecorder(),
         evidenceByTool: [GraphChatToolKind: [GraphEvidence]] = [:],
         responseTextByTool: [GraphChatToolKind: String] = [:],
+        artifactDraftsByTool: [GraphChatToolKind: [GraphChatAnswerArtifactDraft]] = [:],
         registeredKinds: Set<GraphChatToolKind> = Set(GraphChatToolKind.allCases),
         delayNanoseconds: UInt64 = 0
     ) {
         self.recorder = recorder
         self.evidenceByTool = evidenceByTool
         self.responseTextByTool = responseTextByTool
+        self.artifactDraftsByTool = artifactDraftsByTool
         self.registeredKinds = registeredKinds
         self.delayNanoseconds = delayNanoseconds
     }
@@ -90,6 +93,7 @@ nonisolated struct EvidenceRegisteringFakeToolRunnerFactory: GraphChatModelToolR
         conversationTransaction: GraphChatConversationStateTransaction,
         conversationContext: GraphChatConversationContextSnapshot,
         referenceResolver: GraphChatConversationReferenceResolver,
+        responseLanguage: GraphChatResponseLanguage,
         referenceDate: Date,
         calendar: Calendar,
         timeZone: TimeZone
@@ -98,10 +102,13 @@ nonisolated struct EvidenceRegisteringFakeToolRunnerFactory: GraphChatModelToolR
             scope: scope,
             budget: budget,
             evidenceRegistry: evidenceRegistry,
+            artifactRegistry: artifactRegistry,
+            artifactTransactionID: artifactTransactionID,
             conversationTransaction: conversationTransaction,
             recorder: recorder,
             evidenceByTool: evidenceByTool,
             responseTextByTool: responseTextByTool,
+            artifactDraftsByTool: artifactDraftsByTool,
             registeredKinds: registeredKinds,
             delayNanoseconds: delayNanoseconds
         )
@@ -112,10 +119,13 @@ private actor EvidenceRegisteringFakeToolRunner: GraphChatModelToolRunning {
     private let scope: GraphChatScope
     private let budget: GraphChatToolBudget
     private let evidenceRegistry: GraphChatEvidenceRegistry
+    private let artifactRegistry: GraphChatAnswerArtifactRegistry
+    private let artifactTransactionID: GraphChatAnswerArtifactTransactionID
     private let conversationTransaction: GraphChatConversationStateTransaction
     private let recorder: GraphChatFakeToolRunnerRecorder
     private let evidenceByTool: [GraphChatToolKind: [GraphEvidence]]
     private let responseTextByTool: [GraphChatToolKind: String]
+    private let artifactDraftsByTool: [GraphChatToolKind: [GraphChatAnswerArtifactDraft]]
     private let toolKinds: Set<GraphChatToolKind>
     private let delayNanoseconds: UInt64
 
@@ -123,20 +133,26 @@ private actor EvidenceRegisteringFakeToolRunner: GraphChatModelToolRunning {
         scope: GraphChatScope,
         budget: GraphChatToolBudget,
         evidenceRegistry: GraphChatEvidenceRegistry,
+        artifactRegistry: GraphChatAnswerArtifactRegistry,
+        artifactTransactionID: GraphChatAnswerArtifactTransactionID,
         conversationTransaction: GraphChatConversationStateTransaction,
         recorder: GraphChatFakeToolRunnerRecorder,
         evidenceByTool: [GraphChatToolKind: [GraphEvidence]],
         responseTextByTool: [GraphChatToolKind: String],
+        artifactDraftsByTool: [GraphChatToolKind: [GraphChatAnswerArtifactDraft]],
         registeredKinds: Set<GraphChatToolKind>,
         delayNanoseconds: UInt64
     ) {
         self.scope = scope
         self.budget = budget
         self.evidenceRegistry = evidenceRegistry
+        self.artifactRegistry = artifactRegistry
+        self.artifactTransactionID = artifactTransactionID
         self.conversationTransaction = conversationTransaction
         self.recorder = recorder
         self.evidenceByTool = evidenceByTool
         self.responseTextByTool = responseTextByTool
+        self.artifactDraftsByTool = artifactDraftsByTool
         self.toolKinds = registeredKinds
         self.delayNanoseconds = delayNanoseconds
     }
@@ -190,11 +206,23 @@ private actor EvidenceRegisteringFakeToolRunner: GraphChatModelToolRunning {
                 )
             )
         )
+        var artifactIDs: [GraphChatAnswerArtifactID] = []
+        for draft in artifactDraftsByTool[request.kind, default: []] {
+            try Task.checkCancellation()
+            artifactIDs.append(
+                try await artifactRegistry.stage(
+                    draft,
+                    transactionID: artifactTransactionID,
+                    evidenceRegistry: evidenceRegistry
+                )
+            )
+        }
         return GraphChatModelToolResponse(
             tool: request.kind,
             state: evidence.isEmpty ? .noEvidence : .success,
             content: responseTextByTool[request.kind] ?? "Fake read-only result.",
-            evidenceIDs: evidence.map(\.id)
+            evidenceIDs: evidence.map(\.id),
+            artifactIDs: artifactIDs
         )
     }
 }
@@ -253,7 +281,8 @@ nonisolated enum GraphChatProviderTestSupport {
         budgetPolicy: GraphChatToolBudgetPolicy = .default,
         conversationStatePolicy: GraphChatConversationStatePolicy = .default,
         referenceResolver: GraphChatConversationReferenceResolver = GraphChatConversationReferenceResolver(),
-        responseLanguageSelector: GraphChatResponseLanguageSelector = GraphChatResponseLanguageSelector(fallback: .german)
+        responseLanguageSelector: GraphChatResponseLanguageSelector = GraphChatResponseLanguageSelector(fallback: .german),
+        artifactRevalidator: any GraphChatAnswerArtifactRevalidating = GraphChatLiveAnswerArtifactRevalidator()
     ) -> GraphChatOrchestrator {
         let contexts = graphIDs.map { GraphChatTestSupport.makeSchemaContext(graphID: $0) }
         return GraphChatOrchestrator(
@@ -264,6 +293,7 @@ nonisolated enum GraphChatProviderTestSupport {
             conversationStatePolicy: conversationStatePolicy,
             referenceResolver: referenceResolver,
             responseLanguageSelector: responseLanguageSelector,
+            artifactRevalidator: artifactRevalidator,
             referenceDate: { Date(timeIntervalSince1970: 1_735_732_800) },
             calendar: Calendar(identifier: .gregorian),
             timeZone: TimeZone(identifier: "Europe/Berlin")!
