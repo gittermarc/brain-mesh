@@ -154,6 +154,7 @@ struct GraphChatView: View {
                                 selectedFeedback: viewModel.feedbackCategory(
                                     for: message.id
                                 ),
+                                language: viewModel.interfaceLanguage,
                                 onAction: { action in
                                     viewModel.performMessageAction(
                                         action,
@@ -163,7 +164,10 @@ struct GraphChatView: View {
                                 onRetry: viewModel.retry,
                                 onOpenEvidence: viewModel.openEntry,
                                 onShowEvidenceInGraph: viewModel.showInGraph,
-                                onUseFollowUp: viewModel.useFollowUp
+                                onUseFollowUp: viewModel.useFollowUp,
+                                onResolveAnswerPresentation: viewModel.resolveAnswerPresentation,
+                                canOpenArtifactTarget: viewModel.canOpenArtifactTarget,
+                                onOpenArtifactTarget: viewModel.openArtifactTarget
                             )
                             .id(message.id)
                         }

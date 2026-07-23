@@ -502,6 +502,35 @@ final class GraphChatViewModel: ObservableObject {
         navigationActions.showInGraph(presentation.sourceReference)
     }
 
+    func resolveAnswerPresentation(
+        for answer: GraphChatAnswer
+    ) async -> GraphChatAnswerPresentationResolution {
+        await orchestrator.resolveAnswerPresentation(
+            artifactIDs: answer.artifactIDs
+                + answer.sections.flatMap(\.artifactIDs),
+            evidence: answer.evidence,
+            graphScope: graphScope,
+            chatScope: chatScope
+        )
+    }
+
+    func canOpenArtifactTarget(
+        _ target: GraphChatAnswerArtifactNavigationTarget
+    ) -> Bool {
+        currentAccessDecision.route == .ready
+            && target.graphScope == graphScope
+            && navigationActions.canOpenArtifactTarget(target)
+    }
+
+    func openArtifactTarget(
+        _ target: GraphChatAnswerArtifactNavigationTarget
+    ) {
+        guard canOpenArtifactTarget(target) else {
+            return
+        }
+        navigationActions.openArtifactTarget(target)
+    }
+
     private var currentAccessDecision: GraphChatAccessDecision {
         guard let accessDecisionProvider else {
             return evaluatedAccessDecision(

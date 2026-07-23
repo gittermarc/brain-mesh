@@ -300,6 +300,12 @@ nonisolated struct GraphChatUIFakeIndexProvider: GraphChatIndexStatusProviding {
 final class GraphChatUINavigationRecorder {
     private(set) var openedReferences: [GraphSourceReference] = []
     private(set) var shownReferences: [GraphSourceReference] = []
+    private(set) var openedArtifactTargets: [GraphChatAnswerArtifactNavigationTarget] = []
+    private let allowsArtifactTargets: Bool
+
+    init(allowsArtifactTargets: Bool = true) {
+        self.allowsArtifactTargets = allowsArtifactTargets
+    }
 
     func actions() -> GraphChatNavigationActions {
         GraphChatNavigationActions(
@@ -308,6 +314,12 @@ final class GraphChatUINavigationRecorder {
             },
             showInGraph: { [weak self] reference in
                 self?.shownReferences.append(reference)
+            },
+            canOpenArtifactTarget: { [weak self] _ in
+                self?.allowsArtifactTargets == true
+            },
+            openArtifactTarget: { [weak self] target in
+                self?.openedArtifactTargets.append(target)
             }
         )
     }

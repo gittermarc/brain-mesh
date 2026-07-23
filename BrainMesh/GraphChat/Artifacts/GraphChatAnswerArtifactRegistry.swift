@@ -182,6 +182,18 @@ actor GraphChatAnswerArtifactRegistry {
         graphScope expectedGraphScope: GraphScope,
         sessionID expectedSessionID: GraphChatAnswerArtifactSessionID
     ) async throws -> GraphChatAnswerArtifact? {
+        try await resolvedArtifact(
+            for: id,
+            graphScope: expectedGraphScope,
+            sessionID: expectedSessionID
+        )?.artifact
+    }
+
+    func resolvedArtifact(
+        for id: GraphChatAnswerArtifactID,
+        graphScope expectedGraphScope: GraphScope,
+        sessionID expectedSessionID: GraphChatAnswerArtifactSessionID
+    ) async throws -> GraphChatAnswerArtifactRegistryResolution? {
         try validateAccess(
             graphScope: expectedGraphScope,
             sessionID: expectedSessionID
@@ -205,7 +217,15 @@ actor GraphChatAnswerArtifactRegistry {
                 sequence: entry.sequence
             )
         }
-        return revalidated
+        var evidenceByID: [GraphEvidenceID: GraphEvidence] = [:]
+        for evidence in entry.evidence {
+            evidenceByID[evidence.id] = evidence
+        }
+        let resolvedEvidence = revalidated.allEvidenceIDs.compactMap { evidenceByID[$0] }
+        return GraphChatAnswerArtifactRegistryResolution(
+            artifact: revalidated,
+            evidence: resolvedEvidence
+        )
     }
 
     func validatedArtifacts(

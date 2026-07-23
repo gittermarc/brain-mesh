@@ -367,12 +367,21 @@ nonisolated struct GraphChatEvidencePresentation: Hashable, Sendable, Identifiab
     let navigationTarget: GraphSourceNavigationTarget?
 
     init(evidence: GraphEvidence) {
+        self.init(evidence: evidence, language: .german)
+    }
+
+    init(
+        evidence: GraphEvidence,
+        language: GraphChatResponseLanguage
+    ) {
+        let locale = Locale(identifier: language.localeIdentifier)
         self.id = evidence.id
         self.sourceReference = evidence.sourceReference
         self.sourceKind = evidence.sourceReference.sourceKind
         self.sourceKindTitle = Self.sourceTitle(
             for: evidence.sourceReference.sourceKind,
-            evidence: evidence
+            evidence: evidence,
+            language: language
         )
         self.title = evidence.navigationTitle?.trimmingCharacters(
             in: .whitespacesAndNewlines
@@ -384,7 +393,12 @@ nonisolated struct GraphChatEvidencePresentation: Hashable, Sendable, Identifiab
                 GraphChatEvidenceValuePresentation(
                     id: fieldValue.id,
                     fieldName: fieldValue.fieldName,
-                    valueText: Self.valueText(fieldValue.value, unit: fieldValue.unit)
+                    valueText: Self.valueText(
+                        fieldValue.value,
+                        unit: fieldValue.unit,
+                        language: language,
+                        locale: locale
+                    )
                 )
             }
         self.navigationTarget = evidence.sourceReference.navigationTarget
@@ -408,46 +422,76 @@ nonisolated struct GraphChatEvidencePresentation: Hashable, Sendable, Identifiab
 
     private static func sourceTitle(
         for kind: GraphSourceKind,
-        evidence: GraphEvidence
+        evidence: GraphEvidence,
+        language: GraphChatResponseLanguage
     ) -> String {
-        switch kind {
-        case .graph:
+        switch (language, kind) {
+        case (.german, .graph):
             return evidence.fieldValues.count > 1 ? "Statistik" : "Graph"
-        case .entity:
+        case (.english, .graph):
+            return evidence.fieldValues.count > 1 ? "Statistic" : "Graph"
+        case (.german, .entity), (.english, .entity):
             return "Entity"
-        case .attribute:
+        case (.german, .attribute):
             return "Attribut"
-        case .detailField:
+        case (.english, .attribute):
+            return "Attribute"
+        case (.german, .detailField):
             return "Detailfeld"
-        case .detailValue:
+        case (.english, .detailField):
+            return "Detail field"
+        case (.german, .detailValue):
             return "Detailwert"
-        case .link:
+        case (.english, .detailValue):
+            return "Detail value"
+        case (.german, .link):
             return "Verbindung"
-        case .attachment:
+        case (.english, .link):
+            return "Link"
+        case (.german, .attachment):
             return "Attachment-Metadaten"
+        case (.english, .attachment):
+            return "Attachment metadata"
         }
     }
 
     private static func valueText(
         _ value: GraphEvidenceValue,
-        unit: String?
+        unit: String?,
+        language: GraphChatResponseLanguage,
+        locale: Locale
     ) -> String {
         let base: String
         switch value {
         case .text(let text):
             base = text
         case .integer(let integer):
-            base = integer.formatted()
+            base = integer.formatted(.number.locale(locale))
         case .decimal(let decimal):
-            base = decimal.formatted(.number.precision(.fractionLength(0...3)))
+            base = decimal.formatted(
+                .number
+                    .precision(.fractionLength(0...3))
+                    .locale(locale)
+            )
         case .date(let date):
-            base = date.formatted(date: .abbreviated, time: .omitted)
+            base = date.formatted(
+                .dateTime
+                    .locale(locale)
+                    .year()
+                    .month(.abbreviated)
+                    .day()
+            )
         case .boolean(let boolean):
-            base = boolean ? "Ja" : "Nein"
+            switch (language, boolean) {
+            case (.german, true): base = "Ja"
+            case (.german, false): base = "Nein"
+            case (.english, true): base = "Yes"
+            case (.english, false): base = "No"
+            }
         case .choice(let choice):
             base = choice
         case .missing:
-            base = "Nicht vorhanden"
+            base = language == .german ? "Nicht vorhanden" : "Missing"
         }
         guard let unit = unit?.trimmingCharacters(in: .whitespacesAndNewlines),
               unit.isEmpty == false else {

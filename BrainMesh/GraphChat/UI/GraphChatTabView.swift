@@ -533,6 +533,51 @@ struct GraphChatTabView: View {
                     centerOnArrival: true
                 )
                 tabRouter.openGraph()
+            },
+            canOpenArtifactTarget: { target in
+                guard canNavigateSource(in: activeGraphID) else {
+                    return false
+                }
+                return GraphChatAnswerArtifactNavigationPolicy.route(
+                    for: target,
+                    activeGraphScope: GraphScope(graphID: activeGraphID)
+                ) != nil
+            },
+            openArtifactTarget: { target in
+                guard canNavigateSource(in: activeGraphID),
+                      let route = GraphChatAnswerArtifactNavigationPolicy.route(
+                    for: target,
+                    activeGraphScope: GraphScope(graphID: activeGraphID)
+                ) else {
+                    return
+                }
+                switch route {
+                case .openNode(let graphScope, let node):
+                    commandCenter.presentDestination(
+                        .graphChatSource(
+                            .nodeDetail(
+                                graphID: graphScope.graphID,
+                                node: node
+                            )
+                        )
+                    )
+                case .focusNodeInGraph(let graphScope, let node):
+                    graphJump.requestJump(
+                        to: NodeKey(kind: node.kind, uuid: node.id),
+                        in: graphScope.graphID,
+                        centerOnArrival: true
+                    )
+                    tabRouter.openGraph()
+                case .openEntityList(let graphScope, let entityID):
+                    commandCenter.presentDestination(
+                        .graphChatSource(
+                            .nodeDetail(
+                                graphID: graphScope.graphID,
+                                node: NodeRefKey(kind: .entity, id: entityID)
+                            )
+                        )
+                    )
+                }
             }
         )
     }

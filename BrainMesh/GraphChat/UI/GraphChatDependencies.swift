@@ -21,6 +21,12 @@ nonisolated protocol GraphChatOrchestrating: Sendable {
     func restoreConversationState(
         from checkpoint: GraphChatConversationCheckpoint
     ) async throws
+    func resolveAnswerPresentation(
+        artifactIDs: [GraphChatAnswerArtifactID],
+        evidence: [GraphEvidence],
+        graphScope: GraphScope,
+        chatScope: GraphChatScope
+    ) async -> GraphChatAnswerPresentationResolution
 }
 
 extension GraphChatOrchestrator: GraphChatOrchestrating {}
@@ -30,6 +36,22 @@ nonisolated extension GraphChatOrchestrating {
         await discardSession()
     }
 
+    func resolveAnswerPresentation(
+        artifactIDs: [GraphChatAnswerArtifactID],
+        evidence: [GraphEvidence],
+        graphScope: GraphScope,
+        chatScope: GraphChatScope
+    ) async -> GraphChatAnswerPresentationResolution {
+        GraphChatAnswerPresentationResolution(
+            graphScope: graphScope,
+            chatScope: chatScope,
+            artifactSessionID: nil,
+            requestedArtifactIDs: artifactIDs,
+            artifacts: [],
+            evidence: evidence,
+            defaultUnavailableReason: .sessionUnavailable
+        )
+    }
 }
 
 nonisolated protocol GraphChatAvailabilityProviding: Sendable {
@@ -153,17 +175,25 @@ actor InMemoryGraphChatHistoryStore: GraphChatHistoryStoring {
 struct GraphChatNavigationActions {
     let openEntry: (GraphSourceReference) -> Void
     let showInGraph: (GraphSourceReference) -> Void
+    let canOpenArtifactTarget: (GraphChatAnswerArtifactNavigationTarget) -> Bool
+    let openArtifactTarget: (GraphChatAnswerArtifactNavigationTarget) -> Void
 
     init(
         openEntry: @escaping (GraphSourceReference) -> Void,
-        showInGraph: @escaping (GraphSourceReference) -> Void
+        showInGraph: @escaping (GraphSourceReference) -> Void,
+        canOpenArtifactTarget: @escaping (GraphChatAnswerArtifactNavigationTarget) -> Bool = { _ in false },
+        openArtifactTarget: @escaping (GraphChatAnswerArtifactNavigationTarget) -> Void = { _ in }
     ) {
         self.openEntry = openEntry
         self.showInGraph = showInGraph
+        self.canOpenArtifactTarget = canOpenArtifactTarget
+        self.openArtifactTarget = openArtifactTarget
     }
 
     static let disabled = GraphChatNavigationActions(
         openEntry: { _ in },
-        showInGraph: { _ in }
+        showInGraph: { _ in },
+        canOpenArtifactTarget: { _ in false },
+        openArtifactTarget: { _ in }
     )
 }

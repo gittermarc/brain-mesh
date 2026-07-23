@@ -9,10 +9,27 @@ import SwiftUI
 
 struct GraphChatEvidenceCard: View {
     let evidence: GraphChatEvidencePresentation
+    let language: GraphChatResponseLanguage
+    let allowsActions: Bool
     let onOpenEntry: () -> Void
     let onShowInGraph: () -> Void
 
+    init(
+        evidence: GraphChatEvidencePresentation,
+        language: GraphChatResponseLanguage = .german,
+        allowsActions: Bool = true,
+        onOpenEntry: @escaping () -> Void,
+        onShowInGraph: @escaping () -> Void
+    ) {
+        self.evidence = evidence
+        self.language = language
+        self.allowsActions = allowsActions
+        self.onOpenEntry = onOpenEntry
+        self.onShowInGraph = onShowInGraph
+    }
+
     var body: some View {
+        let strings = GraphChatAnswerArtifactStrings(language: language)
         VStack(alignment: .leading, spacing: 12) {
             HStack(alignment: .firstTextBaseline, spacing: 8) {
                 Label(evidence.sourceKindTitle, systemImage: sourceSymbol)
@@ -47,10 +64,12 @@ struct GraphChatEvidenceCard: View {
                             Text(value.fieldName)
                                 .font(.caption)
                                 .foregroundStyle(.secondary)
+                                .fixedSize(horizontal: false, vertical: true)
                                 .gridColumnAlignment(.leading)
                             Text(value.valueText)
                                 .font(.caption.weight(.medium))
                                 .multilineTextAlignment(.leading)
+                                .fixedSize(horizontal: false, vertical: true)
                                 .gridColumnAlignment(.leading)
                         }
                     }
@@ -58,24 +77,24 @@ struct GraphChatEvidenceCard: View {
                 .accessibilityElement(children: .contain)
             }
 
-            if evidence.canOpenEntry || evidence.canShowInGraph {
+            if allowsActions && (evidence.canOpenEntry || evidence.canShowInGraph) {
                 HStack(spacing: 10) {
                     if evidence.canOpenEntry {
                         Button(action: onOpenEntry) {
-                            Label("Eintrag öffnen", systemImage: "arrow.up.right.square")
-                                .frame(minHeight: 32)
+                            Label(strings.open, systemImage: "arrow.up.right.square")
+                                .frame(minHeight: 44)
                         }
                         .buttonStyle(.bordered)
-                        .accessibilityHint("Öffnet die validierte Quelle außerhalb des Chats.")
+                        .accessibilityHint(openHint)
                     }
 
                     if evidence.canShowInGraph {
                         Button(action: onShowInGraph) {
-                            Label("Im Graph zeigen", systemImage: "point.3.connected.trianglepath.dotted")
-                                .frame(minHeight: 32)
+                            Label(strings.showInGraph, systemImage: "point.3.connected.trianglepath.dotted")
+                                .frame(minHeight: 44)
                         }
                         .buttonStyle(.bordered)
-                        .accessibilityHint("Fokussiert die validierte Quelle in der Graph-Ansicht.")
+                        .accessibilityHint(showHint)
                     }
                 }
                 .controlSize(.small)
@@ -88,7 +107,34 @@ struct GraphChatEvidenceCard: View {
                 .stroke(.quaternary, lineWidth: 1)
         }
         .accessibilityElement(children: .contain)
-        .accessibilityLabel("Quelle: \(evidence.sourceKindTitle), \(evidence.title)")
+        .accessibilityLabel(sourceAccessibilityLabel)
+    }
+
+    private var sourceAccessibilityLabel: String {
+        switch language {
+        case .german:
+            return "Quelle: \(evidence.sourceKindTitle), \(evidence.title)"
+        case .english:
+            return "Source: \(evidence.sourceKindTitle), \(evidence.title)"
+        }
+    }
+
+    private var openHint: String {
+        switch language {
+        case .german:
+            return "Öffnet die validierte Quelle außerhalb des Chats."
+        case .english:
+            return "Opens the validated source outside the chat."
+        }
+    }
+
+    private var showHint: String {
+        switch language {
+        case .german:
+            return "Fokussiert die validierte Quelle in der Graph-Ansicht."
+        case .english:
+            return "Focuses the validated source in the graph view."
+        }
     }
 
     private var sourceSymbol: String {

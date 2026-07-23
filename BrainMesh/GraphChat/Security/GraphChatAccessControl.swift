@@ -115,6 +115,31 @@ actor AccessControlledGraphChatOrchestrator: GraphChatOrchestrating {
         await base.conversationStateSnapshot()
     }
 
+    func resolveAnswerPresentation(
+        artifactIDs: [GraphChatAnswerArtifactID],
+        evidence: [GraphEvidence],
+        graphScope: GraphScope,
+        chatScope: GraphChatScope
+    ) async -> GraphChatAnswerPresentationResolution {
+        guard await gate.permits(
+            graphScope: graphScope,
+            chatScope: chatScope
+        ) else {
+            return .unavailable(
+                graphScope: graphScope,
+                chatScope: chatScope,
+                requestedArtifactIDs: artifactIDs,
+                reason: .scopeMismatch
+            )
+        }
+        return await base.resolveAnswerPresentation(
+            artifactIDs: artifactIDs,
+            evidence: evidence,
+            graphScope: graphScope,
+            chatScope: chatScope
+        )
+    }
+
     func restoreConversationState(
         from checkpoint: GraphChatConversationCheckpoint
     ) async throws {

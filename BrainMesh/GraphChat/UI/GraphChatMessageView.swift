@@ -13,9 +13,54 @@ struct GraphChatMessageView: View {
     let selectedFeedback: GraphChatFeedbackCategory?
     let onAction: (GraphChatMessageAction) -> Void
     let onRetry: (UUID) -> Void
+    let language: GraphChatResponseLanguage
     let onOpenEvidence: (GraphChatEvidencePresentation) -> Void
     let onShowEvidenceInGraph: (GraphChatEvidencePresentation) -> Void
     let onUseFollowUp: (GraphChatFollowUpSuggestion) -> Void
+    let onResolveAnswerPresentation: (GraphChatAnswer) async -> GraphChatAnswerPresentationResolution
+    let canOpenArtifactTarget: (GraphChatAnswerArtifactNavigationTarget) -> Bool
+    let onOpenArtifactTarget: (GraphChatAnswerArtifactNavigationTarget) -> Void
+
+    init(
+        message: GraphChatTranscriptMessage,
+        actionAvailability: GraphChatMessageActionAvailability,
+        selectedFeedback: GraphChatFeedbackCategory?,
+        language: GraphChatResponseLanguage = .german,
+        onAction: @escaping (GraphChatMessageAction) -> Void,
+        onRetry: @escaping (UUID) -> Void,
+        onOpenEvidence: @escaping (GraphChatEvidencePresentation) -> Void,
+        onShowEvidenceInGraph: @escaping (GraphChatEvidencePresentation) -> Void,
+        onUseFollowUp: @escaping (GraphChatFollowUpSuggestion) -> Void,
+        onResolveAnswerPresentation: @escaping (GraphChatAnswer) async -> GraphChatAnswerPresentationResolution = { answer in
+            let graphScope = GraphScope(
+                graphID: answer.evidence.first?.sourceReference.graphID ?? UUID()
+            )
+            return .unavailable(
+                graphScope: graphScope,
+                chatScope: .entireGraph(graphScope),
+                requestedArtifactIDs: GraphChatAnswerArtifactViewSupport.uniqueArtifactIDs(
+                    answer.artifactIDs + answer.sections.flatMap(\.artifactIDs)
+                ),
+                evidence: answer.evidence,
+                reason: .sessionUnavailable
+            )
+        },
+        canOpenArtifactTarget: @escaping (GraphChatAnswerArtifactNavigationTarget) -> Bool = { _ in false },
+        onOpenArtifactTarget: @escaping (GraphChatAnswerArtifactNavigationTarget) -> Void = { _ in }
+    ) {
+        self.message = message
+        self.actionAvailability = actionAvailability
+        self.selectedFeedback = selectedFeedback
+        self.language = language
+        self.onAction = onAction
+        self.onRetry = onRetry
+        self.onOpenEvidence = onOpenEvidence
+        self.onShowEvidenceInGraph = onShowEvidenceInGraph
+        self.onUseFollowUp = onUseFollowUp
+        self.onResolveAnswerPresentation = onResolveAnswerPresentation
+        self.canOpenArtifactTarget = canOpenArtifactTarget
+        self.onOpenArtifactTarget = onOpenArtifactTarget
+    }
 
     var body: some View {
         switch message.state {
@@ -234,121 +279,17 @@ struct GraphChatMessageView: View {
         _ answer: GraphChatAnswer,
         allowsEvidenceActions: Bool
     ) -> some View {
-        Text(answer.directAnswer)
-            .font(.body)
-            .fixedSize(horizontal: false, vertical: true)
-            .accessibilityLabel("Antwort")
-            .accessibilityValue(answer.directAnswer)
-
-        if case .clarification(let clarification) = answer.state,
-           clarification.options.isEmpty == false {
-            VStack(alignment: .leading, spacing: 8) {
-                ForEach(clarification.options) { option in
-                    Button {
-                        onUseFollowUp(
-                            GraphChatFollowUpSuggestion(
-                                title: option.title,
-                                prompt: option.id
-                            )
-                        )
-                    } label: {
-                        HStack {
-                            Text(option.title)
-                                .multilineTextAlignment(.leading)
-                            Spacer(minLength: 8)
-                            Image(systemName: "checkmark.circle")
-                                .accessibilityHidden(true)
-                        }
-                        .frame(maxWidth: .infinity, minHeight: 44, alignment: .leading)
-                    }
-                    .buttonStyle(.bordered)
-                    .accessibilityHint("Wählt diese Option für die offene Rückfrage aus.")
-                }
-            }
-        }
-
-        ForEach(answer.sections) { section in
-            VStack(alignment: .leading, spacing: 6) {
-                if let title = section.title, title.isEmpty == false {
-                    Text(title)
-                        .font(.headline)
-                }
-                Text(section.text)
-                    .font(.body)
-                    .fixedSize(horizontal: false, vertical: true)
-            }
-            .accessibilityElement(children: .combine)
-        }
-
-        if answer.appliedFilters.isEmpty == false {
-            VStack(alignment: .leading, spacing: 8) {
-                Label("Angewendete Filter", systemImage: "line.3.horizontal.decrease.circle")
-                    .font(.subheadline.weight(.semibold))
-
-                ForEach(answer.appliedFilters) { filter in
-                    HStack(alignment: .firstTextBaseline, spacing: 8) {
-                        Text(filter.fieldName)
-                            .font(.caption.weight(.semibold))
-                        Text(filter.operationDescription)
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
-                        if let value = filter.valueDescription, value.isEmpty == false {
-                            Text(value)
-                                .font(.caption)
-                                .padding(.horizontal, 8)
-                                .padding(.vertical, 4)
-                                .background(.quaternary, in: Capsule())
-                        }
-                    }
-                    .fixedSize(horizontal: false, vertical: true)
-                    .accessibilityElement(children: .combine)
-                }
-            }
-        }
-
-        if allowsEvidenceActions, answer.evidence.isEmpty == false {
-            VStack(alignment: .leading, spacing: 10) {
-                Label("Quellen", systemImage: "checkmark.seal")
-                    .font(.subheadline.weight(.semibold))
-                    .accessibilityLabel("Validierte Quellen")
-
-                ForEach(answer.evidence.map(GraphChatEvidencePresentation.init)) { evidence in
-                    GraphChatEvidenceCard(
-                        evidence: evidence,
-                        onOpenEntry: {
-                            onOpenEvidence(evidence)
-                        },
-                        onShowInGraph: {
-                            onShowEvidenceInGraph(evidence)
-                        }
-                    )
-                }
-            }
-        }
-
-        if answer.followUpSuggestions.isEmpty == false {
-            VStack(alignment: .leading, spacing: 8) {
-                Text("Weiterfragen")
-                    .font(.subheadline.weight(.semibold))
-
-                ForEach(answer.followUpSuggestions) { suggestion in
-                    Button {
-                        onUseFollowUp(suggestion)
-                    } label: {
-                        HStack {
-                            Text(suggestion.title)
-                                .multilineTextAlignment(.leading)
-                            Spacer(minLength: 8)
-                            Image(systemName: "arrow.up.left")
-                                .accessibilityHidden(true)
-                        }
-                        .frame(maxWidth: .infinity, minHeight: 44, alignment: .leading)
-                    }
-                    .buttonStyle(.bordered)
-                    .accessibilityHint("Übernimmt die Folgefrage in das Eingabefeld.")
-                }
-            }
-        }
+        GraphChatFinalAnswerView(
+            answer: answer,
+            language: language,
+            allowsEvidenceActions: allowsEvidenceActions,
+            resolvePresentation: onResolveAnswerPresentation,
+            canOpenArtifactTarget: canOpenArtifactTarget,
+            onOpenArtifactTarget: onOpenArtifactTarget,
+            onOpenEvidence: onOpenEvidence,
+            onShowEvidenceInGraph: onShowEvidenceInGraph,
+            onUseFollowUp: onUseFollowUp
+        )
     }
 
     private func noResults(

@@ -29,6 +29,31 @@ struct GraphChatAnswerArtifactRegistryTests {
     }
 
     @Test
+    func resolvedArtifactReturnsTheRevalidatedEvidenceUsedByTheRenderer() async throws {
+        let fixture = ArtifactRegistryFixture()
+        let context = try await fixture.makeContext()
+        let transactionID = GraphChatAnswerArtifactTransactionID()
+        let artifactID = try await context.registry.stage(
+            fixture.draft(evidenceID: context.evidence.id),
+            transactionID: transactionID,
+            evidenceRegistry: context.evidenceRegistry
+        )
+        try await context.registry.commit(
+            transactionID: transactionID,
+            retaining: [artifactID]
+        )
+
+        let resolution = try await context.registry.resolvedArtifact(
+            for: artifactID,
+            graphScope: fixture.graphScope,
+            sessionID: fixture.sessionID
+        )
+
+        #expect(resolution?.artifact.id == artifactID)
+        #expect(resolution?.evidence.map(\.id) == [context.evidence.id])
+    }
+
+    @Test
     func unknownArtifactIDReturnsNil() async throws {
         let fixture = ArtifactRegistryFixture()
         let context = try await fixture.makeContext()
