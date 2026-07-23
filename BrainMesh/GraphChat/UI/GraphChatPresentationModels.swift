@@ -64,6 +64,7 @@ nonisolated struct GraphChatAssistantMessageState: Hashable, Sendable {
     static let maximumTextLength = 12_000
     static let maximumSections = 8
     static let maximumEvidence = 12
+    static let maximumArtifacts = 12
     static let maximumFilters = 12
     static let maximumFollowUps = 3
     static let maximumToolActivities = 12
@@ -183,6 +184,7 @@ nonisolated struct GraphChatAssistantMessageState: Hashable, Sendable {
                 )
             },
             evidence: Array(answer.evidence.prefix(maximumEvidence)),
+            artifactIDs: Array(answer.artifactIDs.prefix(maximumArtifacts)),
             appliedFilters: Array(answer.appliedFilters.prefix(maximumFilters)),
             followUpSuggestions: Array(answer.followUpSuggestions.prefix(maximumFollowUps)),
             hasInsufficientEvidence: answer.hasInsufficientEvidence

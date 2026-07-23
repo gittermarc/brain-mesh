@@ -57,6 +57,9 @@ private nonisolated struct FoundationGraphChatGeneratedAnswer {
     @Guide(description: "All Evidence UUID strings used by the direct answer and sections.", .maximumCount(40))
     var evidenceIDs: [String]
 
+    @Guide(description: "Only opaque artifactID UUID strings returned by tools. Never invent or modify an artifact ID.", .maximumCount(12))
+    var artifactIDs: [String]
+
     @Guide(description: "Filters reported by deterministic tools.", .maximumCount(12))
     var appliedFilters: [FoundationGraphChatGeneratedFilter]
 
@@ -356,7 +359,7 @@ private nonisolated func callTool(
     do {
         let response = try await runner.run(request)
         await reporter.finish(request.kind, id: activityID)
-        return response.content
+        return response.modelContent
     } catch {
         await reporter.finish(request.kind, id: activityID)
         throw error
@@ -725,6 +728,7 @@ actor FoundationModelsGraphChatProvider: GraphChatModelProvider {
                 )
             },
             evidenceIDValues: generated.evidenceIDs,
+            artifactIDValues: generated.artifactIDs,
             appliedFilters: generated.appliedFilters.map { filter in
                 GraphChatProviderAppliedFilter(
                     fieldName: filter.fieldName,

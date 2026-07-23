@@ -159,6 +159,7 @@ nonisolated struct GraphChatAnswer: Hashable, Sendable {
     let directAnswer: String
     let sections: [GraphChatAnswerSection]
     let evidence: [GraphEvidence]
+    let artifactIDs: [GraphChatAnswerArtifactID]
     let appliedFilters: [GraphChatAppliedFilter]
     let followUpSuggestions: [GraphChatFollowUpSuggestion]
     let hasInsufficientEvidence: Bool
@@ -172,6 +173,7 @@ nonisolated struct GraphChatAnswer: Hashable, Sendable {
         directAnswer: String,
         sections: [GraphChatAnswerSection] = [],
         evidence: [GraphEvidence] = [],
+        artifactIDs: [GraphChatAnswerArtifactID] = [],
         appliedFilters: [GraphChatAppliedFilter] = [],
         followUpSuggestions: [GraphChatFollowUpSuggestion] = [],
         hasInsufficientEvidence: Bool
@@ -180,6 +182,8 @@ nonisolated struct GraphChatAnswer: Hashable, Sendable {
         self.directAnswer = directAnswer
         self.sections = sections
         self.evidence = GraphEvidenceCollection(evidence).values
+        var seenArtifactIDs = Set<GraphChatAnswerArtifactID>()
+        self.artifactIDs = artifactIDs.filter { seenArtifactIDs.insert($0).inserted }
         self.appliedFilters = appliedFilters
         self.followUpSuggestions = followUpSuggestions
         self.hasInsufficientEvidence = hasInsufficientEvidence

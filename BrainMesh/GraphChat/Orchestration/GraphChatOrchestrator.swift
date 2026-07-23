@@ -17,12 +17,21 @@ actor GraphChatOrchestrator {
         let chatScope: GraphChatScope
     }
 
+    private struct ArtifactSessionResources {
+        let key: ScopeKey
+        let sessionID: GraphChatAnswerArtifactSessionID
+        let registry: GraphChatAnswerArtifactRegistry
+    }
+
     private struct SessionResources {
         let key: ScopeKey
         let sessionID: GraphChatModelSessionID
         let schemaContext: GraphSchemaContext
         let budget: GraphChatToolBudget
         let evidenceRegistry: GraphChatEvidenceRegistry
+        let artifactRegistry: GraphChatAnswerArtifactRegistry
+        let artifactSessionID: GraphChatAnswerArtifactSessionID
+        let artifactTransactionID: GraphChatAnswerArtifactTransactionID
         let conversationBaseState: GraphChatConversationState
         let conversationContext: GraphChatConversationContextSnapshot
         let responseLanguage: GraphChatResponseLanguage
@@ -35,6 +44,8 @@ actor GraphChatOrchestrator {
         let task: Task<Void, Never>
         var sessionID: GraphChatModelSessionID?
         var evidenceRegistry: GraphChatEvidenceRegistry?
+        var artifactRegistry: GraphChatAnswerArtifactRegistry?
+        var artifactTransactionID: GraphChatAnswerArtifactTransactionID?
     }
 
     private let provider: any GraphChatModelProvider
@@ -53,6 +64,7 @@ actor GraphChatOrchestrator {
     private let timeZone: TimeZone
 
     private var preparedSession: SessionResources?
+    private var artifactSession: ArtifactSessionResources?
     private var activeGeneration: ActiveGeneration?
     private var conversationState: GraphChatConversationState?
     private var pendingResetReason: GraphChatConversationResetReason = .newConversation
@@ -130,6 +142,9 @@ actor GraphChatOrchestrator {
             )
             preparedSession = resources
         } catch {
+            await resources.artifactRegistry.rollback(
+                transactionID: resources.artifactTransactionID
+            )
             await provider.discardSession(sessionID: resources.sessionID)
             throw mapError(error)
         }
@@ -177,7 +192,9 @@ actor GraphChatOrchestrator {
                 requestID: requestID,
                 task: task,
                 sessionID: nil,
-                evidenceRegistry: nil
+                evidenceRegistry: nil,
+                artifactRegistry: nil,
+                artifactTransactionID: nil
             )
             pair.continuation.onTermination = { @Sendable [weak self] _ in
                 Task {
@@ -198,12 +215,17 @@ actor GraphChatOrchestrator {
             return
         }
         let evidenceRegistry = activeGeneration.evidenceRegistry
+        let artifactRegistry = activeGeneration.artifactRegistry
+        let artifactTransactionID = activeGeneration.artifactTransactionID
         activeGeneration.task.cancel()
         if let sessionID = activeGeneration.sessionID {
             await provider.cancelGeneration(sessionID: sessionID)
         }
         await activeGeneration.task.value
         await evidenceRegistry?.removeAll()
+        if let artifactRegistry, let artifactTransactionID {
+            await artifactRegistry.rollback(transactionID: artifactTransactionID)
+        }
     }
 
     func discardSession() async {
@@ -216,8 +238,17 @@ actor GraphChatOrchestrator {
         await cancelCurrentGeneration()
         if let preparedSession {
             await preparedSession.evidenceRegistry.removeAll()
+            await preparedSession.artifactRegistry.rollback(
+                transactionID: preparedSession.artifactTransactionID
+            )
             await provider.discardSession(sessionID: preparedSession.sessionID)
             self.preparedSession = nil
+        }
+        if let artifactSession {
+            await artifactSession.registry.removeAll(
+                reason: artifactClearReason(for: reason)
+            )
+            self.artifactSession = nil
         }
         conversationState = nil
         pendingResetReason = reason
@@ -247,8 +278,15 @@ actor GraphChatOrchestrator {
         await cancelCurrentGeneration()
         if let preparedSession {
             await preparedSession.evidenceRegistry.removeAll()
+            await preparedSession.artifactRegistry.rollback(
+                transactionID: preparedSession.artifactTransactionID
+            )
             await provider.discardSession(sessionID: preparedSession.sessionID)
             self.preparedSession = nil
+        }
+        if let artifactSession {
+            await artifactSession.registry.removeAll(reason: .restoredCheckpoint)
+            self.artifactSession = nil
         }
 
         if let state = checkpoint.state {
@@ -278,6 +316,10 @@ actor GraphChatOrchestrator {
         continuation: GraphChatEventStream.Continuation
     ) async {
         continuation.yield(.started(requestID: requestID))
+        var artifactCommitContext: (
+            registry: GraphChatAnswerArtifactRegistry,
+            transactionID: GraphChatAnswerArtifactTransactionID
+        )?
         defer {
             continuation.finish()
             clearActiveGeneration(requestID: requestID)
@@ -445,6 +487,10 @@ actor GraphChatOrchestrator {
                 conversationContext: context,
                 responseLanguage: language
             )
+            artifactCommitContext = (
+                registry: initialResources.artifactRegistry,
+                transactionID: initialResources.artifactTransactionID
+            )
             setActiveResources(initialResources, requestID: requestID)
             let answer = try await generateWithSingleContextRetry(
                 resources: initialResources,
@@ -465,15 +511,24 @@ actor GraphChatOrchestrator {
             guard conversationState == turnStateSnapshot else {
                 throw CancellationError()
             }
+            try await initialResources.artifactRegistry.commit(
+                transactionID: initialResources.artifactTransactionID,
+                retaining: answer.artifactIDs
+            )
+            artifactCommitContext = nil
             conversationState = candidateState
             continuation.yield(.completed(answer))
         } catch is CancellationError {
+            await rollbackArtifactContext(artifactCommitContext)
             continuation.yield(.cancelled)
         } catch let error as GraphChatProviderError where error.code == .cancelled {
+            await rollbackArtifactContext(artifactCommitContext)
             continuation.yield(.cancelled)
         } catch let error as GraphChatToolError where error.code == .cancelled {
+            await rollbackArtifactContext(artifactCommitContext)
             continuation.yield(.cancelled)
         } catch {
+            await rollbackArtifactContext(artifactCommitContext)
             continuation.yield(.failure(mapError(error)))
         }
     }
@@ -511,6 +566,9 @@ actor GraphChatOrchestrator {
                 where error.code == .contextWindowExceeded && retryCount == 0
             {
                 await resources.evidenceRegistry.removeAll()
+                await resources.artifactRegistry.rollback(
+                    transactionID: resources.artifactTransactionID
+                )
                 await provider.discardSession(sessionID: resources.sessionID)
                 await resources.conversationTransaction.resetToBase()
                 retryCount += 1
@@ -521,6 +579,9 @@ actor GraphChatOrchestrator {
                     await provider.cancelGeneration(sessionID: resources.sessionID)
                 }
                 await resources.evidenceRegistry.removeAll()
+                await resources.artifactRegistry.rollback(
+                    transactionID: resources.artifactTransactionID
+                )
                 await provider.discardSession(sessionID: resources.sessionID)
                 throw error
             }
@@ -587,6 +648,9 @@ actor GraphChatOrchestrator {
         return try await validatedAnswer(
             from: finalAnswer,
             registry: resources.evidenceRegistry,
+            artifactRegistry: resources.artifactRegistry,
+            artifactSessionID: resources.artifactSessionID,
+            artifactTransactionID: resources.artifactTransactionID,
             transaction: resources.conversationTransaction,
             context: conversationContext,
             language: responseLanguage,
@@ -598,14 +662,30 @@ actor GraphChatOrchestrator {
     private func validatedAnswer(
         from providerAnswer: GraphChatProviderFinalAnswer,
         registry: GraphChatEvidenceRegistry,
+        artifactRegistry: GraphChatAnswerArtifactRegistry,
+        artifactSessionID: GraphChatAnswerArtifactSessionID,
+        artifactTransactionID: GraphChatAnswerArtifactTransactionID,
         transaction: GraphChatConversationStateTransaction,
         context: GraphChatConversationContextSnapshot,
         language: GraphChatResponseLanguage,
         continuationOperation: GraphChatConversationContinuationOperation?,
         requestQuestion: String
     ) async throws -> GraphChatAnswer {
+        let artifacts = try await artifactRegistry.validatedArtifacts(
+            for: providerAnswer.artifactIDValues,
+            graphScope: context.graphScope,
+            sessionID: artifactSessionID,
+            transactionID: artifactTransactionID
+        )
         var allEvidence: [GraphEvidence] = await registry.validatedEvidence(
             for: providerAnswer.evidenceIDValues
+        )
+        allEvidence.append(
+            contentsOf: await registry.validatedEvidence(
+                for: artifacts.flatMap(\.allEvidenceIDs).map {
+                    $0.rawValue.uuidString
+                }
+            )
         )
         var sections: [GraphChatAnswerSection] = []
         sections.reserveCapacity(providerAnswer.sections.count)
@@ -684,6 +764,7 @@ actor GraphChatOrchestrator {
                 directAnswer: providerAnswer.directAnswer,
                 sections: sections,
                 evidence: validatedEvidence,
+                artifactIDs: artifacts.map(\.id),
                 appliedFilters: filters,
                 followUpSuggestions: followUps,
                 hasInsufficientEvidence: providerAnswer.hasInsufficientEvidence
@@ -696,6 +777,7 @@ actor GraphChatOrchestrator {
                     directAnswer: providerAnswer.directAnswer,
                     sections: sections,
                     evidence: validatedEvidence,
+                    artifactIDs: artifacts.map(\.id),
                     appliedFilters: filters,
                     followUpSuggestions: followUps,
                     hasInsufficientEvidence: true
@@ -712,6 +794,7 @@ actor GraphChatOrchestrator {
                 directAnswer: text,
                 sections: sections,
                 evidence: validatedEvidence,
+                artifactIDs: artifacts.map(\.id),
                 appliedFilters: filters,
                 followUpSuggestions: followUps,
                 hasInsufficientEvidence: true
@@ -1030,6 +1113,9 @@ actor GraphChatOrchestrator {
         }
         if let preparedSession {
             await preparedSession.evidenceRegistry.removeAll()
+            await preparedSession.artifactRegistry.rollback(
+                transactionID: preparedSession.artifactTransactionID
+            )
             await provider.discardSession(sessionID: preparedSession.sessionID)
             self.preparedSession = nil
         }
@@ -1079,6 +1165,8 @@ actor GraphChatOrchestrator {
 
         let budget = GraphChatToolBudget(policy: toolBudgetPolicy)
         let evidenceRegistry = GraphChatEvidenceRegistry(scope: key.chatScope)
+        let artifactResources = await artifactSessionResources(for: key)
+        let artifactTransactionID = GraphChatAnswerArtifactTransactionID()
         let conversationTransaction = GraphChatConversationStateTransaction(
             baseState: conversationBaseState,
             reducer: conversationStateReducer
@@ -1088,6 +1176,8 @@ actor GraphChatOrchestrator {
             schemaContext: schemaContext,
             budget: budget,
             evidenceRegistry: evidenceRegistry,
+            artifactRegistry: artifactResources.registry,
+            artifactTransactionID: artifactTransactionID,
             conversationTransaction: conversationTransaction,
             conversationContext: conversationContext,
             referenceResolver: referenceResolver,
@@ -1122,6 +1212,9 @@ actor GraphChatOrchestrator {
                 schemaContext: schemaContext,
                 budget: budget,
                 evidenceRegistry: evidenceRegistry,
+                artifactRegistry: artifactResources.registry,
+                artifactSessionID: artifactResources.sessionID,
+                artifactTransactionID: artifactTransactionID,
                 conversationBaseState: conversationBaseState,
                 conversationContext: conversationContext,
                 responseLanguage: responseLanguage,
@@ -1129,6 +1222,9 @@ actor GraphChatOrchestrator {
                 toolRunner: toolRunner
             )
         } catch {
+            await artifactResources.registry.rollback(
+                transactionID: artifactTransactionID
+            )
             throw mapError(error)
         }
     }
@@ -1153,6 +1249,9 @@ actor GraphChatOrchestrator {
             schemaContext: resources.schemaContext,
             budget: resources.budget,
             evidenceRegistry: resources.evidenceRegistry,
+            artifactRegistry: resources.artifactRegistry,
+            artifactSessionID: resources.artifactSessionID,
+            artifactTransactionID: resources.artifactTransactionID,
             conversationBaseState: resources.conversationBaseState,
             conversationContext: resources.conversationContext,
             responseLanguage: resources.responseLanguage,
@@ -1168,12 +1267,17 @@ actor GraphChatOrchestrator {
         switch concurrentRequestPolicy {
         case .cancelPrevious:
             let evidenceRegistry = activeGeneration.evidenceRegistry
+            let artifactRegistry = activeGeneration.artifactRegistry
+            let artifactTransactionID = activeGeneration.artifactTransactionID
             activeGeneration.task.cancel()
             if let sessionID = activeGeneration.sessionID {
                 await provider.cancelGeneration(sessionID: sessionID)
             }
             await activeGeneration.task.value
             await evidenceRegistry?.removeAll()
+            if let artifactRegistry, let artifactTransactionID {
+                await artifactRegistry.rollback(transactionID: artifactTransactionID)
+            }
         }
     }
 
@@ -1196,6 +1300,8 @@ actor GraphChatOrchestrator {
         }
         activeGeneration.sessionID = resources.sessionID
         activeGeneration.evidenceRegistry = resources.evidenceRegistry
+        activeGeneration.artifactRegistry = resources.artifactRegistry
+        activeGeneration.artifactTransactionID = resources.artifactTransactionID
         self.activeGeneration = activeGeneration
     }
 
@@ -1220,8 +1326,64 @@ actor GraphChatOrchestrator {
             return
         }
         await preparedSession.evidenceRegistry.removeAll()
+        await preparedSession.artifactRegistry.rollback(
+            transactionID: preparedSession.artifactTransactionID
+        )
         await provider.discardSession(sessionID: preparedSession.sessionID)
         self.preparedSession = nil
+    }
+
+    private func artifactSessionResources(
+        for key: ScopeKey
+    ) async -> ArtifactSessionResources {
+        if let artifactSession, artifactSession.key == key {
+            return artifactSession
+        }
+        if let artifactSession {
+            await artifactSession.registry.removeAll(reason: .scopeChanged)
+        }
+        let sessionID = GraphChatAnswerArtifactSessionID()
+        let resources = ArtifactSessionResources(
+            key: key,
+            sessionID: sessionID,
+            registry: GraphChatAnswerArtifactRegistry(
+                graphScope: key.graphScope,
+                sessionID: sessionID
+            )
+        )
+        artifactSession = resources
+        return resources
+    }
+
+    private func rollbackArtifactContext(
+        _ context: (
+            registry: GraphChatAnswerArtifactRegistry,
+            transactionID: GraphChatAnswerArtifactTransactionID
+        )?
+    ) async {
+        guard let context else {
+            return
+        }
+        await context.registry.rollback(transactionID: context.transactionID)
+    }
+
+    private func artifactClearReason(
+        for reason: GraphChatConversationResetReason
+    ) -> GraphChatAnswerArtifactRegistryClearReason {
+        switch reason {
+        case .newConversation:
+            return .newConversation
+        case .graphChanged:
+            return .graphChanged
+        case .scopeChanged:
+            return .scopeChanged
+        case .graphLocked, .accessRevoked:
+            return .graphLocked
+        case .graphDeleted:
+            return .graphDeleted
+        case .sessionDiscarded:
+            return .sessionDiscarded
+        }
     }
 
     private func validatedKey(
@@ -1360,6 +1522,7 @@ actor GraphChatOrchestrator {
                 Verwende nur Fakten, die Tools in dieser Session geliefert haben. Ergänze niemals Graph-Fakten aus Weltwissen oder Annahmen.
                 Benenne unbekannte, fehlende, mehrdeutige oder unzureichende Daten ausdrücklich.
                 Verwende nur Evidence-UUIDs aus tatsächlichen Tool-Ergebnissen. Erfinde, verändere oder leite niemals eine Evidence-UUID ab.
+                Übernimm nur artifactID-UUIDs, die ein Tool in dieser Anfrage ausdrücklich geliefert hat, unverändert in artifactIDs. Erfinde keine Artifact-ID und erzeuge, verändere oder rekonstruiere niemals Artifact-Payloads.
                 Arbeite ausschließlich im aktiven Graphen und aktiven Chat-Scope. Fordere oder behaupte niemals Daten aus einem anderen Graphen oder Scope.
                 Biete keine Schreib-, Änderungs-, Lösch-, Erstellungs-, Import-, Upload- oder Mutationsaktion an und simuliere oder behaupte sie nicht.
                 Attachment-Tools liefern nur Metadaten. Behaupte niemals, Inhalte von Dateien, Bildern, PDFs oder Binärdaten gelesen zu haben.
@@ -1381,6 +1544,7 @@ actor GraphChatOrchestrator {
                 Use only facts returned by tools in this session. Never add graph facts from world knowledge or assumptions.
                 State unknown, missing, ambiguous, or insufficient data explicitly.
                 Use only Evidence UUIDs that appeared in actual tool results. Never invent, alter, or infer an Evidence UUID.
+                Copy only artifactID UUIDs explicitly returned by a tool in this request, unchanged, into artifactIDs. Never invent an Artifact ID or create, modify, or reconstruct an Artifact payload.
                 Work only inside the active graph and the active chat scope. Never request or claim data from another graph or scope.
                 Never offer, simulate, or claim a write, edit, delete, create, import, upload, or mutation action.
                 Attachment tools expose metadata only. Never claim to have read attachment contents, files, images, PDFs, or binary data.

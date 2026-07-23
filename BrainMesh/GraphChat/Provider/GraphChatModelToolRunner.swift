@@ -80,6 +80,28 @@ nonisolated struct GraphChatModelToolResponse: Hashable, Sendable {
     let state: GraphChatToolResultState
     let content: String
     let evidenceIDs: [GraphEvidenceID]
+    let artifactID: GraphChatAnswerArtifactID?
+
+    var modelContent: String {
+        guard let artifactID else {
+            return content
+        }
+        return "\(content)\nartifactID=\(artifactID.rawValue.uuidString)"
+    }
+
+    init(
+        tool: GraphChatToolKind,
+        state: GraphChatToolResultState,
+        content: String,
+        evidenceIDs: [GraphEvidenceID],
+        artifactID: GraphChatAnswerArtifactID? = nil
+    ) {
+        self.tool = tool
+        self.state = state
+        self.content = content
+        self.evidenceIDs = evidenceIDs
+        self.artifactID = artifactID
+    }
 }
 
 nonisolated protocol GraphChatModelToolRunning: Sendable {
@@ -96,6 +118,8 @@ nonisolated protocol GraphChatModelToolRunnerFactory: Sendable {
         schemaContext: GraphSchemaContext,
         budget: GraphChatToolBudget,
         evidenceRegistry: GraphChatEvidenceRegistry,
+        artifactRegistry: GraphChatAnswerArtifactRegistry,
+        artifactTransactionID: GraphChatAnswerArtifactTransactionID,
         conversationTransaction: GraphChatConversationStateTransaction,
         conversationContext: GraphChatConversationContextSnapshot,
         referenceResolver: GraphChatConversationReferenceResolver,

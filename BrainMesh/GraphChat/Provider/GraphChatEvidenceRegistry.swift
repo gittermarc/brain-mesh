@@ -77,6 +77,10 @@ actor GraphChatEvidenceRegistry {
         evidenceByID[id] != nil
     }
 
+    func containsAll(_ ids: [GraphEvidenceID]) -> Bool {
+        ids.allSatisfy { evidenceByID[$0] != nil }
+    }
+
     func removeAll() {
         evidenceByID.removeAll(keepingCapacity: false)
         appliedFilters.removeAll(keepingCapacity: false)
