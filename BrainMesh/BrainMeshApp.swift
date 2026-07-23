@@ -5,8 +5,8 @@
 //  Created by Marc Fechner on 13.12.25.
 //
 
-import SwiftUI
 import SwiftData
+import SwiftUI
 
 @main
 struct BrainMeshApp: App {
@@ -24,12 +24,14 @@ struct BrainMeshApp: App {
     @StateObject private var entitiesHomeRouting = EntitiesHomeRoutingCoordinator()
     @StateObject private var graphChatLaunchCoordinator: GraphChatLaunchCoordinator
     @StateObject private var graphChatSessionStore: GraphChatSessionStore
+    @StateObject private var graphCopilotWorkspaceCoordinator: GraphCopilotWorkspaceCoordinator
 
     private let sharedModelContainer: ModelContainer
 
     init() {
         let graphLockCoordinator = GraphLockCoordinator()
         let graphChatLaunchCoordinator = GraphChatLaunchCoordinator()
+        let graphCopilotWorkspaceCoordinator = GraphCopilotWorkspaceCoordinator()
 
         let schema = Schema([
             MetaGraph.self,
@@ -39,7 +41,7 @@ struct BrainMeshApp: App {
             MetaAttachment.self,
             MetaDetailFieldDefinition.self,
             MetaDetailFieldValue.self,
-            MetaDetailsTemplate.self
+            MetaDetailsTemplate.self,
         ])
 
         // CloudKit / iCloud Sync (private DB)
@@ -51,30 +53,36 @@ struct BrainMeshApp: App {
             SyncRuntime.shared.setStorageMode(.cloudKit)
         } catch {
             #if DEBUG
-            fatalError("❌ SwiftData CloudKit KONTAINER FEHLER (DEBUG, kein Fallback): \(error)")
+                fatalError("❌ SwiftData CloudKit KONTAINER FEHLER (DEBUG, kein Fallback): \(error)")
             #else
-            print("⚠️ SwiftData CloudKit failed, falling back to local-only: \(error)")
-            let localConfig = ModelConfiguration(schema: schema)
-            do {
-                sharedModelContainer = try ModelContainer(for: schema, configurations: [localConfig])
-                SyncRuntime.shared.setStorageMode(.localOnly)
-            } catch {
-                fatalError("❌ Could not create local ModelContainer: \(error)")
-            }
+                print("⚠️ SwiftData CloudKit failed, falling back to local-only: \(error)")
+                let localConfig = ModelConfiguration(schema: schema)
+                do {
+                    sharedModelContainer = try ModelContainer(for: schema, configurations: [localConfig])
+                    SyncRuntime.shared.setStorageMode(.localOnly)
+                } catch {
+                    fatalError("❌ Could not create local ModelContainer: \(error)")
+                }
             #endif
         }
 
         let graphChatSessionStore = GraphChatSessionStore(
             modelContainer: sharedModelContainer
         )
-        graphLockCoordinator.setLockHandler { [weak graphChatSessionStore, weak graphChatLaunchCoordinator] graphID in
+        graphLockCoordinator.setLockHandler {
+            [
+                weak graphChatSessionStore, weak graphChatLaunchCoordinator,
+                weak graphCopilotWorkspaceCoordinator
+            ] graphID in
             graphChatSessionStore?.handleSecurityLock(graphID: graphID)
             graphChatLaunchCoordinator?.handleSecurityLock(graphID: graphID)
+            graphCopilotWorkspaceCoordinator?.handleSensitiveStateInvalidation(graphID: graphID)
         }
 
         _graphLockCoordinator = StateObject(wrappedValue: graphLockCoordinator)
         _graphChatLaunchCoordinator = StateObject(wrappedValue: graphChatLaunchCoordinator)
         _graphChatSessionStore = StateObject(wrappedValue: graphChatSessionStore)
+        _graphCopilotWorkspaceCoordinator = StateObject(wrappedValue: graphCopilotWorkspaceCoordinator)
 
         // Refresh iCloud account status once on launch (shows up in Settings → Sync).
         Task.detached(priority: .utility) {
@@ -101,6 +109,7 @@ struct BrainMeshApp: App {
                 .environmentObject(entitiesHomeRouting)
                 .environmentObject(graphChatLaunchCoordinator)
                 .environmentObject(graphChatSessionStore)
+                .environmentObject(graphCopilotWorkspaceCoordinator)
         }
         .modelContainer(sharedModelContainer)
     }

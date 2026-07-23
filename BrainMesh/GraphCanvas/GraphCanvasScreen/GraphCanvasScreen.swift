@@ -5,21 +5,25 @@
 //  Created by Marc Fechner on 13.12.25.
 //
 
-import SwiftUI
 import SwiftData
+import SwiftUI
 
 struct GraphCanvasScreen: View {
     @Environment(\.modelContext) var modelContext
     @Environment(\.scenePhase) var scenePhase
+    @Environment(\.horizontalSizeClass) var horizontalSizeClass
     // NOTE: Must not be `private` because several view helpers live in separate extension files.
     @EnvironmentObject var onboarding: OnboardingCoordinator
     // NOTE: Must not be `private` because jump handling touches helpers in separate extension files.
     @EnvironmentObject var graphJump: GraphJumpCoordinator
     @EnvironmentObject var graphChatLaunchCoordinator: GraphChatLaunchCoordinator
+    @EnvironmentObject var graphCopilotWorkspaceCoordinator: GraphCopilotWorkspaceCoordinator
     @EnvironmentObject var tabRouter: RootTabRouter
 
     // ✅ Active Graph (Multi-Graph)
     @AppStorage(BMAppStorageKeys.activeGraphID) var activeGraphIDString: String = ""
+    @AppStorage(BMAppStorageKeys.graphCopilotInspectorPresented) var isCopilotInspectorPresented: Bool = true
+    @AppStorage(BMAppStorageKeys.graphCopilotInspectorWidth) var copilotInspectorWidth: Double = 440
     var activeGraphID: UUID? { UUID(uuidString: activeGraphIDString) }
 
     @Query(sort: [SortDescriptor(\MetaGraph.createdAt, order: .forward)])
@@ -50,7 +54,7 @@ struct GraphCanvasScreen: View {
     // ✅ Lens
     @State var lensEnabled: Bool = true
     @State var lensHideNonRelevant: Bool = false
-    @State var lensDepth: Int = 2 // 1 = nur Nachbarn, 2 = Nachbarn+Nachbarn
+    @State var lensDepth: Int = 2  // 1 = nur Nachbarn, 2 = Nachbarn+Nachbarn
 
     // Performance knobs
     @State var maxNodes: Int = 140
@@ -61,15 +65,14 @@ struct GraphCanvasScreen: View {
 
     // Graph
     @State var nodes: [GraphNode] = []
-    @State var edges: [GraphEdge] = []                         // ✅ alle Kanten (Physik / Daten)
+    @State var edges: [GraphEdge] = []  // ✅ alle Kanten (Physik / Daten)
     @State var positions: [NodeKey: CGPoint] = [:]
     @State var velocities: [NodeKey: CGVector] = [:]
 
     // ✅ Render caches (kein SwiftData-Fetch im Render-Pfad)
     @State var labelCache: [NodeKey: String] = [:]
-    @State var imagePathCache: [NodeKey: String] = [:] // non-empty paths; missing = nil
-    @State var iconSymbolCache: [NodeKey: String] = [:] // non-empty SF Symbol names; missing = nil
-
+    @State var imagePathCache: [NodeKey: String] = [:]  // non-empty paths; missing = nil
+    @State var iconSymbolCache: [NodeKey: String] = [:]  // non-empty SF Symbol names; missing = nil
 
     // ✅ Notizen GERICHETET: source -> target
     @State var directedEdgeNotes: [DirectedEdgeKey: String] = [:]
@@ -77,6 +80,7 @@ struct GraphCanvasScreen: View {
     // Pinning + Selection. This remains the single Canvas selection store.
     @State var pinned: Set<NodeKey> = []
     @State var canvasSelection = GraphCanvasSelectionState()
+    @State var copilotHighlightedNodes: Set<NodeKey> = []
 
     var selection: NodeKey? {
         get { canvasSelection.primary }

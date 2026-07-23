@@ -9,12 +9,18 @@ import Combine
 import Foundation
 import SwiftData
 
+private nonisolated struct GraphChatIndexRefreshRequest: Equatable, Sendable {
+    let graphScope: GraphScope?
+    let prepareIfNeeded: Bool
+}
+
 @MainActor
 final class GraphChatSessionStore: ObservableObject {
     @Published private(set) var availabilityState: GraphChatAvailabilityPresentationState = .loading
     @Published private(set) var indexState: GraphChatIndexPresentationState = .loading
     @Published private(set) var accessDecision: GraphChatAccessDecision = .denied
     @Published private(set) var isGenerationRunning = false
+    @Published private(set) var presentationRevalidationRevision: UInt64 = 0
     private(set) var isGenerationAuthorized = false
 
     private let executionGate: GraphChatExecutionGate
@@ -35,6 +41,9 @@ final class GraphChatSessionStore: ObservableObject {
     private var appliedLaunchRequestID: UUID?
     private var cleanupTask: Task<Void, Never>?
     private var mutationTask: Task<Void, Never>?
+    private var availabilityRefreshTask: Task<Void, Never>?
+    private var indexRefreshTask: Task<Void, Never>?
+    private var indexRefreshRequest: GraphChatIndexRefreshRequest?
     private var accessRevision: UInt64 = 0
 
     init(
@@ -100,6 +109,8 @@ final class GraphChatSessionStore: ObservableObject {
     deinit {
         cleanupTask?.cancel()
         mutationTask?.cancel()
+        availabilityRefreshTask?.cancel()
+        indexRefreshTask?.cancel()
     }
 
     var isReconciliationRunning: Bool {
@@ -111,40 +122,92 @@ final class GraphChatSessionStore: ObservableObject {
     }
 
     func refreshAvailability() async {
-        let availability = await availabilityProvider.availability()
-        let metricState: GraphChatAvailabilityMetricState
-        switch availability {
-        case .available:
-            availabilityState = .available
-            metricState = .available
-        case .unavailable(let reason):
-            availabilityState = .unavailable(reason: reason)
-            metricState = Self.metricState(for: reason)
+        if let availabilityRefreshTask {
+            await availabilityRefreshTask.value
+            return
         }
-        await observability.record(.availability(metricState))
+
+        let availabilityProvider = self.availabilityProvider
+        let observability = self.observability
+        let refreshTask = Task { @MainActor [weak self] in
+            let availability = await availabilityProvider.availability()
+            guard Task.isCancelled == false, let self else {
+                return
+            }
+
+            let metricState: GraphChatAvailabilityMetricState
+            switch availability {
+            case .available:
+                self.availabilityState = .available
+                metricState = .available
+            case .unavailable(let reason):
+                self.availabilityState = .unavailable(reason: reason)
+                metricState = Self.metricState(for: reason)
+            }
+            await observability.record(.availability(metricState))
+        }
+        availabilityRefreshTask = refreshTask
+        await refreshTask.value
+        availabilityRefreshTask = nil
     }
 
     func refreshIndex(
         for graphScope: GraphScope?,
         prepareIfNeeded: Bool
     ) async {
-        guard let graphScope else {
-            indexState = .loading
-            return
+        let request = GraphChatIndexRefreshRequest(
+            graphScope: graphScope,
+            prepareIfNeeded: prepareIfNeeded
+        )
+        if let indexRefreshTask, let indexRefreshRequest {
+            let existingRequestSatisfiesCurrent =
+                indexRefreshRequest.graphScope == request.graphScope
+                && (indexRefreshRequest.prepareIfNeeded || request.prepareIfNeeded == false)
+            await indexRefreshTask.value
+            if existingRequestSatisfiesCurrent {
+                return
+            }
         }
 
-        let currentState = await indexStatusProvider.presentationState(for: graphScope)
-        indexState = currentState
-        guard prepareIfNeeded, currentState.requiresPreparation else {
-            return
-        }
+        let indexStatusProvider = self.indexStatusProvider
+        let refreshTask = Task { @MainActor [weak self] in
+            guard let self else {
+                return
+            }
+            guard let graphScope else {
+                if self.indexRefreshRequest == request {
+                    self.indexState = .loading
+                }
+                return
+            }
 
-        indexState = currentState.preparationInProgressState
-        let preparedState = await indexStatusProvider.prepareIndex(for: graphScope)
-        guard Task.isCancelled == false else {
-            return
+            let currentState = await indexStatusProvider.presentationState(for: graphScope)
+            guard Task.isCancelled == false,
+                self.indexRefreshRequest == request
+            else {
+                return
+            }
+            self.indexState = currentState
+            guard prepareIfNeeded, currentState.requiresPreparation else {
+                return
+            }
+
+            self.indexState = currentState.preparationInProgressState
+            let preparedState = await indexStatusProvider.prepareIndex(for: graphScope)
+            guard Task.isCancelled == false,
+                self.indexRefreshRequest == request
+            else {
+                return
+            }
+            self.indexState = preparedState
         }
-        indexState = preparedState
+        indexRefreshRequest = request
+        indexRefreshTask = refreshTask
+        await refreshTask.value
+        if indexRefreshRequest == request {
+            indexRefreshTask = nil
+            indexRefreshRequest = nil
+        }
     }
 
     func synchronizeAccess(
@@ -169,12 +232,13 @@ final class GraphChatSessionStore: ObservableObject {
             isGraphUnlocked: executionAuthorized && isGraphUnlocked
         )
         executionGate.update(authorization)
-        isGenerationAuthorized = scope.map {
-            authorization.permits(
-                graphScope: $0.graphScope,
-                chatScope: $0
-            )
-        } ?? false
+        isGenerationAuthorized =
+            scope.map {
+                authorization.permits(
+                    graphScope: $0.graphScope,
+                    chatScope: $0
+                )
+            } ?? false
         authorizedGraphID = isGenerationAuthorized ? activeGraphID : nil
         authorizedScope = isGenerationAuthorized ? scope : nil
         currentViewModel?.notifyGenerationAccessChanged()
@@ -212,12 +276,14 @@ final class GraphChatSessionStore: ObservableObject {
         request: GraphChatLaunchRequest,
         graphName: String,
         navigationActions: GraphChatNavigationActions,
-        draftChangeHandler: @escaping @MainActor (String) -> Void = { _ in }
+        draftChangeHandler: @escaping @MainActor (String) -> Void = { _ in },
+        sessionDerivedStateDidClear: @escaping @MainActor () -> Void = {}
     ) -> GraphChatViewModel {
         let scope = request.scope
         if currentScope != scope
             || currentLaunchContext != request.context
-            || currentViewModel == nil {
+            || currentViewModel == nil
+        {
             if currentViewModel != nil || currentScope != nil {
                 let discardedScope = currentScope
                 let pendingLocalTasks = currentViewModel?.discardSensitiveState() ?? []
@@ -242,8 +308,9 @@ final class GraphChatSessionStore: ObservableObject {
                 navigationActions: navigationActions,
                 accessDecisionProvider: { [weak self] in
                     guard let self,
-                          self.authorizedGraphID == scope.graphScope.graphID,
-                          self.authorizedScope == scope else {
+                        self.authorizedGraphID == scope.graphScope.graphID,
+                        self.authorizedScope == scope
+                    else {
                         return .denied
                     }
                     return self.accessDecision
@@ -258,7 +325,8 @@ final class GraphChatSessionStore: ObservableObject {
                 },
                 generationStateDidChange: { [weak self] isGenerating in
                     self?.handleGenerationStateChanged(isGenerating)
-                }
+                },
+                sessionDerivedStateDidClear: sessionDerivedStateDidClear
             )
             currentViewModel = model
             currentScope = scope
@@ -287,9 +355,10 @@ final class GraphChatSessionStore: ObservableObject {
         accessDecision = .denied
         isGenerationAuthorized = false
         isGenerationRunning = false
-        let pendingLocalTasks = currentViewModel?.discardSensitiveState(
-            preserveDraft: preserveDraft
-        ) ?? []
+        let pendingLocalTasks =
+            currentViewModel?.discardSensitiveState(
+                preserveDraft: preserveDraft
+            ) ?? []
         currentViewModel = nil
         currentScope = nil
         currentLaunchContext = nil
@@ -395,25 +464,28 @@ final class GraphChatSessionStore: ObservableObject {
             return
         }
 
+        presentationRevalidationRevision &+= 1
+
         let invalidatesSession = delivery.batch.events.contains { event in
             switch event.kind {
             case .graphDeleted, .graphImported, .graphReplaced, .graphRequiresFullRebuild:
                 return true
             case .entityCreated, .entityUpdated, .entityDeleted,
-                 .attributeCreated, .attributeUpdated, .attributeDeleted,
-                 .linkCreated, .linkUpdated, .linkDeleted,
-                 .detailSchemaChanged, .detailValueChanged, .detailValueDeleted,
-                 .attachmentCreated, .attachmentUpdated, .attachmentDeleted,
-                 .detailTemplateCreated, .graphCreated, .graphUpdated:
+                .attributeCreated, .attributeUpdated, .attributeDeleted,
+                .linkCreated, .linkUpdated, .linkDeleted,
+                .detailSchemaChanged, .detailValueChanged, .detailValueDeleted,
+                .attachmentCreated, .attachmentUpdated, .attachmentDeleted,
+                .detailTemplateCreated, .graphCreated, .graphUpdated:
                 return false
             }
         }
         guard invalidatesSession else {
             return
         }
-        let resetReason: GraphChatConversationResetReason = delivery.batch.events.contains {
-            $0.kind == .graphDeleted
-        } ? .graphDeleted : .sessionDiscarded
+        let resetReason: GraphChatConversationResetReason =
+            delivery.batch.events.contains {
+                $0.kind == .graphDeleted
+            } ? .graphDeleted : .sessionDiscarded
         indexState = .stale(documentCount: indexState.documentCount)
         invalidate(
             removeHistory: true,

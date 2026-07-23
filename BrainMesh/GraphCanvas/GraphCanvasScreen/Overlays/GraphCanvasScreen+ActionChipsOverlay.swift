@@ -49,7 +49,8 @@ extension GraphCanvasScreen {
             entityFieldsPeekPanel(summaryChips: detailsPeekChips, fields: entityFieldsPeekItems)
 
             if let activeFocus = detailsFocusSummaryCache.activeFocus,
-               activeFocus.entityID == node.key.uuid {
+                activeFocus.entityID == node.key.uuid
+            {
                 graphDetailsFocusSummaryChip(summary: detailsFocusSummaryCache)
             }
         }
@@ -116,10 +117,13 @@ extension GraphCanvasScreen {
                         .foregroundStyle(.secondary)
                 }
 
-                Text(verbatim: GraphDetailsFocusFormatting.ruleText(focusState: activeFocus, field: summary.field))
-                    .font(.caption)
-                    .foregroundStyle(.primary)
-                    .lineLimit(2)
+                Text(
+                    verbatim: GraphDetailsFocusFormatting.ruleText(
+                        focusState: activeFocus, field: summary.field)
+                )
+                .font(.caption)
+                .foregroundStyle(.primary)
+                .lineLimit(2)
 
                 Text(verbatim: "Treffer \(summary.matchCount) von \(summary.inspectedAttributeCount)")
                     .font(.caption2)
@@ -154,9 +158,13 @@ extension GraphCanvasScreen {
         )
         graphChatLaunchCoordinator.launch(
             launch,
-            presentationStyle: .rootTab
+            presentationStyle: graphChatPresentationStyle
         )
-        tabRouter.openChat()
+        if supportsCopilotInspector {
+            isCopilotInspectorPresented = true
+        } else {
+            tabRouter.openChat()
+        }
     }
 
     func openGraphChatForSelection() {
@@ -164,17 +172,23 @@ extension GraphCanvasScreen {
             return
         }
         let references = canvasSelection.chatNodes.map(graphChatReference)
-        guard let launch = GraphChatContextEntryPoint.selection(
-            graphID: activeGraphID,
-            nodes: references
-        ) else {
+        guard
+            let launch = GraphChatContextEntryPoint.selection(
+                graphID: activeGraphID,
+                nodes: references
+            )
+        else {
             return
         }
         graphChatLaunchCoordinator.launch(
             launch,
-            presentationStyle: .rootTab
+            presentationStyle: graphChatPresentationStyle
         )
-        tabRouter.openChat()
+        if supportsCopilotInspector {
+            isCopilotInspectorPresented = true
+        } else {
+            tabRouter.openChat()
+        }
     }
 
     func graphChatReference(for key: NodeKey) -> GraphChatNodeContextReference {

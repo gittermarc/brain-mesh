@@ -1,5 +1,6 @@
 import Foundation
 import Testing
+
 @testable import BrainMesh
 
 @MainActor
@@ -124,6 +125,7 @@ struct GraphChatSessionSecurityTests {
     func scopeChangeDiscardsRuntimeBeforeNewScopeIsAuthorized() async {
         let graphID = UUID()
         let setup = makeSessionStore(graphID: graphID, scripts: [])
+        var derivedStateCleanupCount = 0
         let wholeGraphRequest = GraphChatLaunchRequest(
             scope: .entireGraph(GraphScope(graphID: graphID)),
             prefilledQuestion: "Whole Graph"
@@ -137,7 +139,10 @@ struct GraphChatSessionSecurityTests {
         let oldViewModel = setup.store.viewModel(
             request: wholeGraphRequest,
             graphName: "Testgraph",
-            navigationActions: .disabled
+            navigationActions: .disabled,
+            sessionDerivedStateDidClear: {
+                derivedStateCleanupCount += 1
+            }
         )
         let nodeScope = GraphChatScope.node(
             NodeRefKey(kind: .entity, id: UUID()),
@@ -151,9 +156,13 @@ struct GraphChatSessionSecurityTests {
         let newViewModel = setup.store.viewModel(
             request: nodeRequest,
             graphName: "Testgraph",
-            navigationActions: .disabled
+            navigationActions: .disabled,
+            sessionDerivedStateDidClear: {
+                derivedStateCleanupCount += 1
+            }
         )
 
+        #expect(derivedStateCleanupCount == 1)
         #expect(oldViewModel.composerState.text.isEmpty)
         #expect(newViewModel.composerState.text == "Node-Frage")
         #expect(setup.store.isGenerationAuthorized == false)
@@ -248,7 +257,7 @@ struct GraphChatSessionSecurityTests {
                 GraphChatUIFakeScript(
                     events: [
                         .started(requestID: UUID()),
-                        .partialAnswer("Sensible Teilantwort")
+                        .partialAnswer("Sensible Teilantwort"),
                     ],
                     waitsForCancellation: true
                 )
@@ -334,9 +343,127 @@ struct GraphChatSessionSecurityTests {
         #expect(snapshot.discardReasons.last == .graphLocked)
     }
 
+    @Test
+    func activeGraphMutationRevalidatesVisibleArtifactsButForeignMutationDoesNot() async throws {
+        let graphID = UUID()
+        let foreignGraphID = UUID()
+        let bus = GraphMutationEventBus()
+        let setup = makeSessionStore(
+            graphID: graphID,
+            scripts: [],
+            mutationSubscriber: bus
+        )
+        let request = GraphChatLaunchRequest(
+            scope: .entireGraph(GraphScope(graphID: graphID))
+        )
+        await setup.store.synchronizeAccess(
+            activeGraphID: graphID,
+            scope: request.scope,
+            hasProEntitlement: true,
+            isGraphUnlocked: true
+        )
+        _ = setup.store.viewModel(
+            request: request,
+            graphName: "Testgraph",
+            navigationActions: .disabled
+        )
+
+        for _ in 0..<2_000 {
+            if await bus.subscriberCountForTesting == 1 {
+                break
+            }
+            await Task.yield()
+        }
+        #expect(await bus.subscriberCountForTesting == 1)
+
+        let deletedNodeID = UUID()
+        let activeBatch = try GraphMutationBatch(
+            graphID: graphID,
+            events: [
+                GraphMutationEvent(
+                    graphID: graphID,
+                    kind: .entityDeleted,
+                    references: [
+                        .node(NodeRefKey(kind: .entity, id: deletedNodeID))
+                    ]
+                )
+            ]
+        )
+        _ = await bus.publishCommitted(activeBatch)
+        await GraphChatUITestSupport.waitUntil {
+            setup.store.presentationRevalidationRevision == 1
+        }
+
+        #expect(setup.store.presentationRevalidationRevision == 1)
+        #expect(setup.store.hasActiveSession)
+
+        let foreignBatch = try GraphMutationBatch(
+            graphID: foreignGraphID,
+            events: [
+                GraphMutationEvent(
+                    graphID: foreignGraphID,
+                    kind: .entityDeleted,
+                    references: [.node(NodeRefKey(kind: .entity, id: UUID()))]
+                )
+            ]
+        )
+        _ = await bus.publishCommitted(foreignBatch)
+        for _ in 0..<32 {
+            await Task.yield()
+        }
+
+        #expect(setup.store.presentationRevalidationRevision == 1)
+        #expect(setup.store.hasActiveSession)
+        await bus.finish()
+    }
+
+    @Test
+    func concurrentGraphChatHostsShareRuntimeRefreshTasks() async {
+        let graphID = UUID()
+        let graphScope = GraphScope(graphID: graphID)
+        let availabilityProvider = GraphChatSessionAvailabilityProbe()
+        let indexProvider = GraphChatSessionIndexProbe()
+        let bus = GraphMutationEventBus()
+        let store = GraphChatSessionStore(
+            baseOrchestrator: GraphChatUIFakeOrchestrator(scripts: []),
+            availabilityProvider: availabilityProvider,
+            schemaProvider: GraphChatUIFakeSchemaProvider(
+                contexts: [GraphChatTestSupport.makeSchemaContext(graphID: graphID)]
+            ),
+            indexStatusProvider: indexProvider,
+            mutationSubscriber: bus
+        )
+
+        let availabilityTasks = (0..<8).map { _ in
+            Task { @MainActor in
+                await store.refreshAvailability()
+            }
+        }
+        for task in availabilityTasks {
+            await task.value
+        }
+
+        let indexTasks = (0..<8).map { _ in
+            Task { @MainActor in
+                await store.refreshIndex(
+                    for: graphScope,
+                    prepareIfNeeded: false
+                )
+            }
+        }
+        for task in indexTasks {
+            await task.value
+        }
+
+        #expect(await availabilityProvider.callCount == 1)
+        #expect(await indexProvider.presentationCallCount == 1)
+        await bus.finish()
+    }
+
     private func makeSessionStore(
         graphID: UUID,
-        scripts: [GraphChatUIFakeScript]
+        scripts: [GraphChatUIFakeScript],
+        mutationSubscriber: any GraphMutationSubscribing = GraphMutationEventBus.shared
     ) -> (
         store: GraphChatSessionStore,
         orchestrator: GraphChatUIFakeOrchestrator
@@ -349,7 +476,8 @@ struct GraphChatSessionSecurityTests {
             schemaProvider: GraphChatUIFakeSchemaProvider(contexts: [context]),
             indexStatusProvider: GraphChatUIFakeIndexProvider(
                 value: .ready(documentCount: 1)
-            )
+            ),
+            mutationSubscriber: mutationSubscriber
         )
         return (store, orchestrator)
     }
@@ -366,5 +494,31 @@ struct GraphChatSessionSecurityTests {
             await Task.yield()
         }
         return await orchestrator.snapshot()
+    }
+}
+
+private actor GraphChatSessionAvailabilityProbe: GraphChatAvailabilityProviding {
+    private(set) var callCount = 0
+
+    func availability() async -> GraphChatModelAvailability {
+        callCount += 1
+        for _ in 0..<64 {
+            await Task.yield()
+        }
+        return .available
+    }
+}
+
+private actor GraphChatSessionIndexProbe: GraphChatIndexStatusProviding {
+    private(set) var presentationCallCount = 0
+
+    func presentationState(
+        for _: GraphScope
+    ) async -> GraphChatIndexPresentationState {
+        presentationCallCount += 1
+        for _ in 0..<64 {
+            await Task.yield()
+        }
+        return .ready(documentCount: 1)
     }
 }

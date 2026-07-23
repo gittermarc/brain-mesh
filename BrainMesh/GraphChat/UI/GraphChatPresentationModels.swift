@@ -328,7 +328,7 @@ nonisolated enum GraphChatIndexPresentationState: Hashable, Sendable {
             return self
         case .stale(let documentCount):
             return .reconciling(documentCount: documentCount)
-        case .failed(let message, let isUsable, let documentCount):
+        case .failed(_, let isUsable, let documentCount):
             guard isUsable == false else {
                 return self
             }

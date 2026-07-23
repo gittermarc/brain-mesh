@@ -64,68 +64,124 @@ nonisolated struct GraphChatLiveAnswerArtifactRevalidator: GraphChatAnswerArtifa
         }
 
         if let entityID = artifact.querySummary?.entityID,
-           try await sourceRepository.entity(id: entityID, in: scope.graphScope) == nil {
+            try await sourceRepository.entity(id: entityID, in: scope.graphScope) == nil
+        {
             return nil
         }
 
+        let targetRevalidator = GraphChatAnswerArtifactNavigationTargetRevalidator(
+            sourceRepository: sourceRepository
+        )
         for target in artifact.allNavigationTargets {
             try Task.checkCancellation()
-            guard try await navigationTargetExists(target, in: scope.graphScope) else {
+            guard
+                try await targetRevalidator.revalidatedTarget(
+                    target,
+                    in: scope.graphScope
+                ) != nil
+            else {
                 return nil
             }
         }
 
         return artifact
     }
+}
 
-    private func navigationTargetExists(
+nonisolated struct GraphChatAnswerArtifactNavigationTargetRevalidator: Sendable {
+    private let sourceRepository: any GraphEvidenceSourceReading
+
+    init(
+        sourceRepository: any GraphEvidenceSourceReading = GraphReadRepository.shared
+    ) {
+        self.sourceRepository = sourceRepository
+    }
+
+    func revalidatedTarget(
         _ target: GraphChatAnswerArtifactNavigationTarget,
         in graphScope: GraphScope
-    ) async throws -> Bool {
+    ) async throws -> GraphChatAnswerArtifactNavigationTarget? {
+        try Task.checkCancellation()
         guard target.graphScope == graphScope else {
-            return false
+            return nil
         }
 
         switch target {
-        case .openNode(_, let node),
-             .focusNodeInGraph(_, let node):
-            return try await nodeExists(node, in: graphScope)
+        case .openNode(_, let node):
+            guard try await nodeExists(node, in: graphScope) else { return nil }
+            return target
+
+        case .focusNodeInGraph(_, let node):
+            guard try await nodeExists(node, in: graphScope) else { return nil }
+            return target
 
         case .openEntityList(_, let entityID, _):
-            return try await sourceRepository.entity(id: entityID, in: graphScope) != nil
-
-        case .openResultFilter(_, let entityID, _, let resultNodes):
-            if let entityID,
-               try await sourceRepository.entity(id: entityID, in: graphScope) == nil {
-                return false
+            guard try await sourceRepository.entity(id: entityID, in: graphScope) != nil else {
+                return nil
             }
-            return try await allNodesExist(resultNodes, in: graphScope)
+            return target
+
+        case .showResultNodes(_, let title, let nodes):
+            let available = try await availableNodes(nodes, in: graphScope)
+            guard available.isEmpty == false else { return nil }
+            return .showResultNodes(graphScope: graphScope, title: title, nodes: available)
+
+        case .openResultFilter(_, let entityID, let filters, let resultNodes):
+            if let entityID,
+                try await sourceRepository.entity(id: entityID, in: graphScope) == nil
+            {
+                return nil
+            }
+            let available = try await availableNodes(resultNodes, in: graphScope)
+            guard available.isEmpty == false else { return nil }
+            return .openResultFilter(
+                graphScope: graphScope,
+                entityID: entityID,
+                filters: filters,
+                resultNodes: available
+            )
+
+        case .highlightNodesInCanvas(_, let nodes):
+            let available = try await availableNodes(nodes, in: graphScope)
+            guard available.isEmpty == false else { return nil }
+            return .highlightNodesInCanvas(graphScope: graphScope, nodes: available)
+
+        case .clearCanvasHighlight:
+            return target
 
         case .addNodesToCanvasSelection(_, let nodes):
-            guard nodes.isEmpty == false else {
-                return false
-            }
-            return try await allNodesExist(nodes, in: graphScope)
+            let available = try await availableNodes(nodes, in: graphScope)
+            guard available.isEmpty == false else { return nil }
+            return .addNodesToCanvasSelection(graphScope: graphScope, nodes: available)
+
+        case .replaceCanvasSelection(_, let nodes):
+            let available = try await availableNodes(nodes, in: graphScope)
+            guard available.isEmpty == false else { return nil }
+            return .replaceCanvasSelection(graphScope: graphScope, nodes: available)
 
         case .compareNodes(_, let nodes):
-            guard nodes.count >= 2 else {
-                return false
-            }
-            return try await allNodesExist(nodes, in: graphScope)
+            let available = try await availableNodes(nodes, in: graphScope)
+            guard available.count >= 2 else { return nil }
+            return .compareNodes(graphScope: graphScope, nodes: available)
         }
     }
 
-    private func allNodesExist(
+    private func availableNodes(
         _ nodes: [NodeRefKey],
         in graphScope: GraphScope
-    ) async throws -> Bool {
-        for node in nodes {
+    ) async throws -> [NodeRefKey] {
+        var seen = Set<NodeRefKey>()
+        var available: [NodeRefKey] = []
+        for node in nodes.prefix(GraphChatWorkspaceBudget.maximumActionNodes) {
             try Task.checkCancellation()
-            guard try await nodeExists(node, in: graphScope) else {
-                return false
+            guard seen.insert(node).inserted,
+                try await nodeExists(node, in: graphScope)
+            else {
+                continue
             }
+            available.append(node)
         }
-        return true
+        return available
     }
 
     private func nodeExists(

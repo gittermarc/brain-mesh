@@ -19,7 +19,9 @@ nonisolated struct GraphChatAnswerArtifactID: RawRepresentable, Hashable, Sendab
     }
 }
 
-nonisolated struct GraphChatAnswerArtifactSessionID: RawRepresentable, Hashable, Sendable, Identifiable {
+nonisolated struct GraphChatAnswerArtifactSessionID: RawRepresentable, Hashable, Sendable,
+    Identifiable
+{
     let rawValue: UUID
 
     var id: UUID {
@@ -31,7 +33,9 @@ nonisolated struct GraphChatAnswerArtifactSessionID: RawRepresentable, Hashable,
     }
 }
 
-nonisolated struct GraphChatAnswerArtifactTransactionID: RawRepresentable, Hashable, Sendable, Identifiable {
+nonisolated struct GraphChatAnswerArtifactTransactionID: RawRepresentable, Hashable, Sendable,
+    Identifiable
+{
     let rawValue: UUID
 
     var id: UUID {
@@ -135,24 +139,55 @@ nonisolated enum GraphChatAnswerArtifactNavigationTarget: Hashable, Sendable {
         entityID: UUID,
         filters: [GraphChatAnswerArtifactFilterValue]
     )
+    case showResultNodes(
+        graphScope: GraphScope,
+        title: String,
+        nodes: [NodeRefKey]
+    )
     case openResultFilter(
         graphScope: GraphScope,
         entityID: UUID?,
         filters: [GraphChatAnswerArtifactFilterValue],
         resultNodes: [NodeRefKey]
     )
+    case highlightNodesInCanvas(graphScope: GraphScope, nodes: [NodeRefKey])
+    case clearCanvasHighlight(graphScope: GraphScope)
     case addNodesToCanvasSelection(graphScope: GraphScope, nodes: [NodeRefKey])
+    case replaceCanvasSelection(graphScope: GraphScope, nodes: [NodeRefKey])
     case compareNodes(graphScope: GraphScope, nodes: [NodeRefKey])
 
     var graphScope: GraphScope {
         switch self {
         case .openNode(let graphScope, _),
-             .focusNodeInGraph(let graphScope, _),
-             .openEntityList(let graphScope, _, _),
-             .openResultFilter(let graphScope, _, _, _),
-             .addNodesToCanvasSelection(let graphScope, _),
-             .compareNodes(let graphScope, _):
+            .focusNodeInGraph(let graphScope, _),
+            .openEntityList(let graphScope, _, _),
+            .showResultNodes(let graphScope, _, _),
+            .openResultFilter(let graphScope, _, _, _),
+            .highlightNodesInCanvas(let graphScope, _),
+            .clearCanvasHighlight(let graphScope),
+            .addNodesToCanvasSelection(let graphScope, _),
+            .replaceCanvasSelection(let graphScope, _),
+            .compareNodes(let graphScope, _):
             return graphScope
+        }
+    }
+}
+
+nonisolated extension GraphChatAnswerArtifactNavigationTarget {
+    var nodeReferences: [NodeRefKey] {
+        switch self {
+        case .openNode(_, let node), .focusNodeInGraph(_, let node):
+            return [node]
+        case .showResultNodes(_, _, let nodes),
+            .highlightNodesInCanvas(_, let nodes),
+            .addNodesToCanvasSelection(_, let nodes),
+            .replaceCanvasSelection(_, let nodes),
+            .compareNodes(_, let nodes):
+            return nodes
+        case .openResultFilter(_, _, _, let resultNodes):
+            return resultNodes
+        case .openEntityList, .clearCanvasHighlight:
+            return []
         }
     }
 }
@@ -200,10 +235,12 @@ nonisolated struct GraphChatAnswerArtifactTruncation: Hashable, Sendable {
         var seen = Set<GraphChatAnswerArtifactTruncationReason>()
         let normalizedReasons = reasons.filter { seen.insert($0).inserted }
         self.isTruncated = normalizedReasons.isEmpty == false
-        self.omittedCount = normalizedReasons.isEmpty
+        self.omittedCount =
+            normalizedReasons.isEmpty
             ? nil
             : omittedCount.map { max(0, $0) }
-        self.omittedColumnCount = normalizedReasons.isEmpty
+        self.omittedColumnCount =
+            normalizedReasons.isEmpty
             ? nil
             : omittedColumnCount.map { max(0, $0) }
         self.reasons = normalizedReasons
@@ -315,7 +352,8 @@ nonisolated struct GraphChatAnswerArtifactTableColumn: Hashable, Sendable, Ident
         title: String,
         role: GraphChatAnswerArtifactColumnRole,
         unit: String?,
-        valuePresentation: GraphChatAnswerArtifactValuePresentation = GraphChatAnswerArtifactValuePresentation()
+        valuePresentation: GraphChatAnswerArtifactValuePresentation =
+            GraphChatAnswerArtifactValuePresentation()
     ) {
         self.id = id
         self.key = key
@@ -505,7 +543,6 @@ nonisolated enum GraphChatAnswerArtifactKind: String, CaseIterable, Hashable, Se
     case timeline
 }
 
-
 nonisolated struct GraphChatAnswerArtifactQueryFieldSummary: Hashable, Sendable, Identifiable {
     let fieldID: UUID
     let label: String
@@ -650,13 +687,78 @@ nonisolated struct GraphChatAnswerArtifact: Hashable, Sendable, Identifiable {
         navigationTargets + payload.allNavigationTargets
     }
 
+    var workspaceNavigationTargets: [GraphChatAnswerArtifactNavigationTarget] {
+        let nodes = boundedResultNodes
+        guard nodes.isEmpty == false else {
+            return []
+        }
+
+        var targets: [GraphChatAnswerArtifactNavigationTarget] = [
+            .showResultNodes(
+                graphScope: graphScope,
+                title: title,
+                nodes: nodes
+            ),
+            .highlightNodesInCanvas(graphScope: graphScope, nodes: nodes),
+            .clearCanvasHighlight(graphScope: graphScope),
+        ]
+
+        if let querySummary {
+            let filters = querySummary.filters.map { filter in
+                GraphChatAnswerArtifactFilterValue(
+                    fieldID: filter.field.fieldID,
+                    fieldName: filter.field.label,
+                    operationDescription: filter.operationLabel,
+                    values: filter.values
+                )
+            }
+            targets.append(
+                .openResultFilter(
+                    graphScope: graphScope,
+                    entityID: querySummary.entityID,
+                    filters: filters,
+                    resultNodes: nodes
+                )
+            )
+        }
+
+        targets.append(.addNodesToCanvasSelection(graphScope: graphScope, nodes: nodes))
+        targets.append(.replaceCanvasSelection(graphScope: graphScope, nodes: nodes))
+        if nodes.count >= 2 {
+            targets.append(.compareNodes(graphScope: graphScope, nodes: nodes))
+        }
+        return targets
+    }
+
+    private var boundedResultNodes: [NodeRefKey] {
+        var seen = Set<NodeRefKey>()
+        var nodes: [NodeRefKey] = []
+        for target in allNavigationTargets {
+            for node in target.nodeReferences where seen.insert(node).inserted {
+                nodes.append(node)
+                if nodes.count == GraphChatWorkspaceBudget.maximumActionNodes {
+                    return nodes
+                }
+            }
+        }
+        if case .healthFinding(let payload) = payload {
+            for node in payload.affectedNodes where seen.insert(node).inserted {
+                nodes.append(node)
+                if nodes.count == GraphChatWorkspaceBudget.maximumActionNodes {
+                    return nodes
+                }
+            }
+        }
+        return nodes
+    }
+
     var estimatedByteCount: Int {
         max(1, String(reflecting: self).utf8.count)
     }
 }
 
-nonisolated private extension GraphChatAnswerArtifactPayload {
-    var allNavigationTargets: [GraphChatAnswerArtifactNavigationTarget] {
+nonisolated extension GraphChatAnswerArtifactPayload {
+    fileprivate var allNavigationTargets: [GraphChatAnswerArtifactNavigationTarget] {
         switch self {
         case .metric:
             return []
@@ -677,7 +779,7 @@ nonisolated private extension GraphChatAnswerArtifactPayload {
         }
     }
 
-    var allEvidenceIDs: [GraphEvidenceID] {
+    fileprivate var allEvidenceIDs: [GraphEvidenceID] {
         switch self {
         case .metric(let payload):
             return payload.evidence.evidenceIDs

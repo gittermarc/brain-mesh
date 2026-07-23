@@ -485,6 +485,38 @@ struct GraphChatAnswerArtifactPresentationTests {
                 activeGraphScope: fixture.graphScope
             ) == nil
         )
+        let workspaceOnlyTargets: [GraphChatAnswerArtifactNavigationTarget] = [
+            .showResultNodes(
+                graphScope: fixture.graphScope,
+                title: "Results",
+                nodes: [node]
+            ),
+            .highlightNodesInCanvas(
+                graphScope: fixture.graphScope,
+                nodes: [node]
+            ),
+            .clearCanvasHighlight(graphScope: fixture.graphScope),
+            .addNodesToCanvasSelection(
+                graphScope: fixture.graphScope,
+                nodes: [node]
+            ),
+            .replaceCanvasSelection(
+                graphScope: fixture.graphScope,
+                nodes: [node]
+            ),
+            .compareNodes(
+                graphScope: fixture.graphScope,
+                nodes: [node, NodeRefKey(kind: .attribute, id: fixture.uuid(162))]
+            ),
+        ]
+        for target in workspaceOnlyTargets {
+            #expect(
+                GraphChatAnswerArtifactNavigationPolicy.route(
+                    for: target,
+                    activeGraphScope: fixture.graphScope
+                ) == nil
+            )
+        }
         #expect(
             GraphChatAnswerArtifactNavigationPolicy.route(
                 for: .openNode(
@@ -507,6 +539,20 @@ struct GraphChatAnswerArtifactPresentationTests {
         #expect(english.visibleRowsText(visible: 5, available: 125).contains("125"))
         #expect(german.healthType(.missingRequiredValues).isEmpty == false)
         #expect(english.healthType(.missingRequiredValues).isEmpty == false)
+        #expect(german.showAllResults.isEmpty == false)
+        #expect(english.showAllResults.isEmpty == false)
+        #expect(german.openAsFilter.isEmpty == false)
+        #expect(english.openAsFilter.isEmpty == false)
+        #expect(german.highlightInGraph.isEmpty == false)
+        #expect(english.highlightInGraph.isEmpty == false)
+        #expect(german.clearHighlight.isEmpty == false)
+        #expect(english.clearHighlight.isEmpty == false)
+        #expect(german.addToSelection.isEmpty == false)
+        #expect(english.addToSelection.isEmpty == false)
+        #expect(german.replaceSelection.isEmpty == false)
+        #expect(english.replaceSelection.isEmpty == false)
+        #expect(german.compareNodes.isEmpty == false)
+        #expect(english.compareNodes.isEmpty == false)
     }
 }
 

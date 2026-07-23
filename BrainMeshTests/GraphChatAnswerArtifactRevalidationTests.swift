@@ -1,5 +1,6 @@
 import Foundation
 import Testing
+
 @testable import BrainMesh
 
 struct GraphChatAnswerArtifactRevalidationTests {
@@ -101,19 +102,21 @@ struct GraphChatAnswerArtifactRevalidationTests {
             transactionID: transactionID,
             retaining: [artifactID]
         )
-        #expect(try await registry.artifact(
-            for: artifactID,
-            graphScope: graphScope,
-            sessionID: sessionID
-        ) != nil)
+        #expect(
+            try await registry.artifact(
+                for: artifactID,
+                graphScope: graphScope,
+                sessionID: sessionID
+            ) != nil)
 
         await repository.removeAttribute(attributeID)
 
-        #expect(try await registry.artifact(
-            for: artifactID,
-            graphScope: graphScope,
-            sessionID: sessionID
-        ) == nil)
+        #expect(
+            try await registry.artifact(
+                for: artifactID,
+                graphScope: graphScope,
+                sessionID: sessionID
+            ) == nil)
         #expect(await registry.snapshotForTesting().isEmpty)
     }
 
@@ -189,17 +192,19 @@ struct GraphChatAnswerArtifactRevalidationTests {
 
         await repository.removeEntity(entityID)
 
-        #expect(try await registry.artifact(
-            for: artifactID,
-            graphScope: graphScope,
-            sessionID: sessionID
-        ) == nil)
+        #expect(
+            try await registry.artifact(
+                for: artifactID,
+                graphScope: graphScope,
+                sessionID: sessionID
+            ) == nil)
     }
 
     @Test
     func graphChangeClearsArtifactsAndPreventsCrossGraphAccess() async throws {
         let graphScope = GraphScope(graphID: UUID(uuidString: "E0000000-0000-0000-0000-000000000020")!)
-        let otherGraphScope = GraphScope(graphID: UUID(uuidString: "E0000000-0000-0000-0000-000000000021")!)
+        let otherGraphScope = GraphScope(
+            graphID: UUID(uuidString: "E0000000-0000-0000-0000-000000000021")!)
         let sessionID = GraphChatAnswerArtifactSessionID()
         let registry = GraphChatAnswerArtifactRegistry(
             graphScope: graphScope,
@@ -220,6 +225,133 @@ struct GraphChatAnswerArtifactRevalidationTests {
         await registry.removeAll(reason: .graphChanged)
         #expect(await registry.snapshotForTesting().isEmpty)
         #expect(await registry.lastClearReasonForTesting() == .graphChanged)
+    }
+
+    @Test
+    func workspaceNavigationTargetsDropDeletedNodesImmediatelyBeforeExecution() async throws {
+        let graphScope = GraphScope(
+            graphID: UUID(uuidString: "E0000000-0000-0000-0000-000000000040")!
+        )
+        let entityID = UUID(uuidString: "E0000000-0000-0000-0000-000000000041")!
+        let attributeID = UUID(uuidString: "E0000000-0000-0000-0000-000000000042")!
+        let deletedAttributeID = UUID(uuidString: "E0000000-0000-0000-0000-000000000043")!
+        let repository = MutableArtifactEvidenceSourceRepository(
+            graph: GraphMetadataDTO(
+                id: graphScope.graphID,
+                scope: graphScope,
+                name: "Graph",
+                createdAt: Date(timeIntervalSince1970: 1_735_732_800)
+            ),
+            entities: [
+                GraphEntityDTO(
+                    id: entityID,
+                    scope: graphScope,
+                    name: "Projects",
+                    notes: "",
+                    iconSymbolName: nil,
+                    createdAt: Date(timeIntervalSince1970: 1_735_732_800)
+                )
+            ],
+            attributes: [
+                GraphAttributeDTO(
+                    id: attributeID,
+                    scope: graphScope,
+                    ownerEntityID: entityID,
+                    ownerLabel: "Projects",
+                    name: "Alpha",
+                    displayLabel: "Alpha",
+                    notes: "",
+                    iconSymbolName: nil
+                )
+            ]
+        )
+        let revalidator = GraphChatAnswerArtifactNavigationTargetRevalidator(
+            sourceRepository: repository
+        )
+        let entity = NodeRefKey(kind: .entity, id: entityID)
+        let attribute = NodeRefKey(kind: .attribute, id: attributeID)
+        let deleted = NodeRefKey(kind: .attribute, id: deletedAttributeID)
+
+        let revalidated = try await revalidator.revalidatedTarget(
+            .highlightNodesInCanvas(
+                graphScope: graphScope,
+                nodes: [attribute, deleted, entity, attribute]
+            ),
+            in: graphScope
+        )
+
+        #expect(
+            revalidated
+                == .highlightNodesInCanvas(
+                    graphScope: graphScope,
+                    nodes: [attribute, entity]
+                ))
+        #expect(
+            try await revalidator.revalidatedTarget(
+                .replaceCanvasSelection(
+                    graphScope: graphScope,
+                    nodes: [deleted]
+                ),
+                in: graphScope
+            ) == nil)
+        #expect(
+            try await revalidator.revalidatedTarget(
+                .compareNodes(
+                    graphScope: graphScope,
+                    nodes: [attribute, deleted]
+                ),
+                in: graphScope
+            ) == nil)
+    }
+
+    @Test
+    func workspaceNavigationTargetsRejectForeignGraphsAndDeletedFilterEntities() async throws {
+        let graphScope = GraphScope(
+            graphID: UUID(uuidString: "E0000000-0000-0000-0000-000000000050")!
+        )
+        let foreignScope = GraphScope(
+            graphID: UUID(uuidString: "E0000000-0000-0000-0000-000000000051")!
+        )
+        let entityID = UUID(uuidString: "E0000000-0000-0000-0000-000000000052")!
+        let repository = MutableArtifactEvidenceSourceRepository(
+            graph: GraphMetadataDTO(
+                id: graphScope.graphID,
+                scope: graphScope,
+                name: "Graph",
+                createdAt: Date(timeIntervalSince1970: 1_735_732_800)
+            ),
+            entities: [],
+            attributes: []
+        )
+        let revalidator = GraphChatAnswerArtifactNavigationTargetRevalidator(
+            sourceRepository: repository
+        )
+        let node = NodeRefKey(kind: .entity, id: entityID)
+
+        #expect(
+            try await revalidator.revalidatedTarget(
+                .showResultNodes(
+                    graphScope: foreignScope,
+                    title: "Foreign",
+                    nodes: [node]
+                ),
+                in: graphScope
+            ) == nil)
+        #expect(
+            try await revalidator.revalidatedTarget(
+                .openResultFilter(
+                    graphScope: graphScope,
+                    entityID: entityID,
+                    filters: [],
+                    resultNodes: [node]
+                ),
+                in: graphScope
+            ) == nil)
+        #expect(
+            try await revalidator.revalidatedTarget(
+                .clearCanvasHighlight(graphScope: foreignScope),
+                in: graphScope
+            ) == nil)
     }
 
     @Test
@@ -284,7 +416,10 @@ struct GraphChatAnswerArtifactRevalidationTests {
         }
 
         #expect(await registry.snapshotForTesting().isEmpty)
-        #expect(await registry.stagedSnapshotForTesting(transactionID: transactionID).map(\.id) == [artifactID])
+        #expect(
+            await registry.stagedSnapshotForTesting(transactionID: transactionID).map(\.id) == [
+                artifactID
+            ])
     }
 }
 
@@ -329,7 +464,9 @@ private actor MutableArtifactEvidenceSourceRepository: GraphEvidenceSourceReadin
         return attribute
     }
 
-    func detailFieldDefinition(id: UUID, in scope: GraphScope) async throws -> GraphDetailFieldDefinitionDTO? {
+    func detailFieldDefinition(id: UUID, in scope: GraphScope) async throws
+        -> GraphDetailFieldDefinitionDTO?
+    {
         nil
     }
 
@@ -341,7 +478,9 @@ private actor MutableArtifactEvidenceSourceRepository: GraphEvidenceSourceReadin
         nil
     }
 
-    func attachmentMetadata(id: UUID, in scope: GraphScope) async throws -> GraphAttachmentMetadataDTO? {
+    func attachmentMetadata(id: UUID, in scope: GraphScope) async throws
+        -> GraphAttachmentMetadataDTO?
+    {
         nil
     }
 }

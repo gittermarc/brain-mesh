@@ -226,24 +226,48 @@ struct GraphChatAnswerArtifactNavigationButton: View {
 
     private var systemImage: String {
         switch target {
-        case .focusNodeInGraph:
-            return "scope"
         case .openNode, .openEntityList:
             return "arrow.up.right.square"
-        case .openResultFilter, .addNodesToCanvasSelection, .compareNodes:
-            return "arrow.up.right.square"
+        case .focusNodeInGraph:
+            return "scope"
+        case .showResultNodes:
+            return "list.bullet.rectangle"
+        case .openResultFilter:
+            return "line.3.horizontal.decrease.circle"
+        case .highlightNodesInCanvas:
+            return "scope"
+        case .clearCanvasHighlight:
+            return "xmark.circle"
+        case .addNodesToCanvasSelection:
+            return "plus.circle"
+        case .replaceCanvasSelection:
+            return "arrow.triangle.2.circlepath"
+        case .compareNodes:
+            return "rectangle.split.2x1"
         }
     }
 
     private var accessibilityLabel: String {
         let strings = GraphChatAnswerArtifactStrings(language: language)
         switch target {
-        case .focusNodeInGraph:
-            return strings.showInGraph
         case .openNode, .openEntityList:
             return strings.open
-        case .openResultFilter, .addNodesToCanvasSelection, .compareNodes:
-            return strings.open
+        case .focusNodeInGraph:
+            return strings.showInGraph
+        case .showResultNodes:
+            return strings.showAllResults
+        case .openResultFilter:
+            return strings.openAsFilter
+        case .highlightNodesInCanvas:
+            return strings.highlightInGraph
+        case .clearCanvasHighlight:
+            return strings.clearHighlight
+        case .addNodesToCanvasSelection:
+            return strings.addToSelection
+        case .replaceCanvasSelection:
+            return strings.replaceSelection
+        case .compareNodes:
+            return strings.compareNodes
         }
     }
 }

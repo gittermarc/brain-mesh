@@ -17,9 +17,9 @@ nonisolated enum GraphSearchIndexForegroundReconciliationPolicy {
         hasActiveGraphLockRequest: Bool
     ) -> GraphScope? {
         guard isSystemModalPresented == false,
-              hasActiveGraphLockRequest == false,
-              let graphID = UUID(uuidString: activeGraphIDString),
-              graphID != unsetGraphID
+            hasActiveGraphLockRequest == false,
+            let graphID = UUID(uuidString: activeGraphIDString),
+            graphID != unsetGraphID
         else {
             return nil
         }
@@ -43,6 +43,7 @@ extension AppRootView {
             // The graph lock itself keeps its existing debounce to avoid disrupting system pickers.
             graphChatSessionStore.handleSecurityLock()
             graphChatLaunchCoordinator.handleSecurityLock(graphID: nil)
+            graphCopilotWorkspaceCoordinator.clearTransientState()
 
             // Auto-lock when the app actually goes to background — but debounce the lock.
             //
@@ -92,7 +93,9 @@ extension AppRootView {
 
             if systemModals.isSystemModalPresented {
                 var elapsed: TimeInterval = 0
-                while observedScenePhase == .background && systemModals.isSystemModalPresented && elapsed < graceSeconds {
+                while observedScenePhase == .background && systemModals.isSystemModalPresented
+                    && elapsed < graceSeconds
+                {
                     do {
                         try await Task.sleep(nanoseconds: gracePollNanos)
                     } catch {
@@ -111,11 +114,13 @@ extension AppRootView {
     }
 
     func scheduleSearchIndexForegroundReconciliation() {
-        guard let scope = GraphSearchIndexForegroundReconciliationPolicy.scope(
-            activeGraphIDString: activeGraphIDString,
-            isSystemModalPresented: systemModals.isSystemModalPresented,
-            hasActiveGraphLockRequest: graphLock.activeRequest != nil
-        ) else {
+        guard
+            let scope = GraphSearchIndexForegroundReconciliationPolicy.scope(
+                activeGraphIDString: activeGraphIDString,
+                isSystemModalPresented: systemModals.isSystemModalPresented,
+                hasActiveGraphLockRequest: graphLock.activeRequest != nil
+            )
+        else {
             return
         }
 

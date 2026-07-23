@@ -5,8 +5,8 @@
 //  Created by Marc Fechner on 15.12.25.
 //
 
-import SwiftUI
 import SwiftData
+import SwiftUI
 import UIKit
 
 struct AppRootView: View {
@@ -21,6 +21,7 @@ struct AppRootView: View {
     @EnvironmentObject var proStore: ProEntitlementStore
     @EnvironmentObject var graphChatLaunchCoordinator: GraphChatLaunchCoordinator
     @EnvironmentObject var graphChatSessionStore: GraphChatSessionStore
+    @EnvironmentObject var graphCopilotWorkspaceCoordinator: GraphCopilotWorkspaceCoordinator
 
     @AppStorage(BMAppStorageKeys.activeGraphID) var activeGraphIDString: String = ""
 
@@ -51,9 +52,9 @@ struct AppRootView: View {
             }
             .onChange(of: activeGraphIDString) { _, newValue in
                 graphChatSessionStore.handleActiveGraphChange()
-                graphChatLaunchCoordinator.handleActiveGraphChange(
-                    to: UUID(uuidString: newValue)
-                )
+                let graphID = UUID(uuidString: newValue)
+                graphChatLaunchCoordinator.handleActiveGraphChange(to: graphID)
+                graphCopilotWorkspaceCoordinator.handleActiveGraphChange(to: graphID)
 
                 // Avoid forcing lock sheets on top of system pickers.
                 guard systemModals.isSystemModalPresented == false else { return }
@@ -66,12 +67,14 @@ struct AppRootView: View {
             ) { _ in
                 graphChatSessionStore.handleAppTermination()
                 graphChatLaunchCoordinator.handleAppTermination()
+                graphCopilotWorkspaceCoordinator.clearTransientState()
             }
             .onChange(of: proStore.entitlement) { _, entitlement in
                 guard entitlement != .pro else {
                     return
                 }
                 graphChatSessionStore.handleEntitlementRevocation()
+                graphCopilotWorkspaceCoordinator.clearTransientState()
                 if let activeGraphID = UUID(uuidString: activeGraphIDString) {
                     graphChatLaunchCoordinator.resetToWholeGraph(activeGraphID)
                 } else {

@@ -24,6 +24,9 @@ struct GraphCanvasView: View {
     let lens: LensContext
     let detailsFocusRenderPlan: GraphDetailsRenderPlan
 
+    /// Transient Copilot emphasis. This is presentation-only and never mutates the graph.
+    let copilotHighlightedNodes: Set<NodeKey>
+
     let workMode: WorkMode
     let collisionStrength: CGFloat
 

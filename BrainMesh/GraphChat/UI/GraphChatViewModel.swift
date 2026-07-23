@@ -46,10 +46,13 @@ final class GraphChatViewModel: ObservableObject {
     private let availabilityStateDidChange: @MainActor (GraphChatAvailabilityPresentationState) -> Void
     private let indexStateDidChange: @MainActor (GraphChatIndexPresentationState) -> Void
     private let generationStateDidChange: @MainActor (Bool) -> Void
+    private let sessionDerivedStateDidClear: @MainActor () -> Void
 
     private var sessionTask: Task<Void, Never>?
     private var feedbackTask: Task<Void, Never>?
     private var noticeTask: Task<Void, Never>?
+    private var presentationCleanupTask: Task<Void, Never>?
+    private var visiblePresentationIDs: Set<UUID> = []
     private var activeOperationID: UUID?
     private var activeAssistantMessageID: UUID?
     private var activeGenerationIsRegeneration = false
@@ -79,7 +82,8 @@ final class GraphChatViewModel: ObservableObject {
         draftChangeHandler: @escaping @MainActor (String) -> Void = { _ in },
         availabilityStateDidChange: @escaping @MainActor (GraphChatAvailabilityPresentationState) -> Void = { _ in },
         indexStateDidChange: @escaping @MainActor (GraphChatIndexPresentationState) -> Void = { _ in },
-        generationStateDidChange: @escaping @MainActor (Bool) -> Void = { _ in }
+        generationStateDidChange: @escaping @MainActor (Bool) -> Void = { _ in },
+        sessionDerivedStateDidClear: @escaping @MainActor () -> Void = {}
     ) {
         precondition(
             graphScope == chatScope.graphScope,
@@ -108,12 +112,14 @@ final class GraphChatViewModel: ObservableObject {
         self.availabilityStateDidChange = availabilityStateDidChange
         self.indexStateDidChange = indexStateDidChange
         self.generationStateDidChange = generationStateDidChange
+        self.sessionDerivedStateDidClear = sessionDerivedStateDidClear
     }
 
     deinit {
         sessionTask?.cancel()
         feedbackTask?.cancel()
         noticeTask?.cancel()
+        presentationCleanupTask?.cancel()
     }
 
     var graphName: String {
@@ -395,7 +401,44 @@ final class GraphChatViewModel: ObservableObject {
         )
     }
 
+    /// Multiple visible hosts can share this memory-only view model on iPad.
+    func presentationDidAppear(_ presentationID: UUID) {
+        presentationCleanupTask?.cancel()
+        presentationCleanupTask = nil
+        visiblePresentationIDs.insert(presentationID)
+    }
+
+    func presentationDidDisappear(_ presentationID: UUID) {
+        guard visiblePresentationIDs.remove(presentationID) != nil else {
+            return
+        }
+        guard visiblePresentationIDs.isEmpty else {
+            return
+        }
+
+        presentationCleanupTask?.cancel()
+        presentationCleanupTask = Task { @MainActor [weak self] in
+            await Task.yield()
+            guard let self,
+                  Task.isCancelled == false,
+                  self.visiblePresentationIDs.isEmpty else {
+                return
+            }
+            self.presentationCleanupTask = nil
+            guard self.isGenerating else {
+                return
+            }
+            self.cancelActiveSessionOperation(
+                discardSession: false,
+                showCancellationNotice: false
+            )
+        }
+    }
+
     func viewDidDisappear() {
+        presentationCleanupTask?.cancel()
+        presentationCleanupTask = nil
+        visiblePresentationIDs.removeAll()
         cancelActiveSessionOperation(
             discardSession: true,
             showCancellationNotice: false
@@ -425,6 +468,7 @@ final class GraphChatViewModel: ObservableObject {
         feedbackByMessageID = [:]
         committedConversationCheckpoint = nil
         scrollAnchorToken = UUID()
+        sessionDerivedStateDidClear()
 
         let orchestrator = self.orchestrator
         let historyStore = self.historyStore
@@ -464,11 +508,16 @@ final class GraphChatViewModel: ObservableObject {
         activeOperationID = nil
         activeAssistantMessageID = nil
         activeGenerationIsRegeneration = false
-        pendingLocalTasks.forEach { $0.cancel() }
+        for task in pendingLocalTasks {
+            task.cancel()
+        }
         sessionTask = nil
         feedbackTask = nil
         noticeTask?.cancel()
         noticeTask = nil
+        presentationCleanupTask?.cancel()
+        presentationCleanupTask = nil
+        visiblePresentationIDs.removeAll()
         actionNotice = nil
         composerState = GraphChatComposerState()
         isPerformingSessionMutation = false
@@ -485,6 +534,7 @@ final class GraphChatViewModel: ObservableObject {
         schemaErrorMessage = nil
         indexState = .loading
         scrollAnchorToken = UUID()
+        sessionDerivedStateDidClear()
         return pendingLocalTasks
     }
 

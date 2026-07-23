@@ -1,5 +1,6 @@
 import Foundation
 import Testing
+
 @testable import BrainMesh
 
 struct GraphChatAnswerArtifactDomainTests {
@@ -14,7 +15,7 @@ struct GraphChatAnswerArtifactDomainTests {
             .grouping(fixture.groupingPayload),
             .comparison(fixture.comparisonPayload),
             .healthFinding(fixture.healthPayload),
-            .timeline(fixture.timelinePayload)
+            .timeline(fixture.timelinePayload),
         ]
         let artifacts = payloads.enumerated().map { index, payload in
             GraphChatAnswerArtifact(
@@ -48,7 +49,7 @@ struct GraphChatAnswerArtifactDomainTests {
             .duration(3_600.5),
             .percentage(Decimal(string: "0.875")!),
             .choice(GraphChatAnswerArtifactChoiceValue(value: "open", label: "Open")),
-            .missing
+            .missing,
         ]
 
         #expect(values[0] == .text("42"))
@@ -148,20 +149,141 @@ struct GraphChatAnswerArtifactDomainTests {
                 entityID: fixture.uuid(2),
                 filters: []
             ),
+            .showResultNodes(
+                graphScope: fixture.graphScope,
+                title: "Results",
+                nodes: [node]
+            ),
             .openResultFilter(
                 graphScope: fixture.graphScope,
                 entityID: fixture.uuid(2),
                 filters: [],
                 resultNodes: [node]
             ),
+            .highlightNodesInCanvas(
+                graphScope: fixture.graphScope,
+                nodes: [node]
+            ),
+            .clearCanvasHighlight(graphScope: fixture.graphScope),
             .addNodesToCanvasSelection(
                 graphScope: fixture.graphScope,
                 nodes: [node]
             ),
-            .compareNodes(graphScope: fixture.graphScope, nodes: [node])
+            .replaceCanvasSelection(
+                graphScope: fixture.graphScope,
+                nodes: [node]
+            ),
+            .compareNodes(graphScope: fixture.graphScope, nodes: [node]),
         ]
 
         #expect(targets.allSatisfy { $0.graphScope == fixture.graphScope })
+    }
+
+    @Test
+    func workspaceActionsUseOnlyTheBoundedLoadedNodeSet() throws {
+        let fixture = ArtifactDomainFixture()
+        let nodes = (0..<170).map { index in
+            NodeRefKey(kind: .attribute, id: fixture.uuid(index + 1_000))
+        }
+        let navigationTargets = (nodes + [nodes[0]]).map { node in
+            GraphChatAnswerArtifactNavigationTarget.openNode(
+                graphScope: fixture.graphScope,
+                node: node
+            )
+        }
+        let querySummary = GraphChatAnswerArtifactQuerySummary(
+            language: .english,
+            entityID: fixture.uuid(900),
+            entityLabel: "Projects",
+            filters: [],
+            grouping: nil,
+            sorting: [],
+            projection: [],
+            includesNodeIdentity: true,
+            limit: 200,
+            aggregation: nil,
+            displayText: "Projects"
+        )
+        let artifact = GraphChatAnswerArtifact(
+            id: GraphChatAnswerArtifactID(rawValue: fixture.uuid(901)),
+            sessionID: fixture.sessionID,
+            graphScope: fixture.graphScope,
+            title: "Results",
+            payload: .metric(fixture.metricPayload),
+            evidence: fixture.evidence,
+            navigationTargets: navigationTargets,
+            querySummary: querySummary
+        )
+
+        let targets = artifact.workspaceNavigationTargets
+        #expect(targets.count == 7)
+        #expect(targets.allSatisfy { $0.graphScope == fixture.graphScope })
+
+        let showTarget = try #require(
+            targets.first { target in
+                if case .showResultNodes = target { return true }
+                return false
+            })
+        #expect(
+            showTarget.nodeReferences == Array(nodes.prefix(GraphChatWorkspaceBudget.maximumActionNodes)))
+
+        #expect(
+            targets.contains { target in
+                if case .openResultFilter(_, let entityID, _, let resultNodes) = target {
+                    return entityID == querySummary.entityID
+                        && resultNodes.count == GraphChatWorkspaceBudget.maximumActionNodes
+                }
+                return false
+            })
+        #expect(
+            targets.contains { target in
+                if case .highlightNodesInCanvas(_, let resultNodes) = target {
+                    return resultNodes.count == GraphChatWorkspaceBudget.maximumActionNodes
+                }
+                return false
+            })
+        #expect(
+            targets.contains { target in
+                if case .clearCanvasHighlight = target { return true }
+                return false
+            })
+        #expect(
+            targets.contains { target in
+                if case .addNodesToCanvasSelection(_, let resultNodes) = target {
+                    return resultNodes.count == GraphChatWorkspaceBudget.maximumActionNodes
+                }
+                return false
+            })
+        #expect(
+            targets.contains { target in
+                if case .replaceCanvasSelection(_, let resultNodes) = target {
+                    return resultNodes.count == GraphChatWorkspaceBudget.maximumActionNodes
+                }
+                return false
+            })
+        #expect(
+            targets.contains { target in
+                if case .compareNodes(_, let resultNodes) = target {
+                    return resultNodes.count == GraphChatWorkspaceBudget.maximumActionNodes
+                }
+                return false
+            })
+    }
+
+    @Test
+    func artifactsWithoutNodeTargetsDoNotInventWorkspaceActions() {
+        let fixture = ArtifactDomainFixture()
+        let artifact = GraphChatAnswerArtifact(
+            id: GraphChatAnswerArtifactID(rawValue: fixture.uuid(950)),
+            sessionID: fixture.sessionID,
+            graphScope: fixture.graphScope,
+            title: "Count",
+            payload: .metric(fixture.metricPayload),
+            evidence: fixture.evidence,
+            navigationTargets: []
+        )
+
+        #expect(artifact.workspaceNavigationTargets.isEmpty)
     }
 
     private func requireSendable<T: Sendable>(_ value: T) {

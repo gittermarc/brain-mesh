@@ -484,8 +484,12 @@ nonisolated enum GraphChatAnswerArtifactNavigationPolicy {
                 graphScope: graphScope,
                 entityID: entityID
             )
-        case .openResultFilter,
+        case .showResultNodes,
+             .openResultFilter,
+             .highlightNodesInCanvas,
+             .clearCanvasHighlight,
              .addNodesToCanvasSelection,
+             .replaceCanvasSelection,
              .compareNodes:
             return nil
         }
@@ -517,6 +521,27 @@ nonisolated struct GraphChatAnswerArtifactStrings: Sendable {
     var showLess: String { language == .german ? "Weniger anzeigen" : "Show less" }
     var open: String { language == .german ? "Öffnen" : "Open" }
     var showInGraph: String { language == .german ? "Im Graph zeigen" : "Show in graph" }
+    var showAllResults: String {
+        language == .german ? "Alle Ergebnisse anzeigen" : "Show all results"
+    }
+    var openAsFilter: String {
+        language == .german ? "Als Filter öffnen" : "Open as filter"
+    }
+    var highlightInGraph: String {
+        language == .german ? "Im Graph hervorheben" : "Highlight in graph"
+    }
+    var clearHighlight: String {
+        language == .german ? "Hervorhebung entfernen" : "Remove highlight"
+    }
+    var addToSelection: String {
+        language == .german ? "Zur Auswahl hinzufügen" : "Add to selection"
+    }
+    var replaceSelection: String {
+        language == .german ? "Auswahl ersetzen" : "Replace selection"
+    }
+    var compareNodes: String {
+        language == .german ? "Diese Nodes vergleichen" : "Compare these nodes"
+    }
     var visibleResults: String { language == .german ? "Sichtbare Ergebnismenge" : "Visible result set" }
     var appliedFilters: String { language == .german ? "Angewendete Filter" : "Applied filters" }
     var followUp: String { language == .german ? "Weiterfragen" : "Follow up" }

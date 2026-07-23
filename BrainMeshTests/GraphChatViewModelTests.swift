@@ -1,5 +1,6 @@
 import Foundation
 import Testing
+
 @testable import BrainMesh
 
 @MainActor
@@ -48,7 +49,7 @@ struct GraphChatViewModelTests {
                                 state: .finished
                             )
                         ),
-                        .completed(answer)
+                        .completed(answer),
                     ]
                 )
             ]
@@ -114,7 +115,7 @@ struct GraphChatViewModelTests {
                 GraphChatUIFakeScript(
                     events: [
                         .started(requestID: UUID()),
-                        .partialAnswer("Bereits erzeugter Teil")
+                        .partialAnswer("Bereits erzeugter Teil"),
                     ],
                     waitsForCancellation: true
                 )
@@ -125,7 +126,8 @@ struct GraphChatViewModelTests {
         setup.viewModel.send()
         await GraphChatUITestSupport.waitUntil {
             guard setup.viewModel.messages.count == 2,
-                  case .assistant(let state) = setup.viewModel.messages[1].state else {
+                case .assistant(let state) = setup.viewModel.messages[1].state
+            else {
                 return false
             }
             return state.phase == .partial
@@ -169,7 +171,7 @@ struct GraphChatViewModelTests {
                             )
                         )
                     ]
-                )
+                ),
             ]
         )
         await setup.viewModel.load()
@@ -189,7 +191,8 @@ struct GraphChatViewModelTests {
         setup.viewModel.retry(messageID: assistantID)
         await GraphChatUITestSupport.waitUntil {
             guard setup.viewModel.isGenerating == false,
-                  case .assistant(let state) = setup.viewModel.messages[1].state else {
+                case .assistant(let state) = setup.viewModel.messages[1].state
+            else {
                 return false
             }
             return state.phase == .final
@@ -255,7 +258,8 @@ struct GraphChatViewModelTests {
             availabilitySetup.viewModel.isGenerating == false
                 && availabilitySetup.viewModel.messages.count == 2
         }
-        guard case .assistant(let availabilityState) = availabilitySetup.viewModel.messages[1].state else {
+        guard case .assistant(let availabilityState) = availabilitySetup.viewModel.messages[1].state
+        else {
             Issue.record("Expected availability assistant message.")
             return
         }
@@ -394,4 +398,105 @@ struct GraphChatViewModelTests {
 
         #expect(setup.viewModel.isGenerating == false)
     }
+
+    @Test
+    func oneOfTwoPresentationsCanCloseWithoutCancellingTheSharedStream() async {
+        let setup = GraphChatUITestSupport.makeViewModel(
+            scripts: [
+                GraphChatUIFakeScript(
+                    events: [.started(requestID: UUID())],
+                    waitsForCancellation: true
+                )
+            ]
+        )
+        let firstPresentationID = UUID()
+        let secondPresentationID = UUID()
+        setup.viewModel.presentationDidAppear(firstPresentationID)
+        setup.viewModel.presentationDidAppear(secondPresentationID)
+        await setup.viewModel.load()
+        setup.viewModel.setComposerText("Frage")
+        setup.viewModel.send()
+        await GraphChatUITestSupport.waitUntil {
+            setup.viewModel.isGenerating
+        }
+
+        setup.viewModel.presentationDidDisappear(firstPresentationID)
+        for _ in 0..<20 {
+            await Task.yield()
+        }
+
+        let whileSecondHostIsVisible = await setup.orchestrator.snapshot()
+        #expect(whileSecondHostIsVisible.cancellationCount == 0)
+        #expect(setup.viewModel.isGenerating)
+
+        setup.viewModel.presentationDidDisappear(secondPresentationID)
+        await GraphChatProviderTestSupport.waitUntil {
+            let snapshot = await setup.orchestrator.snapshot()
+            return snapshot.cancellationCount > 0
+        }
+
+        let afterLastHostClosed = await setup.orchestrator.snapshot()
+        #expect(afterLastHostClosed.discardCount == 0)
+        #expect(setup.viewModel.isGenerating == false)
+    }
+
+    @Test
+    func reopeningBeforePresentationCleanupKeepsTheRunningStreamAlive() async {
+        let setup = GraphChatUITestSupport.makeViewModel(
+            scripts: [
+                GraphChatUIFakeScript(
+                    events: [.started(requestID: UUID())],
+                    waitsForCancellation: true
+                )
+            ]
+        )
+        let firstPresentationID = UUID()
+        let reopenedPresentationID = UUID()
+        setup.viewModel.presentationDidAppear(firstPresentationID)
+        await setup.viewModel.load()
+        setup.viewModel.setComposerText("Frage")
+        setup.viewModel.send()
+        await GraphChatUITestSupport.waitUntil {
+            setup.viewModel.isGenerating
+        }
+
+        setup.viewModel.presentationDidDisappear(firstPresentationID)
+        setup.viewModel.presentationDidAppear(reopenedPresentationID)
+        for _ in 0..<20 {
+            await Task.yield()
+        }
+
+        let snapshot = await setup.orchestrator.snapshot()
+        #expect(snapshot.cancellationCount == 0)
+        #expect(snapshot.discardCount == 0)
+        #expect(setup.viewModel.isGenerating)
+
+        setup.viewModel.presentationDidDisappear(reopenedPresentationID)
+        await GraphChatProviderTestSupport.waitUntil {
+            let snapshot = await setup.orchestrator.snapshot()
+            return snapshot.cancellationCount > 0
+        }
+    }
+
+    @Test
+    func newChatClearsWorkspaceDerivedStateExactlyOnce() async {
+        var cleanupCount = 0
+        let setup = GraphChatUITestSupport.makeViewModel(
+            scripts: [],
+            sessionDerivedStateDidClear: {
+                cleanupCount += 1
+            }
+        )
+        await setup.viewModel.load()
+        setup.viewModel.setComposerText("Draft")
+
+        await setup.viewModel.clearHistory()
+
+        #expect(cleanupCount == 1)
+        #expect(setup.viewModel.messages.isEmpty)
+        #expect(setup.viewModel.composerState.text.isEmpty)
+        let snapshot = await setup.orchestrator.snapshot()
+        #expect(snapshot.discardReasons.last == .newConversation)
+    }
+
 }

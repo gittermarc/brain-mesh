@@ -12,6 +12,7 @@ struct GraphChatTabView: View {
     @Environment(\.modelContext) private var modelContext
     @EnvironmentObject private var launchCoordinator: GraphChatLaunchCoordinator
     @EnvironmentObject private var sessionStore: GraphChatSessionStore
+    @EnvironmentObject private var graphCopilotWorkspaceCoordinator: GraphCopilotWorkspaceCoordinator
     @EnvironmentObject private var proStore: ProEntitlementStore
     @EnvironmentObject private var graphLock: GraphLockCoordinator
     @EnvironmentObject private var commandCenter: CommandCenterCoordinator
@@ -28,6 +29,8 @@ struct GraphChatTabView: View {
     @State private var validatedRequest: GraphChatLaunchRequest?
     @State private var validatedSourceRequestID: UUID?
     @State private var launchValidationMessage: String?
+    @State private var presentedViewModel: GraphChatViewModel?
+    @State private var presentedViewModelRequestID: UUID?
 
     private var activeGraphID: UUID? {
         UUID(uuidString: activeGraphIDString)
@@ -234,6 +237,16 @@ struct GraphChatTabView: View {
         }
         .task(id: accessTaskID) {
             await synchronizeSessionAccess()
+            guard Task.isCancelled == false else {
+                return
+            }
+            // Session replacement can synchronously clear the previous view model.
+            // Resolve it after the current SwiftUI update transaction has completed.
+            await Task.yield()
+            guard Task.isCancelled == false else {
+                return
+            }
+            synchronizePresentedViewModel()
             await loadPreviewSuggestionsIfAllowed()
         }
         .onChange(of: activeGraphIDString) { _, _ in
@@ -243,6 +256,8 @@ struct GraphChatTabView: View {
             validatedRequest = nil
             validatedSourceRequestID = nil
             launchValidationMessage = nil
+            presentedViewModel = nil
+            presentedViewModelRequestID = nil
             sessionStore.handleActiveGraphChange()
         }
         .sheet(isPresented: $isShowingPaywall, onDismiss: refreshAfterPaywall) {
@@ -253,18 +268,28 @@ struct GraphChatTabView: View {
 
     @ViewBuilder
     private var readyChat: some View {
-        if let activeGraph, let request = effectiveRequest {
-            GraphChatView(
-                viewModel: sessionStore.viewModel(
-                    request: request,
-                    graphName: activeGraph.name,
-                    navigationActions: navigationActions(activeGraphID: activeGraph.id),
-                    draftChangeHandler: { text in
-                        launchCoordinator.updateDraft(text, for: request.scope)
-                    }
-                )
+        if let activeGraph,
+           let request = effectiveRequest,
+           let presentedViewModel,
+           presentedViewModelRequestID == request.id,
+           presentedViewModel.graphScope.graphID == activeGraph.id,
+           presentedViewModel.chatScope == request.scope,
+           presentedViewModel.launchContext == request.context {
+            GraphChatView(viewModel: presentedViewModel)
+                .id(request.id)
+        } else if activeGraph != nil, effectiveRequest != nil {
+            statusView(
+                icon: "bubble.left.and.bubble.right",
+                title: localized(
+                    german: "Chat-Sitzung wird vorbereitet",
+                    english: "Preparing chat session"
+                ),
+                message: localized(
+                    german: "BrainMesh verbindet den geprüften Scope mit der bestehenden lokalen Chat-Sitzung.",
+                    english: "BrainMesh is connecting the validated scope to the existing local chat session."
+                ),
+                showsProgress: true
             )
-            .id(request.id)
         } else {
             statusView(
                 icon: "square.stack.3d.up.slash",
@@ -484,6 +509,36 @@ struct GraphChatTabView: View {
         .padding(20)
         .frame(maxWidth: 620)
         .background(.thinMaterial, in: RoundedRectangle(cornerRadius: 20))
+    }
+
+    private func synchronizePresentedViewModel() {
+        guard accessDecision.route == .ready,
+              let activeGraph,
+              let request = effectiveRequest else {
+            presentedViewModel = nil
+            presentedViewModelRequestID = nil
+            return
+        }
+
+        let viewModel = sessionStore.viewModel(
+            request: request,
+            graphName: activeGraph.name,
+            navigationActions: navigationActions(activeGraphID: activeGraph.id),
+            draftChangeHandler: { text in
+                launchCoordinator.updateDraft(text, for: request.scope)
+            },
+            sessionDerivedStateDidClear: {
+                graphCopilotWorkspaceCoordinator.clearChatDerivedState()
+            }
+        )
+
+        guard activeGraphID == activeGraph.id,
+              effectiveRequest?.id == request.id,
+              accessDecision.route == .ready else {
+            return
+        }
+        presentedViewModel = viewModel
+        presentedViewModelRequestID = request.id
     }
 
     private func draftBinding(for scope: GraphChatScope) -> Binding<String> {

@@ -10,6 +10,7 @@ import SwiftUI
 struct GraphChatView: View {
     @StateObject private var viewModel: GraphChatViewModel
     @State private var isConfirmingNewChat = false
+    @State private var presentationID = UUID()
 
     init(viewModel: @autoclosure @escaping () -> GraphChatViewModel) {
         _viewModel = StateObject(wrappedValue: viewModel())
@@ -64,8 +65,11 @@ struct GraphChatView: View {
         .task {
             await viewModel.load()
         }
+        .onAppear {
+            viewModel.presentationDidAppear(presentationID)
+        }
         .onDisappear {
-            viewModel.viewDidDisappear()
+            viewModel.presentationDidDisappear(presentationID)
         }
     }
 

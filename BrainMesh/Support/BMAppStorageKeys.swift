@@ -41,6 +41,11 @@ enum BMAppStorageKeys {
     static let graphCanvasFocusHistoryV1 = "BMGraphCanvasFocusHistoryV1"
     static let graphCanvasViewPresetsV1 = "BMGraphCanvasViewPresetsV1"
 
+    // MARK: - Graph Copilot Workspace
+
+    static let graphCopilotInspectorPresented = "BMGraphCopilotInspectorPresented"
+    static let graphCopilotInspectorWidth = "BMGraphCopilotInspectorWidth"
+
     // MARK: - Appearance
 
     static let appearanceSettingsV1 = "BMAppearanceSettingsV1"
@@ -53,7 +58,8 @@ enum BMAppStorageKeys {
     static let displaySettingsMigratedAttributesAllV1 = "BMDisplaySettingsMigratedAttributesAllV1"
 
     /// One-time migration flag: legacy EntitiesHome Appearance → DisplaySettingsStore.
-    static let displaySettingsMigratedEntitiesHomeFromAppearanceV1 = "BMDisplaySettingsMigratedEntitiesHomeFromAppearanceV1"
+    static let displaySettingsMigratedEntitiesHomeFromAppearanceV1 =
+        "BMDisplaySettingsMigratedEntitiesHomeFromAppearanceV1"
 
     // MARK: - Video import
 

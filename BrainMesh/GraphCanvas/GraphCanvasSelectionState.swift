@@ -7,7 +7,7 @@
 
 import Foundation
 
-struct GraphCanvasSelectionState: Equatable, Sendable {
+nonisolated struct GraphCanvasSelectionState: Equatable, Sendable {
     private(set) var primary: NodeKey?
     private(set) var retainedNodes: Set<NodeKey>
 
@@ -64,6 +64,26 @@ struct GraphCanvasSelectionState: Equatable, Sendable {
         }
     }
 
+    mutating func add(_ nodes: [NodeKey]) {
+        let normalized = nodes.sorted(by: Self.nodeSort)
+        guard normalized.isEmpty == false else {
+            return
+        }
+
+        if primary == nil, let first = normalized.first {
+            primary = first
+        }
+        for node in normalized where node != primary {
+            retainedNodes.insert(node)
+        }
+    }
+
+    mutating func replace(with nodes: [NodeKey]) {
+        let normalized = Array(Set(nodes)).sorted(by: Self.nodeSort)
+        primary = normalized.first
+        retainedNodes = Set(normalized.dropFirst())
+    }
+
     mutating func clear() {
         primary = nil
         retainedNodes.removeAll()
@@ -80,7 +100,7 @@ struct GraphCanvasSelectionState: Equatable, Sendable {
         }
     }
 
-    private static func nodeSort(_ lhs: NodeKey, _ rhs: NodeKey) -> Bool {
+    nonisolated private static func nodeSort(_ lhs: NodeKey, _ rhs: NodeKey) -> Bool {
         if lhs.kind.rawValue != rhs.kind.rawValue {
             return lhs.kind.rawValue < rhs.kind.rawValue
         }

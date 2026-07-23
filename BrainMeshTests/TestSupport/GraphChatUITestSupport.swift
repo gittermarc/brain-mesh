@@ -356,9 +356,10 @@ nonisolated enum GraphChatUITestSupport {
         feedbackStore: (any GraphChatFeedbackStoring)? = nil,
         clipboardWriter: GraphChatUITestClipboardWriter? = nil,
         accessibilityAnnouncer: GraphChatUITestAccessibilityAnnouncer? = nil,
-        navigationActions: GraphChatNavigationActions = .disabled,
+        navigationActions: GraphChatNavigationActions? = nil,
         accessDecisionProvider: (@MainActor () -> GraphChatAccessDecision)? = nil,
-        schemaContext: GraphSchemaContext? = nil
+        schemaContext: GraphSchemaContext? = nil,
+        sessionDerivedStateDidClear: @escaping @MainActor () -> Void = {}
     ) -> (
         viewModel: GraphChatViewModel,
         orchestrator: GraphChatUIFakeOrchestrator,
@@ -389,8 +390,9 @@ nonisolated enum GraphChatUITestSupport {
             feedbackStore: resolvedFeedbackStore,
             clipboardWriter: resolvedClipboardWriter,
             accessibilityAnnouncer: resolvedAccessibilityAnnouncer,
-            navigationActions: navigationActions,
-            accessDecisionProvider: accessDecisionProvider
+            navigationActions: navigationActions ?? .disabled,
+            accessDecisionProvider: accessDecisionProvider,
+            sessionDerivedStateDidClear: sessionDerivedStateDidClear
         )
         return (
             viewModel,
