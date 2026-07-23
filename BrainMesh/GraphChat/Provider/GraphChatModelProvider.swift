@@ -60,6 +60,45 @@ nonisolated struct GraphChatModelSessionConfiguration: Sendable {
     }
 }
 
+nonisolated enum GraphChatModelContextProfile: String, CaseIterable, Hashable, Sendable {
+    case standard
+    case compact
+    case recovery
+
+    var maximumSchemaCharacters: Int {
+        switch self {
+        case .standard:
+            return 3_200
+        case .compact:
+            return 1_800
+        case .recovery:
+            return 900
+        }
+    }
+
+    var maximumConversationCharacters: Int {
+        switch self {
+        case .standard:
+            return 2_200
+        case .compact:
+            return 1_000
+        case .recovery:
+            return 450
+        }
+    }
+
+    var maximumQuestionCharacters: Int {
+        switch self {
+        case .standard:
+            return 1_600
+        case .compact:
+            return 1_200
+        case .recovery:
+            return 900
+        }
+    }
+}
+
 nonisolated struct GraphChatModelRequest: Hashable, Sendable, Identifiable {
     let id: UUID
     let question: String
@@ -67,6 +106,7 @@ nonisolated struct GraphChatModelRequest: Hashable, Sendable, Identifiable {
     let conversationContext: GraphChatConversationContextSnapshot?
     let responseLanguage: GraphChatResponseLanguage
     let continuationOperation: GraphChatConversationContinuationOperation?
+    let contextProfile: GraphChatModelContextProfile
 
     init(
         id: UUID = UUID(),
@@ -74,7 +114,8 @@ nonisolated struct GraphChatModelRequest: Hashable, Sendable, Identifiable {
         schemaPrompt: String,
         conversationContext: GraphChatConversationContextSnapshot? = nil,
         responseLanguage: GraphChatResponseLanguage = .english,
-        continuationOperation: GraphChatConversationContinuationOperation? = nil
+        continuationOperation: GraphChatConversationContinuationOperation? = nil,
+        contextProfile: GraphChatModelContextProfile = .standard
     ) {
         self.id = id
         self.question = question
@@ -82,6 +123,7 @@ nonisolated struct GraphChatModelRequest: Hashable, Sendable, Identifiable {
         self.conversationContext = conversationContext
         self.responseLanguage = responseLanguage
         self.continuationOperation = continuationOperation
+        self.contextProfile = contextProfile
     }
 }
 

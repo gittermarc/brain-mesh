@@ -39,12 +39,35 @@ nonisolated struct GraphChatFakeToolRunnerSnapshot: Sendable {
     let cancellationCount: Int
 }
 
+actor GraphChatFakeToolExecutionGate {
+    private var isReleased = false
+
+    func waitUntilReleased() async throws {
+        while isReleased == false {
+            try Task.checkCancellation()
+            try await Task.sleep(nanoseconds: 1_000_000)
+        }
+        try Task.checkCancellation()
+    }
+
+    func release() {
+        isReleased = true
+    }
+}
+
 actor GraphChatFakeToolRunnerRecorder {
+    private struct RequestWaiter {
+        let minimumCount: Int
+        let continuation: CheckedContinuation<Void, Never>
+    }
+
     private var requests: [GraphChatModelToolRequest] = []
     private var cancellationCount = 0
+    private var requestWaiters: [RequestWaiter] = []
 
     func record(_ request: GraphChatModelToolRequest) {
         requests.append(request)
+        resumeSatisfiedRequestWaiters()
     }
 
     func recordCancellation() {
@@ -57,10 +80,37 @@ actor GraphChatFakeToolRunnerRecorder {
             cancellationCount: cancellationCount
         )
     }
+
+    func waitUntilRequestCount(_ minimumCount: Int) async {
+        guard requests.count < minimumCount else {
+            return
+        }
+        await withCheckedContinuation { continuation in
+            requestWaiters.append(
+                RequestWaiter(
+                    minimumCount: minimumCount,
+                    continuation: continuation
+                )
+            )
+        }
+    }
+
+    private func resumeSatisfiedRequestWaiters() {
+        var pending: [RequestWaiter] = []
+        for waiter in requestWaiters {
+            if requests.count >= waiter.minimumCount {
+                waiter.continuation.resume()
+            } else {
+                pending.append(waiter)
+            }
+        }
+        requestWaiters = pending
+    }
 }
 
 nonisolated struct EvidenceRegisteringFakeToolRunnerFactory: GraphChatModelToolRunnerFactory {
     let recorder: GraphChatFakeToolRunnerRecorder
+    let executionGate: GraphChatFakeToolExecutionGate?
     let evidenceByTool: [GraphChatToolKind: [GraphEvidence]]
     let responseTextByTool: [GraphChatToolKind: String]
     let artifactDraftsByTool: [GraphChatToolKind: [GraphChatAnswerArtifactDraft]]
@@ -69,6 +119,7 @@ nonisolated struct EvidenceRegisteringFakeToolRunnerFactory: GraphChatModelToolR
 
     init(
         recorder: GraphChatFakeToolRunnerRecorder = GraphChatFakeToolRunnerRecorder(),
+        executionGate: GraphChatFakeToolExecutionGate? = nil,
         evidenceByTool: [GraphChatToolKind: [GraphEvidence]] = [:],
         responseTextByTool: [GraphChatToolKind: String] = [:],
         artifactDraftsByTool: [GraphChatToolKind: [GraphChatAnswerArtifactDraft]] = [:],
@@ -76,6 +127,7 @@ nonisolated struct EvidenceRegisteringFakeToolRunnerFactory: GraphChatModelToolR
         delayNanoseconds: UInt64 = 0
     ) {
         self.recorder = recorder
+        self.executionGate = executionGate
         self.evidenceByTool = evidenceByTool
         self.responseTextByTool = responseTextByTool
         self.artifactDraftsByTool = artifactDraftsByTool
@@ -106,6 +158,7 @@ nonisolated struct EvidenceRegisteringFakeToolRunnerFactory: GraphChatModelToolR
             artifactTransactionID: artifactTransactionID,
             conversationTransaction: conversationTransaction,
             recorder: recorder,
+            executionGate: executionGate,
             evidenceByTool: evidenceByTool,
             responseTextByTool: responseTextByTool,
             artifactDraftsByTool: artifactDraftsByTool,
@@ -123,6 +176,7 @@ private actor EvidenceRegisteringFakeToolRunner: GraphChatModelToolRunning {
     private let artifactTransactionID: GraphChatAnswerArtifactTransactionID
     private let conversationTransaction: GraphChatConversationStateTransaction
     private let recorder: GraphChatFakeToolRunnerRecorder
+    private let executionGate: GraphChatFakeToolExecutionGate?
     private let evidenceByTool: [GraphChatToolKind: [GraphEvidence]]
     private let responseTextByTool: [GraphChatToolKind: String]
     private let artifactDraftsByTool: [GraphChatToolKind: [GraphChatAnswerArtifactDraft]]
@@ -137,6 +191,7 @@ private actor EvidenceRegisteringFakeToolRunner: GraphChatModelToolRunning {
         artifactTransactionID: GraphChatAnswerArtifactTransactionID,
         conversationTransaction: GraphChatConversationStateTransaction,
         recorder: GraphChatFakeToolRunnerRecorder,
+        executionGate: GraphChatFakeToolExecutionGate?,
         evidenceByTool: [GraphChatToolKind: [GraphEvidence]],
         responseTextByTool: [GraphChatToolKind: String],
         artifactDraftsByTool: [GraphChatToolKind: [GraphChatAnswerArtifactDraft]],
@@ -150,6 +205,7 @@ private actor EvidenceRegisteringFakeToolRunner: GraphChatModelToolRunning {
         self.artifactTransactionID = artifactTransactionID
         self.conversationTransaction = conversationTransaction
         self.recorder = recorder
+        self.executionGate = executionGate
         self.evidenceByTool = evidenceByTool
         self.responseTextByTool = responseTextByTool
         self.artifactDraftsByTool = artifactDraftsByTool
@@ -177,6 +233,9 @@ private actor EvidenceRegisteringFakeToolRunner: GraphChatModelToolRunning {
         )
         await recorder.record(request)
         do {
+            if let executionGate {
+                try await executionGate.waitUntilReleased()
+            }
             if delayNanoseconds > 0 {
                 try await Task.sleep(nanoseconds: delayNanoseconds)
             }

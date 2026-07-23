@@ -116,6 +116,36 @@ nonisolated struct GraphChatModelToolResponse: Hashable, Sendable {
     }
 }
 
+nonisolated struct GraphChatModelToolOutputBudget: Hashable, Sendable {
+    let maximumSchemaCharacters: Int
+    let maximumCollectionCharacters: Int
+    let maximumValueCharacters: Int
+    let maximumNotesCharacters: Int
+
+    static let `default` = GraphChatModelToolOutputBudget(
+        maximumSchemaCharacters: 2_400,
+        maximumCollectionCharacters: 3_200,
+        maximumValueCharacters: 400,
+        maximumNotesCharacters: 700
+    )
+
+    init(
+        maximumSchemaCharacters: Int,
+        maximumCollectionCharacters: Int,
+        maximumValueCharacters: Int,
+        maximumNotesCharacters: Int
+    ) {
+        precondition(maximumSchemaCharacters > 0)
+        precondition(maximumCollectionCharacters > 0)
+        precondition(maximumValueCharacters > 0)
+        precondition(maximumNotesCharacters > 0)
+        self.maximumSchemaCharacters = maximumSchemaCharacters
+        self.maximumCollectionCharacters = maximumCollectionCharacters
+        self.maximumValueCharacters = maximumValueCharacters
+        self.maximumNotesCharacters = maximumNotesCharacters
+    }
+}
+
 nonisolated protocol GraphChatModelToolRunning: Sendable {
     func registeredToolKinds() async -> Set<GraphChatToolKind>
 

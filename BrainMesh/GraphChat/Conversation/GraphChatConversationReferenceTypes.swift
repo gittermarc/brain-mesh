@@ -153,13 +153,7 @@ nonisolated struct GraphChatConversationReferenceInterpreter: Sendable {
                 operation: operation
             )
         }
-        if containsAny(
-            normalized,
-            values: [
-                "davon", "daraus", "diese", "diesen", "diesen ergebnissen",
-                "of those", "of them", "these", "those", "them",
-            ])
-        {
+        if containsSetPronoun(normalized) {
             return GraphChatConversationReferenceInterpretation(
                 proposal: .latestResults,
                 operation: operation
@@ -260,7 +254,8 @@ nonisolated struct GraphChatConversationReferenceInterpreter: Sendable {
         if containsAny(
             question,
             values: [
-                "nur", "welche davon", "gehören", "important", "overdue", "only", "belong",
+                "nur", "welche davon", "gehören", "filtere", "filtern", "filter",
+                "important", "overdue", "only", "belong",
             ])
         {
             return .filterReferenceSet
@@ -274,7 +269,7 @@ nonisolated struct GraphChatConversationReferenceInterpreter: Sendable {
             ("ersten zwei", 2), ("erste zwei", 2), ("first two", 2),
             ("ersten fünf", 5), ("erste fünf", 5), ("first five", 5),
         ]
-        return patterns.first(where: { question.contains($0.0) })?.1
+        return patterns.first(where: { containsAny(question, values: [$0.0]) })?.1
     }
 
     private func ordinal(in question: String) -> Int? {
@@ -290,12 +285,12 @@ nonisolated struct GraphChatConversationReferenceInterpreter: Sendable {
             ("neunte", 9), ("ninth", 9),
             ("zehnte", 10), ("tenth", 10),
         ]
-        for (word, ordinal) in values where question.contains(word) {
+        let questionTokens = matchingTokens(question)
+        for (word, ordinal) in values where questionTokens.contains(word) {
             return ordinal
         }
 
-        let tokens = question.components(separatedBy: CharacterSet.decimalDigits.inverted)
-        for token in tokens where token.isEmpty == false {
+        for token in questionTokens where token.allSatisfy { $0.isNumber } {
             if let value = Int(token), value > 0, value <= 100 {
                 return value
             }
@@ -307,7 +302,12 @@ nonisolated struct GraphChatConversationReferenceInterpreter: Sendable {
         containsAny(
             question,
             values: [
-                "davon", "diese", "diesen", "daraus", "of them", "of those", "these", "those",
+                "davon", "daraus", "diese ergebnisse", "diesen ergebnissen",
+                "diese treffer", "diese einträge", "gruppiere diese", "sortiere diese",
+                "vergleiche diese", "filtere diese", "of them", "of those",
+                "these results", "those results", "these matches", "those matches",
+                "group these", "group those", "sort these", "sort those",
+                "compare these", "compare those", "filter these", "filter those",
             ])
     }
 
@@ -367,7 +367,38 @@ nonisolated struct GraphChatConversationReferenceInterpreter: Sendable {
     }
 
     private func containsAny(_ value: String, values: [String]) -> Bool {
-        values.contains(where: value.contains)
+        let valueTokens = matchingTokens(value)
+        return values.contains { candidate in
+            containsPhrase(
+                matchingTokens(candidate),
+                in: valueTokens
+            )
+        }
+    }
+
+    private func matchingTokens(_ value: String) -> [String] {
+        value.lowercased()
+            .components(separatedBy: CharacterSet.alphanumerics.inverted)
+            .filter { $0.isEmpty == false }
+    }
+
+    private func containsPhrase(
+        _ phrase: [String],
+        in value: [String]
+    ) -> Bool {
+        guard phrase.isEmpty == false, phrase.count <= value.count else {
+            return false
+        }
+        if phrase.count == 1 {
+            return value.contains(phrase[0])
+        }
+        for startIndex in 0...(value.count - phrase.count) {
+            let endIndex = startIndex + phrase.count
+            if Array(value[startIndex..<endIndex]) == phrase {
+                return true
+            }
+        }
+        return false
     }
 }
 

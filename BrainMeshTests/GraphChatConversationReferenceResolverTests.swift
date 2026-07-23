@@ -264,6 +264,22 @@ struct GraphChatConversationReferenceResolverTests {
     }
 
     @Test
+    func interpreterRequiresWholeWordsAndExplicitResultReferences() {
+        let interpreter = GraphChatConversationReferenceInterpreter()
+
+        #expect(interpreter.interpretation(for: "Welche Projekte sind diese Woche offen?") == nil)
+        #expect(interpreter.interpretation(for: "What hypotheses are linked?") == nil)
+        #expect(
+            interpreter.interpretation(for: "Welche davon sind offen?")?.proposal
+                == .latestResults
+        )
+        #expect(
+            interpreter.interpretation(for: "Which of those are open?")?.proposal
+                == .latestResults
+        )
+    }
+
+    @Test
     func exactClarificationSelectionDoesNotFreelyInterpretOtherText() {
         let fixture = Fixture()
         let pending = GraphChatPendingClarification(

@@ -15,6 +15,7 @@ nonisolated struct GraphChatModelToolRuntimeFactory: GraphChatModelToolRunnerFac
     private let getNodeTool: GetNodeTool
     private let getNeighborsTool: GetNeighborsTool
     private let graphStatsTool: GraphStatsTool
+    private let outputBudget: GraphChatModelToolOutputBudget
 
     @MainActor
     init(modelContainer: ModelContainer) {
@@ -28,7 +29,8 @@ nonisolated struct GraphChatModelToolRuntimeFactory: GraphChatModelToolRunnerFac
                 reader: GraphStatsServiceReader(
                     container: AnyModelContainer(modelContainer)
                 )
-            )
+            ),
+            outputBudget: .default
         )
     }
 
@@ -38,7 +40,8 @@ nonisolated struct GraphChatModelToolRuntimeFactory: GraphChatModelToolRunnerFac
         queryDetailValuesTool: QueryDetailValuesTool,
         getNodeTool: GetNodeTool,
         getNeighborsTool: GetNeighborsTool,
-        graphStatsTool: GraphStatsTool
+        graphStatsTool: GraphStatsTool,
+        outputBudget: GraphChatModelToolOutputBudget = .default
     ) {
         self.describeSchemaTool = describeSchemaTool
         self.searchGraphTool = searchGraphTool
@@ -46,6 +49,7 @@ nonisolated struct GraphChatModelToolRuntimeFactory: GraphChatModelToolRunnerFac
         self.getNodeTool = getNodeTool
         self.getNeighborsTool = getNeighborsTool
         self.graphStatsTool = graphStatsTool
+        self.outputBudget = outputBudget
     }
 
     func makeRunner(
@@ -74,6 +78,7 @@ nonisolated struct GraphChatModelToolRuntimeFactory: GraphChatModelToolRunnerFac
             conversationContext: conversationContext,
             referenceResolver: referenceResolver,
             responseLanguage: responseLanguage,
+            outputBudget: outputBudget,
             validator: GraphQueryPlanValidator(
                 calendar: calendar,
                 timeZone: timeZone,
@@ -105,6 +110,7 @@ actor GraphChatModelToolRuntime: GraphChatModelToolRunning {
     private let conversationContext: GraphChatConversationContextSnapshot
     private let referenceResolver: GraphChatConversationReferenceResolver
     private let responseLanguage: GraphChatResponseLanguage
+    private let outputBudget: GraphChatModelToolOutputBudget
     private let validator: GraphQueryPlanValidator
     private let describeSchemaTool: DescribeGraphSchemaTool
     private let searchGraphTool: SearchGraphTool
@@ -128,6 +134,7 @@ actor GraphChatModelToolRuntime: GraphChatModelToolRunning {
         conversationContext: GraphChatConversationContextSnapshot,
         referenceResolver: GraphChatConversationReferenceResolver,
         responseLanguage: GraphChatResponseLanguage,
+        outputBudget: GraphChatModelToolOutputBudget = .default,
         validator: GraphQueryPlanValidator,
         describeSchemaTool: DescribeGraphSchemaTool,
         searchGraphTool: SearchGraphTool,
@@ -146,6 +153,7 @@ actor GraphChatModelToolRuntime: GraphChatModelToolRunning {
         self.conversationContext = conversationContext
         self.referenceResolver = referenceResolver
         self.responseLanguage = responseLanguage
+        self.outputBudget = outputBudget
         self.validator = validator
         self.describeSchemaTool = describeSchemaTool
         self.searchGraphTool = searchGraphTool
@@ -864,7 +872,7 @@ actor GraphChatModelToolRuntime: GraphChatModelToolRunning {
         let truncation = snapshot.truncation.isTruncated ? "Schema ist begrenzt." : "Schema ist vollständig im Snapshot."
         return boundedOutput(
             "Graph=\(snapshot.graphName)\n\(entityLines.joined(separator: "\n"))\n\(truncation)",
-            maximumLength: 12_000
+            maximumLength: outputBudget.maximumSchemaCharacters
         )
     }
 
@@ -921,7 +929,9 @@ actor GraphChatModelToolRuntime: GraphChatModelToolRunning {
             "nodeAlias=\(nodeAlias) | label=\(boundedOutput(output.label)) | evidenceIDs=\(idList(output.evidenceIDs))"
         ]
         if output.notes.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false {
-            lines.append("notes=\(boundedOutput(output.notes, maximumLength: 1_000))")
+            lines.append(
+                "notes=\(boundedOutput(output.notes, maximumLength: outputBudget.maximumNotesCharacters))"
+            )
         }
         for detail in output.detailValues {
             let unit = detail.unit.map { " \($0)" } ?? ""
@@ -998,12 +1008,19 @@ actor GraphChatModelToolRuntime: GraphChatModelToolRunning {
 
     private func boundedOutput(
         _ value: String,
-        maximumLength: Int = 600
+        maximumLength: Int? = nil
     ) -> String {
+        let maximumLength = maximumLength ?? outputBudget.maximumValueCharacters
         guard value.count > maximumLength else {
             return value
         }
-        return String(value.prefix(maximumLength)) + " [gekürzt]"
+        let truncationMarker = " [gekürzt]"
+        guard truncationMarker.count < maximumLength else {
+            return String(value.prefix(maximumLength))
+        }
+        return String(
+            value.prefix(maximumLength - truncationMarker.count)
+        ) + truncationMarker
     }
 
     private func boundedCollection(
@@ -1013,7 +1030,10 @@ actor GraphChatModelToolRuntime: GraphChatModelToolRunning {
         guard lines.isEmpty == false else {
             return empty
         }
-        return boundedOutput(lines.joined(separator: "\n"), maximumLength: 16_000)
+        return boundedOutput(
+            lines.joined(separator: "\n"),
+            maximumLength: outputBudget.maximumCollectionCharacters
+        )
     }
 
     private func requiredValue(_ value: String?) throws -> String {

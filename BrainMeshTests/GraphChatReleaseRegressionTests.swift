@@ -436,8 +436,9 @@ struct GraphChatReleaseRegressionTests {
     }
 
     @Test
-    func cancellationDuringToolExecutionStopsProviderAndToolWithoutFinalAnswer() async {
+    nonisolated func cancellationDuringToolExecutionStopsProviderAndToolWithoutFinalAnswer() async throws {
         let recorder = GraphChatFakeToolRunnerRecorder()
+        let executionGate = GraphChatFakeToolExecutionGate()
         let provider = FakeGraphChatModelProvider(
             scripts: [
                 FakeGraphChatProviderScript(
@@ -458,7 +459,7 @@ struct GraphChatReleaseRegressionTests {
             provider: provider,
             factory: EvidenceRegisteringFakeToolRunnerFactory(
                 recorder: recorder,
-                delayNanoseconds: 5_000_000_000
+                executionGate: executionGate
             )
         )
         let graphScope = GraphScope(graphID: GraphChatTestSupport.graphID)
@@ -467,15 +468,42 @@ struct GraphChatReleaseRegressionTests {
             graphScope: graphScope,
             chatScope: .entireGraph(graphScope)
         )
-        let collector = Task {
-            await GraphChatProviderTestSupport.collect(stream)
+        var iterator = stream.makeAsyncIterator()
+        var events: [GraphChatStreamEvent] = []
+        var observedToolStart = false
+        while let event = await iterator.next() {
+            events.append(event)
+            if case .toolActivity(let activity) = event,
+                activity.tool == .searchGraph,
+                activity.state == .started
+            {
+                observedToolStart = true
+                break
+            }
         }
-        await GraphChatProviderTestSupport.waitUntil {
-            await recorder.snapshot().requests.count == 1
+        try #require(observedToolStart)
+        await recorder.waitUntilRequestCount(1)
+
+        let cancellationTask = Task {
+            await orchestrator.cancelCurrentGeneration()
+        }
+        // Prevent a broken cancellation path from hanging the regression suite forever.
+        let watchdogTask = Task {
+            do {
+                try await Task.sleep(nanoseconds: 5_000_000_000)
+            } catch {
+                return
+            }
+            await executionGate.release()
         }
 
-        await orchestrator.cancelCurrentGeneration()
-        let events = await collector.value
+        await cancellationTask.value
+        watchdogTask.cancel()
+        await executionGate.release()
+
+        while let event = await iterator.next() {
+            events.append(event)
+        }
         let runnerSnapshot = await recorder.snapshot()
         let providerSnapshot = await provider.snapshot()
 

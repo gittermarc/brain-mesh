@@ -39,6 +39,11 @@ actor GraphChatOrchestrator {
         let toolRunner: any GraphChatModelToolRunning
     }
 
+    private struct GenerationResult {
+        let answer: GraphChatAnswer
+        let resources: SessionResources
+    }
+
     private struct ActiveGeneration {
         let requestID: UUID
         let task: Task<Void, Never>
@@ -547,6 +552,9 @@ actor GraphChatOrchestrator {
                     currentReference = resolved
                     continuationOperation = interpretation.operation
                 case .clarification, .noResults, .rejected:
+                    if shouldDeferReferenceResolutionToProvider(resolution) {
+                        break
+                    }
                     let answer = answer(
                         for: resolution,
                         language: language,
@@ -582,7 +590,7 @@ actor GraphChatOrchestrator {
                 transactionID: initialResources.artifactTransactionID
             )
             setActiveResources(initialResources, requestID: requestID)
-            var answer = try await generateWithSingleContextRetry(
+            let generation = try await generateWithSingleContextRetry(
                 resources: initialResources,
                 question: providerQuestion,
                 conversationContext: context,
@@ -591,8 +599,14 @@ actor GraphChatOrchestrator {
                 requestID: requestID,
                 continuation: continuation
             )
+            let completedResources = generation.resources
+            var answer = generation.answer
+            artifactCommitContext = (
+                registry: completedResources.artifactRegistry,
+                transactionID: completedResources.artifactTransactionID
+            )
             try Task.checkCancellation()
-            let candidateState = try await initialResources.conversationTransaction.finalizedState(
+            let candidateState = try await completedResources.conversationTransaction.finalizedState(
                 requestID: requestID,
                 completedAt: referenceDate(),
                 validatedEvidenceIDs: answer.evidenceIDs
@@ -601,8 +615,8 @@ actor GraphChatOrchestrator {
             guard conversationState == turnStateSnapshot else {
                 throw CancellationError()
             }
-            let committedArtifactIDs = try await initialResources.artifactRegistry.commit(
-                transactionID: initialResources.artifactTransactionID,
+            let committedArtifactIDs = try await completedResources.artifactRegistry.commit(
+                transactionID: completedResources.artifactTransactionID,
                 retaining: answer.artifactIDs
             )
             answer = answer.retainingArtifactIDs(Set(committedArtifactIDs))
@@ -632,27 +646,37 @@ actor GraphChatOrchestrator {
         continuationOperation: GraphChatConversationContinuationOperation?,
         requestID: UUID,
         continuation: GraphChatEventStream.Continuation
-    ) async throws -> GraphChatAnswer {
+    ) async throws -> GenerationResult {
         var resources = initialResources
         var retryCount = 0
+        let initialProfile = initialContextProfile(
+            question: question,
+            schemaContext: initialResources.schemaContext,
+            chatScope: initialResources.key.chatScope,
+            conversationContext: conversationContext,
+            responseLanguage: responseLanguage
+        )
 
         while true {
             do {
-                let context =
-                    retryCount == 0
-                    ? conversationContext
-                    : compactRetryContext(conversationContext)
+                let profile: GraphChatModelContextProfile =
+                    retryCount == 0 ? initialProfile : .recovery
+                let context = providerContext(
+                    conversationContext,
+                    profile: profile
+                )
                 let answer = try await consumeProviderStream(
                     resources: resources,
                     question: question,
                     conversationContext: context,
                     responseLanguage: responseLanguage,
                     continuationOperation: continuationOperation,
+                    contextProfile: profile,
                     continuation: continuation
                 )
                 await resources.evidenceRegistry.removeAll()
                 await provider.discardSession(sessionID: resources.sessionID)
-                return answer
+                return GenerationResult(answer: answer, resources: resources)
             } catch let error as GraphChatProviderError
                 where error.code == .contextWindowExceeded && retryCount == 0
             {
@@ -661,7 +685,6 @@ actor GraphChatOrchestrator {
                     transactionID: resources.artifactTransactionID
                 )
                 await provider.discardSession(sessionID: resources.sessionID)
-                await resources.conversationTransaction.resetToBase()
                 retryCount += 1
                 resources = try await replaceSession(in: resources)
                 setActiveResources(resources, requestID: requestID)
@@ -685,18 +708,25 @@ actor GraphChatOrchestrator {
         conversationContext: GraphChatConversationContextSnapshot,
         responseLanguage: GraphChatResponseLanguage,
         continuationOperation: GraphChatConversationContinuationOperation?,
+        contextProfile: GraphChatModelContextProfile,
         continuation: GraphChatEventStream.Continuation
     ) async throws -> GraphChatAnswer {
         let request = GraphChatModelRequest(
-            question: question,
+            question: boundedQuestion(
+                question,
+                maximumLength: contextProfile.maximumQuestionCharacters,
+                language: responseLanguage
+            ),
             schemaPrompt: schemaPrompt(
                 from: resources.schemaContext,
                 chatScope: resources.key.chatScope,
-                language: responseLanguage
+                language: responseLanguage,
+                profile: contextProfile
             ),
             conversationContext: conversationContext,
             responseLanguage: responseLanguage,
-            continuationOperation: continuationOperation
+            continuationOperation: continuationOperation,
+            contextProfile: contextProfile
         )
         let providerStream = try await provider.streamResponse(
             sessionID: resources.sessionID,
@@ -849,6 +879,11 @@ actor GraphChatOrchestrator {
                 )
                 if case .resolved = resolution {
                     // The proposal was app-side validated. The normal answer may be returned.
+                } else if shouldIgnoreUnresolvedReferenceProposal(
+                    resolution,
+                    directAnswer: providerAnswer.directAnswer
+                ) {
+                    // A non-binding missing-context proposal must not replace a usable answer.
                 } else {
                     let fallback = answer(
                         for: resolution,
@@ -1184,27 +1219,190 @@ actor GraphChatOrchestrator {
         ).state
     }
 
-    private func compactRetryContext(
-        _ context: GraphChatConversationContextSnapshot
+    private func shouldDeferReferenceResolutionToProvider(
+        _ resolution: GraphChatConversationReferenceResolution
+    ) -> Bool {
+        switch resolution {
+        case .clarification(let clarification):
+            return clarification.issue == .missingContext
+                && clarification.options.isEmpty
+        case .noResults(let issue), .rejected(let issue):
+            return issue == .missingContext
+        case .resolved:
+            return false
+        }
+    }
+
+    private func shouldIgnoreUnresolvedReferenceProposal(
+        _ resolution: GraphChatConversationReferenceResolution,
+        directAnswer: String
+    ) -> Bool {
+        guard directAnswer.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false else {
+            return false
+        }
+        return shouldDeferReferenceResolutionToProvider(resolution)
+    }
+
+    private func initialContextProfile(
+        question: String,
+        schemaContext: GraphSchemaContext,
+        chatScope: GraphChatScope,
+        conversationContext: GraphChatConversationContextSnapshot,
+        responseLanguage: GraphChatResponseLanguage
+    ) -> GraphChatModelContextProfile {
+        let standardSchema = schemaPrompt(
+            from: schemaContext,
+            chatScope: chatScope,
+            language: responseLanguage,
+            profile: .standard
+        )
+        let standardConversation = GraphChatConversationContextFormatter().format(
+            conversationContext,
+            language: responseLanguage,
+            maximumCharacters: GraphChatModelContextProfile.standard.maximumConversationCharacters
+        )
+        let estimatedCharacters = standardSchema.count
+            + standardConversation.count
+            + min(question.count, GraphChatModelContextProfile.standard.maximumQuestionCharacters)
+            + systemInstructions(for: chatScope, language: responseLanguage).count
+
+        return estimatedCharacters > 5_000 ? .compact : .standard
+    }
+
+    private func providerContext(
+        _ context: GraphChatConversationContextSnapshot,
+        profile: GraphChatModelContextProfile
     ) -> GraphChatConversationContextSnapshot {
-        GraphChatConversationContextSnapshot(
+        guard profile != .standard else {
+            return context
+        }
+
+        let resultLimit = profile == .compact ? 2 : 1
+        let itemLimit = profile == .compact ? 16 : 6
+        let groupLimit = profile == .compact ? 6 : 2
+        let supplementalAliasLimit = profile == .compact ? 16 : 4
+        let retainedResults = context.results.suffix(resultLimit).map { result in
+            GraphChatConversationContextResult(
+                id: result.id,
+                alias: result.alias,
+                kind: result.kind,
+                state: result.state,
+                entityAlias: result.entityAlias,
+                itemAliases: Array(result.itemAliases.prefix(itemLimit)),
+                groupAliases: Array(result.groupAliases.prefix(groupLimit)),
+                sourceReferenceCount: result.sourceReferenceCount,
+                appliedFilters: Array(result.appliedFilters.prefix(4)),
+                technicalDescription: bounded(result.technicalDescription, limit: 120)
+            )
+        }
+
+        var requiredAliases = Set<String>()
+        for result in retainedResults {
+            requiredAliases.insert(result.alias)
+            if let entityAlias = result.entityAlias {
+                requiredAliases.insert(entityAlias)
+            }
+            requiredAliases.formUnion(result.itemAliases)
+            requiredAliases.formUnion(result.groupAliases)
+        }
+        [
+            context.latestResultAlias,
+            context.lastEntityAlias,
+            context.lastFieldAlias,
+            context.lastGroupAlias,
+            context.lastNodeAlias,
+            context.lastComparisonAlias,
+            context.currentReferenceAlias,
+        ].compactMap { $0 }.forEach { requiredAliases.insert($0) }
+
+        let supplementalAliases = context.aliases.reversed().filter {
+            requiredAliases.contains($0.alias) == false
+        }.prefix(supplementalAliasLimit).map(\.alias)
+        requiredAliases.formUnion(supplementalAliases)
+
+        let aliases = context.aliases.compactMap { alias -> GraphChatConversationContextAlias? in
+            guard requiredAliases.contains(alias.alias) else {
+                return nil
+            }
+            return compactAlias(
+                alias,
+                itemLimit: itemLimit,
+                comparisonLimit: profile == .compact ? 6 : 2
+            )
+        }
+        let availableAliases = Set(aliases.map(\.alias))
+
+        return GraphChatConversationContextSnapshot(
             conversationID: context.conversationID,
             graphScope: context.graphScope,
             chatScope: context.chatScope,
-            aliases: context.aliases,
-            results: Array(context.results.suffix(1)),
-            turns: [],
-            latestResultAlias: context.latestResultAlias,
-            lastEntityAlias: context.lastEntityAlias,
-            lastFieldAlias: context.lastFieldAlias,
-            lastGroupAlias: context.lastGroupAlias,
-            lastNodeAlias: context.lastNodeAlias,
-            lastComparisonAlias: context.lastComparisonAlias,
-            currentReferenceAlias: context.currentReferenceAlias,
-            lastValidatedQuery: context.lastValidatedQuery,
-            resultRevalidations: context.resultRevalidations,
+            aliases: aliases,
+            results: retainedResults,
+            turns: profile == .compact ? Array(context.turns.suffix(1)) : [],
+            latestResultAlias: retainedAlias(context.latestResultAlias, in: availableAliases),
+            lastEntityAlias: retainedAlias(context.lastEntityAlias, in: availableAliases),
+            lastFieldAlias: retainedAlias(context.lastFieldAlias, in: availableAliases),
+            lastGroupAlias: retainedAlias(context.lastGroupAlias, in: availableAliases),
+            lastNodeAlias: retainedAlias(context.lastNodeAlias, in: availableAliases),
+            lastComparisonAlias: retainedAlias(
+                context.lastComparisonAlias,
+                in: availableAliases
+            ),
+            currentReferenceAlias: retainedAlias(
+                context.currentReferenceAlias,
+                in: availableAliases
+            ),
+            lastValidatedQuery: profile == .compact ? context.lastValidatedQuery : nil,
+            resultRevalidations: context.resultRevalidations.filter { revalidation in
+                retainedResults.contains { result in
+                    result.alias == revalidation.resultAlias
+                }
+            },
             pendingClarificationID: context.pendingClarificationID
         )
+    }
+
+    private func compactAlias(
+        _ alias: GraphChatConversationContextAlias,
+        itemLimit: Int,
+        comparisonLimit: Int
+    ) -> GraphChatConversationContextAlias {
+        let target: GraphChatConversationContextAliasTarget
+        switch alias.target {
+        case .resultSet(let id, let nodes, let entityID):
+            target = .resultSet(
+                id,
+                nodes: Array(nodes.prefix(itemLimit)),
+                entityID: entityID
+            )
+        case .group(let id, let nodes, let fieldID, let count):
+            target = .group(
+                id,
+                nodes: Array(nodes.prefix(itemLimit)),
+                fieldID: fieldID,
+                count: count
+            )
+        case .comparison(let references):
+            target = .comparison(Array(references.prefix(comparisonLimit)))
+        case .node, .entity, .field:
+            target = alias.target
+        }
+        return GraphChatConversationContextAlias(
+            alias: alias.alias,
+            label: bounded(alias.label, limit: 120),
+            target: target,
+            ordinal: alias.ordinal
+        )
+    }
+
+    private func retainedAlias(
+        _ alias: String?,
+        in availableAliases: Set<String>
+    ) -> String? {
+        guard let alias, availableAliases.contains(alias) else {
+            return nil
+        }
+        return alias
     }
 
     private func takeOrCreateSessionResources(
@@ -1344,6 +1542,36 @@ actor GraphChatOrchestrator {
     private func replaceSession(
         in resources: SessionResources
     ) async throws -> SessionResources {
+        let budget = GraphChatToolBudget(policy: recoveryToolBudgetPolicy())
+        let evidenceRegistry = GraphChatEvidenceRegistry(scope: resources.key.chatScope)
+        let artifactTransactionID = GraphChatAnswerArtifactTransactionID()
+        let conversationTransaction = GraphChatConversationStateTransaction(
+            baseState: resources.conversationBaseState,
+            reducer: conversationStateReducer
+        )
+        let toolRunner = toolRunnerFactory.makeRunner(
+            scope: resources.key.chatScope,
+            schemaContext: resources.schemaContext,
+            budget: budget,
+            evidenceRegistry: evidenceRegistry,
+            artifactRegistry: resources.artifactRegistry,
+            artifactTransactionID: artifactTransactionID,
+            conversationTransaction: conversationTransaction,
+            conversationContext: resources.conversationContext,
+            referenceResolver: referenceResolver,
+            responseLanguage: resources.responseLanguage,
+            referenceDate: referenceDate(),
+            calendar: calendar,
+            timeZone: timeZone
+        )
+        let registeredKinds = await toolRunner.registeredToolKinds()
+        guard registeredKinds == Set(GraphChatToolKind.allCases) else {
+            throw GraphChatError(
+                code: .invalidRequest,
+                message:
+                    "Für den Context-Retry sind nicht exakt die kontrollierten read-only Tools registriert."
+            )
+        }
         let configuration = GraphChatModelSessionConfiguration(
             graphScope: resources.key.graphScope,
             chatScope: resources.key.chatScope,
@@ -1352,23 +1580,41 @@ actor GraphChatOrchestrator {
                 for: resources.key.chatScope,
                 language: resources.responseLanguage
             ),
-            toolRunner: resources.toolRunner
+            toolRunner: toolRunner
         )
-        let sessionID = try await provider.createSession(configuration: configuration)
-        return SessionResources(
-            key: resources.key,
-            sessionID: sessionID,
-            schemaContext: resources.schemaContext,
-            budget: resources.budget,
-            evidenceRegistry: resources.evidenceRegistry,
-            artifactRegistry: resources.artifactRegistry,
-            artifactSessionID: resources.artifactSessionID,
-            artifactTransactionID: resources.artifactTransactionID,
-            conversationBaseState: resources.conversationBaseState,
-            conversationContext: resources.conversationContext,
-            responseLanguage: resources.responseLanguage,
-            conversationTransaction: resources.conversationTransaction,
-            toolRunner: resources.toolRunner
+        do {
+            let sessionID = try await provider.createSession(configuration: configuration)
+            return SessionResources(
+                key: resources.key,
+                sessionID: sessionID,
+                schemaContext: resources.schemaContext,
+                budget: budget,
+                evidenceRegistry: evidenceRegistry,
+                artifactRegistry: resources.artifactRegistry,
+                artifactSessionID: resources.artifactSessionID,
+                artifactTransactionID: artifactTransactionID,
+                conversationBaseState: resources.conversationBaseState,
+                conversationContext: resources.conversationContext,
+                responseLanguage: resources.responseLanguage,
+                conversationTransaction: conversationTransaction,
+                toolRunner: toolRunner
+            )
+        } catch {
+            await resources.artifactRegistry.rollback(
+                transactionID: artifactTransactionID
+            )
+            throw error
+        }
+    }
+
+    private func recoveryToolBudgetPolicy() -> GraphChatToolBudgetPolicy {
+        GraphChatToolBudgetPolicy(
+            maximumCalls: min(toolBudgetPolicy.maximumCalls, 3),
+            maximumResultCountPerTool: min(
+                toolBudgetPolicy.maximumResultCountPerTool,
+                12
+            ),
+            maximumEvidenceCount: min(toolBudgetPolicy.maximumEvidenceCount, 40)
         )
     }
 
@@ -1555,7 +1801,8 @@ actor GraphChatOrchestrator {
     private func schemaPrompt(
         from context: GraphSchemaContext,
         chatScope: GraphChatScope,
-        language: GraphChatResponseLanguage
+        language: GraphChatResponseLanguage,
+        profile: GraphChatModelContextProfile
     ) -> String {
         var lines: [String]
         switch language {
@@ -1563,24 +1810,29 @@ actor GraphChatOrchestrator {
             lines = [
                 "Graph: \(context.snapshot.graphName)",
                 "Schema-Version: \(context.snapshot.version)",
-                "Aktiver Scope: \(scopeDescription(chatScope.target, language: language))",
+                "Scope: \(scopeDescription(chatScope.target, language: language))",
             ]
         case .english:
             lines = [
                 "Graph: \(context.snapshot.graphName)",
                 "Schema version: \(context.snapshot.version)",
-                "Active scope: \(scopeDescription(chatScope.target, language: language))",
+                "Scope: \(scopeDescription(chatScope.target, language: language))",
             ]
         }
+
         for entity in context.snapshot.entities {
             lines.append("\(entity.alias.rawValue): \(entity.name)")
             for field in entity.fields {
                 var details = "  \(field.alias.rawValue): \(field.name) [\(field.type.rawValue)]"
-                if let unit = field.unit, unit.isEmpty == false {
+                if profile != .recovery,
+                    let unit = field.unit,
+                    unit.isEmpty == false
+                {
                     details += " unit=\(unit)"
                 }
-                if field.choiceOptions.isEmpty == false {
-                    details += " choices=\(field.choiceOptions.joined(separator: ", "))"
+                if profile == .standard, field.choiceOptions.isEmpty == false {
+                    let choices = field.choiceOptions.prefix(6).joined(separator: ", ")
+                    details += " choices=\(choices)"
                 }
                 lines.append(details)
             }
@@ -1588,16 +1840,15 @@ actor GraphChatOrchestrator {
         if context.snapshot.truncation.isTruncated {
             switch language {
             case .german:
-                lines.append(
-                    "Der Schema-Snapshot ist absichtlich begrenzt; nutze describeGraphSchema für weiteren kontrollierten Kontext."
-                )
+                lines.append("Schema begrenzt; nutze describeGraphSchema für Details.")
             case .english:
-                lines.append(
-                    "The schema snapshot is intentionally truncated; use describeGraphSchema for more bounded context."
-                )
+                lines.append("Schema is bounded; use describeGraphSchema for details.")
             }
         }
-        return bounded(lines.joined(separator: "\n"), limit: 10_000)
+        return bounded(
+            lines.joined(separator: "\n"),
+            limit: profile.maximumSchemaCharacters
+        )
     }
 
     private func scopeDescription(
@@ -1632,47 +1883,35 @@ actor GraphChatOrchestrator {
         case .german:
             return """
                 \(GraphChatResponseLocalizer(language: language).providerInstruction())
-                Beantworte Fragen ausschließlich zum aktiven BrainMesh-Graphen über die registrierten read-only Tools.
-                Verwende nur Fakten, die Tools in dieser Session geliefert haben. Ergänze niemals Graph-Fakten aus Weltwissen oder Annahmen.
-                Benenne unbekannte, fehlende, mehrdeutige oder unzureichende Daten ausdrücklich.
-                Verwende nur Evidence-UUIDs aus tatsächlichen Tool-Ergebnissen. Erfinde, verändere oder leite niemals eine Evidence-UUID ab.
-                Übernimm nur artifactID-UUIDs, die ein Tool in dieser Anfrage ausdrücklich geliefert hat, unverändert in artifactIDs. Ordne eine Artifact-ID dem passenden Abschnitt zu, wenn der Abschnitt dieses Ergebnis einordnet. Erfinde keine Artifact-ID und erzeuge, verändere oder rekonstruiere niemals Artifact-Payloads.
-                Tabellen, Rankings, Gruppen, Kennzahlen, Timelines und Ergebniszeilen stammen ausschließlich aus Artifacts. Wiederhole bei vorhandenem Artifact nicht sämtliche Zeilen im Fließtext und erfinde keine strukturierten Werte.
-                Arbeite ausschließlich im aktiven Graphen und aktiven Chat-Scope. Fordere oder behaupte niemals Daten aus einem anderen Graphen oder Scope.
-                Biete keine Schreib-, Änderungs-, Lösch-, Erstellungs-, Import-, Upload- oder Mutationsaktion an und simuliere oder behaupte sie nicht.
-                Attachment-Tools liefern nur Metadaten. Behaupte niemals, Inhalte von Dateien, Bildern, PDFs oder Binärdaten gelesen zu haben.
-                Tool-Aliase sind opak. Nutze ausschließlich E-, F-, N-, CURRENT-, CI-, CR-, CG-, CE-, CF- und CN-Aliase aus Schema, vertrauenswürdigem Konversations-Snapshot oder Tool-Ergebnissen.
-                Konversationsreferenzen sind nur Vorschläge. Jeder Alias wird von der App aufgelöst und revalidiert, bevor ein Tool oder eine Query Daten nutzen darf.
-                Nutze queryDetailValues.conversationReferenceAlias für Filter, Gruppierung, Statistik, Sortierung oder Limits über eine validierte frühere Ergebnismenge.
-                Gib bei einer mehrdeutigen Referenz responseKind clarification und nur Aliase aus dem vertrauenswürdigen Snapshot als clarificationOptionAliases zurück.
-                Gib responseKind noResults nur zurück, nachdem ein gültiger Tool-Aufruf noResults gemeldet hat. Gib unsupported für Graph-Mutationen, Attachment-Inhalte, Multi-Hop-Pfade oder Query-Plan-v2-Funktionen zurück.
-                Behandle Tool-Fehler und leere Ergebnisse als Evidence-Grenzen und niemals als Erlaubnis zu raten.
-                Halte die direkte Antwort knapp. Setze hasInsufficientEvidence auf true, wenn verlässliche Tool-Evidence fehlt.
-                Führe für interpretative Begriffe wie wichtig, dringend, relevant oder offen die konkret verwendeten Filter auf.
-                Folgefragen dürfen nur optionale read-only Fragen zum selben aktiven Scope sein.
+                Beantworte nur Fragen zum aktiven BrainMesh-Graphen und Scope mit den registrierten read-only Tools.
+                Graph-Fakten dürfen ausschließlich aus Tool-Ergebnissen dieser Anfrage stammen. Benenne fehlende oder mehrdeutige Daten; rate niemals.
+                Evidence- und Artifact-UUIDs dürfen nur unverändert aus Tool-Ergebnissen übernommen werden. Erfinde keine IDs oder strukturierten Werte.
+                Tabellen, Rankings, Gruppen, Kennzahlen und Ergebniszeilen gehören in Artifacts; erkläre sie knapp, ohne sämtliche Zeilen zu wiederholen.
+                Biete keine Schreib-, Änderungs-, Lösch-, Import-, Upload- oder sonstige Mutationsaktion an.
+                Attachments liefern nur Metadaten. Behaupte niemals, Datei-, Bild-, PDF- oder Binärinhalte gelesen zu haben.
+                Nutze ausschließlich Aliase aus Schema, vertrauenswürdigem Konversations-Snapshot oder Tool-Ergebnissen. Aliase sind opak und werden appseitig revalidiert.
+                Konversationsreferenzen sind Vorschläge. Nutze clarification nur bei echter Mehrdeutigkeit mit validierten Optionen. Fehlt lokaler Referenzkontext, behandle die aktuelle Frage normal statt eine Referenz zu unterstellen.
+                Nutze queryDetailValues.conversationReferenceAlias für Operationen über eine validierte frühere Ergebnismenge.
+                noResults ist nur nach einem entsprechenden gültigen Tool-Ergebnis erlaubt. unsupported gilt für Graph-Mutationen, Attachment-Inhalte, Multi-Hop-Pfade und Query-Plan-v2-Funktionen.
+                Antworte normalerweise in zwei bis vier klaren Sätzen: zuerst direkt, danach kurze Begründung oder Einschränkung. Setze hasInsufficientEvidence bei fehlender verlässlicher Tool-Evidence.
+                Nenne bei Begriffen wie wichtig, dringend, relevant oder offen die konkret verwendeten Filter. Folgefragen bleiben optional, read-only und im selben Scope.
                 Aktiver Scope: \(scopeDescription(scope.target, language: language)).
                 """
         case .english:
             return """
                 \(GraphChatResponseLocalizer(language: language).providerInstruction())
-                Answer questions only about the active BrainMesh graph through the registered read-only tools.
-                Use only facts returned by tools in this session. Never add graph facts from world knowledge or assumptions.
-                State unknown, missing, ambiguous, or insufficient data explicitly.
-                Use only Evidence UUIDs that appeared in actual tool results. Never invent, alter, or infer an Evidence UUID.
-                Copy only artifactID UUIDs explicitly returned by a tool in this request, unchanged, into artifactIDs. Associate an Artifact ID with the section that interprets that result when applicable. Never invent an Artifact ID or create, modify, or reconstruct an Artifact payload.
-                Tables, rankings, groups, metrics, timelines, and result rows come only from Artifacts. When an Artifact exists, do not repeat every row in prose and never invent structured values.
-                Work only inside the active graph and the active chat scope. Never request or claim data from another graph or scope.
-                Never offer, simulate, or claim a write, edit, delete, create, import, upload, or mutation action.
-                Attachment tools expose metadata only. Never claim to have read attachment contents, files, images, PDFs, or binary data.
-                Tool aliases are opaque. Use only E, F, N, CURRENT, CI, CR, CG, CE, CF, and CN aliases supplied by the schema, trusted conversation snapshot, or tool results.
-                Conversation references are proposals only. Every alias is resolved and revalidated by the app before a tool or query can access data.
-                Use queryDetailValues.conversationReferenceAlias for filters, grouping, statistics, sorting, or limits over a validated previous result set.
-                When a reference is ambiguous, return responseKind clarification and only aliases from the trusted snapshot as clarificationOptionAliases.
-                Return responseKind noResults only after a valid tool call reports noResults. Return unsupported for graph mutations, attachment contents, multi-hop paths, or Query Plan v2 features.
-                Treat tool errors and empty results as evidence limitations, not as permission to guess.
-                Keep the direct answer concise. Mark hasInsufficientEvidence true whenever reliable tool evidence is missing.
-                For interpretive terms such as important, urgent, relevant, open, or similar concepts, include the concrete applied filters used for the interpretation.
-                Follow-up suggestions must be optional read-only questions about the same active scope.
+                Answer only questions about the active BrainMesh graph and scope with the registered read-only tools.
+                Graph facts must come only from tool results in this request. State missing or ambiguous data and never guess.
+                Evidence and Artifact UUIDs may only be copied unchanged from tool results. Never invent IDs or structured values.
+                Tables, rankings, groups, metrics, and result rows belong in Artifacts; explain them briefly without repeating every row.
+                Never offer a write, edit, delete, import, upload, or other mutation action.
+                Attachments expose metadata only. Never claim to have read file, image, PDF, or binary contents.
+                Use only aliases from the schema, trusted conversation snapshot, or tool results. Aliases are opaque and revalidated by the app.
+                Conversation references are proposals. Use clarification only for genuine ambiguity with validated options. When local reference context is absent, handle the current question normally instead of assuming a reference.
+                Use queryDetailValues.conversationReferenceAlias for operations over a validated previous result set.
+                noResults is allowed only after a matching valid tool result. unsupported applies to graph mutations, attachment contents, multi-hop paths, and Query Plan v2 features.
+                Normally answer in two to four clear sentences: answer directly first, then add a brief reason or limitation. Mark hasInsufficientEvidence when reliable tool evidence is missing.
+                For terms such as important, urgent, relevant, or open, state the concrete applied filters. Follow-ups remain optional, read-only, and in the same scope.
                 Active scope: \(scopeDescription(scope.target, language: language)).
                 """
         }
@@ -1779,7 +2018,8 @@ actor GraphChatOrchestrator {
                 return GraphChatError(
                     code: .contextWindowExceeded,
                     message: providerError.message,
-                    recoverySuggestion: "Stelle eine kürzere oder konkretere Frage."
+                    recoverySuggestion:
+                        "Der lokale Graph-Kontext war trotz automatischer Reduktion zu groß. Starte einen neuen Chat oder wähle einen kleineren Chat-Scope."
                 )
             case .cancelled:
                 return GraphChatError(
@@ -1835,6 +2075,29 @@ actor GraphChatOrchestrator {
             code: .unexpected,
             message: "Die Graph-Chat-Anfrage konnte nicht abgeschlossen werden."
         )
+    }
+
+    private func boundedQuestion(
+        _ value: String,
+        maximumLength: Int,
+        language: GraphChatResponseLanguage
+    ) -> String {
+        guard value.count > maximumLength else {
+            return value
+        }
+        let marker: String
+        switch language {
+        case .german:
+            marker = "\n[Frage appseitig gekürzt]\n"
+        case .english:
+            marker = "\n[Question shortened by the app]\n"
+        }
+        let availableLength = max(2, maximumLength - marker.count)
+        let prefixLength = max(1, availableLength * 2 / 3)
+        let suffixLength = max(1, availableLength - prefixLength)
+        return String(value.prefix(prefixLength))
+            + marker
+            + String(value.suffix(suffixLength))
     }
 
     private func bounded(_ value: String, limit: Int) -> String {

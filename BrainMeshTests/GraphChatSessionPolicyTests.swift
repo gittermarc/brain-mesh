@@ -189,6 +189,10 @@ struct GraphChatSessionPolicyTests {
 
     @Test
     func contextWindowFailureRetriesExactlyOnceWithAFreshSession() async throws {
+        let question = String(
+            repeating: "A detailed graph question with additional bounded context. ",
+            count: 80
+        )
         let provider = FakeGraphChatModelProvider(
             scripts: [
                 FakeGraphChatProviderScript(
@@ -212,7 +216,7 @@ struct GraphChatSessionPolicyTests {
 
         let events = await GraphChatProviderTestSupport.collect(
             await orchestrator.streamAnswer(
-                question: "Retry once.",
+                question: question,
                 graphScope: graphScope,
                 chatScope: .entireGraph(graphScope)
             )
@@ -230,6 +234,139 @@ struct GraphChatSessionPolicyTests {
         #expect(snapshot.discardedSessions.count == 2)
         #expect(snapshot.streamedRequests[0].conversationContext != nil)
         #expect(snapshot.streamedRequests[1].conversationContext != nil)
+        #expect(snapshot.streamedRequests[0].contextProfile != .recovery)
+        #expect(snapshot.streamedRequests[1].contextProfile == .recovery)
+        #expect(
+            snapshot.streamedRequests[0].question.count
+                <= snapshot.streamedRequests[0].contextProfile.maximumQuestionCharacters
+        )
+        #expect(snapshot.streamedRequests[1].question.count < question.count)
+        #expect(
+            snapshot.streamedRequests[1].schemaPrompt.count
+                <= GraphChatModelContextProfile.recovery.maximumSchemaCharacters
+        )
+        #expect(
+            snapshot.streamedRequests[1].question.count
+                <= GraphChatModelContextProfile.recovery.maximumQuestionCharacters
+        )
+        #expect(snapshot.streamedRequests[1].conversationContext?.turns.isEmpty == true)
+    }
+
+    @Test
+    func contextRetryReceivesAFreshToolBudgetAndConversationTransaction() async throws {
+        let provider = FakeGraphChatModelProvider(
+            scripts: [
+                FakeGraphChatProviderScript(
+                    steps: [
+                        .toolRequest(.searchGraph(query: "first attempt", limit: 1)),
+                        .failure(
+                            GraphChatProviderError(
+                                code: .contextWindowExceeded,
+                                message: "Context window exceeded"
+                            )
+                        ),
+                    ]
+                ),
+                FakeGraphChatProviderScript(
+                    steps: [
+                        .toolRequest(.getNode(nodeAlias: "E1", relatedLimit: 1)),
+                        .event(
+                            .completed(
+                                GraphChatProviderTestSupport.makeFinalAnswer(
+                                    directAnswer: "Recovered with a fresh tool budget.",
+                                    hasInsufficientEvidence: true
+                                )
+                            )
+                        ),
+                    ]
+                ),
+            ]
+        )
+        let orchestrator = GraphChatProviderTestSupport.makeOrchestrator(
+            provider: provider,
+            factory: EvidenceRegisteringFakeToolRunnerFactory(),
+            budgetPolicy: GraphChatToolBudgetPolicy(
+                maximumCalls: 1,
+                maximumResultCountPerTool: 10,
+                maximumEvidenceCount: 10
+            )
+        )
+        let graphScope = GraphScope(graphID: GraphChatTestSupport.graphID)
+
+        let events = await GraphChatProviderTestSupport.collect(
+            await orchestrator.streamAnswer(
+                question: "Retry with a fresh budget.",
+                graphScope: graphScope,
+                chatScope: .entireGraph(graphScope)
+            )
+        )
+        let providerSnapshot = await provider.snapshot()
+        let stateSnapshot = await orchestrator.conversationStateSnapshot()
+        let state = try #require(stateSnapshot)
+
+        #expect(events.contains { event in
+            if case .completed(let answer) = event {
+                return answer.directAnswer == "Recovered with a fresh tool budget."
+            }
+            return false
+        })
+        #expect(providerSnapshot.toolResponses.map(\.tool) == [.searchGraph, .getNode])
+        #expect(state.turnContexts.count == 1)
+        #expect(state.turnContexts[0].toolKinds == [.getNode])
+    }
+
+    @Test
+    func unresolvedImplicitResultReferenceFallsThroughToTheProvider() async throws {
+        let provider = FakeGraphChatModelProvider(
+            scripts: [
+                FakeGraphChatProviderScript(
+                    steps: [
+                        .event(
+                            .partialAnswer(
+                                GraphChatProviderPartialAnswer(
+                                    directAnswer: "Die Frage wurde regulär beantwortet.",
+                                    hasInsufficientEvidence: true
+                                )
+                            )
+                        ),
+                        .event(
+                            .completed(
+                                GraphChatProviderTestSupport.makeFinalAnswer(
+                                    directAnswer: "Die Frage wurde regulär beantwortet.",
+                                    hasInsufficientEvidence: true,
+                                    referenceProposal: .latestResults
+                                )
+                            )
+                        )
+                    ]
+                )
+            ]
+        )
+        let orchestrator = GraphChatProviderTestSupport.makeOrchestrator(
+            provider: provider,
+            factory: EvidenceRegisteringFakeToolRunnerFactory()
+        )
+        let graphScope = GraphScope(graphID: GraphChatTestSupport.graphID)
+
+        let events = await GraphChatProviderTestSupport.collect(
+            await orchestrator.streamAnswer(
+                question: "Welche davon sind offen?",
+                graphScope: graphScope,
+                chatScope: .entireGraph(graphScope)
+            )
+        )
+        let snapshot = await provider.snapshot()
+
+        #expect(events.contains { event in
+            if case .completed(let answer) = event {
+                return answer.directAnswer == "Die Frage wurde regulär beantwortet."
+            }
+            return false
+        })
+        #expect(snapshot.streamedRequests.count == 1)
+        #expect(snapshot.streamedRequests[0].question == "Welche davon sind offen?")
+        #expect(snapshot.streamedRequests[0].continuationOperation == nil)
+        #expect(snapshot.streamedRequests[0].conversationContext?.currentReferenceAlias == nil)
     }
 
     @Test

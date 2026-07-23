@@ -12,16 +12,16 @@ import FoundationModels
 
 @Generable
 private nonisolated struct FoundationGraphChatGeneratedSection {
-    @Guide(description: "Short optional section title. Use an empty string when no title is needed.")
+    @Guide(description: "Optional short title, otherwise empty.")
     var title: String
 
-    @Guide(description: "Section text based only on tool results. When artifactIDs are present, interpret the result without repeating every structured row.")
+    @Guide(description: "Tool-grounded explanation. Do not repeat every artifact row.")
     var text: String
 
-    @Guide(description: "Evidence UUID strings that were present in tool results.", .maximumCount(20))
+    @Guide(description: "Evidence UUIDs from tool results.", .maximumCount(12))
     var evidenceIDs: [String]
 
-    @Guide(description: "Only artifactID UUID strings returned by tools that support this section. Never invent or modify an artifact ID.", .maximumCount(6))
+    @Guide(description: "Unchanged artifact UUIDs from tools.", .maximumCount(4))
     var artifactIDs: [String]
 }
 
@@ -48,25 +48,25 @@ private nonisolated struct FoundationGraphChatGeneratedFollowUp {
 
 @Generable
 private nonisolated struct FoundationGraphChatGeneratedAnswer {
-    @Guide(description: "One value: answer, clarification, noResults, or unsupported.")
+    @Guide(description: "answer, clarification, noResults, or unsupported.")
     var responseKind: String
 
-    @Guide(description: "Direct concise answer based only on tool results. Do not recreate tables, rankings, groups, metrics, timelines, or result rows in prose.")
+    @Guide(description: "Clear tool-grounded answer, usually two to four sentences. Do not recreate structured artifact rows.")
     var directAnswer: String
 
-    @Guide(description: "Optional supporting answer sections.", .maximumCount(6))
+    @Guide(description: "Optional supporting sections.", .maximumCount(4))
     var sections: [FoundationGraphChatGeneratedSection]
 
-    @Guide(description: "All Evidence UUID strings used by the direct answer and sections.", .maximumCount(40))
+    @Guide(description: "Used Evidence UUIDs from tools.", .maximumCount(24))
     var evidenceIDs: [String]
 
-    @Guide(description: "Only opaque artifactID UUID strings returned by tools. Never invent or modify an artifact ID.", .maximumCount(12))
+    @Guide(description: "Unchanged artifact UUIDs from tools.", .maximumCount(8))
     var artifactIDs: [String]
 
-    @Guide(description: "Filters reported by deterministic tools.", .maximumCount(12))
+    @Guide(description: "Filters reported by tools.", .maximumCount(8))
     var appliedFilters: [FoundationGraphChatGeneratedFilter]
 
-    @Guide(description: "Optional read-only follow-up suggestions.", .maximumCount(3))
+    @Guide(description: "Optional read-only follow-ups.", .maximumCount(2))
     var followUps: [FoundationGraphChatGeneratedFollowUp]
 
     @Guide(description: "True when tool results do not contain enough evidence for a reliable answer.")
@@ -93,7 +93,7 @@ private nonisolated struct FoundationGraphChatGeneratedAnswer {
     @Guide(description: "Clarification question when responseKind is clarification. Use an empty string otherwise.")
     var clarificationQuestion: String
 
-    @Guide(description: "Only validated conversation aliases offered as clarification choices.", .maximumCount(8))
+    @Guide(description: "Validated clarification aliases only.", .maximumCount(6))
     var clarificationOptionAliases: [String]
 
     @Guide(
@@ -593,7 +593,7 @@ actor FoundationModelsGraphChatProvider: GraphChatModelProvider {
             continuation.finish(
                 throwing: GraphChatProviderError(
                     code: .contextWindowExceeded,
-                    message: "Das lokale Modell-Kontextfenster wurde überschritten."
+                    message: "Der lokale Graph-Kontext war trotz automatischer Reduktion zu groß."
                 )
             )
         } catch LanguageModelSession.GenerationError.unsupportedLanguageOrLocale {
@@ -648,8 +648,6 @@ actor FoundationModelsGraphChatProvider: GraphChatModelProvider {
     private func prompt(for request: GraphChatModelRequest) -> String {
         let labels = promptLabels(for: request.responseLanguage)
         var sections = [
-            labels.responseLanguage,
-            GraphChatResponseLocalizer(language: request.responseLanguage).providerInstruction(),
             labels.schemaSnapshot,
             request.schemaPrompt
         ]
@@ -658,7 +656,8 @@ actor FoundationModelsGraphChatProvider: GraphChatModelProvider {
             sections.append(
                 GraphChatConversationContextFormatter().format(
                     context,
-                    language: request.responseLanguage
+                    language: request.responseLanguage,
+                    maximumCharacters: request.contextProfile.maximumConversationCharacters
                 )
             )
         }
@@ -679,7 +678,6 @@ actor FoundationModelsGraphChatProvider: GraphChatModelProvider {
     private func promptLabels(
         for language: GraphChatResponseLanguage
     ) -> (
-        responseLanguage: String,
         schemaSnapshot: String,
         conversationSnapshot: String,
         resolvedClarification: String,
@@ -688,7 +686,6 @@ actor FoundationModelsGraphChatProvider: GraphChatModelProvider {
         switch language {
         case .german:
             return (
-                "ANTWORTSPRACHE",
                 "SCHEMA-SNAPSHOT",
                 "KONVERSATIONS-SNAPSHOT",
                 "AUFGELÖSTE KLÄRUNG",
@@ -696,7 +693,6 @@ actor FoundationModelsGraphChatProvider: GraphChatModelProvider {
             )
         case .english:
             return (
-                "RESPONSE LANGUAGE",
                 "SCHEMA SNAPSHOT",
                 "CONVERSATION SNAPSHOT",
                 "RESOLVED CLARIFICATION",

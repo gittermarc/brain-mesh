@@ -91,12 +91,18 @@ struct GraphChatLargeGraphTests {
         let request = try #require(snapshot.streamedRequests.first)
         let response = try #require(snapshot.toolResponses.first)
 
-        #expect(request.schemaPrompt.count <= 10_000)
+        #expect(
+            request.schemaPrompt.count
+                <= request.contextProfile.maximumSchemaCharacters
+        )
         #expect(request.schemaPrompt.contains(fixture.firstAttribute.displayName) == false)
         #expect(request.schemaPrompt.contains(fixture.lastAttribute.displayName) == false)
         #expect(request.schemaPrompt.contains("Documented large-graph fixture row") == false)
         #expect(response.tool == .queryDetailValues)
-        #expect(response.content.count <= 16_000)
+        #expect(
+            response.content.count
+                <= GraphChatModelToolOutputBudget.default.maximumCollectionCharacters
+        )
         #expect(response.evidenceIDs.count <= GraphChatToolBudgetPolicy.default.maximumEvidenceCount)
         #expect(response.content.contains("Large Item 0000"))
         #expect(response.content.contains("Large Item 2399") == false)
@@ -113,5 +119,10 @@ struct GraphChatLargeGraphTests {
         #expect(GraphChatToolBudgetPolicy.default.maximumResultCountPerTool == 50)
         #expect(GraphChatToolBudgetPolicy.default.maximumEvidenceCount == 200)
         #expect(QueryDetailValuesTool.maximumResultCount == 50)
+        #expect(GraphChatModelContextProfile.standard.maximumSchemaCharacters == 3_200)
+        #expect(GraphChatModelContextProfile.compact.maximumSchemaCharacters == 1_800)
+        #expect(GraphChatModelContextProfile.recovery.maximumSchemaCharacters == 900)
+        #expect(GraphChatModelToolOutputBudget.default.maximumSchemaCharacters == 2_400)
+        #expect(GraphChatModelToolOutputBudget.default.maximumCollectionCharacters == 3_200)
     }
 }

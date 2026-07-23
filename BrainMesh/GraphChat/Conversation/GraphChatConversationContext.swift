@@ -670,7 +670,8 @@ nonisolated struct GraphChatConversationContextFormatter: Sendable {
 
     func format(
         _ snapshot: GraphChatConversationContextSnapshot,
-        language: GraphChatResponseLanguage
+        language: GraphChatResponseLanguage,
+        maximumCharacters: Int? = nil
     ) -> String {
         var lines: [String] = []
         switch language {
@@ -743,7 +744,10 @@ nonisolated struct GraphChatConversationContextFormatter: Sendable {
         }
 
         let formatted = lines.joined(separator: "\n")
-        return bounded(formatted, budget.maximumFormattedCharacters)
+        return bounded(
+            formatted,
+            maximumCharacters ?? budget.maximumFormattedCharacters
+        )
     }
 
     private func kind(_ target: GraphChatConversationContextAliasTarget) -> String {
