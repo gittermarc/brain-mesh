@@ -8,21 +8,8 @@
 import SwiftUI
 
 extension GraphCanvasView {
-    func drawOutgoingNoteIfAny(
-        source: NodeKey,
-        target: NodeKey,
-        from a: CGPoint,
-        to b: CGPoint,
-        alpha: CGFloat,
-        in context: GraphicsContext
-    ) {
-        let k = DirectedEdgeKey.make(source: source, target: target, type: .link)
-        guard let note = directedEdgeNotes[k], !note.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return }
-        drawEdgeNote(note, source: source, target: target, from: a, to: b, alpha: alpha, in: context)
-    }
-
     func drawEdgeNotePrepared(
-        _ prepared: PreparedOutgoingNote,
+        _ prepared: GraphCanvasPreparedOutgoingNote,
         source: NodeKey,
         target: NodeKey,
         from a: CGPoint,
@@ -70,31 +57,4 @@ extension GraphCanvasView {
         context.draw(resolved, at: mid, anchor: .center)
     }
 
-    func drawEdgeNote(
-        _ raw: String,
-        source: NodeKey,
-        target: NodeKey,
-        from a: CGPoint,
-        to b: CGPoint,
-        alpha: CGFloat,
-        in context: GraphicsContext
-    ) {
-        let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmed.isEmpty else { return }
-
-        let maxChars = 46
-        let textStr = trimmed.count > maxChars ? (String(trimmed.prefix(maxChars)) + "…") : trimmed
-        let sideSeed = RenderingSupport.stableSeed(source.identifier + "->" + target.identifier)
-        let side: CGFloat = (sideSeed % 2 == 0) ? 1 : -1
-
-        drawEdgeNotePrepared(
-            PreparedOutgoingNote(text: textStr, side: side),
-            source: source,
-            target: target,
-            from: a,
-            to: b,
-            alpha: alpha,
-            in: context
-        )
-    }
 }

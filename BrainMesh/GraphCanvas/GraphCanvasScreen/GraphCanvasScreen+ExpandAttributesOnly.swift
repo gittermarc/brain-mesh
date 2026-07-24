@@ -98,7 +98,12 @@ extension GraphCanvasScreen {
         }
 
         if !appendedNodes.isEmpty {
-            nodes.append(contentsOf: appendedNodes)
+            let updatedNodes = nodes + appendedNodes
+            refreshStaticRenderSnapshot(
+                nodes: updatedNodes,
+                directedEdgeNotes: directedEdgeNotes
+            )
+            nodes = updatedNodes
 
             labelCache = updatedLabelCache
             imagePathCache = updatedImagePathCache

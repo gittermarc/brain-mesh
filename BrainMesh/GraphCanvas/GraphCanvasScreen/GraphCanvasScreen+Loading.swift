@@ -73,6 +73,10 @@ extension GraphCanvasScreen {
             let newDirectedNotes = snapshot.directedEdgeNotes.filter { validDirected.contains($0.key) }
 
             // ✅ Commit the result in one go (prevents cancelled/older loads from partially overriding state)
+            refreshStaticRenderSnapshot(
+                nodes: snapshot.nodes,
+                directedEdgeNotes: newDirectedNotes
+            )
             nodes = snapshot.nodes
             edges = snapshot.edges
             labelCache = snapshot.labelCache

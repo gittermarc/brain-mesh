@@ -100,20 +100,11 @@ extension GraphCanvasView {
     }
 
     private func hitTest(worldTap: CGPoint) -> NodeKey? {
-        var best: (NodeKey, CGFloat)?
-
-        for n in nodes {
-            if lens.hideNonRelevant && lens.isHidden(n.key) { continue }
-            guard let p = positions[n.key] else { continue }
-            let dx = p.x - worldTap.x
-            let dy = p.y - worldTap.y
-            let d = sqrt(dx*dx + dy*dy)
-
-            let hitRadius: CGFloat = (n.key.kind == .entity) ? 22 : 18
-            if d <= hitRadius {
-                if best == nil || d < best!.1 { best = (n.key, d) }
-            }
-        }
-        return best?.0
+        GraphCanvasHitTesting.hitTest(
+            nodes: nodes,
+            positions: positions,
+            worldTap: worldTap,
+            lens: lens
+        )
     }
 }

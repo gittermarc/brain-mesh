@@ -24,7 +24,7 @@ extension GraphCanvasScreen {
                     iconSymbolCache: iconSymbolCache,
                     drawEdges: drawEdgesCache,
                     physicsEdges: edges,
-                    directedEdgeNotes: directedEdgeNotes,
+                    staticRenderSnapshot: staticRenderSnapshot,
                     lens: lensCache,
                     detailsFocusRenderPlan: detailsFocusRenderPlanCache,
                     copilotHighlightedNodes: copilotHighlightedNodes,
@@ -301,6 +301,10 @@ extension GraphCanvasScreen {
             .onChange(of: scale) { _, _ in pulseMiniMap() }
             .onAppear {
                 if !nodes.isEmpty {
+                    refreshStaticRenderSnapshot(
+                        nodes: nodes,
+                        directedEdgeNotes: directedEdgeNotes
+                    )
                     scheduleDerivedStateUpdate(
                         input: derivedStateInputSnapshot,
                         reason: .initial

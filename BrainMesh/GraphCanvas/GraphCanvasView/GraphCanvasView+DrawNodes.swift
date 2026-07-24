@@ -10,7 +10,8 @@ import SwiftUI
 extension GraphCanvasView {
     func drawNodes(
         in context: GraphicsContext,
-        frame: FrameCache,
+        frame: GraphCanvasDynamicFrameCache,
+        staticSnapshot: GraphCanvasStaticRenderSnapshot,
         alphas: ZoomAlphas,
         theme: GraphTheme,
         colorScheme: ColorScheme
@@ -83,7 +84,10 @@ extension GraphCanvasView {
                             (isSelected || isCopilotHighlighted) ? 1.0 : 0.0
                         ) * nodeAlpha
                     if labelA > 0.04 {
-                        let off = frame.labelOffsets[n.key] ?? .zero
+                        let off = staticSnapshot.labelOffsetsByNodeKey[n.key]
+                            ?? GraphCanvasStaticRenderSnapshotBuilder.labelOffset(
+                                for: n.key
+                            )
                         drawLabel(
                             n.label,
                             at: CGPoint(x: s.x + off.x, y: s.y + 28 + off.y),
@@ -173,7 +177,10 @@ extension GraphCanvasView {
                             (isSelected || isCopilotHighlighted) ? 1.0 : 0.0
                         ) * nodeAlpha
                     if labelA > 0.06 {
-                        let off = frame.labelOffsets[n.key] ?? .zero
+                        let off = staticSnapshot.labelOffsetsByNodeKey[n.key]
+                            ?? GraphCanvasStaticRenderSnapshotBuilder.labelOffset(
+                                for: n.key
+                            )
                         drawLabel(
                             n.label,
                             at: CGPoint(x: s.x + off.x, y: s.y + 24 + off.y),

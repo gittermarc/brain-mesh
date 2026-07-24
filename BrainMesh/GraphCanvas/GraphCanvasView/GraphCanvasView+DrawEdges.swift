@@ -10,7 +10,8 @@ import SwiftUI
 extension GraphCanvasView {
     func drawEdges(
         in context: GraphicsContext,
-        frame: FrameCache,
+        frame: GraphCanvasDynamicFrameCache,
+        staticSnapshot: GraphCanvasStaticRenderSnapshot,
         alphas: ZoomAlphas,
         theme: GraphTheme,
         colorScheme: ColorScheme
@@ -19,7 +20,15 @@ extension GraphCanvasView {
             if lens.hideNonRelevant && (lens.isHidden(e.a) || lens.isHidden(e.b)) { continue }
             if !detailsFocusRenderPlan.shouldRender(edge: e) { continue }
 
-            guard let a = frame.screenPoints[e.a], let b = frame.screenPoints[e.b] else { continue }
+            guard let endpoints = GraphCanvasDynamicFrameBuilder.resolveEdgeEndpoints(
+                e,
+                availableValues: frame.screenPoints,
+                staticSnapshot: staticSnapshot
+            ),
+            let a = frame.screenPoints[endpoints.a],
+            let b = frame.screenPoints[endpoints.b] else {
+                continue
+            }
 
             let edgeAlpha = lens.edgeOpacity(a: e.a, b: e.b) * detailsFocusRenderPlan.edgeOpacityMultiplier(a: e.a, b: e.b)
             if edgeAlpha <= 0.001 { continue }
@@ -41,13 +50,20 @@ extension GraphCanvasView {
 
             // ✅ Notizen: nur im Nah-Zoom + nur für Kanten der selektierten Node (ausgehend)
             if let sel = selection,
-               let notes = frame.outgoingNotesByTarget,
                alphas.showNotes,
                e.type == .link {
 
-                if sel == e.a, let note = notes[e.b] {
+                if sel == e.a,
+                   let note = staticSnapshot.preparedOutgoingNote(
+                       source: e.a,
+                       target: e.b
+                   ) {
                     drawEdgeNotePrepared(note, source: e.a, target: e.b, from: a, to: b, alpha: alphas.noteAlpha, in: context)
-                } else if sel == e.b, let note = notes[e.a] {
+                } else if sel == e.b,
+                          let note = staticSnapshot.preparedOutgoingNote(
+                              source: e.b,
+                              target: e.a
+                          ) {
                     drawEdgeNotePrepared(note, source: e.b, target: e.a, from: b, to: a, alpha: alphas.noteAlpha, in: context)
                 }
             }

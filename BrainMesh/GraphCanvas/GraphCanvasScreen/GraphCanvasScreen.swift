@@ -137,6 +137,10 @@ struct GraphCanvasScreen: View {
     @State var detailsFocusRenderPlanCache: GraphDetailsRenderPlan = .empty
     @State var derivedStateScheduler = GraphCanvasDerivedStateScheduler()
 
+    // ✅ Immutable static render data, rebuilt only at actual static-data mutation boundaries.
+    @State var staticRenderSnapshot: GraphCanvasStaticRenderSnapshot = .empty
+    @State var staticRenderSnapshotCache = GraphCanvasStaticRenderSnapshotCache()
+
     // ✅ Degree cap (Link edges) + “more”
     // NOTE: Must not be `private` because helpers live in separate extension files.
     let degreeCap: Int = 12

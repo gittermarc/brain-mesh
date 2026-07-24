@@ -22,6 +22,10 @@ nonisolated enum BMLog {
         subsystem: subsystem,
         category: "canvas-derived-state"
     )
+    static let canvasStaticRender = Logger(
+        subsystem: subsystem,
+        category: "canvas-static-render"
+    )
     static let search = Logger(subsystem: subsystem, category: "search")
     static let mutationEvents = Logger(
         subsystem: subsystem,

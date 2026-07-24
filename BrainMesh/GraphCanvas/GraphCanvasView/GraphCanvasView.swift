@@ -20,7 +20,7 @@ struct GraphCanvasView: View {
     let drawEdges: [GraphEdge]
     let physicsEdges: [GraphEdge]
 
-    let directedEdgeNotes: [DirectedEdgeKey: String]
+    let staticRenderSnapshot: GraphCanvasStaticRenderSnapshot
     let lens: LensContext
     let detailsFocusRenderPlan: GraphDetailsRenderPlan
 
