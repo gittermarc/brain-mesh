@@ -256,6 +256,11 @@ enum AppLoadersConfigurator {
         await GraphStatsLoader.shared.configure(container: container)
 
         try Task.checkCancellation()
+        await EntitiesHomeAttributeOwnerResolver.shared.configure(
+            container: container
+        )
+
+        try Task.checkCancellation()
         await EntitiesHomeLoader.shared.configure(container: container)
 
         try Task.checkCancellation()

@@ -7,6 +7,7 @@
 
 import Foundation
 import SwiftData
+import os
 
 extension EntitiesHomeLoader {
 
@@ -15,7 +16,62 @@ extension EntitiesHomeLoader {
         let isNotesOnlyHit: Bool
     }
 
-    static func fetchEntities(
+    func fetchEntities(
+        context: ModelContext,
+        graphID: UUID?,
+        foldedSearch: String
+    ) async throws -> [MatchedEntity] {
+        guard foldedSearch.isEmpty == false,
+              let graphID,
+              let indexedMatchProvider
+        else {
+            return try Self.fetchEntitiesUsingSwiftDataFallback(
+                context: context,
+                graphID: graphID,
+                foldedSearch: foldedSearch
+            )
+        }
+
+        do {
+            let indexedResult = try await indexedMatchProvider.matches(
+                graphID: graphID,
+                foldedQuery: foldedSearch
+            )
+            try Task.checkCancellation()
+
+            guard indexedResult.completeness.isComplete else {
+                log.notice(
+                    "Entities Home search uses SwiftData fallback reason=\(indexedResult.completeness.rawValue, privacy: .public)"
+                )
+                return try Self.fetchEntitiesUsingSwiftDataFallback(
+                    context: context,
+                    graphID: graphID,
+                    foldedSearch: foldedSearch
+                )
+            }
+
+            return try Self.fetchEntitiesUsingIndexedMatches(
+                context: context,
+                graphID: graphID,
+                matches: indexedResult.matches
+            )
+        } catch is CancellationError {
+            throw CancellationError()
+        } catch {
+            try Task.checkCancellation()
+            let nsError = error as NSError
+            log.error(
+                "Entities Home index query failed domain=\(nsError.domain, privacy: .public) code=\(nsError.code); using SwiftData fallback"
+            )
+            return try Self.fetchEntitiesUsingSwiftDataFallback(
+                context: context,
+                graphID: graphID,
+                foldedSearch: foldedSearch
+            )
+        }
+    }
+
+    static func fetchEntitiesUsingSwiftDataFallback(
         context: ModelContext,
         graphID: UUID?,
         foldedSearch: String
@@ -147,6 +203,69 @@ extension EntitiesHomeLoader {
         return sorted.map { e in
             let isNotesOnly = notesMatch.contains(e.id) && strongMatch.contains(e.id) == false
             return MatchedEntity(entity: e, isNotesOnlyHit: isNotesOnly)
+        }
+    }
+
+    private static func fetchEntitiesUsingIndexedMatches(
+        context: ModelContext,
+        graphID: UUID,
+        matches: [EntitiesHomeIndexedMatch]
+    ) throws -> [MatchedEntity] {
+        guard matches.isEmpty == false else { return [] }
+
+        var classificationsByEntityID: [
+            UUID: EntitiesHomeIndexedMatchClassification
+        ] = [:]
+        classificationsByEntityID.reserveCapacity(matches.count)
+        for match in matches {
+            if let current = classificationsByEntityID[match.entityID] {
+                if match.classification.rawValue > current.rawValue {
+                    classificationsByEntityID[match.entityID] =
+                        match.classification
+                }
+            } else {
+                classificationsByEntityID[match.entityID] = match.classification
+            }
+        }
+
+        let sortedEntityIDs = classificationsByEntityID.keys.sorted {
+            $0.uuidString < $1.uuidString
+        }
+        var entitiesByID: [UUID: MetaEntity] = [:]
+        entitiesByID.reserveCapacity(sortedEntityIDs.count)
+
+        let chunkSize = 200
+        var chunkStart = 0
+        while chunkStart < sortedEntityIDs.count {
+            try Task.checkCancellation()
+            let chunkEnd = min(
+                sortedEntityIDs.count,
+                chunkStart + chunkSize
+            )
+            let chunkIDs = Array(sortedEntityIDs[chunkStart..<chunkEnd])
+            let descriptor = FetchDescriptor<MetaEntity>(
+                predicate: #Predicate<MetaEntity> { entity in
+                    entity.graphID == graphID
+                        && chunkIDs.contains(entity.id)
+                }
+            )
+            for entity in try context.fetch(descriptor) {
+                entitiesByID[entity.id] = entity
+            }
+            chunkStart = chunkEnd
+        }
+
+        let sortedEntities = entitiesByID.values.sorted {
+            $0.name.localizedStandardCompare($1.name) == .orderedAscending
+        }
+        return sortedEntities.compactMap { entity in
+            guard let classification = classificationsByEntityID[entity.id] else {
+                return nil
+            }
+            return MatchedEntity(
+                entity: entity,
+                isNotesOnlyHit: classification == .notesOnly
+            )
         }
     }
 

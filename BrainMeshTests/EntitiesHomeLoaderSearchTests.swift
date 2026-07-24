@@ -190,7 +190,7 @@ struct EntitiesHomeLoaderSearchTests {
         graphID: UUID?,
         term: String
     ) throws -> [EntitiesHomeLoader.MatchedEntity] {
-        try EntitiesHomeLoader.fetchEntities(
+        try EntitiesHomeLoader.fetchEntitiesUsingSwiftDataFallback(
             context: testStore.context,
             graphID: graphID,
             foldedSearch: BMSearch.fold(term)

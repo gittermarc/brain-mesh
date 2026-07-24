@@ -13,12 +13,15 @@ import os
 
 actor EntitiesHomeLoader {
 
-    static let shared = EntitiesHomeLoader()
+    static let shared = EntitiesHomeLoader(
+        indexedMatchProvider: EntitiesHomeIndexedMatchProvider()
+    )
 
     // NOTE: Some members are `internal` so they remain accessible from the split extension files.
     // This is intentional for a mechanical refactor (move-only, no behavioral change).
     var container: AnyModelContainer? = nil
     let log = Logger(subsystem: "BrainMesh", category: "EntitiesHomeLoader")
+    let indexedMatchProvider: (any EntitiesHomeIndexedMatchProviding)?
 
     // MARK: - Counts cache (avoid re-fetching all attributes/links while typing or toggling views)
 
@@ -28,6 +31,12 @@ actor EntitiesHomeLoader {
     /// Small TTL so counts don't stay stale for long, but typing/search doesn't repeatedly load everything.
     /// Cache is graph-wide to keep counts correct for any search subset (no partial-cache zeros).
     let countsCacheTTLSeconds: TimeInterval = 8
+
+    init(
+        indexedMatchProvider: (any EntitiesHomeIndexedMatchProviding)? = nil
+    ) {
+        self.indexedMatchProvider = indexedMatchProvider
+    }
 
     func configure(container: AnyModelContainer) {
         self.container = container
@@ -83,7 +92,7 @@ actor EntitiesHomeLoader {
 
         try Task.checkCancellation()
 
-        let entities = try EntitiesHomeLoader.fetchEntities(
+        let entities = try await fetchEntities(
             context: context,
             graphID: gid,
             foldedSearch: term

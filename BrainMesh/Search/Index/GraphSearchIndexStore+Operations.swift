@@ -8,6 +8,11 @@
 import Foundation
 import os
 
+nonisolated struct GraphSearchDocumentQueryResult: Sendable {
+    let documents: [GraphSearchDocument]
+    let isComplete: Bool
+}
+
 extension GraphSearchIndexStore {
     func upsert(_ documents: [GraphSearchDocument]) throws {
         _ = try requireConnection()
@@ -212,6 +217,125 @@ extension GraphSearchIndexStore {
         limit: Int
     ) throws -> [GraphSearchIndexHit] {
         try searchDocuments(graphIDs: nil, text: text, limit: limit)
+    }
+
+    func matchingDocuments(
+        in graphID: UUID,
+        text: String,
+        documentKinds: Set<GraphSearchDocumentKind>,
+        limit: Int
+    ) throws -> GraphSearchDocumentQueryResult {
+        let connection = try requireConnection()
+        let query = BMSearch.fold(text)
+        guard query.isEmpty == false else {
+            return GraphSearchDocumentQueryResult(
+                documents: [],
+                isComplete: true
+            )
+        }
+
+        let safeLimit = max(0, min(limit, Self.maximumSearchLimit))
+        guard safeLimit > 0 else {
+            return GraphSearchDocumentQueryResult(
+                documents: [],
+                isComplete: false
+            )
+        }
+
+        let sortedDocumentKinds = documentKinds.sorted {
+            if $0.sortPrecedence != $1.sortPrecedence {
+                return $0.sortPrecedence < $1.sortPrecedence
+            }
+            return $0.rawValue < $1.rawValue
+        }
+        guard sortedDocumentKinds.isEmpty == false else {
+            return GraphSearchDocumentQueryResult(
+                documents: [],
+                isComplete: true
+            )
+        }
+
+        let queryNgrams = Self.queryNgrams(for: query)
+        guard queryNgrams.isEmpty == false else {
+            return GraphSearchDocumentQueryResult(
+                documents: [],
+                isComplete: true
+            )
+        }
+
+        let startedAt = Self.uptimeNanoseconds()
+        return try mapSQLiteErrors {
+            try cancellationCheck()
+
+            let documentKindPlaceholders = Array(
+                repeating: "?",
+                count: sortedDocumentKinds.count
+            ).joined(separator: ", ")
+            let ngramPlaceholders = Array(
+                repeating: "?",
+                count: queryNgrams.count
+            ).joined(separator: ", ")
+            let statement = try connection.prepare(
+                """
+                SELECT \(Self.documentSelectColumns)
+                FROM graph_search_documents
+                WHERE graph_id = ?
+                  AND document_kind IN (\(documentKindPlaceholders))
+                  AND instr(normalized_search_text, ?) > 0
+                  AND document_id IN (
+                      SELECT document_id
+                      FROM graph_search_ngrams
+                      WHERE graph_id = ?
+                        AND gram IN (\(ngramPlaceholders))
+                      GROUP BY document_id
+                      HAVING COUNT(DISTINCT gram) = ?
+                  )
+                ORDER BY document_id ASC
+                LIMIT ?
+                """,
+                operation: "search-filtered-graph-documents"
+            )
+
+            var bindingIndex: Int32 = 1
+            try statement.bind(
+                graphID.uuidString.lowercased(),
+                at: bindingIndex
+            )
+            bindingIndex += 1
+            for documentKind in sortedDocumentKinds {
+                try statement.bind(documentKind.rawValue, at: bindingIndex)
+                bindingIndex += 1
+            }
+            try statement.bind(query, at: bindingIndex)
+            bindingIndex += 1
+            try statement.bind(
+                graphID.uuidString.lowercased(),
+                at: bindingIndex
+            )
+            bindingIndex += 1
+            for ngram in queryNgrams {
+                try statement.bind(ngram, at: bindingIndex)
+                bindingIndex += 1
+            }
+            try statement.bind(queryNgrams.count, at: bindingIndex)
+            bindingIndex += 1
+            try statement.bind(safeLimit + 1, at: bindingIndex)
+
+            let fetchedDocuments = try decodeAllDocuments(from: statement)
+            try cancellationCheck()
+            let isComplete = fetchedDocuments.count <= safeLimit
+            let documents = isComplete
+                ? fetchedDocuments
+                : Array(fetchedDocuments.prefix(safeLimit))
+
+            BMLog.search.info(
+                "Search index filtered query documents=\(documents.count) complete=\(isComplete) durationMS=\(Self.elapsedMilliseconds(since: startedAt), format: .fixed(precision: 2))"
+            )
+            return GraphSearchDocumentQueryResult(
+                documents: documents,
+                isComplete: isComplete
+            )
+        }
     }
 
     func document(id documentID: String) throws -> GraphSearchDocument? {
