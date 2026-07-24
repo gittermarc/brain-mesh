@@ -14,9 +14,11 @@ extension AttributeDetailView {
         NodeConnectionsCard(
             ownerKind: .attribute,
             ownerID: attribute.id,
-            graphID: attribute.graphID,
-            outgoing: outgoingLinks,
-            incoming: incomingLinks,
+            graphID: attribute.graphID ?? attribute.owner?.graphID,
+            outgoing: linksPreview.outgoingPreview,
+            incoming: linksPreview.incomingPreview,
+            outgoingCount: linksPreview.outgoingCount,
+            incomingCount: linksPreview.incomingCount,
             segment: $segment,
             previewLimit: 4
         )

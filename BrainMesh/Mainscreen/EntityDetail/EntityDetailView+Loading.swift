@@ -6,47 +6,87 @@
 //
 
 import SwiftUI
-import SwiftData
 
 extension EntityDetailView {
 
-    var linksTaskKey: String {
-        entity.id.uuidString + "|" + (entity.graphID?.uuidString ?? "nil")
+    var linksPreviewLoadIdentity: NodeConnectionsPreviewLoadIdentity {
+        NodeConnectionsPreviewLoadIdentity(
+            ownerKind: .entity,
+            ownerID: entity.id,
+            graphID: entity.graphID
+        )
     }
 
     func handleLinkSheetPresentationChanged(_ isPresented: Bool) {
-        if !isPresented {
-            Task { @MainActor in
-                await reloadLinksPreview()
-            }
+        guard linksPreviewLoadTriggerPolicy
+            .registerAddLinkPresentation(isPresented)
+        else {
+            return
+        }
+        Task { @MainActor in
+            await reloadLinksPreview()
         }
     }
 
     func handleBulkLinkSheetPresentationChanged(_ isPresented: Bool) {
-        if !isPresented {
-            Task { @MainActor in
-                await reloadLinksPreview()
-            }
+        guard linksPreviewLoadTriggerPolicy
+            .registerBulkLinkPresentation(isPresented)
+        else {
+            return
+        }
+        Task { @MainActor in
+            await reloadLinksPreview()
         }
     }
 
     @MainActor
     func reloadLinksPreview() async {
-        do {
-            let snapshot = try NodeLinksQueryBuilder.load(
-                context: modelContext,
-                kind: .entity,
-                id: entity.id,
-                graphID: entity.graphID,
-                previewLimit: 12
-            )
+        let identity = linksPreviewLoadIdentity
+        let token = linksPreviewLoadTriggerPolicy.beginLoad(for: identity)
 
-            outgoingLinksPreview = snapshot.outgoingPreview
-            incomingLinksPreview = snapshot.incomingPreview
-            outgoingLinksCount = snapshot.outgoingCount
-            incomingLinksCount = snapshot.incomingCount
+        guard let graphID = identity.graphID else {
+            if linksPreviewLoadTriggerPolicy.accepts(
+                token,
+                currentIdentity: linksPreviewLoadIdentity
+            ) {
+                linksPreview = .empty
+            }
+            return
+        }
+
+        do {
+            let snapshot =
+                try await BMNodeConnectionsPreviewLoadInstrumentation
+                .measure(
+                    ownerKind: .entity,
+                    counts: { snapshot in
+                        (
+                            outgoing: snapshot.outgoingCount,
+                            incoming: snapshot.incomingCount
+                        )
+                    },
+                    operation: {
+                        try await NodeConnectionsLoader.shared
+                            .loadPreviewSnapshot(
+                                ownerKind: .entity,
+                                ownerID: identity.ownerID,
+                                graphID: graphID,
+                                previewLimit: 12
+                            )
+                    }
+                )
+
+            guard linksPreviewLoadTriggerPolicy.accepts(
+                token,
+                currentIdentity: linksPreviewLoadIdentity
+            ) else {
+                return
+            }
+            linksPreview = snapshot
+        } catch is CancellationError {
+            // Task replacement and navigation cancellation are expected.
         } catch {
-            // Keep the last known state. No user-facing alert for preview failures.
+            // Keep the last known value-only state. Preview failures are not user-facing.
         }
     }
 }

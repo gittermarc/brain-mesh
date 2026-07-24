@@ -20,11 +20,10 @@ struct EntityDetailView: View {
 
     @Bindable var entity: MetaEntity
 
-    // P0.1: Links preview + counts (fetch-limited, no full-load @Query).
-    @State var outgoingLinksPreview: [MetaLink] = []
-    @State var incomingLinksPreview: [MetaLink] = []
-    @State var outgoingLinksCount: Int = 0
-    @State var incomingLinksCount: Int = 0
+    // PR 9: Value-only links preview + exact counts from the background loader.
+    @State var linksPreview: NodeConnectionsPreviewSnapshot = .empty
+    @State var linksPreviewLoadTriggerPolicy =
+        NodeConnectionsPreviewLoadTriggerPolicy()
 
     // P0.2: Media preview + counts (fetch-limited, no full-load @Query).
     @State var mediaPreview: NodeMediaPreview = .empty
@@ -86,7 +85,15 @@ struct EntityDetailView: View {
                     .task(id: entity.id) {
                         await reloadMediaPreview()
                     }
-                    .task(id: linksTaskKey) {
+                    .task(id: linksPreviewLoadIdentity) {
+                        guard linksPreviewLoadTriggerPolicy
+                            .registerTaskIdentity(
+                                linksPreviewLoadIdentity
+                            )
+                        else {
+                            return
+                        }
+                        linksPreview = .empty
                         await reloadLinksPreview()
                     }
                     .onAppear {
@@ -97,6 +104,9 @@ struct EntityDetailView: View {
                     }
                     .onChange(of: showBulkLink) { _, isPresented in
                         handleBulkLinkSheetPresentationChanged(isPresented)
+                    }
+                    .onDisappear {
+                        linksPreviewLoadTriggerPolicy.resetTaskLifecycle()
                     }
                 }
             )

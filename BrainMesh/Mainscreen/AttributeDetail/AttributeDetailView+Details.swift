@@ -114,8 +114,8 @@ extension AttributeDetailView {
             return "\(g) Fotos · \(a) Dateien"
 
         case .connections:
-            let out = outgoingLinksCount
-            let inc = incomingLinksCount
+            let out = linksPreview.outgoingCount
+            let inc = linksPreview.incomingCount
             if out == 0 && inc == 0 { return nil }
             return "\(out) ausgehend · \(inc) eingehend"
         }

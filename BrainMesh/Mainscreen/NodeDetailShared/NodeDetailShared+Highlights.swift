@@ -327,17 +327,40 @@ struct NodeOwnerCard: View {
 }
 
 enum NodeTopLinks {
-    static func compute(outgoing: [MetaLink], incoming: [MetaLink], max: Int) -> [NodeRef] {
+    static func compute(
+        outgoing: [LinkRowDTO],
+        incoming: [LinkRowDTO],
+        max: Int
+    ) -> [NodeRef] {
+        let safeMaximum = Swift.max(0, max)
+        guard safeMaximum > 0 else { return [] }
+
         var refs: [NodeRef] = []
 
-        for l in outgoing {
-            refs.append(NodeRef(kind: l.targetKind, id: l.targetID, label: l.targetLabel, iconSymbolName: nil))
-            if refs.count >= max { return refs }
+        for row in outgoing {
+            guard let peerKind = row.peerKind else { continue }
+            refs.append(
+                NodeRef(
+                    kind: peerKind,
+                    id: row.peerID,
+                    label: row.peerLabel,
+                    iconSymbolName: nil
+                )
+            )
+            if refs.count >= safeMaximum { return refs }
         }
 
-        for l in incoming {
-            refs.append(NodeRef(kind: l.sourceKind, id: l.sourceID, label: l.sourceLabel, iconSymbolName: nil))
-            if refs.count >= max { return refs }
+        for row in incoming {
+            guard let peerKind = row.peerKind else { continue }
+            refs.append(
+                NodeRef(
+                    kind: peerKind,
+                    id: row.peerID,
+                    label: row.peerLabel,
+                    iconSymbolName: nil
+                )
+            )
+            if refs.count >= safeMaximum { return refs }
         }
 
         return refs

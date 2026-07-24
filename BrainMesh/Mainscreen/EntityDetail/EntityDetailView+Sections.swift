@@ -109,8 +109,8 @@ extension EntityDetailView {
             return "\(g) Fotos · \(a) Dateien"
 
         case .connections:
-            let out = outgoingLinksCount
-            let inc = incomingLinksCount
+            let out = linksPreview.outgoingCount
+            let inc = linksPreview.incomingCount
             if out == 0 && inc == 0 { return nil }
             return "\(out) ausgehend · \(inc) eingehend"
         }
@@ -155,8 +155,10 @@ extension EntityDetailView {
             ownerKind: .entity,
             ownerID: entity.id,
             graphID: entity.graphID,
-            outgoing: outgoingLinksPreview,
-            incoming: incomingLinksPreview,
+            outgoing: linksPreview.outgoingPreview,
+            incoming: linksPreview.incomingPreview,
+            outgoingCount: linksPreview.outgoingCount,
+            incomingCount: linksPreview.incomingCount,
             segment: $connectionsSegment,
             previewLimit: 5
         )

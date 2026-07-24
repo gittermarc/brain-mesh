@@ -288,18 +288,18 @@
 - Dateien:
   - `BrainMesh/Mainscreen/EntityDetail/EntityDetailView.swift`
   - `BrainMesh/Mainscreen/AttributeDetail/AttributeDetailView.swift`
-  - `BrainMesh/Mainscreen/NodeLinksQueryBuilder.swift`
+  - `BrainMesh/Mainscreen/NodeDetailShared/NodeConnectionsLoader.swift`
 - Mechanik:
-  - Link-Preview nutzt `fetchCount` und `fetchLimit`.
+  - Link-Preview nutzt im Background-Loader `fetchCount` und `fetchLimit`, liefert value-only `LinkRowDTO`-Rows sowie exakte Directional Counts.
   - Media Preview läuft über eigene Loader unter `NodeDetailShared`/Attachments.
 - Hotspot-Grund:
   - Detail-Views haben viele Sheet-States und `.onChange` Reloads nach Link-/Bulk-Link-Sheets.
-  - MainActor `NodeLinksQueryBuilder.load` nutzt `modelContext`; durch `fetchLimit` entschärft, aber bei langsamen Stores trotzdem UI-relevant.
 - Bereits vorhandene Mitigation:
-  - Kommentare markieren bewusst kein full-load `@Query`.
-  - Preview-Limit standardmäßig 12.
-- Refactor-Hebel:
-  - Link preview komplett in `NodeConnectionsLoader`/Actor ziehen.
+  - Der Preview-Pfad ist vollständig graph-scoped und verwendet einen eigenen read-only Background-`ModelContext`.
+  - Preview-Limit standardmäßig 12 und defensiv hart begrenzt; Counts bleiben per `fetchCount` vollständig.
+  - Peer-Namen werden für die begrenzten Rows gebündelt aufgelöst, `previewLimit == 0` überspringt Link- und Peer-Fetches.
+  - Generation Tokens plus Task-Cancellation verhindern stale Preview-Commits nach Node- oder Graphwechsel.
+- Verbleibender Refactor-Hebel:
   - Sheet-State in `NodeDetailSheetCoordinator` auslagern.
 
 ### Rendering / Scrolling — Stats
@@ -468,15 +468,11 @@
   - SwiftData `@Model` nie in DTOs halten.
   - ModelActor-Pattern prüfen.
 
-#### MainActor Fetches
+#### MainActor Fetches — Link Preview behoben
 
-- Datei: `BrainMesh/Mainscreen/NodeLinksQueryBuilder.swift`.
-- Mechanik:
-  - `@MainActor` statische `load` nutzt `modelContext` für `fetchCount` und fetch-limited preview.
-- Risiko:
-  - Für Detail-Screens wahrscheinlich okay, aber bei langsamem Store und vielen Links UI-relevant.
-- Hebel:
-  - LinkPreview actorized, analog zu `NodeConnectionsLoader`.
+- Der frühere `NodeLinksQueryBuilder`-Pfad wurde entfernt.
+- Entity und Attribute Detail beziehen begrenzte Link-Previews und exakte Counts jetzt asynchron aus `NodeConnectionsLoader`.
+- SwiftData-`MetaLink`-Modelle bleiben im Loader; Preview-State, Highlights, Connections Card und Navigation arbeiten mit value-only DTOs.
 
 #### Unbounded/Long-Lived Tasks
 

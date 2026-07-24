@@ -43,60 +43,124 @@ nonisolated struct BMDuration {
     }
 }
 
-/// Debug-only signpost wrapper for Attribute Detail link-preview loads.
+nonisolated enum BMNodeConnectionsPreviewLoadStatus:
+    String,
+    Equatable,
+    Sendable
+{
+    case success
+    case cancelled
+    case error
+}
+
+/// Technical-only metric payload for detail connection previews.
 ///
-/// The operation always runs synchronously on the caller's actor. Release builds
-/// execute the operation directly, without timing, signpost, or result-count work.
+/// It deliberately has no node IDs, graph IDs, names, notes, labels, or link content.
+nonisolated struct BMNodeConnectionsPreviewLoadMetric:
+    Equatable,
+    Sendable
+{
+    let ownerKindRaw: Int
+    let status: BMNodeConnectionsPreviewLoadStatus
+    let outgoingCount: Int?
+    let incomingCount: Int?
+    let durationMilliseconds: Double
+}
+
+/// Debug-only signpost wrapper for Entity and Attribute detail connection previews.
+///
+/// Release builds execute the async operation directly, without timing, signposts,
+/// result-count extraction, or metric construction.
 @MainActor
-enum BMAttributeLinkPreviewLoadInstrumentation {
+enum BMNodeConnectionsPreviewLoadInstrumentation {
     #if DEBUG
     private static let signposter = OSSignposter(logger: BMLog.load)
     #endif
 
     @inline(__always)
     static func measure<Result>(
+        ownerKind: NodeKind,
         counts: (Result) -> (outgoing: Int, incoming: Int),
-        operation: () throws -> Result
-    ) rethrows -> Result {
+        operation: () async throws -> Result
+    ) async rethrows -> Result {
         #if DEBUG
         let duration = BMDuration()
         let signpostID = signposter.makeSignpostID()
         let intervalState = signposter.beginInterval(
-            "AttributeLinkPreviewLoad",
+            "NodeConnectionsPreviewLoad",
             id: signpostID
         )
+        let ownerKindRaw = ownerKind.rawValue
 
-        BMLog.load.debug("attribute_link_preview_load status=start")
+        BMLog.load.debug(
+            "node_connections_preview_load status=start owner_kind=\(ownerKindRaw, privacy: .public)"
+        )
 
         do {
-            let result = try operation()
+            let result = try await operation()
             let hitCounts = counts(result)
-            let elapsedMilliseconds = duration.millisecondsElapsed
+            let metric = makeMetric(
+                ownerKind: ownerKind,
+                status: .success,
+                outgoingCount: hitCounts.outgoing,
+                incomingCount: hitCounts.incoming,
+                durationMilliseconds: duration.millisecondsElapsed
+            )
 
             signposter.endInterval(
-                "AttributeLinkPreviewLoad",
+                "NodeConnectionsPreviewLoad",
                 intervalState,
-                "status=success outgoing=\(hitCounts.outgoing, privacy: .public) incoming=\(hitCounts.incoming, privacy: .public) duration_ms=\(elapsedMilliseconds, privacy: .public)"
+                "status=success owner_kind=\(metric.ownerKindRaw, privacy: .public) outgoing=\(hitCounts.outgoing, privacy: .public) incoming=\(hitCounts.incoming, privacy: .public) duration_ms=\(metric.durationMilliseconds, privacy: .public)"
             )
             BMLog.load.debug(
-                "attribute_link_preview_load status=success outgoing=\(hitCounts.outgoing, privacy: .public) incoming=\(hitCounts.incoming, privacy: .public) duration_ms=\(elapsedMilliseconds, privacy: .public)"
+                "node_connections_preview_load status=success owner_kind=\(metric.ownerKindRaw, privacy: .public) outgoing=\(hitCounts.outgoing, privacy: .public) incoming=\(hitCounts.incoming, privacy: .public) duration_ms=\(metric.durationMilliseconds, privacy: .public)"
             )
             return result
         } catch {
-            let elapsedMilliseconds = duration.millisecondsElapsed
+            let status: BMNodeConnectionsPreviewLoadStatus =
+                error is CancellationError ? .cancelled : .error
+            let metric = makeMetric(
+                ownerKind: ownerKind,
+                status: status,
+                outgoingCount: nil,
+                incomingCount: nil,
+                durationMilliseconds: duration.millisecondsElapsed
+            )
 
             signposter.endInterval(
-                "AttributeLinkPreviewLoad",
+                "NodeConnectionsPreviewLoad",
                 intervalState,
-                "status=error outgoing=unavailable incoming=unavailable duration_ms=\(elapsedMilliseconds, privacy: .public)"
+                "status=\(metric.status.rawValue, privacy: .public) owner_kind=\(metric.ownerKindRaw, privacy: .public) outgoing=unavailable incoming=unavailable duration_ms=\(metric.durationMilliseconds, privacy: .public)"
             )
-            BMLog.load.error(
-                "attribute_link_preview_load status=error outgoing=unavailable incoming=unavailable duration_ms=\(elapsedMilliseconds, privacy: .public)"
-            )
+            if status == .cancelled {
+                BMLog.load.debug(
+                    "node_connections_preview_load status=cancelled owner_kind=\(metric.ownerKindRaw, privacy: .public) outgoing=unavailable incoming=unavailable duration_ms=\(metric.durationMilliseconds, privacy: .public)"
+                )
+            } else {
+                BMLog.load.error(
+                    "node_connections_preview_load status=error owner_kind=\(metric.ownerKindRaw, privacy: .public) outgoing=unavailable incoming=unavailable duration_ms=\(metric.durationMilliseconds, privacy: .public)"
+                )
+            }
             throw error
         }
         #else
-        return try operation()
+        return try await operation()
         #endif
+    }
+
+    static func makeMetric(
+        ownerKind: NodeKind,
+        status: BMNodeConnectionsPreviewLoadStatus,
+        outgoingCount: Int?,
+        incomingCount: Int?,
+        durationMilliseconds: Double
+    ) -> BMNodeConnectionsPreviewLoadMetric {
+        BMNodeConnectionsPreviewLoadMetric(
+            ownerKindRaw: ownerKind.rawValue,
+            status: status,
+            outgoingCount: outgoingCount,
+            incomingCount: incomingCount,
+            durationMilliseconds: durationMilliseconds
+        )
     }
 }

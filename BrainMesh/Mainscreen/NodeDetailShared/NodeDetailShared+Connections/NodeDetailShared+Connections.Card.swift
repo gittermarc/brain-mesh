@@ -12,8 +12,10 @@ struct NodeConnectionsCard: View {
     let ownerID: UUID
     let graphID: UUID?
 
-    let outgoing: [MetaLink]
-    let incoming: [MetaLink]
+    let outgoing: [LinkRowDTO]
+    let incoming: [LinkRowDTO]
+    let outgoingCount: Int
+    let incomingCount: Int
 
     @Binding var segment: NodeLinkDirectionSegment
     let previewLimit: Int
@@ -30,8 +32,11 @@ struct NodeConnectionsCard: View {
             }
             .pickerStyle(.segmented)
 
-            let links = (segment == .outgoing ? outgoing : incoming)
-            if links.isEmpty {
+            let links = segment == .outgoing ? outgoing : incoming
+            let count =
+                segment == .outgoing ? outgoingCount : incomingCount
+
+            if count == 0 {
                 NodeEmptyStateRow(
                     text: segment == .outgoing ? "Keine ausgehenden Links." : "Keine eingehenden Links.",
                     ctaTitle: "Im Toolbelt hinzufügen",
@@ -40,17 +45,29 @@ struct NodeConnectionsCard: View {
                 )
             } else {
                 VStack(spacing: 8) {
-                    ForEach(links.prefix(previewLimit)) { link in
-                        NavigationLink {
-                            NodeLinkListDestinationView(link: link, direction: segment)
-                        } label: {
+                    ForEach(links.prefix(previewLimit)) { row in
+                        if let target = row.navigationTarget {
+                            NavigationLink {
+                                NodeDestinationView(
+                                    kind: target.kind,
+                                    id: target.id
+                                )
+                            } label: {
+                                NodeLinkRow(
+                                    direction: segment,
+                                    title: row.peerLabel,
+                                    note: row.note
+                                )
+                            }
+                            .buttonStyle(.plain)
+                        } else {
                             NodeLinkRow(
                                 direction: segment,
-                                title: segment == .outgoing ? link.targetLabel : link.sourceLabel,
-                                note: link.note
+                                title: row.peerLabel,
+                                note: row.note,
+                                showsDisclosureIndicator: false
                             )
                         }
-                        .buttonStyle(.plain)
                     }
                 }
 
@@ -78,22 +95,11 @@ struct NodeConnectionsCard: View {
     }
 }
 
-private struct NodeLinkListDestinationView: View {
-    let link: MetaLink
-    let direction: NodeLinkDirectionSegment
-
-    var body: some View {
-        let kind: NodeKind = (direction == .outgoing ? link.targetKind : link.sourceKind)
-        let id: UUID = (direction == .outgoing ? link.targetID : link.sourceID)
-
-        return NodeDestinationView(kind: kind, id: id)
-    }
-}
-
 private struct NodeLinkRow: View {
     let direction: NodeLinkDirectionSegment
     let title: String
     let note: String?
+    var showsDisclosureIndicator: Bool = true
 
     var body: some View {
         HStack(spacing: 12) {
@@ -116,9 +122,11 @@ private struct NodeLinkRow: View {
             }
 
             Spacer(minLength: 0)
-            Image(systemName: "chevron.right")
-                .font(.footnote)
-                .foregroundStyle(.secondary)
+            if showsDisclosureIndicator {
+                Image(systemName: "chevron.right")
+                    .font(.footnote)
+                    .foregroundStyle(.secondary)
+            }
         }
         .padding(12)
         .background(Color(uiColor: .tertiarySystemGroupedBackground), in: RoundedRectangle(cornerRadius: 16, style: .continuous))

@@ -18,8 +18,8 @@ struct AttributeDetailHighlightsRow: View {
     let nodeKey: NodeKey
 
     let notes: String
-    let outgoingLinks: [MetaLink]
-    let incomingLinks: [MetaLink]
+    let outgoingLinks: [LinkRowDTO]
+    let incomingLinks: [LinkRowDTO]
 
     /// Media preview + counts (P0.2).
     let galleryThumbs: [MetaAttachment]

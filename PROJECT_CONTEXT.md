@@ -345,7 +345,9 @@ BrainMesh ist eine SwiftUI-iOS/iPadOS-App für graphbasiertes Wissens- und Entit
 - Shared Detail Components:
   - `BrainMesh/Mainscreen/NodeDetailShared/`.
 - Link Preview:
-  - `BrainMesh/Mainscreen/NodeLinksQueryBuilder.swift` nutzt `fetchCount` und `fetchLimit` statt unbounded `@Query`.
+  - `BrainMesh/Mainscreen/NodeDetailShared/NodeConnectionsLoader.swift` lädt Entity- und Attribute-Previews in einem Background-`ModelContext`.
+  - Detail-Views halten ausschließlich `NodeConnectionsPreviewSnapshot` mit begrenzten `LinkRowDTO`-Arrays und exakten Directional Counts; SwiftData-`MetaLink`-Modelle verlassen den Loader nicht.
+  - Peer-Bezeichnungen werden graph-scoped und gebündelt aufgelöst. Generation Tokens verhindern, dass ältere Loads nach Node- oder Graphwechsel aktuellen Preview-State überschreiben.
 
 ### Graph Canvas
 

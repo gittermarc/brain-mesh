@@ -22,12 +22,8 @@ struct AttributeDetailView: View {
 
     @Bindable var attribute: MetaAttribute
 
-    // P0.1: Links preview + counts (fetch-limited, no full-load @Query).
-    // NOTE: Keep property names stable because AttributeDetailView is split across multiple files via extensions.
-    @State var outgoingLinks: [MetaLink] = []
-    @State var incomingLinks: [MetaLink] = []
-    @State var outgoingLinksCount: Int = 0
-    @State var incomingLinksCount: Int = 0
+    // PR 9: Value-only links preview + exact counts from the background loader.
+    @State var linksPreview: NodeConnectionsPreviewSnapshot = .empty
 
     // Media preview + counts (fetch-limited, no full-load @Query).
     @State var mediaPreview: NodeMediaPreview = .empty
@@ -66,7 +62,8 @@ struct AttributeDetailView: View {
 
     @State var errorMessage: String? = nil
 
-    @State private var linksPreviewLoadTriggerPolicy = AttributeLinksPreviewLoadTriggerPolicy()
+    @State private var linksPreviewLoadTriggerPolicy =
+        NodeConnectionsPreviewLoadTriggerPolicy()
 
     // runtime-expand state for sections that start collapsed (non-persistent).
     @State var expandedSectionIDs: Set<String> = []
@@ -80,10 +77,13 @@ struct AttributeDetailView: View {
         self.attribute = attribute
     }
 
-    private var linksTaskKey: AttributeLinksPreviewLoadTaskKey {
-        AttributeLinksPreviewLoadTaskKey(
-            attributeID: attribute.id,
-            graphID: attribute.graphID
+    private var linksPreviewLoadIdentity:
+        NodeConnectionsPreviewLoadIdentity
+    {
+        NodeConnectionsPreviewLoadIdentity(
+            ownerKind: .attribute,
+            ownerID: attribute.id,
+            graphID: attribute.graphID ?? attribute.owner?.graphID
         )
     }
 
@@ -108,10 +108,15 @@ struct AttributeDetailView: View {
                     .task(id: attribute.id) {
                         await reloadMediaPreview()
                     }
-                    .task(id: linksTaskKey) {
-                        guard linksPreviewLoadTriggerPolicy.registerTaskKey(linksTaskKey) else {
+                    .task(id: linksPreviewLoadIdentity) {
+                        guard linksPreviewLoadTriggerPolicy
+                            .registerTaskIdentity(
+                                linksPreviewLoadIdentity
+                            )
+                        else {
                             return
                         }
+                        linksPreview = .empty
                         await reloadLinksPreview()
                     }
                     .task(id: focusTaskKey) {
@@ -154,35 +159,56 @@ struct AttributeDetailView: View {
         )
     }
 
-    // MARK: - Links Preview (P0.1)
+    // MARK: - Connections Preview (PR 9)
 
     @MainActor
     private func reloadLinksPreview() async {
-        do {
-            let snapshot = try BMAttributeLinkPreviewLoadInstrumentation.measure(
-                counts: { snapshot in
-                    (
-                        outgoing: snapshot.outgoingCount,
-                        incoming: snapshot.incomingCount
-                    )
-                },
-                operation: {
-                    try NodeLinksQueryBuilder.load(
-                        context: modelContext,
-                        kind: .attribute,
-                        id: attribute.id,
-                        graphID: attribute.graphID,
-                        previewLimit: 12
-                    )
-                }
-            )
+        let identity = linksPreviewLoadIdentity
+        let token = linksPreviewLoadTriggerPolicy.beginLoad(for: identity)
 
-            outgoingLinks = snapshot.outgoingPreview
-            incomingLinks = snapshot.incomingPreview
-            outgoingLinksCount = snapshot.outgoingCount
-            incomingLinksCount = snapshot.incomingCount
+        guard let graphID = identity.graphID else {
+            if linksPreviewLoadTriggerPolicy.accepts(
+                token,
+                currentIdentity: linksPreviewLoadIdentity
+            ) {
+                linksPreview = .empty
+            }
+            return
+        }
+
+        do {
+            let snapshot =
+                try await BMNodeConnectionsPreviewLoadInstrumentation
+                .measure(
+                    ownerKind: .attribute,
+                    counts: { snapshot in
+                        (
+                            outgoing: snapshot.outgoingCount,
+                            incoming: snapshot.incomingCount
+                        )
+                    },
+                    operation: {
+                        try await NodeConnectionsLoader.shared
+                            .loadPreviewSnapshot(
+                                ownerKind: .attribute,
+                                ownerID: identity.ownerID,
+                                graphID: graphID,
+                                previewLimit: 12
+                            )
+                    }
+                )
+
+            guard linksPreviewLoadTriggerPolicy.accepts(
+                token,
+                currentIdentity: linksPreviewLoadIdentity
+            ) else {
+                return
+            }
+            linksPreview = snapshot
+        } catch is CancellationError {
+            // Task replacement and navigation cancellation are expected.
         } catch {
-            // Keep the last known state. No user-facing alert for preview failures.
+            // Keep the last known value-only state. Preview failures are not user-facing.
         }
     }
 }

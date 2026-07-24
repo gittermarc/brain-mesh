@@ -36,8 +36,8 @@ extension AttributeDetailView {
             graphID: attribute.graphID ?? attribute.owner?.graphID,
             nodeKey: NodeKey(kind: .attribute, uuid: attribute.id),
             notes: attribute.notes,
-            outgoingLinks: outgoingLinks,
-            incomingLinks: incomingLinks,
+            outgoingLinks: linksPreview.outgoingPreview,
+            incomingLinks: linksPreview.incomingPreview,
             galleryThumbs: mediaPreview.galleryPreview,
             galleryCount: mediaPreview.galleryCount,
             attachmentCount: mediaPreview.attachmentCount,
@@ -75,7 +75,7 @@ extension AttributeDetailView {
     }
 
     var heroPills: [NodeStatPill] {
-        let linkCount = outgoingLinksCount + incomingLinksCount
+        let linkCount = linksPreview.totalCount
         let mediaCount = mediaPreview.totalCount
 
         var pills: [NodeStatPill] = []

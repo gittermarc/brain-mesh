@@ -33,8 +33,8 @@ extension EntityDetailView {
             graphID: entity.graphID,
             nodeKey: NodeKey(kind: .entity, uuid: entity.id),
             notes: entity.notes,
-            outgoingLinks: outgoingLinksPreview,
-            incomingLinks: incomingLinksPreview,
+            outgoingLinks: linksPreview.outgoingPreview,
+            incomingLinks: linksPreview.incomingPreview,
             galleryThumbs: mediaPreview.galleryPreview,
             galleryCount: mediaPreview.galleryCount,
             attachmentCount: mediaPreview.attachmentCount,
@@ -72,8 +72,8 @@ extension EntityDetailView {
     var heroPills: [NodeStatPill] {
         let base: [NodeStatPill] = [
             NodeStatPill(title: "\(entity.attributesList.count)", systemImage: "tag"),
-            NodeStatPill(title: "\(outgoingLinksCount)", systemImage: "arrow.up.right"),
-            NodeStatPill(title: "\(incomingLinksCount)", systemImage: "arrow.down.left"),
+            NodeStatPill(title: "\(linksPreview.outgoingCount)", systemImage: "arrow.up.right"),
+            NodeStatPill(title: "\(linksPreview.incomingCount)", systemImage: "arrow.down.left"),
             NodeStatPill(title: "\(mediaPreview.totalCount)", systemImage: "photo.on.rectangle")
         ]
 
