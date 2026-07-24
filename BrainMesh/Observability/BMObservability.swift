@@ -18,6 +18,10 @@ nonisolated enum BMLog {
     static let load = Logger(subsystem: subsystem, category: "load")
     static let expand = Logger(subsystem: subsystem, category: "expand")
     static let physics = Logger(subsystem: subsystem, category: "physics")
+    static let canvasDerivedState = Logger(
+        subsystem: subsystem,
+        category: "canvas-derived-state"
+    )
     static let search = Logger(subsystem: subsystem, category: "search")
     static let mutationEvents = Logger(
         subsystem: subsystem,

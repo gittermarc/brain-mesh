@@ -6,9 +6,8 @@
 import SwiftUI
 
 extension GraphCanvasScreen {
-    @MainActor
-    func recomputeDerivedState() {
-        let derivedState = GraphCanvasDerivedStateBuilder.build(
+    var derivedStateInputSnapshot: GraphCanvasDerivedStateInputSnapshot {
+        GraphCanvasDerivedStateInputSnapshot(
             selection: selection,
             edges: edges,
             showAllLinksForSelection: showAllLinksForSelection,
@@ -18,11 +17,44 @@ extension GraphCanvasScreen {
             lensDepth: lensDepth,
             detailsFocusState: detailsFocusState,
             detailsFocusPreparedState: detailsFocusPreparedState,
-            labelForKey: { key in
-                displayLabel(for: key)
+            labelLookup: GraphCanvasDerivedStateInputSnapshot.makeLabelLookup(
+                nodes: nodes,
+                labelCache: labelCache
+            )
+        )
+    }
+
+    @MainActor
+    func scheduleDerivedStateUpdate(
+        input: GraphCanvasDerivedStateInputSnapshot,
+        reason: GraphCanvasDerivedStateTriggerReason
+    ) {
+        derivedStateScheduler.schedule(
+            input: input,
+            graphID: activeGraphID,
+            reason: reason,
+            commit: { derivedState in
+                commitDerivedState(derivedState)
             }
         )
+    }
 
+    @MainActor
+    func resumeDerivedStateAfterGraphLoad() {
+        derivedStateScheduler.resumeAfterGraphTransition(
+            input: derivedStateInputSnapshot,
+            graphID: activeGraphID,
+            reason: .graphLoad,
+            commit: { derivedState in
+                commitDerivedState(derivedState)
+            }
+        )
+    }
+
+    @MainActor
+    private func commitDerivedState(
+        _ derivedState: GraphCanvasDerivedStateSnapshot
+    ) {
         let cacheMutation = GraphCanvasDerivedStateCacheMutation.diff(
             cachedDrawEdges: drawEdgesCache,
             cachedLens: lensCache,

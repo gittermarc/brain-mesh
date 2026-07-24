@@ -98,6 +98,7 @@ extension GraphCanvasScreen {
             applyStagedJumpAfterLoadIfNeeded(availableKeys: nodeKeys)
             applyPendingFocusCenterAfterLoadIfNeeded(availableKeys: nodeKeys)
             applyPendingViewPresetAfterLoadIfNeeded(availableKeys: nodeKeys)
+            resumeDerivedStateAfterGraphLoad()
             isLoading = false
 
             BMLog.load.info(

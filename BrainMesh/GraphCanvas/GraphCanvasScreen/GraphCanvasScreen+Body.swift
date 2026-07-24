@@ -202,6 +202,8 @@ extension GraphCanvasScreen {
 
             // ✅ Graph change => reset view state + reload
             .onChange(of: activeGraphIDString) { _, _ in
+                derivedStateScheduler.beginGraphTransition(to: activeGraphID)
+
                 // Reset anything that is graph-scoped.
                 clearFocusEntity(scheduleReload: false)
                 canvasSelection.clear()
@@ -298,7 +300,12 @@ extension GraphCanvasScreen {
             .onChange(of: pan) { _, _ in pulseMiniMap() }
             .onChange(of: scale) { _, _ in pulseMiniMap() }
             .onAppear {
-                recomputeDerivedState()
+                if !nodes.isEmpty {
+                    scheduleDerivedStateUpdate(
+                        input: derivedStateInputSnapshot,
+                        reason: .initial
+                    )
+                }
                 synchronizeCopilotHighlights()
                 publishCopilotCanvasContext()
                 handlePendingCopilotCommand()
@@ -318,6 +325,7 @@ extension GraphCanvasScreen {
             .onDisappear {
                 // Best-effort: If the screen goes away, stop any in-flight load.
                 loadTask?.cancel()
+                derivedStateScheduler.cancel()
                 graphCopilotWorkspaceCoordinator.setCanvasVisible(
                     false,
                     graphScope: activeGraphID.map { GraphScope(graphID: $0) }
@@ -360,16 +368,16 @@ extension GraphCanvasScreen {
                 }
             }
 
-            // ✅ Derived state updates (only when its true inputs change)
-            .onChange(of: edges) { _, _ in recomputeDerivedState() }
-            .onChange(of: nodes) { _, _ in recomputeDerivedState() }
-            .onChange(of: labelCache) { _, _ in recomputeDerivedState() }
-            .onChange(of: showAllLinksForSelection) { _, _ in recomputeDerivedState() }
-            .onChange(of: lensEnabled) { _, _ in recomputeDerivedState() }
-            .onChange(of: lensHideNonRelevant) { _, _ in recomputeDerivedState() }
-            .onChange(of: lensDepth) { _, _ in recomputeDerivedState() }
-            .onChange(of: detailsFocusState) { _, _ in recomputeDerivedState() }
-            .onChange(of: detailsFocusPreparedState) { _, _ in recomputeDerivedState() }
+            // ✅ One value-only observation replaces the former derived-state fan-out.
+            .onChange(of: derivedStateInputSnapshot) { previous, current in
+                scheduleDerivedStateUpdate(
+                    input: current,
+                    reason: GraphCanvasDerivedStateTriggerReason.classify(
+                        previous: previous,
+                        current: current
+                    )
+                )
+            }
     }
 
     private var graphCanvasObservationView: some View {

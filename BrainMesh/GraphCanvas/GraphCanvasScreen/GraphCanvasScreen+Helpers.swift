@@ -118,7 +118,6 @@ extension GraphCanvasScreen {
         }
 
         recomputeDetailsPeek(for: newSelection)
-        recomputeDerivedState()
     }
 
 
