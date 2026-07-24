@@ -20,6 +20,13 @@ nonisolated enum GraphPhysicsEngine {
         let simulatedNodes = relevant == nil
             ? input.nodes
             : input.nodes.filter { relevant!.contains($0.key) }
+        let interactionStrategy =
+            GraphPhysicsInteractionStrategySelector.strategy(
+                simulatedNodeCount: simulatedNodes.count,
+                configuration: configuration.interactionStrategy,
+                diagnosticOverride:
+                    input.diagnosticInteractionStrategyOverride
+            )
 
         if let relevant {
             for node in input.nodes where !relevant.contains(node.key) {
@@ -27,78 +34,108 @@ nonisolated enum GraphPhysicsEngine {
             }
         }
 
-        var pairCount = 0
+        let interactionMetrics: InteractionMetrics
 
-        for i in 0..<simulatedNodes.count {
-            let firstKey = simulatedNodes[i].key
-            guard let firstPosition = positions[firstKey] else { continue }
+        switch interactionStrategy {
+        case .exactPairLoop:
+            var pairCount = 0
 
-            if (i + 1) >= simulatedNodes.count { continue }
-            for j in (i + 1)..<simulatedNodes.count {
-                let secondKey = simulatedNodes[j].key
-                guard let secondPosition = positions[secondKey] else { continue }
-                pairCount += 1
+            // This loop and its calculation order intentionally remain
+            // identical to the engine extracted in PR 12.
+            for i in 0..<simulatedNodes.count {
+                let firstKey = simulatedNodes[i].key
+                guard let firstPosition = positions[firstKey] else {
+                    continue
+                }
 
-                let dx = firstPosition.x - secondPosition.x
-                let dy = firstPosition.y - secondPosition.y
-                let distanceSquared = max(
-                    dx * dx + dy * dy,
-                    configuration.minimumPairDistanceSquared
-                )
-                let distance = sqrt(distanceSquared)
+                if (i + 1) >= simulatedNodes.count { continue }
+                for j in (i + 1)..<simulatedNodes.count {
+                    let secondKey = simulatedNodes[j].key
+                    guard let secondPosition = positions[secondKey] else {
+                        continue
+                    }
+                    pairCount += 1
 
-                let repulsionForce = configuration.repulsion / distanceSquared
-                let repulsionX =
-                    dx * repulsionForce * configuration.repulsionScale
-                let repulsionY =
-                    dy * repulsionForce * configuration.repulsionScale
-                addVelocity(
-                    firstKey,
-                    dx: repulsionX,
-                    dy: repulsionY,
-                    fixedNodeKeys: input.fixedNodeKeys,
-                    velocities: &velocities
-                )
-                addVelocity(
-                    secondKey,
-                    dx: -repulsionX,
-                    dy: -repulsionY,
-                    fixedNodeKeys: input.fixedNodeKeys,
-                    velocities: &velocities
-                )
+                    let dx = firstPosition.x - secondPosition.x
+                    let dy = firstPosition.y - secondPosition.y
+                    let distanceSquared = max(
+                        dx * dx + dy * dy,
+                        configuration.minimumPairDistanceSquared
+                    )
+                    let distance = sqrt(distanceSquared)
 
-                let minimumDistance = radius(
-                    for: firstKey,
-                    configuration: configuration
-                ) + radius(
-                    for: secondKey,
-                    configuration: configuration
-                ) + configuration.collisionPadding
-
-                if distance < minimumDistance {
-                    let overlap = minimumDistance - distance
-                    let normalX = distance > 0.01 ? dx / distance : 1
-                    let normalY = distance > 0.01 ? dy / distance : 0
-                    let collisionX =
-                        normalX * overlap * configuration.collisionStrength
-                    let collisionY =
-                        normalY * overlap * configuration.collisionStrength
+                    let repulsionForce =
+                        configuration.repulsion / distanceSquared
+                    let repulsionX =
+                        dx * repulsionForce * configuration.repulsionScale
+                    let repulsionY =
+                        dy * repulsionForce * configuration.repulsionScale
                     addVelocity(
                         firstKey,
-                        dx: collisionX,
-                        dy: collisionY,
+                        dx: repulsionX,
+                        dy: repulsionY,
                         fixedNodeKeys: input.fixedNodeKeys,
                         velocities: &velocities
                     )
                     addVelocity(
                         secondKey,
-                        dx: -collisionX,
-                        dy: -collisionY,
+                        dx: -repulsionX,
+                        dy: -repulsionY,
                         fixedNodeKeys: input.fixedNodeKeys,
                         velocities: &velocities
                     )
+
+                    let minimumDistance = radius(
+                        for: firstKey,
+                        configuration: configuration
+                    ) + radius(
+                        for: secondKey,
+                        configuration: configuration
+                    ) + configuration.collisionPadding
+
+                    if distance < minimumDistance {
+                        let overlap = minimumDistance - distance
+                        let normalX =
+                            distance > 0.01 ? dx / distance : 1
+                        let normalY =
+                            distance > 0.01 ? dy / distance : 0
+                        let collisionX =
+                            normalX * overlap * configuration.collisionStrength
+                        let collisionY =
+                            normalY * overlap * configuration.collisionStrength
+                        addVelocity(
+                            firstKey,
+                            dx: collisionX,
+                            dy: collisionY,
+                            fixedNodeKeys: input.fixedNodeKeys,
+                            velocities: &velocities
+                        )
+                        addVelocity(
+                            secondKey,
+                            dx: -collisionX,
+                            dy: -collisionY,
+                            fixedNodeKeys: input.fixedNodeKeys,
+                            velocities: &velocities
+                        )
+                    }
                 }
             }
+
+            interactionMetrics = InteractionMetrics(
+                exactCheckedNodePairCount: pairCount,
+                occupiedGridCellCount: 0,
+                neighboringCellPairCount: 0,
+                approximatedDistantCellPairCount: 0
+            )
+
+        case .spatialGrid:
+            interactionMetrics = applySpatialGridInteractions(
+                nodes: simulatedNodes,
+                positions: positions,
+                fixedNodeKeys: input.fixedNodeKeys,
+                configuration: configuration,
+                velocities: &velocities
+            )
         }
 
         var springCount = 0
@@ -193,11 +230,226 @@ nonisolated enum GraphPhysicsEngine {
             velocities: velocities,
             maxSimSpeed: maxSimSpeed,
             metrics: GraphPhysicsStepMetrics(
+                interactionStrategy: interactionStrategy,
+                theoreticalExactPairCount:
+                    GraphPhysicsStepMetrics.theoreticalPairCount(
+                        simulatedNodes.count
+                    ),
+                exactCheckedNodePairCount:
+                    interactionMetrics.exactCheckedNodePairCount,
+                occupiedGridCellCount:
+                    interactionMetrics.occupiedGridCellCount,
+                neighboringCellPairCount:
+                    interactionMetrics.neighboringCellPairCount,
+                approximatedDistantCellPairCount:
+                    interactionMetrics.approximatedDistantCellPairCount,
                 simulatedNodeCount: simulatedNodes.count,
-                pairCount: pairCount,
                 springCount: springCount
             )
         )
+    }
+
+    private struct InteractionMetrics {
+        let exactCheckedNodePairCount: Int
+        let occupiedGridCellCount: Int
+        let neighboringCellPairCount: Int
+        let approximatedDistantCellPairCount: Int
+    }
+
+    private static func applySpatialGridInteractions(
+        nodes: [GraphNode],
+        positions: [NodeKey: CGPoint],
+        fixedNodeKeys: Set<NodeKey>,
+        configuration: GraphPhysicsConfiguration,
+        velocities: inout [NodeKey: CGVector]
+    ) -> InteractionMetrics {
+        let grid = GraphPhysicsSpatialGrid(
+            nodes: nodes,
+            positions: positions,
+            configuration: configuration.spatialGrid
+        )
+        let cells = grid.cells
+        var exactCheckedNodePairCount = 0
+        var neighboringCellPairCount = 0
+        var approximatedDistantCellPairCount = 0
+        var distantVelocityByCell:
+            [GraphPhysicsGridCoordinate: CGVector] = [:]
+        distantVelocityByCell.reserveCapacity(cells.count)
+
+        for cellIndex in cells.indices {
+            let firstCell = cells[cellIndex]
+
+            if firstCell.nodes.count >= 2 {
+                for firstNodeIndex in 0..<(firstCell.nodes.count - 1) {
+                    let firstNode = firstCell.nodes[firstNodeIndex]
+                    for secondNodeIndex in
+                        (firstNodeIndex + 1)..<firstCell.nodes.count {
+                        let secondNode = firstCell.nodes[secondNodeIndex]
+                        exactCheckedNodePairCount += 1
+                        applyExactPairInteraction(
+                            firstNode,
+                            secondNode,
+                            fixedNodeKeys: fixedNodeKeys,
+                            configuration: configuration,
+                            velocities: &velocities
+                        )
+                    }
+                }
+            }
+
+            guard cellIndex < cells.count - 1 else { continue }
+
+            for secondCellIndex in (cellIndex + 1)..<cells.count {
+                let secondCell = cells[secondCellIndex]
+
+                if firstCell.coordinate.isImmediatelyNeighboring(
+                    secondCell.coordinate
+                ) {
+                    neighboringCellPairCount += 1
+                    for firstNode in firstCell.nodes {
+                        for secondNode in secondCell.nodes {
+                            exactCheckedNodePairCount += 1
+                            applyExactPairInteraction(
+                                firstNode,
+                                secondNode,
+                                fixedNodeKeys: fixedNodeKeys,
+                                configuration: configuration,
+                                velocities: &velocities
+                            )
+                        }
+                    }
+                } else {
+                    approximatedDistantCellPairCount += 1
+                    accumulateDistantCellRepulsion(
+                        firstCell,
+                        secondCell,
+                        configuration: configuration,
+                        velocityByCell: &distantVelocityByCell
+                    )
+                }
+            }
+        }
+
+        // Every distant cell-pair contribution is accumulated first. Each
+        // movable node receives its cell delta exactly once per tick.
+        for cell in cells {
+            guard let velocity = distantVelocityByCell[cell.coordinate]
+            else {
+                continue
+            }
+            for node in cell.nodes {
+                addVelocity(
+                    node.key,
+                    dx: velocity.dx,
+                    dy: velocity.dy,
+                    fixedNodeKeys: fixedNodeKeys,
+                    velocities: &velocities
+                )
+            }
+        }
+
+        return InteractionMetrics(
+            exactCheckedNodePairCount: exactCheckedNodePairCount,
+            occupiedGridCellCount: cells.count,
+            neighboringCellPairCount: neighboringCellPairCount,
+            approximatedDistantCellPairCount:
+                approximatedDistantCellPairCount
+        )
+    }
+
+    private static func applyExactPairInteraction(
+        _ firstNode: GraphPhysicsGridNode,
+        _ secondNode: GraphPhysicsGridNode,
+        fixedNodeKeys: Set<NodeKey>,
+        configuration: GraphPhysicsConfiguration,
+        velocities: inout [NodeKey: CGVector]
+    ) {
+        let dx = firstNode.position.x - secondNode.position.x
+        let dy = firstNode.position.y - secondNode.position.y
+        let distanceSquared = max(
+            dx * dx + dy * dy,
+            configuration.minimumPairDistanceSquared
+        )
+        let distance = sqrt(distanceSquared)
+
+        let repulsionForce = configuration.repulsion / distanceSquared
+        let repulsionX =
+            dx * repulsionForce * configuration.repulsionScale
+        let repulsionY =
+            dy * repulsionForce * configuration.repulsionScale
+        addVelocity(
+            firstNode.key,
+            dx: repulsionX,
+            dy: repulsionY,
+            fixedNodeKeys: fixedNodeKeys,
+            velocities: &velocities
+        )
+        addVelocity(
+            secondNode.key,
+            dx: -repulsionX,
+            dy: -repulsionY,
+            fixedNodeKeys: fixedNodeKeys,
+            velocities: &velocities
+        )
+
+        let minimumDistance = radius(
+            for: firstNode.key,
+            configuration: configuration
+        ) + radius(
+            for: secondNode.key,
+            configuration: configuration
+        ) + configuration.collisionPadding
+
+        if distance < minimumDistance {
+            let overlap = minimumDistance - distance
+            let normalX = distance > 0.01 ? dx / distance : 1
+            let normalY = distance > 0.01 ? dy / distance : 0
+            let collisionX =
+                normalX * overlap * configuration.collisionStrength
+            let collisionY =
+                normalY * overlap * configuration.collisionStrength
+            addVelocity(
+                firstNode.key,
+                dx: collisionX,
+                dy: collisionY,
+                fixedNodeKeys: fixedNodeKeys,
+                velocities: &velocities
+            )
+            addVelocity(
+                secondNode.key,
+                dx: -collisionX,
+                dy: -collisionY,
+                fixedNodeKeys: fixedNodeKeys,
+                velocities: &velocities
+            )
+        }
+    }
+
+    private static func accumulateDistantCellRepulsion(
+        _ firstCell: GraphPhysicsGridCell,
+        _ secondCell: GraphPhysicsGridCell,
+        configuration: GraphPhysicsConfiguration,
+        velocityByCell:
+            inout [GraphPhysicsGridCoordinate: CGVector]
+    ) {
+        let firstCount = firstCell.aggregate.positionedNodeCount
+        let secondCount = secondCell.aggregate.positionedNodeCount
+        guard firstCount > 0, secondCount > 0 else { return }
+
+        let interaction = GraphPhysicsDistantCellRepulsion.calculate(
+            first: firstCell.aggregate,
+            second: secondCell.aggregate,
+            configuration: configuration
+        )
+
+        velocityByCell[firstCell.coordinate, default: .zero].dx +=
+            interaction.firstCellVelocityPerMovableNode.dx
+        velocityByCell[firstCell.coordinate, default: .zero].dy +=
+            interaction.firstCellVelocityPerMovableNode.dy
+        velocityByCell[secondCell.coordinate, default: .zero].dx +=
+            interaction.secondCellVelocityPerMovableNode.dx
+        velocityByCell[secondCell.coordinate, default: .zero].dy +=
+            interaction.secondCellVelocityPerMovableNode.dy
     }
 
     private static func addVelocity(

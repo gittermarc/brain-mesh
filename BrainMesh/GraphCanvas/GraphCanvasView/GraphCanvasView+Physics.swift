@@ -141,11 +141,19 @@ extension GraphCanvasView {
             let maxMs = Double(physicsTickMaxNanos) / 1_000_000.0
             let simCount = result.metrics.simulatedNodeCount
             let relCount = relevant?.count ?? 0
-            let pairCount = result.metrics.pairCount
+            let strategy = result.metrics.interactionStrategy.rawValue
+            let theoreticalPairs =
+                result.metrics.theoreticalExactPairCount
+            let exactPairs = result.metrics.exactCheckedNodePairCount
+            let gridCells = result.metrics.occupiedGridCellCount
+            let neighboringCellPairs =
+                result.metrics.neighboringCellPairCount
+            let distantCellPairs =
+                result.metrics.approximatedDistantCellPairCount
             let springCount = result.metrics.springCount
 
             BMLog.physics.debug(
-                "physics avgMs=\(avgMs, format: .fixed(precision: 2)) maxMs=\(maxMs, format: .fixed(precision: 2)) nodes=\(nodes.count, privacy: .public) simNodes=\(simCount, privacy: .public) relevant=\(relCount, privacy: .public) edges=\(physicsEdges.count, privacy: .public) pairs=\(pairCount, privacy: .public) springs=\(springCount, privacy: .public)"
+                "physics avgMs=\(avgMs, format: .fixed(precision: 2)) maxMs=\(maxMs, format: .fixed(precision: 2)) strategy=\(strategy, privacy: .public) nodes=\(nodes.count, privacy: .public) simNodes=\(simCount, privacy: .public) relevant=\(relCount, privacy: .public) edges=\(physicsEdges.count, privacy: .public) theoreticalPairs=\(theoreticalPairs, privacy: .public) exactPairs=\(exactPairs, privacy: .public) gridCells=\(gridCells, privacy: .public) neighboringCellPairs=\(neighboringCellPairs, privacy: .public) distantCellPairs=\(distantCellPairs, privacy: .public) springs=\(springCount, privacy: .public)"
             )
 
             physicsTickCounter = 0

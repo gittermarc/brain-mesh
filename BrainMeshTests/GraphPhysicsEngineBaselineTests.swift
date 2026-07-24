@@ -18,11 +18,39 @@ struct GraphPhysicsEngineBaselineTests {
             let result = GraphPhysicsEngine.step(input: input)
             let runtimeNanoseconds =
                 DispatchTime.now().uptimeNanoseconds &- start
+            let expectedStrategy: GraphPhysicsInteractionStrategy =
+                nodeCount <= 80 ? .exactPairLoop : .spatialGrid
 
             #expect(
-                result.metrics.pairCount == theoreticalPairCount,
+                result.metrics.interactionStrategy == expectedStrategy,
                 Comment(rawValue: "nodeCount=\(nodeCount)")
             )
+            #expect(
+                result.metrics.theoreticalExactPairCount
+                    == theoreticalPairCount,
+                Comment(rawValue: "nodeCount=\(nodeCount)")
+            )
+            if expectedStrategy == .exactPairLoop {
+                #expect(
+                    result.metrics.exactCheckedNodePairCount
+                        == theoreticalPairCount,
+                    Comment(rawValue: "nodeCount=\(nodeCount)")
+                )
+            } else {
+                #expect(
+                    result.metrics.exactCheckedNodePairCount
+                        < theoreticalPairCount,
+                    Comment(rawValue: "nodeCount=\(nodeCount)")
+                )
+                #expect(
+                    result.metrics.occupiedGridCellCount > 0,
+                    Comment(rawValue: "nodeCount=\(nodeCount)")
+                )
+                #expect(
+                    result.metrics.approximatedDistantCellPairCount > 0,
+                    Comment(rawValue: "nodeCount=\(nodeCount)")
+                )
+            }
             #expect(
                 result.metrics.springCount == expectedSpringCount,
                 Comment(rawValue: "nodeCount=\(nodeCount)")
@@ -46,8 +74,12 @@ struct GraphPhysicsEngineBaselineTests {
 
             print(
                 "GraphPhysics baseline nodes=\(nodeCount) "
+                    + "strategy=\(result.metrics.interactionStrategy.rawValue) "
                     + "theoreticalPairs=\(theoreticalPairCount) "
-                    + "checkedPairs=\(result.metrics.pairCount) "
+                    + "exactPairs=\(result.metrics.exactCheckedNodePairCount) "
+                    + "gridCells=\(result.metrics.occupiedGridCellCount) "
+                    + "neighborCellPairs=\(result.metrics.neighboringCellPairCount) "
+                    + "distantCellPairs=\(result.metrics.approximatedDistantCellPairCount) "
                     + "springs=\(result.metrics.springCount) "
                     + "simulatedNodes=\(result.metrics.simulatedNodeCount) "
                     + "runtimeNs=\(runtimeNanoseconds)"

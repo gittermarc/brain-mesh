@@ -106,6 +106,10 @@ struct GraphPhysicsEngineCharacterizationTests {
             actual.metrics.springCount == expected.metrics.springCount,
             Comment(rawValue: "\(fixtureName): spring count")
         )
+        #expect(
+            actual.metrics == expected.metrics,
+            Comment(rawValue: "\(fixtureName): complete metrics")
+        )
     }
 
     private func expectClose(

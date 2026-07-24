@@ -29,6 +29,16 @@ struct GraphPhysicsEngineTests {
         #expect(configuration.repulsionScale == 0.00002)
         #expect(configuration.collisionStrength == 0.030)
         #expect(
+            configuration.interactionStrategy
+                .exactPairLoopMaximumSimulatedNodeCount == 80
+        )
+        #expect(configuration.spatialGrid.maximumCollisionDistance == 50)
+        #expect(
+            configuration.spatialGrid
+                .localInteractionReferenceDistance == 76
+        )
+        #expect(configuration.spatialGrid.cellSize == 76)
+        #expect(
             GraphPhysicsConfiguration(
                 collisionStrength: -0.5
             ).collisionStrength == 0
@@ -38,6 +48,17 @@ struct GraphPhysicsEngineTests {
     @Test
     func domainValuesAreSendable() {
         assertSendable(GraphPhysicsConfiguration.self)
+        assertSendable(GraphPhysicsInteractionStrategy.self)
+        assertSendable(
+            GraphPhysicsInteractionStrategyConfiguration.self
+        )
+        assertSendable(GraphPhysicsSpatialGridConfiguration.self)
+        assertSendable(GraphPhysicsGridCoordinate.self)
+        assertSendable(GraphPhysicsGridNode.self)
+        assertSendable(GraphPhysicsGridCellAggregate.self)
+        assertSendable(GraphPhysicsDistantCellRepulsion.self)
+        assertSendable(GraphPhysicsGridCell.self)
+        assertSendable(GraphPhysicsSpatialGrid.self)
         assertSendable(GraphPhysicsStepInput.self)
         assertSendable(GraphPhysicsStepMetrics.self)
         assertSendable(GraphPhysicsStepResult.self)

@@ -343,6 +343,10 @@ enum GraphPhysicsFixtures {
             GraphPhysicsCharacterizationFixture(
                 name: "forty nodes",
                 input: deterministicInput(nodeCount: 40)
+            ),
+            GraphPhysicsCharacterizationFixture(
+                name: "eighty nodes",
+                input: deterministicInput(nodeCount: 80)
             )
         ]
     }

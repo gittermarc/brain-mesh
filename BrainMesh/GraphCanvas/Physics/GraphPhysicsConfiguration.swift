@@ -26,6 +26,8 @@ nonisolated struct GraphPhysicsConfiguration: Equatable, Sendable {
     let minimumSpringDistance: CGFloat
     let repulsionScale: CGFloat
     let collisionStrength: CGFloat
+    let interactionStrategy:
+        GraphPhysicsInteractionStrategyConfiguration
 
     init(
         collisionStrength: CGFloat,
@@ -41,7 +43,9 @@ nonisolated struct GraphPhysicsConfiguration: Equatable, Sendable {
         attributeRadius: CGFloat = 18,
         minimumPairDistanceSquared: CGFloat = 40,
         minimumSpringDistance: CGFloat = 1,
-        repulsionScale: CGFloat = 0.00002
+        repulsionScale: CGFloat = 0.00002,
+        interactionStrategy:
+            GraphPhysicsInteractionStrategyConfiguration = .production
     ) {
         self.repulsion = repulsion
         self.linkSpring = linkSpring
@@ -57,5 +61,12 @@ nonisolated struct GraphPhysicsConfiguration: Equatable, Sendable {
         self.minimumSpringDistance = minimumSpringDistance
         self.repulsionScale = repulsionScale
         self.collisionStrength = max(0, collisionStrength)
+        self.interactionStrategy = interactionStrategy
+    }
+
+    var spatialGrid: GraphPhysicsSpatialGridConfiguration {
+        GraphPhysicsSpatialGridConfiguration(
+            physicsConfiguration: self
+        )
     }
 }
