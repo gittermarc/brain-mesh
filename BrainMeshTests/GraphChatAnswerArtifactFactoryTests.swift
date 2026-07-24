@@ -470,6 +470,132 @@ struct GraphChatAnswerArtifactFactoryTests {
     }
 
     @Test
+    func repeatedIdenticalInputsProduceEqualDraftsAndStableIDs() throws {
+        let context = GraphChatTestSupport.makeSchemaContext()
+        let titleID = fieldID("F1", in: context)
+        let dueDateID = fieldID("F5", in: context)
+        let result = queryResult(
+            rows: [
+                row(
+                    id: uuid(550),
+                    label: "Project Alpha",
+                    cells: [
+                        cell(
+                            fieldID: titleID,
+                            name: "Titel",
+                            value: .text("Alpha"),
+                            index: 551
+                        ),
+                        cell(
+                            fieldID: dueDateID,
+                            name: "Fällig",
+                            value: .date(Date(timeIntervalSince1970: 1_735_732_800)),
+                            index: 552
+                        )
+                    ]
+                )
+            ]
+        )
+        let queryPlan = plan(
+            context: context,
+            sorting: [
+                GraphValidatedQuerySort(
+                    key: .field(dueDateID),
+                    direction: .descending
+                )
+            ],
+            projection: [.nodeIdentity, .field(titleID), .field(dueDateID)]
+        )
+
+        let first = try #require(
+            GraphChatAnswerArtifactFactory.queryResult(
+                result,
+                plan: queryPlan,
+                schemaContext: context,
+                language: .english
+            )
+        )
+        let second = try #require(
+            GraphChatAnswerArtifactFactory.queryResult(
+                result,
+                plan: queryPlan,
+                schemaContext: context,
+                language: .english
+            )
+        )
+
+        #expect(first == second)
+        guard case .table(let firstTable) = first.payload,
+              case .table(let secondTable) = second.payload else {
+            Issue.record("Expected deterministic table artifacts")
+            return
+        }
+        #expect(firstTable.columns.map(\.id) == secondTable.columns.map(\.id))
+        #expect(firstTable.rows.map(\.id) == secondTable.rows.map(\.id))
+        #expect(firstTable.sorting == secondTable.sorting)
+    }
+
+    @Test
+    func germanAndEnglishQuerySummariesRemainExactlyDeterministic() throws {
+        let context = GraphChatTestSupport.makeSchemaContext()
+        let titleID = fieldID("F1", in: context)
+        let dueDateID = fieldID("F5", in: context)
+        let statusID = fieldID("F7", in: context)
+        let queryPlan = plan(
+            context: context,
+            filters: [
+                GraphValidatedQueryFilter(
+                    fieldID: titleID,
+                    fieldType: .singleLineText,
+                    operation: .contains,
+                    value: .text("Alpha")
+                )
+            ],
+            sorting: [
+                GraphValidatedQuerySort(
+                    key: .field(dueDateID),
+                    direction: .descending
+                )
+            ],
+            projection: [.nodeIdentity, .field(titleID), .field(dueDateID)],
+            aggregation: .groupCount(statusID),
+            limit: 25
+        )
+
+        let germanFirst = GraphChatAnswerArtifactFactory.querySummary(
+            plan: queryPlan,
+            schemaContext: context,
+            language: .german
+        )
+        let germanSecond = GraphChatAnswerArtifactFactory.querySummary(
+            plan: queryPlan,
+            schemaContext: context,
+            language: .german
+        )
+        let englishFirst = GraphChatAnswerArtifactFactory.querySummary(
+            plan: queryPlan,
+            schemaContext: context,
+            language: .english
+        )
+        let englishSecond = GraphChatAnswerArtifactFactory.querySummary(
+            plan: queryPlan,
+            schemaContext: context,
+            language: .english
+        )
+
+        #expect(germanFirst == germanSecond)
+        #expect(englishFirst == englishSecond)
+        #expect(
+            germanFirst.displayText
+                == "Entity: Projekte; Filter: Titel enthält Alpha; Gruppierung: Status; Sortierung: Fällig absteigend; Projektion: Name, Titel, Fällig; Limit: 25; Aggregation: Gruppierte Anzahl: Status"
+        )
+        #expect(
+            englishFirst.displayText
+                == "Entity: Projekte; Filters: Titel contains Alpha; Grouping: Status; Sorting: Fällig descending; Projection: Name, Titel, Fällig; Limit: 25; Aggregation: Grouped count: Status"
+        )
+    }
+
+    @Test
     func querySummaryRepresentsEverySupportedAggregation() throws {
         let context = GraphChatTestSupport.makeSchemaContext()
         let budgetID = fieldID("F4", in: context)
@@ -699,7 +825,33 @@ struct GraphChatAnswerArtifactFactoryTests {
         }
 
         #expect(table.columns.first?.role == .primary)
-        #expect(Array(table.columns.dropFirst().map(\.role)) == fieldFixtures.map { $0.2 })
+        let detailColumns = Array(table.columns.dropFirst())
+        #expect(detailColumns.map(\.role) == fieldFixtures.map { $0.2 })
+        #expect(detailColumns.map(\.valuePresentation.missingLabel) == Array(repeating: "Missing", count: 7))
+        #expect(detailColumns.map(\.valuePresentation.booleanTrueLabel) == Array(repeating: "Yes", count: 7))
+        #expect(detailColumns.map(\.valuePresentation.booleanFalseLabel) == Array(repeating: "No", count: 7))
+        #expect(detailColumns.map(\.valuePresentation.dateFormat) == [
+            nil,
+            nil,
+            nil,
+            nil,
+            .localizedDate,
+            nil,
+            nil
+        ])
+        #expect(detailColumns.map(\.valuePresentation.choiceLabels) == [
+            [],
+            [],
+            [],
+            [],
+            [],
+            [],
+            [
+                GraphChatAnswerArtifactChoiceValue(value: "Offen"),
+                GraphChatAnswerArtifactChoiceValue(value: "In Arbeit"),
+                GraphChatAnswerArtifactChoiceValue(value: "Fertig")
+            ]
+        ])
     }
 
     private func plan(
