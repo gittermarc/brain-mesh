@@ -68,5 +68,5 @@ enum BMAppStorageKeys {
 
     // MARK: - Image import (gallery)
 
-    static let galleryImageCompressionPreset = "BMGalleryImageCompressionPreset"
+    nonisolated static let galleryImageCompressionPreset = "BMGalleryImageCompressionPreset"
 }

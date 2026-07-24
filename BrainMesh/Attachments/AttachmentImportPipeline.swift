@@ -10,7 +10,7 @@ import Foundation
 import UniformTypeIdentifiers
 import UIKit
 
-struct PreparedAttachmentImport: Sendable {
+nonisolated struct PreparedAttachmentImport: Equatable, Sendable {
     let id: UUID
     let title: String
     let originalFilename: String
@@ -24,14 +24,51 @@ struct PreparedAttachmentImport: Sendable {
     var isGalleryImage: Bool { inferredKind == .galleryImage }
 }
 
-enum AttachmentImportPipeline {
+/// Small cache seam used by the import pipeline and its deterministic error tests.
+/// Every closure is value-only and safe to execute outside the MainActor.
+nonisolated struct AttachmentImportCacheOperations: Sendable {
+    let writeToCache: @Sendable (Data, UUID, String) throws -> String
+    let copyIntoCache: @Sendable (URL, UUID, String) throws -> String
+    let resolveURL: @Sendable (String) -> URL?
+    let readData: @Sendable (URL) throws -> Data
+    let delete: @Sendable (String?) -> Void
+
+    static let live = AttachmentImportCacheOperations(
+        writeToCache: { data, attachmentID, fileExtension in
+            try AttachmentStore.writeToCache(
+                data: data,
+                attachmentID: attachmentID,
+                fileExtension: fileExtension
+            )
+        },
+        copyIntoCache: { sourceURL, attachmentID, fileExtension in
+            try AttachmentStore.copyIntoCache(
+                from: sourceURL,
+                attachmentID: attachmentID,
+                fileExtension: fileExtension
+            )
+        },
+        resolveURL: { localPath in
+            AttachmentStore.url(forLocalPath: localPath)
+        },
+        readData: { url in
+            try Data(contentsOf: url, options: [.mappedIfSafe])
+        },
+        delete: { localPath in
+            AttachmentStore.delete(localPath: localPath)
+        }
+    )
+}
+
+nonisolated enum AttachmentImportPipeline {
 
     /// Prepares an attachment import from a security-scoped file URL.
-    /// - Important: performs file I/O; call from a background task.
+    /// - Important: performs file I/O and image/video preparation; call from a detached task.
     static func prepareFileImport(
         from url: URL,
         attachmentID: UUID,
-        maxBytes: Int
+        maxBytes: Int,
+        cacheOperations: AttachmentImportCacheOperations = .live
     ) async throws -> PreparedAttachmentImport {
 
         let scoped = url.startAccessingSecurityScopedResource()
@@ -45,36 +82,45 @@ enum AttachmentImportPipeline {
         let contentType = (try? url.resourceValues(forKeys: [.contentTypeKey]).contentType)?.identifier ?? ""
         let fileSize = (try? url.resourceValues(forKeys: [.fileSizeKey]).fileSize) ?? 0
 
-        let inferredKind = inferKind(contentTypeIdentifier: contentType, fileExtension: ext)
+        let inferredKind = inferKind(
+            contentTypeIdentifier: contentType,
+            fileExtension: ext
+        )
 
         let compressionEnabled = VideoImportPreferences.isCompressionEnabled()
         let compressionQuality = VideoImportPreferences.compressionQuality()
 
-        // Gallery images: always normalize through our gallery JPEG pipeline (controlled by IMG1 preset)
-        // so "Datei importieren" can't bypass image size policy.
+        // App-wide rule: gallery images imported through the file importer are normalized through
+        // the configured JPEG gallery preset so this entry point cannot bypass image size policy.
         if inferredKind == .galleryImage {
             let preset = ImageGalleryImportPreferences.compressionPreset()
-
-            // Read bytes directly from the security-scoped URL.
-            // (We avoid copying the original into cache to prevent keeping a large raw file around.)
             let raw = try Data(contentsOf: url, options: [.mappedIfSafe])
 
-            if let decoded = ImageImportPipeline.decodeImageSafely(from: raw, maxPixelSize: preset.maxDecodePixelSize),
-               let jpeg = ImageImportPipeline.prepareJPEGForGallery(decoded, targetBytes: preset.targetBytes) {
+            if let decoded = ImageImportPipeline.decodeImageSafely(
+                from: raw,
+                maxPixelSize: preset.maxDecodePixelSize
+            ),
+               let jpeg = ImageImportPipeline.prepareJPEGForGallery(
+                decoded,
+                targetBytes: preset.targetBytes
+               ) {
 
-                if jpeg.count > maxBytes {
-                    // Even after recompress we exceed maxBytes -> reject.
-                    throw AttachmentImportPipelineError.tooLarge(bytes: jpeg.count, maxBytes: maxBytes)
+                guard jpeg.count <= maxBytes else {
+                    throw AttachmentImportPipelineError.tooLarge(
+                        bytes: jpeg.count,
+                        maxBytes: maxBytes
+                    )
                 }
 
                 let baseTitle = url.deletingPathExtension().lastPathComponent
                 let normalizedTitle = baseTitle.isEmpty ? "Foto" : baseTitle
                 let normalizedOriginal = baseTitle.isEmpty ? "Foto.jpg" : "\(baseTitle).jpg"
 
-                let localFilename = try AttachmentStore.writeToCache(
-                    data: jpeg,
+                let localFilename = try writePreparedData(
+                    jpeg,
                     attachmentID: attachmentID,
-                    fileExtension: "jpg"
+                    fileExtension: "jpg",
+                    cacheOperations: cacheOperations
                 )
 
                 return PreparedAttachmentImport(
@@ -90,86 +136,93 @@ enum AttachmentImportPipeline {
                 )
             }
 
-            // Recompress failed. Only fall back to importing as-is if the original is within maxBytes.
-            if raw.count <= maxBytes {
-                // Copy to sandbox (security scoped URLs are not stable).
-                let cachedFilename = try AttachmentStore.copyIntoCache(from: url, attachmentID: attachmentID, fileExtension: ext)
-                guard let cachedURL = AttachmentStore.url(forLocalPath: cachedFilename) else {
-                    throw AttachmentImportPipelineError.cacheWriteFailed
-                }
-
-                let data = try Data(contentsOf: cachedURL, options: [.mappedIfSafe])
-                if data.count > maxBytes {
-                    AttachmentStore.delete(localPath: cachedFilename)
-                    throw AttachmentImportPipelineError.tooLarge(bytes: data.count, maxBytes: maxBytes)
-                }
-
-                let title = url.deletingPathExtension().lastPathComponent
-
-                return PreparedAttachmentImport(
-                    id: attachmentID,
-                    title: title.isEmpty ? "Foto" : title,
-                    originalFilename: fileName,
-                    contentTypeIdentifier: contentType,
-                    fileExtension: ext,
-                    byteCount: data.count,
-                    inferredKind: inferredKind,
-                    localPath: cachedFilename,
-                    fileData: data
+            // Recompression failed. Keep the source format only when the original is within limit.
+            guard raw.count <= maxBytes else {
+                throw AttachmentImportPipelineError.tooLarge(
+                    bytes: raw.count,
+                    maxBytes: maxBytes
                 )
             }
 
-            // Original is too large and we couldn't recompress -> reject.
-            throw AttachmentImportPipelineError.tooLarge(bytes: raw.count, maxBytes: maxBytes)
+            let cachedFilename = try copyPreparedFile(
+                from: url,
+                attachmentID: attachmentID,
+                fileExtension: ext,
+                cacheOperations: cacheOperations
+            )
+            let data = try readPreparedCache(
+                localPath: cachedFilename,
+                maxBytes: maxBytes,
+                oversizedError: .attachment,
+                cacheOperations: cacheOperations
+            )
+            let title = url.deletingPathExtension().lastPathComponent
+
+            return PreparedAttachmentImport(
+                id: attachmentID,
+                title: title.isEmpty ? "Foto" : title,
+                originalFilename: fileName,
+                contentTypeIdentifier: contentType,
+                fileExtension: ext,
+                byteCount: data.count,
+                inferredKind: inferredKind,
+                localPath: cachedFilename,
+                fileData: data
+            )
         }
 
-        // If a video is larger than our max, try to compress it instead of rejecting.
+        // App-wide rule: an oversized video is compressed when the preference is enabled.
         if fileSize > maxBytes {
-            if inferredKind == .video, compressionEnabled {
-                let compressed = try await VideoCompression.compressToCache(
-                    sourceURL: url,
-                    attachmentID: attachmentID,
-                    maxBytes: maxBytes,
-                    quality: compressionQuality
-                )
-
-                let data = try Data(contentsOf: compressed.outputURL, options: [.mappedIfSafe])
-                if data.count > maxBytes {
-                    AttachmentStore.delete(localPath: compressed.localFilename)
-                    throw VideoCompressionError.tooLargeAfterCompression(bytes: data.count, maxBytes: maxBytes)
-                }
-
-                let baseTitle = url.deletingPathExtension().lastPathComponent
-                let normalizedOriginal = baseTitle.isEmpty ? "Video.\(compressed.fileExtension)" : "\(baseTitle).\(compressed.fileExtension)"
-
-                return PreparedAttachmentImport(
-                    id: attachmentID,
-                    title: baseTitle.isEmpty ? "Video" : baseTitle,
-                    originalFilename: normalizedOriginal,
-                    contentTypeIdentifier: compressed.contentTypeIdentifier,
-                    fileExtension: compressed.fileExtension,
-                    byteCount: data.count,
-                    inferredKind: .video,
-                    localPath: compressed.localFilename,
-                    fileData: data
+            guard inferredKind == .video, compressionEnabled else {
+                throw AttachmentImportPipelineError.tooLarge(
+                    bytes: fileSize,
+                    maxBytes: maxBytes
                 )
             }
 
-            throw AttachmentImportPipelineError.tooLarge(bytes: fileSize, maxBytes: maxBytes)
+            let compressed = try await VideoCompression.compressToCache(
+                sourceURL: url,
+                attachmentID: attachmentID,
+                maxBytes: maxBytes,
+                quality: compressionQuality
+            )
+            let data = try readPreparedCache(
+                localPath: compressed.localFilename,
+                maxBytes: maxBytes,
+                oversizedError: .compressedVideo,
+                cacheOperations: cacheOperations
+            )
+
+            let baseTitle = url.deletingPathExtension().lastPathComponent
+            let normalizedOriginal = baseTitle.isEmpty
+                ? "Video.\(compressed.fileExtension)"
+                : "\(baseTitle).\(compressed.fileExtension)"
+
+            return PreparedAttachmentImport(
+                id: attachmentID,
+                title: baseTitle.isEmpty ? "Video" : baseTitle,
+                originalFilename: normalizedOriginal,
+                contentTypeIdentifier: compressed.contentTypeIdentifier,
+                fileExtension: compressed.fileExtension,
+                byteCount: data.count,
+                inferredKind: .video,
+                localPath: compressed.localFilename,
+                fileData: data
+            )
         }
 
-        // Copy to sandbox first (security scoped URLs are not stable).
-        let cachedFilename = try AttachmentStore.copyIntoCache(from: url, attachmentID: attachmentID, fileExtension: ext)
-        guard let cachedURL = AttachmentStore.url(forLocalPath: cachedFilename) else {
-            throw AttachmentImportPipelineError.cacheWriteFailed
-        }
-
-        let data = try Data(contentsOf: cachedURL, options: [.mappedIfSafe])
-        if data.count > maxBytes {
-            AttachmentStore.delete(localPath: cachedFilename)
-            throw AttachmentImportPipelineError.tooLarge(bytes: data.count, maxBytes: maxBytes)
-        }
-
+        let cachedFilename = try copyPreparedFile(
+            from: url,
+            attachmentID: attachmentID,
+            fileExtension: ext,
+            cacheOperations: cacheOperations
+        )
+        let data = try readPreparedCache(
+            localPath: cachedFilename,
+            maxBytes: maxBytes,
+            oversizedError: .attachment,
+            cacheOperations: cacheOperations
+        )
         let title = url.deletingPathExtension().lastPathComponent
 
         return PreparedAttachmentImport(
@@ -185,91 +238,102 @@ enum AttachmentImportPipeline {
         )
     }
 
-    /// Prepares a video import from a temp URL produced by the photo picker.
-    /// - Important: performs AVFoundation export + file I/O; call from a background task.
+    /// Prepares a video import from a temporary URL produced by the photo picker.
+    /// - Important: performs AVFoundation export and file I/O; call from a detached task.
     static func prepareVideoImport(
         from url: URL,
         attachmentID: UUID,
         suggestedFilename: String,
         contentTypeIdentifier: String,
         fileExtension: String,
-        maxBytes: Int
+        maxBytes: Int,
+        cacheOperations: AttachmentImportCacheOperations = .live
     ) async throws -> PreparedAttachmentImport {
 
         let fileSize = (try? url.resourceValues(forKeys: [.fileSizeKey]).fileSize) ?? 0
-        let trimmed = fileExtension.trimmingCharacters(in: CharacterSet(charactersIn: "."))
+        let trimmed = fileExtension.trimmingCharacters(
+            in: CharacterSet(charactersIn: ".")
+        )
         let inputExt = trimmed.isEmpty ? "mov" : trimmed
 
-        let titleBase = URL(fileURLWithPath: suggestedFilename).deletingPathExtension().lastPathComponent
-        let fallbackName = suggestedFilename.isEmpty ? "Video.\(inputExt)" : suggestedFilename
+        let titleBase = URL(fileURLWithPath: suggestedFilename)
+            .deletingPathExtension()
+            .lastPathComponent
+        let fallbackName = suggestedFilename.isEmpty
+            ? "Video.\(inputExt)"
+            : suggestedFilename
 
         let compressionEnabled = VideoImportPreferences.isCompressionEnabled()
         let compressionQuality = VideoImportPreferences.compressionQuality()
 
-        // If the picked video is larger than our max, compress it into cache.
         if fileSize > maxBytes {
-            if compressionEnabled {
-                let compressed = try await VideoCompression.compressToCache(
-                    sourceURL: url,
-                    attachmentID: attachmentID,
-                    maxBytes: maxBytes,
-                    quality: compressionQuality
-                )
-
-                let data = try Data(contentsOf: compressed.outputURL, options: [.mappedIfSafe])
-                if data.count > maxBytes {
-                    AttachmentStore.delete(localPath: compressed.localFilename)
-                    throw VideoCompressionError.tooLargeAfterCompression(bytes: data.count, maxBytes: maxBytes)
-                }
-
-                let normalizedTitle = titleBase.isEmpty ? "Video" : titleBase
-                let normalizedOriginal = URL(fileURLWithPath: fallbackName).deletingPathExtension().lastPathComponent
-                let originalName = normalizedOriginal.isEmpty ? "Video.\(compressed.fileExtension)" : "\(normalizedOriginal).\(compressed.fileExtension)"
-
-                return PreparedAttachmentImport(
-                    id: attachmentID,
-                    title: normalizedTitle,
-                    originalFilename: originalName,
-                    contentTypeIdentifier: compressed.contentTypeIdentifier,
-                    fileExtension: compressed.fileExtension,
-                    byteCount: data.count,
-                    inferredKind: .video,
-                    localPath: compressed.localFilename,
-                    fileData: data
+            guard compressionEnabled else {
+                throw AttachmentImportPipelineError.tooLarge(
+                    bytes: fileSize,
+                    maxBytes: maxBytes
                 )
             }
 
-            throw AttachmentImportPipelineError.tooLarge(bytes: fileSize, maxBytes: maxBytes)
+            let compressed = try await VideoCompression.compressToCache(
+                sourceURL: url,
+                attachmentID: attachmentID,
+                maxBytes: maxBytes,
+                quality: compressionQuality
+            )
+            let data = try readPreparedCache(
+                localPath: compressed.localFilename,
+                maxBytes: maxBytes,
+                oversizedError: .compressedVideo,
+                cacheOperations: cacheOperations
+            )
+
+            let normalizedTitle = titleBase.isEmpty ? "Video" : titleBase
+            let normalizedOriginal = URL(fileURLWithPath: fallbackName)
+                .deletingPathExtension()
+                .lastPathComponent
+            let originalName = normalizedOriginal.isEmpty
+                ? "Video.\(compressed.fileExtension)"
+                : "\(normalizedOriginal).\(compressed.fileExtension)"
+
+            return PreparedAttachmentImport(
+                id: attachmentID,
+                title: normalizedTitle,
+                originalFilename: originalName,
+                contentTypeIdentifier: compressed.contentTypeIdentifier,
+                fileExtension: compressed.fileExtension,
+                byteCount: data.count,
+                inferredKind: .video,
+                localPath: compressed.localFilename,
+                fileData: data
+            )
         }
 
-        // Otherwise: copy the temp file into cache as-is.
-        let cachedFilename = try AttachmentStore.copyIntoCache(from: url, attachmentID: attachmentID, fileExtension: inputExt)
-        guard let cachedURL = AttachmentStore.url(forLocalPath: cachedFilename) else {
-            throw AttachmentImportPipelineError.cacheWriteFailed
-        }
-
-        let data = try Data(contentsOf: cachedURL, options: [.mappedIfSafe])
-        if data.count > maxBytes {
-            AttachmentStore.delete(localPath: cachedFilename)
-            throw AttachmentImportPipelineError.tooLarge(bytes: data.count, maxBytes: maxBytes)
-        }
+        let cachedFilename = try copyPreparedFile(
+            from: url,
+            attachmentID: attachmentID,
+            fileExtension: inputExt,
+            cacheOperations: cacheOperations
+        )
+        let data = try readPreparedCache(
+            localPath: cachedFilename,
+            maxBytes: maxBytes,
+            oversizedError: .attachment,
+            cacheOperations: cacheOperations
+        )
 
         let typeID: String
-        if !contentTypeIdentifier.isEmpty {
+        if contentTypeIdentifier.isEmpty == false {
             typeID = contentTypeIdentifier
-        } else if let t = UTType(filenameExtension: inputExt)?.identifier {
-            typeID = t
+        } else if let inferredType = UTType(filenameExtension: inputExt)?.identifier {
+            typeID = inferredType
         } else {
             typeID = UTType.movie.identifier
         }
 
-        let title = titleBase
-        let originalName = fallbackName
-
         return PreparedAttachmentImport(
             id: attachmentID,
-            title: title.isEmpty ? "Video" : title,
-            originalFilename: originalName,
+            title: titleBase.isEmpty ? "Video" : titleBase,
+            originalFilename: fallbackName,
             contentTypeIdentifier: typeID,
             fileExtension: inputExt,
             byteCount: data.count,
@@ -279,42 +343,152 @@ enum AttachmentImportPipeline {
         )
     }
 
-    static func inferKind(contentTypeIdentifier: String, fileExtension: String) -> AttachmentContentKind {
-        if let t = UTType(contentTypeIdentifier) {
-            if t.conforms(to: .image) {
+    static func inferKind(
+        contentTypeIdentifier: String,
+        fileExtension: String
+    ) -> AttachmentContentKind {
+        if let type = UTType(contentTypeIdentifier) {
+            if type.conforms(to: .image) {
                 return .galleryImage
             }
-            if t.conforms(to: .movie) || t.conforms(to: .video) {
+            if type.conforms(to: .movie) || type.conforms(to: .video) {
                 return .video
             }
             return .file
         }
 
-        if let t = UTType(filenameExtension: fileExtension) {
-            if t.conforms(to: .image) {
+        if let type = UTType(filenameExtension: fileExtension) {
+            if type.conforms(to: .image) {
                 return .galleryImage
             }
-            if t.conforms(to: .movie) || t.conforms(to: .video) {
+            if type.conforms(to: .movie) || type.conforms(to: .video) {
                 return .video
             }
         }
 
         return .file
     }
+
+    private enum OversizedErrorStyle {
+        case attachment
+        case compressedVideo
+    }
+
+    private static func writePreparedData(
+        _ data: Data,
+        attachmentID: UUID,
+        fileExtension: String,
+        cacheOperations: AttachmentImportCacheOperations
+    ) throws -> String {
+        let expectedLocalPath = AttachmentStore.makeLocalFilename(
+            attachmentID: attachmentID,
+            fileExtension: fileExtension
+        )
+
+        let localPath: String
+        do {
+            localPath = try cacheOperations.writeToCache(
+                data,
+                attachmentID,
+                fileExtension
+            )
+        } catch {
+            cacheOperations.delete(expectedLocalPath)
+            throw AttachmentImportPipelineError.cacheWriteFailed
+        }
+
+        guard cacheOperations.resolveURL(localPath) != nil else {
+            cacheOperations.delete(localPath)
+            throw AttachmentImportPipelineError.cacheWriteFailed
+        }
+        return localPath
+    }
+
+    private static func copyPreparedFile(
+        from sourceURL: URL,
+        attachmentID: UUID,
+        fileExtension: String,
+        cacheOperations: AttachmentImportCacheOperations
+    ) throws -> String {
+        let expectedLocalPath = AttachmentStore.makeLocalFilename(
+            attachmentID: attachmentID,
+            fileExtension: fileExtension
+        )
+
+        do {
+            return try cacheOperations.copyIntoCache(
+                sourceURL,
+                attachmentID,
+                fileExtension
+            )
+        } catch {
+            cacheOperations.delete(expectedLocalPath)
+            throw AttachmentImportPipelineError.cacheWriteFailed
+        }
+    }
+
+    /// Reads a cache entry while the pipeline still owns it. Every failure removes that entry;
+    /// a successful return transfers ownership to the resulting PreparedAttachmentImport.
+    private static func readPreparedCache(
+        localPath: String,
+        maxBytes: Int,
+        oversizedError: OversizedErrorStyle,
+        cacheOperations: AttachmentImportCacheOperations
+    ) throws -> Data {
+        guard let cachedURL = cacheOperations.resolveURL(localPath) else {
+            cacheOperations.delete(localPath)
+            throw AttachmentImportPipelineError.cacheWriteFailed
+        }
+
+        let data: Data
+        do {
+            data = try cacheOperations.readData(cachedURL)
+        } catch {
+            cacheOperations.delete(localPath)
+            throw AttachmentImportPipelineError.cacheReadFailed
+        }
+
+        guard data.count <= maxBytes else {
+            cacheOperations.delete(localPath)
+            switch oversizedError {
+            case .attachment:
+                throw AttachmentImportPipelineError.tooLarge(
+                    bytes: data.count,
+                    maxBytes: maxBytes
+                )
+            case .compressedVideo:
+                throw VideoCompressionError.tooLargeAfterCompression(
+                    bytes: data.count,
+                    maxBytes: maxBytes
+                )
+            }
+        }
+
+        return data
+    }
 }
 
-enum AttachmentImportPipelineError: LocalizedError {
+nonisolated enum AttachmentImportPipelineError: LocalizedError, Equatable, Sendable {
     case tooLarge(bytes: Int, maxBytes: Int)
     case cacheWriteFailed
+    case cacheReadFailed
 
     var errorDescription: String? {
         switch self {
         case .tooLarge(let bytes, let maxBytes):
-            let size = ByteCountFormatter.string(fromByteCount: Int64(bytes), countStyle: .file)
-            let max = ByteCountFormatter.string(fromByteCount: Int64(maxBytes), countStyle: .file)
+            let size = ByteCountFormatter.string(
+                fromByteCount: Int64(bytes),
+                countStyle: .file
+            )
+            let max = ByteCountFormatter.string(
+                fromByteCount: Int64(maxBytes),
+                countStyle: .file
+            )
             return "Datei ist zu groß (\(size)). Bitte nur kleine Anhänge hinzufügen (max. \(max))."
         case .cacheWriteFailed:
             return "Lokale Datei konnte nicht erstellt werden."
+        case .cacheReadFailed:
+            return "Lokale Datei konnte nicht gelesen werden."
         }
     }
 }

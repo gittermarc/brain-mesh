@@ -8,7 +8,7 @@
 
 import Foundation
 
-enum VideoImportPreferences {
+nonisolated enum VideoImportPreferences {
 
     // MARK: - UserDefaults Keys
 

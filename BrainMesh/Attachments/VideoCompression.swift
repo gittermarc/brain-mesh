@@ -10,7 +10,7 @@ import Foundation
 import AVFoundation
 import UniformTypeIdentifiers
 
-enum VideoCompression {
+nonisolated enum VideoCompression {
 
     enum Quality: String, CaseIterable, Identifiable, Sendable {
         case high
@@ -179,7 +179,7 @@ enum VideoCompression {
 
 }
 
-enum VideoCompressionError: LocalizedError {
+nonisolated enum VideoCompressionError: LocalizedError, Equatable, Sendable {
     case exportSessionCreationFailed
     case exportFailed
     case exportProducedEmptyFile

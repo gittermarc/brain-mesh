@@ -8,7 +8,7 @@
 
 import Foundation
 
-enum ImageGalleryCompressionPreset: String, CaseIterable, Identifiable, Sendable {
+nonisolated enum ImageGalleryCompressionPreset: String, CaseIterable, Identifiable, Sendable {
     case original
     case highQuality
     case lowQuality
@@ -51,7 +51,7 @@ enum ImageGalleryCompressionPreset: String, CaseIterable, Identifiable, Sendable
     }
 }
 
-enum ImageGalleryImportPreferences {
+nonisolated enum ImageGalleryImportPreferences {
 
     // MARK: - UserDefaults Key
 

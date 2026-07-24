@@ -7,7 +7,6 @@
 
 import SwiftUI
 import SwiftData
-import UniformTypeIdentifiers
 
 extension AttributeDetailView {
 
@@ -38,17 +37,27 @@ extension AttributeDetailView {
             return
         }
 
-        let isVideo = AttachmentStore.isVideo(contentTypeIdentifier: attachment.contentTypeIdentifier)
-            || ["mov", "mp4", "m4v"].contains(attachment.fileExtension.lowercased())
+        let isVideo = AttachmentStore.isVideo(
+            contentTypeIdentifier: attachment.contentTypeIdentifier
+        ) || ["mov", "mp4", "m4v"].contains(
+            attachment.fileExtension.lowercased()
+        )
 
         if isVideo {
-            videoPlayback = VideoPlaybackRequest(url: url, title: attachment.title.isEmpty ? attachment.originalFilename : attachment.title)
+            videoPlayback = VideoPlaybackRequest(
+                url: url,
+                title: attachment.title.isEmpty
+                    ? attachment.originalFilename
+                    : attachment.title
+            )
             return
         }
 
         attachmentPreviewSheet = NodeAttachmentPreviewSheetState(
             url: url,
-            title: attachment.title.isEmpty ? attachment.originalFilename : attachment.title,
+            title: attachment.title.isEmpty
+                ? attachment.originalFilename
+                : attachment.title,
             contentTypeIdentifier: attachment.contentTypeIdentifier,
             fileExtension: attachment.fileExtension
         )
@@ -64,78 +73,24 @@ extension AttributeDetailView {
 
     @MainActor
     private func performFileImport(from url: URL) async {
-        let scoped = url.startAccessingSecurityScopedResource()
-        defer {
-            if scoped { url.stopAccessingSecurityScopedResource() }
-        }
-
-        let fileName = url.lastPathComponent
-        let ext = url.pathExtension
-
-        let contentType = (try? url.resourceValues(forKeys: [.contentTypeKey]).contentType)?.identifier ?? ""
-        let fileSize = (try? url.resourceValues(forKeys: [.fileSizeKey]).fileSize) ?? 0
-
-        if fileSize > maxBytes {
-            errorMessage = "Datei ist zu groß (\(ByteCountFormatter.string(fromByteCount: Int64(fileSize), countStyle: .file))). Bitte nur kleine Anhänge hinzufügen."
-            return
-        }
-
-        let attachmentID = UUID()
-        var preparedLocalPath: String?
-        defer {
-            AttachmentStore.delete(localPath: preparedLocalPath)
-        }
-
         do {
-            let copiedName = try AttachmentStore.copyIntoCache(from: url, attachmentID: attachmentID, fileExtension: ext)
-            preparedLocalPath = copiedName
-            guard let copiedURL = AttachmentStore.url(forLocalPath: copiedName) else {
-                errorMessage = "Lokale Datei konnte nicht erstellt werden."
-                return
-            }
+            let attachmentID = UUID()
+            let importLimit = maxBytes
+            let prepared = try await Task.detached(priority: .userInitiated) {
+                try await AttachmentImportPipeline.prepareFileImport(
+                    from: url,
+                    attachmentID: attachmentID,
+                    maxBytes: importLimit
+                )
+            }.value
 
-            let data = try Data(contentsOf: copiedURL, options: [.mappedIfSafe])
-            if data.count > maxBytes {
-                AttachmentStore.delete(localPath: copiedName)
-                errorMessage = "Datei ist zu groß (\(ByteCountFormatter.string(fromByteCount: Int64(data.count), countStyle: .file))). Bitte nur kleine Anhänge hinzufügen."
-                return
-            }
-
-            let title = url.deletingPathExtension().lastPathComponent
-
-            let inferredKind: AttachmentContentKind
-            if let t = UTType(contentType) {
-                if t.conforms(to: .image) {
-                    inferredKind = .galleryImage
-                } else if t.conforms(to: .movie) || t.conforms(to: .video) {
-                    inferredKind = .video
-                } else {
-                    inferredKind = .file
-                }
-            } else {
-                inferredKind = .file
-            }
-
-            let att = MetaAttachment(
-                id: attachmentID,
+            try await AttachmentImportMutationService.insertPrepared(
+                prepared,
                 ownerKind: .attribute,
                 ownerID: attribute.id,
                 graphID: attribute.graphID,
-                contentKind: inferredKind,
-                title: title,
-                originalFilename: fileName,
-                contentTypeIdentifier: contentType,
-                fileExtension: ext,
-                byteCount: data.count,
-                fileData: data,
-                localPath: copiedName
-            )
-
-            try await AttachmentMutationService.insert(
-                att,
                 in: modelContext
             )
-            preparedLocalPath = nil
 
             await reloadMediaPreview()
         } catch {
@@ -156,10 +111,10 @@ extension AttributeDetailView {
                 fileExtension: picked.fileExtension
             )
         case .failure(let error):
-            if let pickerError = error as? VideoPickerError, pickerError == .cancelled {
-                return
+            if let message = AttachmentImportPresentationPolicy
+                .videoPickerErrorMessage(for: error) {
+                errorMessage = message
             }
-            errorMessage = error.localizedDescription
         }
     }
 
@@ -170,73 +125,30 @@ extension AttributeDetailView {
         contentTypeIdentifier: String,
         fileExtension: String
     ) async {
-        var preparedLocalPath: String?
-        defer {
-            AttachmentStore.delete(localPath: preparedLocalPath)
-        }
-
         do {
-            let fileSize = (try? url.resourceValues(forKeys: [.fileSizeKey]).fileSize) ?? 0
-            if fileSize > maxBytes {
-                errorMessage = "Video ist zu groß (\(ByteCountFormatter.string(fromByteCount: Int64(fileSize), countStyle: .file))). Bitte nur kleine Videos hinzufügen."
-                return
-            }
-
             let attachmentID = UUID()
-            let ext = fileExtension.trimmingCharacters(in: CharacterSet(charactersIn: ".")).isEmpty ? "mov" : fileExtension
+            let importLimit = maxBytes
+            let prepared = try await Task.detached(priority: .userInitiated) {
+                try await AttachmentImportPipeline.prepareVideoImport(
+                    from: url,
+                    attachmentID: attachmentID,
+                    suggestedFilename: suggestedFilename,
+                    contentTypeIdentifier: contentTypeIdentifier,
+                    fileExtension: fileExtension,
+                    maxBytes: importLimit
+                )
+            }.value
 
-            let cachedFilename = try AttachmentStore.copyIntoCache(from: url, attachmentID: attachmentID, fileExtension: ext)
-            preparedLocalPath = cachedFilename
-            guard let cachedURL = AttachmentStore.url(forLocalPath: cachedFilename) else {
-                errorMessage = "Lokale Videodatei konnte nicht erstellt werden."
-                return
-            }
-
-            let data = try Data(contentsOf: cachedURL, options: [.mappedIfSafe])
-            if data.count > maxBytes {
-                AttachmentStore.delete(localPath: cachedFilename)
-                errorMessage = "Video ist zu groß (\(ByteCountFormatter.string(fromByteCount: Int64(data.count), countStyle: .file))). Bitte nur kleine Videos hinzufügen."
-                return
-            }
-
-            let title = URL(fileURLWithPath: suggestedFilename).deletingPathExtension().lastPathComponent
-            let originalName = suggestedFilename.isEmpty ? "Video.\(ext)" : suggestedFilename
-
-            let typeID: String
-            if !contentTypeIdentifier.isEmpty {
-                typeID = contentTypeIdentifier
-            } else if let t = UTType(filenameExtension: ext)?.identifier {
-                typeID = t
-            } else {
-                typeID = UTType.movie.identifier
-            }
-
-            let att = MetaAttachment(
-                id: attachmentID,
+            try await AttachmentImportMutationService.insertPrepared(
+                prepared,
                 ownerKind: .attribute,
                 ownerID: attribute.id,
                 graphID: attribute.graphID,
-                contentKind: .video,
-                title: title.isEmpty ? "Video" : title,
-                originalFilename: originalName,
-                contentTypeIdentifier: typeID,
-                fileExtension: ext,
-                byteCount: data.count,
-                fileData: data,
-                localPath: cachedFilename
-            )
-
-            try await AttachmentMutationService.insert(
-                att,
                 in: modelContext
             )
-            preparedLocalPath = nil
-            do {
-                try FileManager.default.removeItem(at: url)
-            } catch {
-                // Picker-owned temporary files are best-effort cleanup after the graph save.
-            }
 
+            await AttachmentImportFileCleanup
+                .removeTemporaryPickerFileBestEffort(at: url)
             await reloadMediaPreview()
         } catch {
             errorMessage = error.localizedDescription
