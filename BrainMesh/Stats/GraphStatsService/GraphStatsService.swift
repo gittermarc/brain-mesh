@@ -16,7 +16,7 @@ import Foundation
 import SwiftData
 
 /// Aggregated counters for a graph (or totals / legacy).
-nonisolated struct GraphCounts: Equatable, Sendable {
+nonisolated struct GraphCounts: Equatable, Hashable, Sendable {
     let entities: Int
     let attributes: Int
     let links: Int
@@ -76,7 +76,7 @@ nonisolated struct GraphStatsBaseCounts: Equatable, Sendable {
     }
 }
 
-nonisolated struct GraphStatsScopeRevision: Equatable, Sendable {
+nonisolated struct GraphStatsScopeRevision: Equatable, Hashable, Sendable {
     let counts: GraphCounts
     let detailFieldCount: Int
     let newestEntityCreatedAt: Date?

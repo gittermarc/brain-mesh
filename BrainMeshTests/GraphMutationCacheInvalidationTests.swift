@@ -11,18 +11,22 @@ struct GraphMutationCacheInvalidationTests {
         let container = AnyModelContainer(store.container)
         let bus = GraphMutationEventBus()
         let home = EntitiesHomeLoader()
+        let health = EntitiesHomeHealthSummaryProvider()
         let stats = GraphStatsLoader()
         let coordinator = GraphMutationCacheInvalidationCoordinator(
             subscriber: bus,
             entitiesHomeLoader: home,
+            entitiesHomeHealthProvider: health,
             graphStatsLoader: stats
         )
         let graphA = cacheTestUUID(1)
         let graphB = cacheTestUUID(2)
 
         await home.configure(container: container)
+        await health.configure(container: container)
         await stats.configure(container: container)
         await seedHomeCaches(home, graphIDs: [graphA, graphB])
+        await seedHealthCaches(health, graphIDs: [graphA, graphB])
         await stats.seedCachesForTesting(graphID: graphA)
         await stats.seedCachesForTesting(graphID: graphB)
         await coordinator.configure(container: container)
@@ -39,6 +43,13 @@ struct GraphMutationCacheInvalidationTests {
         #expect(await home.hasCachedCountsForTesting(kind: .links, graphID: graphA) == false)
         #expect(await home.hasCachedCountsForTesting(kind: .attributes, graphID: graphB))
         #expect(await home.hasCachedCountsForTesting(kind: .links, graphID: graphB))
+        #expect(
+            await health.hasCachedSummaryForTesting(graphID: graphA)
+                == false
+        )
+        #expect(
+            await health.hasCachedSummaryForTesting(graphID: graphB)
+        )
         #expect(await stats.hasCountsCacheForTesting(graphID: graphA) == false)
         #expect(await stats.hasCountsCacheForTesting(graphID: graphB))
         #expect(await stats.hasTotalCountsCacheForTesting() == false)
@@ -68,11 +79,12 @@ struct GraphMutationCacheInvalidationTests {
             fieldID: cacheTestUUID(16)
         )
 
-        let cases: [(String, GraphMutationBatch, Bool)] = [
+        let cases: [(String, GraphMutationBatch, Bool, Bool)] = [
             (
                 "entity",
                 try GraphMutationBatchFactory.nodeUpdated(graphID: graphID, node: node),
-                false
+                false,
+                true
             ),
             (
                 "attribute",
@@ -81,16 +93,19 @@ struct GraphMutationCacheInvalidationTests {
                     attributeID: owner.id,
                     ownerEntityID: node.id
                 ),
+                true,
                 true
             ),
             (
                 "link",
                 try GraphMutationBatchFactory.linksCreated(graphID: graphID, links: [link]),
+                true,
                 true
             ),
             (
                 "detail",
                 try GraphMutationBatchFactory.detailValueChanged(graphID: graphID, value: value),
+                false,
                 false
             ),
             (
@@ -99,15 +114,26 @@ struct GraphMutationCacheInvalidationTests {
                     graphID: graphID,
                     attachments: [attachment]
                 ),
-                false
+                false,
+                true
             )
         ]
 
-        for (name, batch, expectedHomeInvalidation) in cases {
+        for (
+            name,
+            batch,
+            expectedHomeInvalidation,
+            expectedHealthInvalidation
+        ) in cases {
             let plan = try #require(GraphMutationCacheInvalidationPlan.make(for: batch))
             #expect(plan.graphID == graphID, Comment(rawValue: name))
             #expect(
                 plan.invalidateEntitiesHomeCounts == expectedHomeInvalidation,
+                Comment(rawValue: name)
+            )
+            #expect(
+                plan.invalidateEntitiesHomeHealth
+                    == expectedHealthInvalidation,
                 Comment(rawValue: name)
             )
             #expect(plan.invalidateGraphStatsCounts, Comment(rawValue: name))
@@ -122,18 +148,22 @@ struct GraphMutationCacheInvalidationTests {
         let container = AnyModelContainer(store.container)
         let bus = GraphMutationEventBus()
         let home = EntitiesHomeLoader()
+        let health = EntitiesHomeHealthSummaryProvider()
         let stats = GraphStatsLoader()
         let coordinator = GraphMutationCacheInvalidationCoordinator(
             subscriber: bus,
             entitiesHomeLoader: home,
+            entitiesHomeHealthProvider: health,
             graphStatsLoader: stats
         )
         let graphA = cacheTestUUID(20)
         let graphB = cacheTestUUID(21)
 
         await home.configure(container: container)
+        await health.configure(container: container)
         await stats.configure(container: container)
         await seedHomeCaches(home, graphIDs: [graphA, graphB])
+        await seedHealthCaches(health, graphIDs: [graphA, graphB])
         await stats.seedCachesForTesting(graphID: graphA)
         await stats.seedCachesForTesting(graphID: graphB)
         await coordinator.configure(container: container)
@@ -146,8 +176,16 @@ struct GraphMutationCacheInvalidationTests {
         #expect(await home.hasCachedCountsForTesting(kind: .attributes, graphID: graphB))
         #expect(await stats.hasCountsCacheForTesting(graphID: graphA) == false)
         #expect(await stats.hasCountsCacheForTesting(graphID: graphB))
+        #expect(
+            await health.hasCachedSummaryForTesting(graphID: graphA)
+                == false
+        )
+        #expect(
+            await health.hasCachedSummaryForTesting(graphID: graphB)
+        )
 
         await seedHomeCaches(home, graphIDs: [graphA])
+        await seedHealthCaches(health, graphIDs: [graphA])
         await stats.seedCachesForTesting(graphID: graphA)
         _ = await bus.publishCommitted(
             try GraphMutationBatchFactory.graphDeleted(graphID: graphA)
@@ -158,6 +196,60 @@ struct GraphMutationCacheInvalidationTests {
         #expect(await stats.hasCountsCacheForTesting(graphID: graphA) == false)
         #expect(await stats.hasCountsCacheForTesting(graphID: graphB))
         #expect(await stats.hasTotalCountsCacheForTesting() == false)
+        #expect(
+            await health.hasCachedSummaryForTesting(graphID: graphA)
+                == false
+        )
+        #expect(
+            await health.hasCachedSummaryForTesting(graphID: graphB)
+        )
+
+        await coordinator.stop()
+        await bus.finish()
+    }
+
+    @Test
+    func importReplacementAndDeletionInvalidateHealth() async throws {
+        let store = try BrainMeshTestContainer.makeInMemoryStore()
+        let container = AnyModelContainer(store.container)
+        let bus = GraphMutationEventBus()
+        let health = EntitiesHomeHealthSummaryProvider()
+        let coordinator = GraphMutationCacheInvalidationCoordinator(
+            subscriber: bus,
+            entitiesHomeLoader: EntitiesHomeLoader(),
+            entitiesHomeHealthProvider: health,
+            graphStatsLoader: GraphStatsLoader()
+        )
+        let graphID = cacheTestUUID(30)
+        let batches = [
+            try GraphMutationBatchFactory.graphImported(graphID: graphID),
+            try GraphMutationBatchFactory.graphReplaced(graphID: graphID),
+            try GraphMutationBatchFactory.graphDeleted(graphID: graphID)
+        ]
+        await health.configure(container: container)
+        await coordinator.configure(container: container)
+
+        for (index, batch) in batches.enumerated() {
+            let plan = try #require(
+                GraphMutationCacheInvalidationPlan.make(for: batch)
+            )
+            #expect(plan.graphID == graphID)
+            #expect(plan.invalidateEntitiesHomeHealth)
+
+            await seedHealthCaches(health, graphIDs: [graphID])
+            _ = await bus.publishCommitted(batch)
+            #expect(
+                await waitForProcessedBatch(
+                    coordinator,
+                    expectedCount: index + 1
+                )
+            )
+            #expect(
+                await health.hasCachedSummaryForTesting(
+                    graphID: graphID
+                ) == false
+            )
+        }
 
         await coordinator.stop()
         await bus.finish()
@@ -212,6 +304,24 @@ private func seedHomeCaches(
             for: .links,
             graphID: graphID,
             now: Date()
+        )
+    }
+}
+
+private func seedHealthCaches(
+    _ provider: EntitiesHomeHealthSummaryProvider,
+    graphIDs: [UUID]
+) async {
+    for graphID in graphIDs {
+        await provider.seedCacheForTesting(
+            graphID: graphID,
+            revision: GraphStatsScopeRevision(
+                counts: .zero,
+                detailFieldCount: 0,
+                newestEntityCreatedAt: nil,
+                newestLinkCreatedAt: nil,
+                newestAttachmentCreatedAt: nil
+            )
         )
     }
 }

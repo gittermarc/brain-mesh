@@ -8,12 +8,14 @@ import Foundation
 nonisolated struct GraphHealthEntityNodeInput: Equatable, Sendable {
     let id: UUID
     let label: String
+    let hasHeaderImage: Bool
 }
 
 nonisolated struct GraphHealthAttributeNodeInput: Equatable, Sendable {
     let id: UUID
     let label: String
     let ownerEntityID: UUID?
+    let hasHeaderImage: Bool
 }
 
 nonisolated struct GraphHealthLinkEndpointInput: Equatable, Sendable {
@@ -82,14 +84,33 @@ nonisolated enum GraphHealthIssueEngine {
         media: GraphMediaSnapshot
     ) -> [GraphHealthIssue] {
         var issues: [GraphHealthIssue] = []
+        let categories = entityCategories(
+            entities: entities,
+            attributes: attributes,
+            links: links,
+            detailSchemas: detailSchemas,
+            attachments: attachments
+        )
 
-        if let issue = isolatedEntitiesIssue(graphID: graphID, entities: entities, links: links) {
+        if let issue = isolatedEntitiesIssue(
+            graphID: graphID,
+            entities: entities,
+            affectedEntityIDs: Set(categories.isolatedEntityIDs)
+        ) {
             issues.append(issue)
         }
-        if let issue = entitiesWithoutAttributesIssue(graphID: graphID, entities: entities, attributes: attributes) {
+        if let issue = entitiesWithoutAttributesIssue(
+            graphID: graphID,
+            entities: entities,
+            affectedEntityIDs: Set(categories.entityIDsWithoutAttributes)
+        ) {
             issues.append(issue)
         }
-        if let issue = entitiesWithoutDetailsIssue(graphID: graphID, entities: entities, detailSchemas: detailSchemas) {
+        if let issue = entitiesWithoutDetailsIssue(
+            graphID: graphID,
+            entities: entities,
+            affectedEntityIDs: Set(categories.entityIDsWithoutDetails)
+        ) {
             issues.append(issue)
         }
         if let issue = largeAttachmentsIssue(graphID: graphID, attachments: attachments) {
@@ -115,32 +136,50 @@ nonisolated enum GraphHealthIssueEngine {
             return lhs.id < rhs.id
         }
     }
+
+    static func entityCategories(
+        entities: [GraphHealthEntityNodeInput],
+        attributes: [GraphHealthAttributeNodeInput],
+        links: [GraphHealthLinkEndpointInput],
+        detailSchemas: [GraphHealthDetailSchemaInput],
+        attachments: [GraphHealthAttachmentMetadataInput]
+    ) -> GraphHealthEntityCategorySnapshot {
+        GraphHealthEntityCategoryEngine.make(
+            entities: entities.map { entity in
+                GraphHealthEntityCategoryEntityInput(
+                    id: entity.id,
+                    hasHeaderImage: entity.hasHeaderImage
+                )
+            },
+            attributes: attributes.map { attribute in
+                GraphHealthEntityCategoryAttributeInput(
+                    id: attribute.id,
+                    ownerEntityID: attribute.ownerEntityID,
+                    hasHeaderImage: attribute.hasHeaderImage
+                )
+            },
+            links: links,
+            detailSchemas: detailSchemas,
+            attachments: attachments.map { attachment in
+                GraphHealthEntityCategoryAttachmentInput(
+                    ownerKindRaw: attachment.ownerKindRaw,
+                    ownerID: attachment.ownerID
+                )
+            }
+        )
+    }
 }
 
 private nonisolated extension GraphHealthIssueEngine {
     static func isolatedEntitiesIssue(
         graphID: UUID?,
         entities: [GraphHealthEntityNodeInput],
-        links: [GraphHealthLinkEndpointInput]
+        affectedEntityIDs: Set<UUID>
     ) -> GraphHealthIssue? {
         guard entities.isEmpty == false else { return nil }
 
-        let entityIDs = Set(entities.map(\.id))
-        let entityKindRaw = NodeKind.entity.rawValue
-        var linkedEntityIDs = Set<UUID>()
-        linkedEntityIDs.reserveCapacity(entityIDs.count)
-
-        for link in links {
-            if link.sourceKindRaw == entityKindRaw, entityIDs.contains(link.sourceID) {
-                linkedEntityIDs.insert(link.sourceID)
-            }
-            if link.targetKindRaw == entityKindRaw, entityIDs.contains(link.targetID) {
-                linkedEntityIDs.insert(link.targetID)
-            }
-        }
-
         let affected = entities
-            .filter { linkedEntityIDs.contains($0.id) == false }
+            .filter { affectedEntityIDs.contains($0.id) }
             .sorted { lhs, rhs in sortedByLabelThenID(lhs: lhs, rhs: rhs) }
 
         guard affected.isEmpty == false else { return nil }
@@ -166,12 +205,11 @@ private nonisolated extension GraphHealthIssueEngine {
     static func entitiesWithoutAttributesIssue(
         graphID: UUID?,
         entities: [GraphHealthEntityNodeInput],
-        attributes: [GraphHealthAttributeNodeInput]
+        affectedEntityIDs: Set<UUID>
     ) -> GraphHealthIssue? {
         guard entities.isEmpty == false else { return nil }
-        let entityIDsWithAttributes = Set(attributes.compactMap(\.ownerEntityID))
         let affected = entities
-            .filter { entityIDsWithAttributes.contains($0.id) == false }
+            .filter { affectedEntityIDs.contains($0.id) }
             .sorted { lhs, rhs in sortedByLabelThenID(lhs: lhs, rhs: rhs) }
 
         guard affected.isEmpty == false else { return nil }
@@ -198,12 +236,11 @@ private nonisolated extension GraphHealthIssueEngine {
     static func entitiesWithoutDetailsIssue(
         graphID: UUID?,
         entities: [GraphHealthEntityNodeInput],
-        detailSchemas: [GraphHealthDetailSchemaInput]
+        affectedEntityIDs: Set<UUID>
     ) -> GraphHealthIssue? {
         guard entities.isEmpty == false else { return nil }
-        let entityIDsWithSchemas = Set(detailSchemas.map(\.entityID))
         let affected = entities
-            .filter { entityIDsWithSchemas.contains($0.id) == false }
+            .filter { affectedEntityIDs.contains($0.id) }
             .sorted { lhs, rhs in sortedByLabelThenID(lhs: lhs, rhs: rhs) }
 
         guard affected.isEmpty == false else { return nil }

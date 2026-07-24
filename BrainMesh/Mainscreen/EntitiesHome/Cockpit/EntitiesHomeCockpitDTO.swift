@@ -22,8 +22,50 @@ nonisolated struct EntitiesHomeCockpitSnapshot: Equatable, Sendable {
         }
     )
 
+    static func empty(graphID: UUID) -> EntitiesHomeCockpitSnapshot {
+        EntitiesHomeCockpitSnapshot(
+            graphID: graphID,
+            recentNodes: [],
+            healthSummary: .empty,
+            quickFilters: EntitiesHomeQuickFilterSnapshot.snapshots(
+                from: .empty
+            )
+        )
+    }
+
     func quickFilterSnapshot(for filter: EntitiesHomeQuickFilter) -> EntitiesHomeQuickFilterSnapshot? {
         quickFilters.first { $0.filter == filter }
+    }
+
+    func replacingRecentNodes(
+        _ recentNodes: [EntitiesHomeCockpitRecentNode],
+        for graphID: UUID
+    ) -> EntitiesHomeCockpitSnapshot? {
+        guard self.graphID == graphID else {
+            return nil
+        }
+        return EntitiesHomeCockpitSnapshot(
+            graphID: graphID,
+            recentNodes: recentNodes,
+            healthSummary: healthSummary,
+            quickFilters: quickFilters
+        )
+    }
+
+    func replacingHealth(
+        _ health: EntitiesHomeHealthSummarySnapshot
+    ) -> EntitiesHomeCockpitSnapshot? {
+        guard graphID == health.graphID else {
+            return nil
+        }
+        return EntitiesHomeCockpitSnapshot(
+            graphID: health.graphID,
+            recentNodes: recentNodes,
+            healthSummary: health.summary,
+            quickFilters: EntitiesHomeQuickFilterSnapshot.snapshots(
+                from: health.summary
+            )
+        )
     }
 }
 

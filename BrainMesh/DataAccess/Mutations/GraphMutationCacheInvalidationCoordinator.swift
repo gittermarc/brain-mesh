@@ -12,6 +12,7 @@ actor GraphMutationCacheInvalidationCoordinator {
 
     private let subscriber: any GraphMutationSubscribing
     private let entitiesHomeLoader: EntitiesHomeLoader
+    private let entitiesHomeHealthProvider: EntitiesHomeHealthSummaryProvider
     private let graphStatsLoader: GraphStatsLoader
 
     private var subscriptionTask: Task<Void, Never>?
@@ -23,10 +24,12 @@ actor GraphMutationCacheInvalidationCoordinator {
     init(
         subscriber: any GraphMutationSubscribing = GraphMutationEventBus.shared,
         entitiesHomeLoader: EntitiesHomeLoader = .shared,
+        entitiesHomeHealthProvider: EntitiesHomeHealthSummaryProvider = .shared,
         graphStatsLoader: GraphStatsLoader = .shared
     ) {
         self.subscriber = subscriber
         self.entitiesHomeLoader = entitiesHomeLoader
+        self.entitiesHomeHealthProvider = entitiesHomeHealthProvider
         self.graphStatsLoader = graphStatsLoader
     }
 
@@ -51,6 +54,7 @@ actor GraphMutationCacheInvalidationCoordinator {
 
         let stream = await subscriber.mutationBatches(bufferingPolicy: .unbounded)
         let entitiesHomeLoader = entitiesHomeLoader
+        let entitiesHomeHealthProvider = entitiesHomeHealthProvider
         let graphStatsLoader = graphStatsLoader
 
         subscriptionTask = Task.detached { [weak self] in
@@ -69,6 +73,11 @@ actor GraphMutationCacheInvalidationCoordinator {
                 if plan.invalidateEntitiesHomeCounts {
                     await entitiesHomeLoader.invalidateCaches(
                         forGraphID: plan.graphID
+                    )
+                }
+                if plan.invalidateEntitiesHomeHealth {
+                    await entitiesHomeHealthProvider.invalidate(
+                        for: plan.graphID
                     )
                 }
                 await graphStatsLoader.invalidateCaches(using: plan)

@@ -45,8 +45,14 @@ extension EntitiesHomeView {
 
                     await reload(forFolded: folded)
                 }
-                .task(id: cockpitTaskToken) {
-                    await loadCockpitIfNeeded()
+                .task(id: recentNodesTaskToken) {
+                    await loadRecentNodesIfNeeded()
+                }
+                .task(id: healthTaskToken) {
+                    await loadHealthIfNeeded()
+                }
+                .task(id: healthObservationTaskToken) {
+                    await observeHealthInvalidationsIfNeeded()
                 }
                 .onChange(of: entitiesHomeSortRaw) { _, _ in
                     // Apply sorting instantly without waiting for a reload.
@@ -74,7 +80,6 @@ extension EntitiesHomeView {
                         Task {
                             await EntitiesHomeLoader.shared.invalidateCache(for: activeGraphID)
                             await reload(forFolded: BMSearch.fold(searchText))
-                            await loadCockpitIfNeeded()
                         }
                     }
                 }
@@ -220,8 +225,10 @@ extension EntitiesHomeView {
             EntitiesHomeCockpitView(
                 activeGraphName: activeGraphName,
                 snapshot: cockpitSnapshot,
-                isLoading: isCockpitLoading,
-                errorMessage: cockpitErrorMessage,
+                isRecentNodesLoading: isRecentNodesLoading,
+                recentNodesErrorMessage: recentNodesErrorMessage,
+                isHealthLoading: isHealthLoading,
+                healthErrorMessage: healthErrorMessage,
                 selectedFilter: effectiveQuickFilter,
                 onSelectFilter: { filter in
                     selectedQuickFilter = filter

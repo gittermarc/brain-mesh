@@ -43,8 +43,12 @@ struct EntitiesHomeView: View {
     @State var deletionErrorMessage: String?
 
     @State var cockpitSnapshot: EntitiesHomeCockpitSnapshot = .empty
-    @State var isCockpitLoading = false
-    @State var cockpitErrorMessage: String?
+    @State var isRecentNodesLoading = false
+    @State var recentNodesErrorMessage: String?
+    @State var isHealthLoading = false
+    @State var healthErrorMessage: String?
+    @State var recentNodesReloadRevision: UInt = 0
+    @State var healthReloadRevision: UInt = 0
     @State var selectedQuickFilter: EntitiesHomeQuickFilter = .all
 
     var activeGraphName: String {
@@ -127,14 +131,22 @@ struct EntitiesHomeView: View {
         )
     }
 
-    var cockpitTaskToken: String {
-        let recentSignature = recentNodeStore
-            .recentItems(graphID: activeGraphID, limit: 8)
+    var recentNodesTaskToken: String {
+        let recentSignature = recentNodeStore.items
+            .filter { $0.graphID == activeGraphID }
             .map { item in
-                "\(item.id)|\(item.openedAt.timeIntervalSince1970)"
+                "\(item.id)|\(item.openedAt.timeIntervalSince1970)|\(item.label)|\(item.iconSymbolName)"
             }
             .joined(separator: ";")
-        return "\(activeGraphIDString)|\(displaySettings.entitiesHome.showCockpit)|\(recentSignature)"
+        return "\(activeGraphIDString)|\(displaySettings.entitiesHome.showCockpit)|\(recentNodesReloadRevision)|\(recentSignature)"
+    }
+
+    var healthTaskToken: String {
+        "\(activeGraphIDString)|\(displaySettings.entitiesHome.showCockpit)|\(healthReloadRevision)"
+    }
+
+    var healthObservationTaskToken: String {
+        "\(activeGraphIDString)|\(displaySettings.entitiesHome.showCockpit)"
     }
 
 }

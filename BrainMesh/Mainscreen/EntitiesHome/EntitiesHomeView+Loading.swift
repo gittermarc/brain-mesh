@@ -44,40 +44,196 @@ extension EntitiesHomeView {
         }
     }
 
-    @MainActor func loadCockpitIfNeeded() async {
+    @MainActor func loadRecentNodesIfNeeded() async {
         guard shouldShowCockpit else {
             cockpitSnapshot = .empty
-            isCockpitLoading = false
-            cockpitErrorMessage = nil
+            isRecentNodesLoading = false
+            recentNodesErrorMessage = nil
+            return
+        }
+        guard let graphID = activeGraphID else {
+            cockpitSnapshot = .empty
+            isRecentNodesLoading = false
+            recentNodesErrorMessage = nil
             return
         }
 
-        let graphID = activeGraphID
-        let recentItems = recentNodeStore.recentItems(graphID: graphID, limit: 8)
-        isCockpitLoading = true
-        cockpitErrorMessage = nil
+        prepareCockpitSnapshot(for: graphID)
+        let recentItems = recentNodeStore.items
+        isRecentNodesLoading = true
+        recentNodesErrorMessage = nil
 
         do {
-            let snapshot = try await EntitiesHomeCockpitLoader.shared.loadSnapshot(
+            let recentNodes = try await EntitiesHomeRecentNodesLoader.shared.load(
                 graphID: graphID,
                 recentItems: recentItems,
                 limit: 8
             )
-            if Task.isCancelled { return }
-            cockpitSnapshot = snapshot
-            isCockpitLoading = false
-            cockpitErrorMessage = nil
-
-            if selectedQuickFilter != .all, snapshot.quickFilterSnapshot(for: selectedQuickFilter) == nil {
-                selectedQuickFilter = .all
+            guard Task.isCancelled == false,
+                  activeGraphID == graphID,
+                  shouldShowCockpit,
+                  let updatedSnapshot = cockpitSnapshot.replacingRecentNodes(
+                    recentNodes,
+                    for: graphID
+                  )
+            else {
+                return
             }
+
+            cockpitSnapshot = updatedSnapshot
+            isRecentNodesLoading = false
+            recentNodesErrorMessage = nil
         } catch is CancellationError {
             return
         } catch {
-            if Task.isCancelled { return }
-            isCockpitLoading = false
-            cockpitErrorMessage = "Die Cockpit-Hinweise konnten gerade nicht geladen werden. Die Entitätenliste bleibt nutzbar."
+            guard Task.isCancelled == false,
+                  activeGraphID == graphID
+            else {
+                return
+            }
+            isRecentNodesLoading = false
+            recentNodesErrorMessage =
+                "Die zuletzt geöffneten Knoten konnten gerade nicht geladen werden."
         }
     }
 
+    @MainActor func loadHealthIfNeeded() async {
+        guard shouldShowCockpit else {
+            cockpitSnapshot = .empty
+            isHealthLoading = false
+            healthErrorMessage = nil
+            return
+        }
+        guard let graphID = activeGraphID else {
+            cockpitSnapshot = .empty
+            isHealthLoading = false
+            healthErrorMessage = nil
+            return
+        }
+
+        prepareCockpitSnapshot(for: graphID)
+        isHealthLoading = true
+        healthErrorMessage = nil
+
+        do {
+            let health =
+                try await EntitiesHomeHealthSummaryProvider.shared.summary(
+                    for: graphID
+                )
+            guard Task.isCancelled == false,
+                  activeGraphID == graphID,
+                  shouldShowCockpit,
+                  let updatedSnapshot =
+                    cockpitSnapshot.replacingHealth(health)
+            else {
+                return
+            }
+
+            cockpitSnapshot = updatedSnapshot
+            isHealthLoading = false
+            healthErrorMessage = nil
+        } catch is CancellationError {
+            guard Task.isCancelled == false,
+                  activeGraphID == graphID,
+                  shouldShowCockpit
+            else {
+                return
+            }
+            healthReloadRevision &+= 1
+            return
+        } catch {
+            guard Task.isCancelled == false,
+                  activeGraphID == graphID
+            else {
+                return
+            }
+            isHealthLoading = false
+            healthErrorMessage =
+                "Die Graph-Hinweise konnten gerade nicht geladen werden. Die Entitätenliste bleibt nutzbar."
+        }
+    }
+
+    @MainActor func observeHealthInvalidationsIfNeeded() async {
+        guard shouldShowCockpit, let graphID = activeGraphID else {
+            return
+        }
+
+        async let healthObservation: Void =
+            observeHealthProviderInvalidations(for: graphID)
+        async let recentObservation: Void =
+            observeRecentNodePresentationInvalidations(for: graphID)
+        _ = await (healthObservation, recentObservation)
+    }
+
+    @MainActor private func observeHealthProviderInvalidations(
+        for graphID: UUID
+    ) async {
+        let stream =
+            await EntitiesHomeHealthSummaryProvider.shared.invalidations()
+        for await invalidatedGraphID in stream {
+            guard Task.isCancelled == false else {
+                return
+            }
+            guard invalidatedGraphID == graphID,
+                  activeGraphID == graphID
+            else {
+                continue
+            }
+            healthReloadRevision &+= 1
+        }
+    }
+
+    @MainActor private func observeRecentNodePresentationInvalidations(
+        for graphID: UUID
+    ) async {
+        let stream = await GraphMutationEventBus.shared.mutationBatches(
+            bufferingPolicy: .unbounded
+        )
+        for await delivery in stream {
+            guard Task.isCancelled == false else {
+                return
+            }
+            let batch = delivery.batch
+            guard batch.graphID == graphID,
+                  Self.mutationCanChangeRecentNodePresentation(batch)
+            else {
+                continue
+            }
+
+            guard activeGraphID == graphID else {
+                return
+            }
+            recentNodesReloadRevision &+= 1
+        }
+    }
+
+    @MainActor private func prepareCockpitSnapshot(for graphID: UUID) {
+        if cockpitSnapshot.graphID != graphID {
+            cockpitSnapshot = .empty(graphID: graphID)
+            recentNodesErrorMessage = nil
+            healthErrorMessage = nil
+        }
+    }
+
+    nonisolated private static func mutationCanChangeRecentNodePresentation(
+        _ batch: GraphMutationBatch
+    ) -> Bool {
+        batch.events.contains { event in
+            switch event.kind {
+            case .entityUpdated, .entityDeleted,
+                 .attributeUpdated, .attributeDeleted,
+                 .graphImported, .graphReplaced, .graphDeleted,
+                 .graphRequiresFullRebuild:
+                return true
+            case .entityCreated, .attributeCreated,
+                 .linkCreated, .linkUpdated, .linkDeleted,
+                 .detailSchemaChanged,
+                 .detailValueChanged, .detailValueDeleted,
+                 .detailTemplateCreated,
+                 .attachmentCreated, .attachmentUpdated, .attachmentDeleted,
+                 .graphCreated, .graphUpdated:
+                return false
+            }
+        }
+    }
 }

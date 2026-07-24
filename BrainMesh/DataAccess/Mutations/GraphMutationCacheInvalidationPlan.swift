@@ -10,12 +10,14 @@ import Foundation
 nonisolated struct GraphMutationCacheInvalidationPlan: Hashable, Sendable {
     let graphID: UUID
     let invalidateEntitiesHomeCounts: Bool
+    let invalidateEntitiesHomeHealth: Bool
     let invalidateGraphStatsCounts: Bool
     let invalidateGraphStatsTotalAggregate: Bool
     let invalidateGraphStatsDashboards: Bool
 
     static func make(for batch: GraphMutationBatch) -> GraphMutationCacheInvalidationPlan? {
         var invalidateEntitiesHomeCounts = false
+        var invalidateEntitiesHomeHealth = false
         var invalidateGraphStatsCounts = false
         var invalidateGraphStatsTotalAggregate = false
         var invalidateGraphStatsDashboards = false
@@ -25,6 +27,7 @@ nonisolated struct GraphMutationCacheInvalidationPlan: Hashable, Sendable {
             case .attributeCreated, .attributeDeleted,
                  .linkCreated, .linkDeleted:
                 invalidateEntitiesHomeCounts = true
+                invalidateEntitiesHomeHealth = true
                 invalidateGraphStatsCounts = true
                 invalidateGraphStatsTotalAggregate = true
                 invalidateGraphStatsDashboards = true
@@ -33,8 +36,13 @@ nonisolated struct GraphMutationCacheInvalidationPlan: Hashable, Sendable {
                  .attributeUpdated,
                  .linkUpdated,
                  .detailSchemaChanged,
-                 .detailValueChanged, .detailValueDeleted,
                  .attachmentCreated, .attachmentUpdated, .attachmentDeleted:
+                invalidateEntitiesHomeHealth = true
+                invalidateGraphStatsCounts = true
+                invalidateGraphStatsTotalAggregate = true
+                invalidateGraphStatsDashboards = true
+
+            case .detailValueChanged, .detailValueDeleted:
                 invalidateGraphStatsCounts = true
                 invalidateGraphStatsTotalAggregate = true
                 invalidateGraphStatsDashboards = true
@@ -47,6 +55,7 @@ nonisolated struct GraphMutationCacheInvalidationPlan: Hashable, Sendable {
             case .graphImported, .graphReplaced, .graphDeleted,
                  .graphRequiresFullRebuild:
                 invalidateEntitiesHomeCounts = true
+                invalidateEntitiesHomeHealth = true
                 invalidateGraphStatsCounts = true
                 invalidateGraphStatsTotalAggregate = true
                 invalidateGraphStatsDashboards = true
@@ -58,6 +67,7 @@ nonisolated struct GraphMutationCacheInvalidationPlan: Hashable, Sendable {
         }
 
         guard invalidateEntitiesHomeCounts
+                || invalidateEntitiesHomeHealth
                 || invalidateGraphStatsCounts
                 || invalidateGraphStatsTotalAggregate
                 || invalidateGraphStatsDashboards else {
@@ -67,6 +77,7 @@ nonisolated struct GraphMutationCacheInvalidationPlan: Hashable, Sendable {
         return GraphMutationCacheInvalidationPlan(
             graphID: batch.graphID,
             invalidateEntitiesHomeCounts: invalidateEntitiesHomeCounts,
+            invalidateEntitiesHomeHealth: invalidateEntitiesHomeHealth,
             invalidateGraphStatsCounts: invalidateGraphStatsCounts,
             invalidateGraphStatsTotalAggregate: invalidateGraphStatsTotalAggregate,
             invalidateGraphStatsDashboards: invalidateGraphStatsDashboards

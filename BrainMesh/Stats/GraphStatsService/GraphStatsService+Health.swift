@@ -58,7 +58,8 @@ private nonisolated extension GraphStatsService {
         return entities.map { entity in
             GraphHealthEntityNodeInput(
                 id: entity.id,
-                label: entity.name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? shortID(entity.id) : entity.name
+                label: entity.name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? shortID(entity.id) : entity.name,
+                hasHeaderImage: entity.imageData?.isEmpty == false
             )
         }
     }
@@ -72,10 +73,19 @@ private nonisolated extension GraphStatsService {
         )
 
         return attributes.map { attribute in
-            GraphHealthAttributeNodeInput(
+            let ownerEntityID: UUID?
+            if let owner = attribute.owner,
+               owner.graphID == graphID {
+                ownerEntityID = owner.id
+            } else {
+                ownerEntityID = nil
+            }
+
+            return GraphHealthAttributeNodeInput(
                 id: attribute.id,
                 label: attribute.displayName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? shortID(attribute.id) : attribute.displayName,
-                ownerEntityID: attribute.owner?.id
+                ownerEntityID: ownerEntityID,
+                hasHeaderImage: attribute.imageData?.isEmpty == false
             )
         }
     }

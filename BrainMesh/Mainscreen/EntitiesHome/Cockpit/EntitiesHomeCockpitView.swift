@@ -10,8 +10,10 @@ import SwiftUI
 struct EntitiesHomeCockpitView: View {
     let activeGraphName: String
     let snapshot: EntitiesHomeCockpitSnapshot
-    let isLoading: Bool
-    let errorMessage: String?
+    let isRecentNodesLoading: Bool
+    let recentNodesErrorMessage: String?
+    let isHealthLoading: Bool
+    let healthErrorMessage: String?
     let selectedFilter: EntitiesHomeQuickFilter
     let onSelectFilter: (EntitiesHomeQuickFilter) -> Void
     let onOpenRecent: (EntitiesHomeCockpitRecentNode) -> Void
@@ -30,14 +32,27 @@ struct EntitiesHomeCockpitView: View {
         VStack(alignment: .leading, spacing: 16) {
             header
 
-            if isLoading && snapshot.graphID == nil {
-                loadingCard
+            if let recentNodesErrorMessage {
+                errorCard(
+                    title: "Weiterarbeiten gerade nicht verfügbar",
+                    message: recentNodesErrorMessage
+                )
+            }
+            if isRecentNodesLoading {
+                loadingCard(message: "Zuletzt geöffnete Knoten werden geladen")
             } else {
-                if let errorMessage {
-                    errorCard(message: errorMessage)
-                }
-
                 continueSection
+            }
+
+            if let healthErrorMessage {
+                errorCard(
+                    title: "Graph-Hinweise gerade nicht verfügbar",
+                    message: healthErrorMessage
+                )
+            }
+            if isHealthLoading {
+                loadingCard(message: "Graph-Hinweise werden vorbereitet")
+            } else {
                 healthSection
                 quickFilterSection
             }
@@ -74,10 +89,10 @@ struct EntitiesHomeCockpitView: View {
         }
     }
 
-    private var loadingCard: some View {
+    private func loadingCard(message: String) -> some View {
         HStack(spacing: 10) {
             ProgressView()
-            Text("Cockpit wird vorbereitet")
+            Text(message)
                 .font(.subheadline)
                 .foregroundStyle(.secondary)
             Spacer(minLength: 0)
@@ -86,7 +101,7 @@ struct EntitiesHomeCockpitView: View {
         .background(Color(uiColor: .secondarySystemGroupedBackground), in: RoundedRectangle(cornerRadius: 16, style: .continuous))
     }
 
-    private func errorCard(message: String) -> some View {
+    private func errorCard(title: String, message: String) -> some View {
         HStack(alignment: .top, spacing: 10) {
             Image(systemName: "exclamationmark.triangle")
                 .symbolRenderingMode(.hierarchical)
@@ -94,7 +109,7 @@ struct EntitiesHomeCockpitView: View {
                 .accessibilityHidden(true)
 
             VStack(alignment: .leading, spacing: 4) {
-                Text("Cockpit gerade nicht verfügbar")
+                Text(title)
                     .font(.subheadline.weight(.semibold))
                 Text(message)
                     .font(.caption)

@@ -138,7 +138,7 @@ struct EntitiesHomeCockpitLoaderTests {
             )
         ]
 
-        let snapshot = try await loadSnapshot(in: testStore, graphID: primaryGraph.id, recentItems: recentItems, limit: 2)
+        let snapshot = try await loadSnapshot(in: testStore, graphID: primaryGraph.id, recentItems: recentItems, limit: 3)
 
         #expect(snapshot.recentNodes.map(\.nodeID) == [attribute.id, entity.id])
         #expect(snapshot.recentNodes.map(\.label) == ["Owner", "Atlas Current"])

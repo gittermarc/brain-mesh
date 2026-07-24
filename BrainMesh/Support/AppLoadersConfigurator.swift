@@ -264,7 +264,14 @@ enum AppLoadersConfigurator {
         await EntitiesHomeLoader.shared.configure(container: container)
 
         try Task.checkCancellation()
-        await EntitiesHomeCockpitLoader.shared.configure(container: container)
+        await EntitiesHomeRecentNodesLoader.shared.configure(
+            container: container
+        )
+
+        try Task.checkCancellation()
+        await EntitiesHomeHealthSummaryProvider.shared.configure(
+            container: container
+        )
 
         try Task.checkCancellation()
         await BrainMeshSearchService.shared.configure(container: container)

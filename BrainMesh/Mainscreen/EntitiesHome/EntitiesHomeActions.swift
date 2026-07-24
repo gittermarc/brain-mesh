@@ -42,7 +42,7 @@ extension EntitiesHomeView {
                 }
 
                 guard !entitiesToDelete.isEmpty else {
-                    refreshAfterDeletion()
+                    await refreshAfterDeletion()
                     return
                 }
 
@@ -52,18 +52,15 @@ extension EntitiesHomeView {
                 )
 
                 rows.removeAll { requestedIDs.contains($0.id) }
-                refreshAfterDeletion()
+                await refreshAfterDeletion()
             } catch {
                 deletionErrorMessage = error.localizedDescription
             }
         }
     }
 
-    private func refreshAfterDeletion() {
-        Task {
-            await EntitiesHomeLoader.shared.invalidateCache(for: activeGraphID)
-            await reload(forFolded: BMSearch.fold(searchText))
-            await loadCockpitIfNeeded()
-        }
+    @MainActor private func refreshAfterDeletion() async {
+        await EntitiesHomeLoader.shared.invalidateCache(for: activeGraphID)
+        await reload(forFolded: BMSearch.fold(searchText))
     }
 }
