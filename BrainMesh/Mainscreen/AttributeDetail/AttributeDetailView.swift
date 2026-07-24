@@ -66,6 +66,8 @@ struct AttributeDetailView: View {
 
     @State var errorMessage: String? = nil
 
+    @State private var linksPreviewLoadTriggerPolicy = AttributeLinksPreviewLoadTriggerPolicy()
+
     // runtime-expand state for sections that start collapsed (non-persistent).
     @State var expandedSectionIDs: Set<String> = []
 
@@ -78,8 +80,11 @@ struct AttributeDetailView: View {
         self.attribute = attribute
     }
 
-    private var linksTaskKey: String {
-        attribute.id.uuidString + "|" + (attribute.graphID?.uuidString ?? "nil")
+    private var linksTaskKey: AttributeLinksPreviewLoadTaskKey {
+        AttributeLinksPreviewLoadTaskKey(
+            attributeID: attribute.id,
+            graphID: attribute.graphID
+        )
     }
 
     var body: some View {
@@ -104,6 +109,9 @@ struct AttributeDetailView: View {
                         await reloadMediaPreview()
                     }
                     .task(id: linksTaskKey) {
+                        guard linksPreviewLoadTriggerPolicy.registerTaskKey(linksTaskKey) else {
+                            return
+                        }
                         await reloadLinksPreview()
                     }
                     .task(id: focusTaskKey) {
@@ -111,22 +119,24 @@ struct AttributeDetailView: View {
                     }
                     .onAppear {
                         recordRecentOpen()
+                    }
+                    .onDisappear {
+                        linksPreviewLoadTriggerPolicy.resetTaskLifecycle()
+                    }
+                    .onChange(of: showAddLink) { _, isPresented in
+                        guard linksPreviewLoadTriggerPolicy.registerAddLinkPresentation(isPresented) else {
+                            return
+                        }
                         Task { @MainActor in
                             await reloadLinksPreview()
                         }
                     }
-                    .onChange(of: showAddLink) { _, isPresented in
-                        if !isPresented {
-                            Task { @MainActor in
-                                await reloadLinksPreview()
-                            }
-                        }
-                    }
                     .onChange(of: showBulkLink) { _, isPresented in
-                        if !isPresented {
-                            Task { @MainActor in
-                                await reloadLinksPreview()
-                            }
+                        guard linksPreviewLoadTriggerPolicy.registerBulkLinkPresentation(isPresented) else {
+                            return
+                        }
+                        Task { @MainActor in
+                            await reloadLinksPreview()
                         }
                     }
                 }
@@ -149,12 +159,22 @@ struct AttributeDetailView: View {
     @MainActor
     private func reloadLinksPreview() async {
         do {
-            let snapshot = try NodeLinksQueryBuilder.load(
-                context: modelContext,
-                kind: .attribute,
-                id: attribute.id,
-                graphID: attribute.graphID,
-                previewLimit: 12
+            let snapshot = try BMAttributeLinkPreviewLoadInstrumentation.measure(
+                counts: { snapshot in
+                    (
+                        outgoing: snapshot.outgoingCount,
+                        incoming: snapshot.incomingCount
+                    )
+                },
+                operation: {
+                    try NodeLinksQueryBuilder.load(
+                        context: modelContext,
+                        kind: .attribute,
+                        id: attribute.id,
+                        graphID: attribute.graphID,
+                        previewLimit: 12
+                    )
+                }
             )
 
             outgoingLinks = snapshot.outgoingPreview

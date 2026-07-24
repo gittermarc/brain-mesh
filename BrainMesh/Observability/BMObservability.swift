@@ -42,3 +42,61 @@ nonisolated struct BMDuration {
         Double(nanosecondsElapsed) / 1_000_000.0
     }
 }
+
+/// Debug-only signpost wrapper for Attribute Detail link-preview loads.
+///
+/// The operation always runs synchronously on the caller's actor. Release builds
+/// execute the operation directly, without timing, signpost, or result-count work.
+@MainActor
+enum BMAttributeLinkPreviewLoadInstrumentation {
+    #if DEBUG
+    private static let signposter = OSSignposter(logger: BMLog.load)
+    #endif
+
+    @inline(__always)
+    static func measure<Result>(
+        counts: (Result) -> (outgoing: Int, incoming: Int),
+        operation: () throws -> Result
+    ) rethrows -> Result {
+        #if DEBUG
+        let duration = BMDuration()
+        let signpostID = signposter.makeSignpostID()
+        let intervalState = signposter.beginInterval(
+            "AttributeLinkPreviewLoad",
+            id: signpostID
+        )
+
+        BMLog.load.debug("attribute_link_preview_load status=start")
+
+        do {
+            let result = try operation()
+            let hitCounts = counts(result)
+            let elapsedMilliseconds = duration.millisecondsElapsed
+
+            signposter.endInterval(
+                "AttributeLinkPreviewLoad",
+                intervalState,
+                "status=success outgoing=\(hitCounts.outgoing, privacy: .public) incoming=\(hitCounts.incoming, privacy: .public) duration_ms=\(elapsedMilliseconds, privacy: .public)"
+            )
+            BMLog.load.debug(
+                "attribute_link_preview_load status=success outgoing=\(hitCounts.outgoing, privacy: .public) incoming=\(hitCounts.incoming, privacy: .public) duration_ms=\(elapsedMilliseconds, privacy: .public)"
+            )
+            return result
+        } catch {
+            let elapsedMilliseconds = duration.millisecondsElapsed
+
+            signposter.endInterval(
+                "AttributeLinkPreviewLoad",
+                intervalState,
+                "status=error outgoing=unavailable incoming=unavailable duration_ms=\(elapsedMilliseconds, privacy: .public)"
+            )
+            BMLog.load.error(
+                "attribute_link_preview_load status=error outgoing=unavailable incoming=unavailable duration_ms=\(elapsedMilliseconds, privacy: .public)"
+            )
+            throw error
+        }
+        #else
+        return try operation()
+        #endif
+    }
+}
