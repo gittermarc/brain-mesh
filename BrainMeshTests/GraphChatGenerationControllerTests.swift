@@ -627,6 +627,28 @@ struct GraphChatGenerationControllerTests {
         #expect(setup.callbacks.visibleStateChanges == [true, false])
     }
 
+    @Test
+    func cancelRuntimeWithoutAVisibleOperationStillOwnsProviderCleanup() async {
+        let assistantID = UUID()
+        let setup = makeSetup(
+            assistantMessageIDs: [assistantID],
+            operationIDs: [],
+            scripts: []
+        )
+
+        let cleanup = setup.controller.cancelRuntime(
+            discardSession: false
+        )
+        await cleanup.value
+
+        let orchestratorSnapshot = await setup.orchestrator.snapshot()
+        let historySnapshots = await setup.history.snapshots()
+        #expect(orchestratorSnapshot.cancellationCount == 1)
+        #expect(historySnapshots == [setup.callbacks.messages])
+        #expect(setup.controller.isGenerating == false)
+        #expect(setup.callbacks.visibleStateChanges.isEmpty)
+    }
+
     private func makeSetup(
         assistantMessageIDs: [UUID],
         operationIDs: [GraphChatGenerationOperationID],

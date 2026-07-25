@@ -252,6 +252,48 @@ final class GraphChatGenerationController {
         return barrier
     }
 
+    /// Ensures that provider/tool cancellation stays behind this technical boundary
+    /// even when no visible generation operation is currently registered.
+    @discardableResult
+    func cancelRuntime(
+        discardSession: Bool,
+        persistMessageSnapshot: Bool = true
+    ) -> Task<Void, Never> {
+        if activeOperation != nil,
+           let cancellationTask = cancel(
+            discardSession: discardSession,
+            persistMessageSnapshot: persistMessageSnapshot
+           ) {
+            return cancellationTask
+        }
+
+        let snapshot = persistMessageSnapshot
+            ? callbacks.messageSnapshot()
+            : nil
+        let previousBarrier = cancellationBarrier
+        let barrierID = UUID()
+        cancellationBarrierID = barrierID
+        let orchestrator = self.orchestrator
+        let historyStore = self.historyStore
+        let chatScope = self.chatScope
+        let barrier = Task { [weak self] in
+            await previousBarrier?.value
+            await orchestrator.cancelCurrentGeneration()
+            if discardSession {
+                await orchestrator.discardSession()
+            }
+            if let snapshot {
+                await historyStore.save(
+                    snapshot,
+                    for: chatScope
+                )
+            }
+            self?.clearCancellationBarrier(barrierID)
+        }
+        cancellationBarrier = barrier
+        return barrier
+    }
+
     func isActive(_ operationID: GraphChatGenerationOperationID) -> Bool {
         activeOperation?.operationID == operationID
     }

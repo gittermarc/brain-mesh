@@ -480,7 +480,12 @@ nonisolated struct GraphEdge: Hashable, Sendable {
 }
 
 nonisolated extension Array where Element == GraphEdge {
-    func unique() -> [GraphEdge] { Array(Set(self)) }
+    /// Removes duplicate edges without changing their established render order.
+    func unique() -> [GraphEdge] {
+        var seen = Set<GraphEdge>()
+        seen.reserveCapacity(count)
+        return filter { seen.insert($0).inserted }
+    }
 }
 
 /// Directed notes key: source -> target

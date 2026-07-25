@@ -37,7 +37,7 @@ struct GraphCanvasDerivedStateTests {
         )
 
         #expect(drawEdges.count == 3)
-        #expect(Set(drawEdges) == Set([containment, linkAlpha, linkBeta]))
+        #expect(drawEdges == [containment, linkAlpha, linkBeta])
     }
 
     @Test
