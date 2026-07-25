@@ -48,14 +48,44 @@ final class GraphChatViewModel: ObservableObject {
     private let generationStateDidChange: @MainActor (Bool) -> Void
     private let sessionDerivedStateDidClear: @MainActor () -> Void
 
-    private var sessionTask: Task<Void, Never>?
+    private lazy var generationController = GraphChatGenerationController(
+        graphScope: graphScope,
+        chatScope: chatScope,
+        orchestrator: orchestrator,
+        historyStore: historyStore,
+        observability: observability,
+        callbacks: GraphChatGenerationCallbacks(
+            messageSnapshot: { [weak self] in
+                self?.messages ?? []
+            },
+            operationWillCancel: { [weak self] _, assistantMessageID in
+                self?.markAssistantCancelled(
+                    messageID: assistantMessageID
+                )
+            },
+            eventDidArrive: { [weak self] event, _, assistantMessageID in
+                self?.apply(
+                    event,
+                    toAssistantMessageID: assistantMessageID
+                )
+            },
+            completedTurnDidArrive: { [weak self] operationID, assistantMessageID in
+                await self?.captureCommittedConversationCheckpoint(
+                    for: assistantMessageID,
+                    operationID: operationID
+                )
+            },
+            generationStateDidChange: { [weak self] isGenerating in
+                self?.updateVisibleGenerationState(isGenerating)
+            }
+        )
+    )
+    private var sessionMutationTask: Task<Void, Never>?
     private var feedbackTask: Task<Void, Never>?
     private var noticeTask: Task<Void, Never>?
     private var presentationCleanupTask: Task<Void, Never>?
     private var visiblePresentationIDs: Set<UUID> = []
-    private var activeOperationID: UUID?
-    private var activeAssistantMessageID: UUID?
-    private var activeGenerationIsRegeneration = false
+    private var activeSessionMutationID: UUID?
     private var committedConversationCheckpoint: GraphChatConversationCheckpoint?
     private var hasLoaded = false
     private var isLoadingSchema = false
@@ -116,7 +146,7 @@ final class GraphChatViewModel: ObservableObject {
     }
 
     deinit {
-        sessionTask?.cancel()
+        sessionMutationTask?.cancel()
         feedbackTask?.cancel()
         noticeTask?.cancel()
         presentationCleanupTask?.cancel()
@@ -139,7 +169,7 @@ final class GraphChatViewModel: ObservableObject {
     }
 
     var isGenerating: Bool {
-        composerState.isGenerating
+        generationController.isGenerating
     }
 
     var canSend: Bool {
@@ -308,7 +338,7 @@ final class GraphChatViewModel: ObservableObject {
             question: question,
             assistantMessageID: assistantID,
             usedIndexFallback: decision.usesIndexFallback,
-            isRegeneration: false
+            mode: .newTurn
         )
     }
 
@@ -449,16 +479,18 @@ final class GraphChatViewModel: ObservableObject {
     /// Only session-derived messages, trusted conversation state, clarification, evidence,
     /// tool runtime state, feedback, and composer state are reset.
     private func startNewChat() {
-        let previousTask = sessionTask
-        previousTask?.cancel()
+        let hadActiveGeneration = generationController.isGenerating
+        let generationCleanupTask = generationController.cancel(
+            discardSession: false,
+            persistMessageSnapshot: false
+        )
+        let previousMutationTask = sessionMutationTask
+        previousMutationTask?.cancel()
         let previousFeedbackTask = feedbackTask
         previousFeedbackTask?.cancel()
         feedbackTask = nil
-        let operationID = UUID()
-        activeOperationID = operationID
-        activeAssistantMessageID = nil
-        activeGenerationIsRegeneration = false
-        setGenerationState(false)
+        let mutationID = UUID()
+        activeSessionMutationID = mutationID
         isPerformingSessionMutation = true
 
         messages = []
@@ -474,19 +506,23 @@ final class GraphChatViewModel: ObservableObject {
         let historyStore = self.historyStore
         let feedbackStore = self.feedbackStore
         let chatScope = self.chatScope
-        sessionTask = Task { [weak self] in
-            await orchestrator.cancelCurrentGeneration()
-            await previousTask?.value
+        sessionMutationTask = Task { [weak self] in
+            await previousMutationTask?.value
+            if hadActiveGeneration {
+                await generationCleanupTask?.value
+            } else {
+                await orchestrator.cancelCurrentGeneration()
+            }
             await previousFeedbackTask?.value
             await orchestrator.discardSession(reason: .newConversation)
             await historyStore.removeMessages(for: chatScope)
             await feedbackStore.removeAll(for: chatScope)
             guard let self,
-                  self.isActiveOperation(operationID) else {
+                  self.isActiveSessionMutation(mutationID) else {
                 return
             }
             self.isPerformingSessionMutation = false
-            self.finishOperation(operationID)
+            self.finishSessionMutation(mutationID)
             self.showNotice(
                 message: "Neuer Chat gestartet",
                 systemImage: "plus.message"
@@ -496,7 +532,7 @@ final class GraphChatViewModel: ObservableObject {
 
     func clearHistory() async {
         startNewChat()
-        let task = sessionTask
+        let task = sessionMutationTask
         await task?.value
     }
 
@@ -504,14 +540,19 @@ final class GraphChatViewModel: ObservableObject {
     func discardSensitiveState(
         preserveDraft: Bool = false
     ) -> [Task<Void, Never>] {
-        let pendingLocalTasks = [sessionTask, feedbackTask].compactMap { $0 }
-        activeOperationID = nil
-        activeAssistantMessageID = nil
-        activeGenerationIsRegeneration = false
-        for task in pendingLocalTasks {
-            task.cancel()
-        }
-        sessionTask = nil
+        let generationCleanupTask = generationController.cancel(
+            discardSession: false,
+            persistMessageSnapshot: false
+        )
+        sessionMutationTask?.cancel()
+        feedbackTask?.cancel()
+        let pendingLocalTasks = [
+            generationCleanupTask,
+            sessionMutationTask,
+            feedbackTask,
+        ].compactMap { $0 }
+        activeSessionMutationID = nil
+        sessionMutationTask = nil
         feedbackTask = nil
         noticeTask?.cancel()
         noticeTask = nil
@@ -521,7 +562,6 @@ final class GraphChatViewModel: ObservableObject {
         actionNotice = nil
         composerState = GraphChatComposerState()
         isPerformingSessionMutation = false
-        generationStateDidChange(false)
         if preserveDraft == false {
             draftChangeHandler("")
         }
@@ -634,136 +674,17 @@ final class GraphChatViewModel: ObservableObject {
         question: String,
         assistantMessageID: UUID,
         usedIndexFallback: Bool,
-        isRegeneration: Bool
+        mode: GraphChatGenerationMode
     ) {
-        let previousTask = sessionTask
-        previousTask?.cancel()
-        let operationID = UUID()
-        activeOperationID = operationID
-        activeAssistantMessageID = assistantMessageID
-        activeGenerationIsRegeneration = isRegeneration
-        setGenerationState(true)
         scrollAnchorToken = UUID()
-
-        sessionTask = Task { [weak self] in
-            if let previousTask {
-                await previousTask.value
-            }
-            guard let self,
-                  Task.isCancelled == false,
-                  self.isActiveOperation(operationID) else {
-                return
-            }
-            await self.consumeGeneration(
+        generationController.start(
+            GraphChatGenerationRequest(
                 question: question,
                 assistantMessageID: assistantMessageID,
+                mode: mode,
                 usedIndexFallback: usedIndexFallback,
-                operationID: operationID
             )
-        }
-    }
-
-    private func consumeGeneration(
-        question: String,
-        assistantMessageID: UUID,
-        usedIndexFallback: Bool,
-        operationID: UUID
-    ) async {
-        let timer = BMDuration()
-        var toolCount = 0
-        var toolKinds: Set<GraphChatToolKind> = []
-        var terminalMetric: GraphChatRequestMetric?
-
-        await historyStore.save(messages, for: chatScope)
-        let stream = await orchestrator.streamAnswer(
-            question: question,
-            graphScope: graphScope,
-            chatScope: chatScope
         )
-        var receivedTerminalEvent = false
-
-        for await event in stream {
-            guard Task.isCancelled == false,
-                  isActiveOperation(operationID),
-                  activeAssistantMessageID == assistantMessageID else {
-                break
-            }
-
-            if case .toolActivity(let activity) = event,
-               activity.state == .started {
-                toolCount += 1
-                toolKinds.insert(activity.tool)
-            }
-
-            apply(
-                event,
-                toAssistantMessageID: assistantMessageID
-            )
-
-            if case .completed = event {
-                await captureCommittedConversationCheckpoint(
-                    for: assistantMessageID,
-                    operationID: operationID
-                )
-            }
-
-            receivedTerminalEvent = isTerminal(event)
-            await historyStore.save(messages, for: chatScope)
-
-            if receivedTerminalEvent {
-                terminalMetric = Self.metric(
-                    for: event,
-                    durationMilliseconds: timer.millisecondsElapsed,
-                    toolCount: toolCount,
-                    toolKinds: toolKinds,
-                    usedIndexFallback: usedIndexFallback
-                )
-                break
-            }
-        }
-
-        if Task.isCancelled || isActiveOperation(operationID) == false {
-            await observability.record(
-                .request(
-                    GraphChatRequestMetric(
-                        durationMilliseconds: timer.millisecondsElapsed,
-                        toolCount: toolCount,
-                        toolKinds: toolKinds,
-                        evidenceCount: 0,
-                        usedIndexFallback: usedIndexFallback,
-                        outcome: .cancelled,
-                        errorCode: .cancelled
-                    )
-                )
-            )
-            return
-        }
-
-        if receivedTerminalEvent == false {
-            let failure = GraphChatError(
-                code: .unexpected,
-                message: "Die Antwort wurde ohne Abschluss beendet.",
-                recoverySuggestion: "Versuche die Frage erneut."
-            )
-            apply(
-                .failure(failure),
-                toAssistantMessageID: assistantMessageID
-            )
-            await historyStore.save(messages, for: chatScope)
-            terminalMetric = GraphChatRequestMetric(
-                durationMilliseconds: timer.millisecondsElapsed,
-                toolCount: toolCount,
-                toolKinds: toolKinds,
-                evidenceCount: 0,
-                usedIndexFallback: usedIndexFallback,
-                outcome: .failed,
-                errorCode: failure.code
-            )
-        }
-        if let terminalMetric {
-            await observability.record(.request(terminalMetric))
-        }
-        finishGeneration(operationID)
     }
 
     private func submitEditedQuestion() {
@@ -782,26 +703,23 @@ final class GraphChatViewModel: ObservableObject {
             return
         }
 
-        let operationID = UUID()
-        activeOperationID = operationID
-        activeAssistantMessageID = nil
-        activeGenerationIsRegeneration = false
-        setGenerationState(true)
         isPerformingSessionMutation = true
-        let previousTask = sessionTask
-        previousTask?.cancel()
         let previousFeedbackTask = feedbackTask
-
-        sessionTask = Task { [weak self] in
+        let assistantID = UUID()
+        let request = GraphChatGenerationRequest(
+            question: plan.replacementQuestion,
+            assistantMessageID: assistantID,
+            mode: .branchReplacement,
+            usedIndexFallback: decision.usesIndexFallback
+        )
+        generationController.start(request) { [weak self] operationID in
             guard let self else {
-                return
+                return false
             }
-            await self.orchestrator.cancelCurrentGeneration()
-            await previousTask?.value
             await previousFeedbackTask?.value
             guard Task.isCancelled == false,
-                  self.isActiveOperation(operationID) else {
-                return
+                  self.generationController.isActive(operationID) else {
+                return false
             }
 
             do {
@@ -813,11 +731,11 @@ final class GraphChatViewModel: ObservableObject {
                     error,
                     operationID: operationID
                 )
-                return
+                return false
             }
 
             guard Task.isCancelled == false,
-                  self.isActiveOperation(operationID),
+                  self.generationController.isActive(operationID),
                   self.currentAccessDecision.route == .ready else {
                 self.handleBranchRestoreFailure(
                     GraphChatError(
@@ -826,10 +744,9 @@ final class GraphChatViewModel: ObservableObject {
                     ),
                     operationID: operationID
                 )
-                return
+                return false
             }
 
-            let assistantID = UUID()
             let userMessage = GraphChatTranscriptMessage(
                 state: .userQuestion(plan.replacementQuestion),
                 conversationCheckpointBeforeTurn: plan.restoreCheckpoint
@@ -849,7 +766,6 @@ final class GraphChatViewModel: ObservableObject {
             self.composerState.text = ""
             self.draftChangeHandler("")
             self.editingState = nil
-            self.activeAssistantMessageID = assistantID
             self.feedbackByMessageID = self.feedbackByMessageID.filter {
                 plan.removedMessageIDs.contains($0.key) == false
             }
@@ -860,17 +776,12 @@ final class GraphChatViewModel: ObservableObject {
             await self.historyStore.save(self.messages, for: self.chatScope)
 
             guard Task.isCancelled == false,
-                  self.isActiveOperation(operationID) else {
-                return
+                  self.generationController.isActive(operationID) else {
+                return false
             }
             self.isPerformingSessionMutation = false
             self.scrollAnchorToken = UUID()
-            await self.consumeGeneration(
-                question: plan.replacementQuestion,
-                assistantMessageID: assistantID,
-                usedIndexFallback: decision.usesIndexFallback,
-                operationID: operationID
-            )
+            return true
         }
     }
 
@@ -881,6 +792,14 @@ final class GraphChatViewModel: ObservableObject {
             return
         }
 
+        let generationCleanupTask: Task<Void, Never>?
+        if isGenerating {
+            generationCleanupTask = generationController.cancel(
+                discardSession: false
+            )
+        } else {
+            generationCleanupTask = nil
+        }
         editingState = GraphChatEditingState(
             userMessageID: messageID,
             originalQuestion: question
@@ -888,35 +807,10 @@ final class GraphChatViewModel: ObservableObject {
         composerState.text = question
         draftChangeHandler(question)
 
-        guard isGenerating else {
-            return
-        }
-
-        let previousTask = sessionTask
-        previousTask?.cancel()
-        let operationID = UUID()
-        activeOperationID = operationID
-        activeGenerationIsRegeneration = false
-        markActiveAssistantCancelled()
-        activeAssistantMessageID = nil
-        setGenerationState(false)
-        isPerformingSessionMutation = true
-        let orchestrator = self.orchestrator
-        let historyStore = self.historyStore
-        let chatScope = self.chatScope
-        let messageSnapshot = messages
-
-        sessionTask = Task { [weak self] in
-            await orchestrator.cancelCurrentGeneration()
-            await previousTask?.value
-            await historyStore.save(messageSnapshot, for: chatScope)
-            guard let self,
-                  Task.isCancelled == false,
-                  self.isActiveOperation(operationID) else {
-                return
-            }
-            self.isPerformingSessionMutation = false
-            self.finishOperation(operationID)
+        if let generationCleanupTask {
+            beginGenerationCancellationMutation(
+                awaiting: generationCleanupTask
+            )
         }
     }
 
@@ -953,8 +847,8 @@ final class GraphChatViewModel: ObservableObject {
 
         let decision = currentAccessDecision
         if isGenerating {
-            guard activeAssistantMessageID == messageID,
-                  activeGenerationIsRegeneration == false,
+            guard generationController.activeAssistantMessageID == messageID,
+                  generationController.activeMode?.isRegeneration == false,
                   decision.canCancelGeneration else {
                 return
             }
@@ -965,26 +859,25 @@ final class GraphChatViewModel: ObservableObject {
             }
         }
 
-        let previousTask = sessionTask
-        previousTask?.cancel()
         let previousFeedbackTask = feedbackTask
-        let operationID = UUID()
-        activeOperationID = operationID
-        activeAssistantMessageID = messageID
-        activeGenerationIsRegeneration = true
-        setGenerationState(true)
         isPerformingSessionMutation = true
-
-        sessionTask = Task { [weak self] in
+        let mode: GraphChatGenerationMode = isTechnicalRetry
+            ? .technicalRetry
+            : .regeneration
+        let request = GraphChatGenerationRequest(
+            question: plan.question,
+            assistantMessageID: messageID,
+            mode: mode,
+            usedIndexFallback: decision.usesIndexFallback
+        )
+        generationController.start(request) { [weak self] operationID in
             guard let self else {
-                return
+                return false
             }
-            await self.orchestrator.cancelCurrentGeneration()
-            await previousTask?.value
             await previousFeedbackTask?.value
             guard Task.isCancelled == false,
-                  self.isActiveOperation(operationID) else {
-                return
+                  self.generationController.isActive(operationID) else {
+                return false
             }
 
             do {
@@ -996,11 +889,11 @@ final class GraphChatViewModel: ObservableObject {
                     error,
                     operationID: operationID
                 )
-                return
+                return false
             }
 
             guard Task.isCancelled == false,
-                  self.isActiveOperation(operationID),
+                  self.generationController.isActive(operationID),
                   self.currentAccessDecision.route == .ready else {
                 self.handleBranchRestoreFailure(
                     GraphChatError(
@@ -1009,7 +902,7 @@ final class GraphChatViewModel: ObservableObject {
                     ),
                     operationID: operationID
                 )
-                return
+                return false
             }
 
             let assistantMessage = GraphChatTranscriptMessage(
@@ -1030,17 +923,12 @@ final class GraphChatViewModel: ObservableObject {
             await self.historyStore.save(self.messages, for: self.chatScope)
 
             guard Task.isCancelled == false,
-                  self.isActiveOperation(operationID) else {
-                return
+                  self.generationController.isActive(operationID) else {
+                return false
             }
             self.isPerformingSessionMutation = false
             self.scrollAnchorToken = UUID()
-            await self.consumeGeneration(
-                question: plan.question,
-                assistantMessageID: plan.assistantMessageID,
-                usedIndexFallback: decision.usesIndexFallback,
-                operationID: operationID
-            )
+            return true
         }
     }
 
@@ -1126,14 +1014,14 @@ final class GraphChatViewModel: ObservableObject {
         discardSession: Bool,
         showCancellationNotice: Bool
     ) {
-        let previousTask = sessionTask
-        previousTask?.cancel()
-        let operationID = UUID()
-        activeOperationID = operationID
-        activeGenerationIsRegeneration = false
-        markActiveAssistantCancelled()
-        activeAssistantMessageID = nil
-        setGenerationState(false)
+        let hadActiveGeneration = generationController.isGenerating
+        let generationCleanupTask = generationController.cancel(
+            discardSession: discardSession
+        )
+        let previousMutationTask = sessionMutationTask
+        previousMutationTask?.cancel()
+        let mutationID = UUID()
+        activeSessionMutationID = mutationID
         isPerformingSessionMutation = true
         scrollAnchorToken = UUID()
 
@@ -1141,20 +1029,24 @@ final class GraphChatViewModel: ObservableObject {
         let historyStore = self.historyStore
         let chatScope = self.chatScope
         let messageSnapshot = messages
-        sessionTask = Task { [weak self] in
-            await orchestrator.cancelCurrentGeneration()
-            await previousTask?.value
-            if discardSession {
-                await orchestrator.discardSession()
+        sessionMutationTask = Task { [weak self] in
+            await previousMutationTask?.value
+            if hadActiveGeneration {
+                await generationCleanupTask?.value
+            } else {
+                await orchestrator.cancelCurrentGeneration()
+                if discardSession {
+                    await orchestrator.discardSession()
+                }
+                await historyStore.save(messageSnapshot, for: chatScope)
             }
-            await historyStore.save(messageSnapshot, for: chatScope)
             guard let self,
                   Task.isCancelled == false,
-                  self.isActiveOperation(operationID) else {
+                  self.isActiveSessionMutation(mutationID) else {
                 return
             }
             self.isPerformingSessionMutation = false
-            self.finishOperation(operationID)
+            self.finishSessionMutation(mutationID)
             if showCancellationNotice {
                 self.showNotice(
                     message: "Antwort abgebrochen",
@@ -1164,14 +1056,34 @@ final class GraphChatViewModel: ObservableObject {
         }
     }
 
-    private func markActiveAssistantCancelled() {
-        let targetID = activeAssistantMessageID
+    private func beginGenerationCancellationMutation(
+        awaiting generationCleanupTask: Task<Void, Never>
+    ) {
+        let previousMutationTask = sessionMutationTask
+        previousMutationTask?.cancel()
+        let mutationID = UUID()
+        activeSessionMutationID = mutationID
+        isPerformingSessionMutation = true
+        sessionMutationTask = Task { [weak self] in
+            await previousMutationTask?.value
+            await generationCleanupTask.value
+            guard let self,
+                  Task.isCancelled == false,
+                  self.isActiveSessionMutation(mutationID) else {
+                return
+            }
+            self.isPerformingSessionMutation = false
+            self.finishSessionMutation(mutationID)
+        }
+    }
+
+    private func markAssistantCancelled(messageID: UUID) {
         guard let index = messages.lastIndex(where: { message in
             guard case .assistant(let state) = message.state,
                   state.isTerminal == false else {
                 return false
             }
-            return targetID == nil || message.id == targetID
+            return message.id == messageID
         }), case .assistant(var state) = messages[index].state else {
             return
         }
@@ -1200,11 +1112,11 @@ final class GraphChatViewModel: ObservableObject {
 
     private func captureCommittedConversationCheckpoint(
         for messageID: UUID,
-        operationID: UUID
+        operationID: GraphChatGenerationOperationID
     ) async {
         guard let state = await orchestrator.conversationStateSnapshot(),
               Task.isCancelled == false,
-              isActiveOperation(operationID),
+              generationController.isActive(operationID),
               state.graphScope == graphScope,
               state.chatScope == chatScope,
               let index = messages.firstIndex(where: { $0.id == messageID }) else {
@@ -1294,46 +1206,34 @@ final class GraphChatViewModel: ObservableObject {
 
     private func handleBranchRestoreFailure(
         _ error: Error,
-        operationID: UUID
+        operationID: GraphChatGenerationOperationID
     ) {
-        guard isActiveOperation(operationID) else {
+        guard generationController.isActive(operationID) else {
             return
         }
         isPerformingSessionMutation = false
-        setGenerationState(false)
-        activeAssistantMessageID = nil
-        activeGenerationIsRegeneration = false
-        finishOperation(operationID)
         showNotice(
             message: error.localizedDescription,
             systemImage: "exclamationmark.triangle"
         )
     }
 
-    private func finishGeneration(_ operationID: UUID) {
-        guard isActiveOperation(operationID) else {
+    private func finishSessionMutation(_ mutationID: UUID) {
+        guard activeSessionMutationID == mutationID else {
             return
         }
-        setGenerationState(false)
-        activeAssistantMessageID = nil
-        activeGenerationIsRegeneration = false
-        isPerformingSessionMutation = false
-        finishOperation(operationID)
+        activeSessionMutationID = nil
+        sessionMutationTask = nil
     }
 
-    private func finishOperation(_ operationID: UUID) {
-        guard activeOperationID == operationID else {
+    private func isActiveSessionMutation(_ mutationID: UUID) -> Bool {
+        activeSessionMutationID == mutationID
+    }
+
+    private func updateVisibleGenerationState(_ isGenerating: Bool) {
+        guard composerState.isGenerating != isGenerating else {
             return
         }
-        activeOperationID = nil
-        sessionTask = nil
-    }
-
-    private func isActiveOperation(_ operationID: UUID) -> Bool {
-        activeOperationID == operationID
-    }
-
-    private func setGenerationState(_ isGenerating: Bool) {
         composerState.isGenerating = isGenerating
         generationStateDidChange(isGenerating)
     }
@@ -1381,60 +1281,4 @@ final class GraphChatViewModel: ObservableObject {
         await historyStore.save(messages, for: chatScope)
     }
 
-    private func isTerminal(_ event: GraphChatStreamEvent) -> Bool {
-        switch event {
-        case .completed, .cancelled, .failure:
-            return true
-        case .started, .toolActivity, .partialAnswer:
-            return false
-        }
-    }
-
-    private nonisolated static func metric(
-        for event: GraphChatStreamEvent,
-        durationMilliseconds: Double,
-        toolCount: Int,
-        toolKinds: Set<GraphChatToolKind>,
-        usedIndexFallback: Bool
-    ) -> GraphChatRequestMetric? {
-        switch event {
-        case .completed(let answer):
-            return GraphChatRequestMetric(
-                durationMilliseconds: durationMilliseconds,
-                toolCount: toolCount,
-                toolKinds: toolKinds,
-                evidenceCount: answer.evidence.count,
-                usedIndexFallback: usedIndexFallback,
-                outcome: {
-                    if case .noResults = answer.state {
-                        return .noResults
-                    }
-                    return .completed
-                }(),
-                errorCode: nil
-            )
-        case .cancelled:
-            return GraphChatRequestMetric(
-                durationMilliseconds: durationMilliseconds,
-                toolCount: toolCount,
-                toolKinds: toolKinds,
-                evidenceCount: 0,
-                usedIndexFallback: usedIndexFallback,
-                outcome: .cancelled,
-                errorCode: .cancelled
-            )
-        case .failure(let error):
-            return GraphChatRequestMetric(
-                durationMilliseconds: durationMilliseconds,
-                toolCount: toolCount,
-                toolKinds: toolKinds,
-                evidenceCount: 0,
-                usedIndexFallback: usedIndexFallback,
-                outcome: error.code == .cancelled ? .cancelled : .failed,
-                errorCode: error.code
-            )
-        case .started, .toolActivity, .partialAnswer:
-            return nil
-        }
-    }
 }
