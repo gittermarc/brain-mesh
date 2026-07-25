@@ -12,19 +12,14 @@ nonisolated enum GraphChatConcurrentRequestPolicy: String, CaseIterable, Hashabl
 }
 
 actor GraphChatOrchestrator {
-    private struct ScopeKey: Hashable, Sendable {
-        let graphScope: GraphScope
-        let chatScope: GraphChatScope
-    }
-
     private struct ArtifactSessionResources {
-        let key: ScopeKey
+        let key: GraphChatOrchestrationScopeKey
         let sessionID: GraphChatAnswerArtifactSessionID
         let registry: GraphChatAnswerArtifactRegistry
     }
 
     private struct SessionResources {
-        let key: ScopeKey
+        let key: GraphChatOrchestrationScopeKey
         let sessionID: GraphChatModelSessionID
         let schemaContext: GraphSchemaContext
         let budget: GraphChatToolBudget
@@ -61,9 +56,11 @@ actor GraphChatOrchestrator {
     private let conversationStateReducer: GraphChatConversationStateReducer
     private let conversationContextBuilder: GraphChatConversationContextBuilder
     private let referenceResolver: GraphChatConversationReferenceResolver
-    private let referenceInterpreter: GraphChatConversationReferenceInterpreter
-    private let unsupportedRequestDetector: GraphChatUnsupportedRequestDetector
+    private let requestPreflight: GraphChatRequestPreflight
     private let responseLanguageSelector: GraphChatResponseLanguageSelector
+    private let initialContextProfilePlanner: GraphChatInitialContextProfilePlanner
+    private let missingContextPolicy: GraphChatReferenceMissingContextDeferPolicy
+    private let localAnswerBuilder: GraphChatLocalAnswerBuilder
     private let artifactRevalidator: any GraphChatAnswerArtifactRevalidating
     private let evidenceValidator: any GraphEvidenceValidating
     private let referenceDate: @Sendable () -> Date
@@ -100,16 +97,29 @@ actor GraphChatOrchestrator {
         self.toolRunnerFactory = toolRunnerFactory
         self.toolBudgetPolicy = toolBudgetPolicy
         self.concurrentRequestPolicy = concurrentRequestPolicy
-        self.conversationStateReducer = GraphChatConversationStateReducer(
+        let stateReducer = GraphChatConversationStateReducer(
             policy: conversationStatePolicy
         )
-        self.conversationContextBuilder = GraphChatConversationContextBuilder(
+        let contextBuilder = GraphChatConversationContextBuilder(
             budget: conversationContextBudget
         )
+        let missingContextPolicy = GraphChatReferenceMissingContextDeferPolicy()
+        let localAnswerBuilder = GraphChatLocalAnswerBuilder()
+        self.conversationStateReducer = stateReducer
+        self.conversationContextBuilder = contextBuilder
         self.referenceResolver = referenceResolver
-        self.referenceInterpreter = GraphChatConversationReferenceInterpreter()
-        self.unsupportedRequestDetector = GraphChatUnsupportedRequestDetector()
+        self.requestPreflight = GraphChatRequestPreflight(
+            conversationStateReducer: stateReducer,
+            conversationContextBuilder: contextBuilder,
+            referenceResolver: referenceResolver,
+            responseLanguageSelector: responseLanguageSelector,
+            missingContextPolicy: missingContextPolicy,
+            localAnswerBuilder: localAnswerBuilder
+        )
         self.responseLanguageSelector = responseLanguageSelector
+        self.initialContextProfilePlanner = GraphChatInitialContextProfilePlanner()
+        self.missingContextPolicy = missingContextPolicy
+        self.localAnswerBuilder = localAnswerBuilder
         self.artifactRevalidator = artifactRevalidator
         self.evidenceValidator = evidenceValidator
         self.referenceDate = referenceDate
@@ -121,7 +131,10 @@ actor GraphChatOrchestrator {
         graphScope: GraphScope,
         chatScope: GraphChatScope
     ) async throws {
-        let key = try validatedKey(graphScope: graphScope, chatScope: chatScope)
+        let key = try requestPreflight.validatedKey(
+            graphScope: graphScope,
+            chatScope: chatScope
+        )
         try await cancelActiveGenerationForNewRequest()
         let baseState = conversationStateForTurn(for: key)
         await discardPreparedSession(
@@ -172,7 +185,10 @@ actor GraphChatOrchestrator {
 
         do {
             try await cancelActiveGenerationForNewRequest()
-            let key = try validatedKey(graphScope: graphScope, chatScope: chatScope)
+            let key = try requestPreflight.validatedKey(
+                graphScope: graphScope,
+                chatScope: chatScope
+            )
             let turnStateSnapshot = conversationStateForTurn(for: key)
             await discardPreparedSession(
                 unlessMatching: key,
@@ -300,7 +316,7 @@ actor GraphChatOrchestrator {
             )
         }
 
-        let expectedKey = ScopeKey(
+        let expectedKey = GraphChatOrchestrationScopeKey(
             graphScope: graphScope,
             chatScope: chatScope
         )
@@ -356,7 +372,7 @@ actor GraphChatOrchestrator {
     func restoreConversationState(
         from checkpoint: GraphChatConversationCheckpoint
     ) async throws {
-        let key = try validatedKey(
+        let key = try requestPreflight.validatedKey(
             graphScope: checkpoint.graphScope,
             chatScope: checkpoint.chatScope
         )
@@ -406,7 +422,7 @@ actor GraphChatOrchestrator {
     private func performRequest(
         requestID: UUID,
         question: String,
-        key: ScopeKey,
+        key: GraphChatOrchestrationScopeKey,
         turnStateSnapshot: GraphChatConversationState,
         continuation: GraphChatEventStream.Continuation
     ) async {
@@ -421,169 +437,32 @@ actor GraphChatOrchestrator {
         }
 
         do {
-            let normalizedQuestion = try validateQuestion(question)
-            let language = responseLanguageSelector.language(for: normalizedQuestion)
-            let localizer = GraphChatResponseLocalizer(language: language)
-
-            if turnStateSnapshot.pendingClarification == nil,
-                let unsupportedCapability = unsupportedRequestDetector.capability(
-                    for: normalizedQuestion
-                )
-            {
-                let answer = GraphChatAnswer(
-                    state: .unsupported(unsupportedCapability),
-                    directAnswer: localizer.unsupported(unsupportedCapability),
-                    hasInsufficientEvidence: false
-                )
-                try await completeLocalAnswer(
-                    answer,
+            let preflightResult = try await requestPreflight.evaluate(
+                GraphChatRequestPreflightInput(
                     requestID: requestID,
-                    baseState: turnStateSnapshot,
-                    expectedCommittedState: turnStateSnapshot,
-                    pendingClarification: nil,
-                    continuation: continuation
+                    requestedAt: referenceDate(),
+                    question: question,
+                    graphScope: key.graphScope,
+                    chatScope: key.chatScope,
+                    conversationState: turnStateSnapshot
                 )
+            )
+            guard case .provider(let plan) = preflightResult else {
+                if case .local(let localPlan) = preflightResult {
+                    try await completeLocalAnswer(
+                        localPlan,
+                        requestID: requestID,
+                        continuation: continuation
+                    )
+                }
                 return
             }
 
-            var requestBaseState = turnStateSnapshot
-            var currentReference: GraphChatResolvedConversationReference?
-            var continuationOperation: GraphChatConversationContinuationOperation?
-            var providerQuestion = normalizedQuestion
-            var context = conversationContextBuilder.makeSnapshot(
-                from: requestBaseState.snapshot
-            )
-
-            if let pending = requestBaseState.pendingClarification {
-                guard
-                    pending.isValid(
-                        at: referenceDate(),
-                        graphScope: key.graphScope,
-                        chatScope: key.chatScope
-                    )
-                else {
-                    requestBaseState = try clearedClarification(in: requestBaseState)
-                    context = conversationContextBuilder.makeSnapshot(
-                        from: requestBaseState.snapshot
-                    )
-                    let answer = GraphChatAnswer(
-                        state: .clarification(
-                            GraphChatClarification(
-                                id: UUID(),
-                                question: localizer.clarificationQuestion(reason: .staleResults),
-                                options: []
-                            )
-                        ),
-                        directAnswer: localizer.clarificationQuestion(reason: .staleResults),
-                        hasInsufficientEvidence: true
-                    )
-                    try await completeLocalAnswer(
-                        answer,
-                        requestID: requestID,
-                        baseState: requestBaseState,
-                        expectedCommittedState: turnStateSnapshot,
-                        pendingClarification: nil,
-                        continuation: continuation
-                    )
-                    return
-                }
-
-                guard
-                    let selectedOption = referenceInterpreter.clarificationSelection(
-                        for: normalizedQuestion,
-                        pending: pending
-                    )
-                else {
-                    let answer = clarificationAnswer(
-                        pending: pending,
-                        question: localizer.clarificationQuestion(reason: .ambiguous)
-                    )
-                    try await completeLocalAnswer(
-                        answer,
-                        requestID: requestID,
-                        baseState: requestBaseState,
-                        expectedCommittedState: turnStateSnapshot,
-                        pendingClarification: nil,
-                        continuation: continuation
-                    )
-                    return
-                }
-
-                let resolution = try await referenceResolver.resolve(
-                    selectedOption.proposal,
-                    in: context,
-                    expectedGraphScope: key.graphScope,
-                    expectedChatScope: key.chatScope
-                )
-                requestBaseState = try clearedClarification(in: requestBaseState)
-                guard case .resolved(let resolved) = resolution else {
-                    let answer = answer(
-                        for: resolution,
-                        language: language,
-                        operation: pending.continuationOperation,
-                        state: requestBaseState,
-                        sourceTurnID: pending.sourceTurnID,
-                        continuationQuestion: pending.continuationQuestion
-                    )
-                    try await completeLocalAnswer(
-                        answer.value,
-                        requestID: requestID,
-                        baseState: requestBaseState,
-                        expectedCommittedState: turnStateSnapshot,
-                        pendingClarification: answer.pending,
-                        continuation: continuation
-                    )
-                    return
-                }
-                currentReference = resolved
-                continuationOperation = pending.continuationOperation
-                providerQuestion = pending.continuationQuestion
-            } else if let interpretation = referenceInterpreter.interpretation(
-                for: normalizedQuestion
-            ) {
-                let resolution = try await referenceResolver.resolve(
-                    interpretation.proposal,
-                    in: context,
-                    expectedGraphScope: key.graphScope,
-                    expectedChatScope: key.chatScope
-                )
-                switch resolution {
-                case .resolved(let resolved):
-                    currentReference = resolved
-                    continuationOperation = interpretation.operation
-                case .clarification, .noResults, .rejected:
-                    if shouldDeferReferenceResolutionToProvider(resolution) {
-                        break
-                    }
-                    let answer = answer(
-                        for: resolution,
-                        language: language,
-                        operation: interpretation.operation,
-                        state: requestBaseState,
-                        sourceTurnID: requestBaseState.turnContexts.last?.id,
-                        continuationQuestion: normalizedQuestion
-                    )
-                    try await completeLocalAnswer(
-                        answer.value,
-                        requestID: requestID,
-                        baseState: requestBaseState,
-                        expectedCommittedState: turnStateSnapshot,
-                        pendingClarification: answer.pending,
-                        continuation: continuation
-                    )
-                    return
-                }
-            }
-
-            context = conversationContextBuilder.makeSnapshot(
-                from: requestBaseState.snapshot,
-                currentReference: currentReference
-            )
             let initialResources = try await takeOrCreateSessionResources(
-                for: key,
-                conversationBaseState: requestBaseState,
-                conversationContext: context,
-                responseLanguage: language
+                for: plan.scopeKey,
+                conversationBaseState: plan.requestBaseState,
+                conversationContext: plan.conversationContext,
+                responseLanguage: plan.responseLanguage
             )
             artifactCommitContext = (
                 registry: initialResources.artifactRegistry,
@@ -592,10 +471,10 @@ actor GraphChatOrchestrator {
             setActiveResources(initialResources, requestID: requestID)
             let generation = try await generateWithSingleContextRetry(
                 resources: initialResources,
-                question: providerQuestion,
-                conversationContext: context,
-                responseLanguage: language,
-                continuationOperation: continuationOperation,
+                question: plan.providerQuestion,
+                conversationContext: plan.conversationContext,
+                responseLanguage: plan.responseLanguage,
+                continuationOperation: plan.continuationOperation,
                 requestID: requestID,
                 continuation: continuation
             )
@@ -612,7 +491,7 @@ actor GraphChatOrchestrator {
                 validatedEvidenceIDs: answer.evidenceIDs
             )
             try Task.checkCancellation()
-            guard conversationState == turnStateSnapshot else {
+            guard conversationState == plan.expectedCommittedState else {
                 throw CancellationError()
             }
             let committedArtifactIDs = try await completedResources.artifactRegistry.commit(
@@ -649,12 +528,28 @@ actor GraphChatOrchestrator {
     ) async throws -> GenerationResult {
         var resources = initialResources
         var retryCount = 0
-        let initialProfile = initialContextProfile(
-            question: question,
-            schemaContext: initialResources.schemaContext,
+        let standardSchema = schemaPrompt(
+            from: initialResources.schemaContext,
             chatScope: initialResources.key.chatScope,
-            conversationContext: conversationContext,
-            responseLanguage: responseLanguage
+            language: responseLanguage,
+            profile: .standard
+        )
+        let standardConversation = GraphChatConversationContextFormatter().format(
+            conversationContext,
+            language: responseLanguage,
+            maximumCharacters:
+                GraphChatModelContextProfile.standard.maximumConversationCharacters
+        )
+        let initialProfile = initialContextProfilePlanner.profile(
+            for: GraphChatInitialContextProfileInput(
+                schemaPrompt: standardSchema,
+                conversationContext: standardConversation,
+                question: question,
+                systemInstructions: systemInstructions(
+                    for: initialResources.key.chatScope,
+                    language: responseLanguage
+                )
+            )
         )
 
         while true {
@@ -879,21 +774,23 @@ actor GraphChatOrchestrator {
                 )
                 if case .resolved = resolution {
                     // The proposal was app-side validated. The normal answer may be returned.
-                } else if shouldIgnoreUnresolvedReferenceProposal(
+                } else if missingContextPolicy.shouldIgnoreUnresolvedProviderProposal(
                     resolution,
                     directAnswer: providerAnswer.directAnswer
                 ) {
                     // A non-binding missing-context proposal must not replace a usable answer.
                 } else {
-                    let fallback = answer(
-                        for: resolution,
+                    let fallback = localAnswerBuilder.referenceResolution(
+                        resolution,
                         language: language,
                         operation: continuationOperation ?? .answerAboutReference,
                         state: candidateState,
                         sourceTurnID: candidateState.turnContexts.last?.id,
-                        continuationQuestion: requestQuestion
+                        continuationQuestion: requestQuestion,
+                        clarificationID: UUID(),
+                        referenceDate: referenceDate()
                     )
-                    if let pending = fallback.pending {
+                    if let pending = fallback.pendingClarification {
                         try await transaction.apply(
                             GraphChatConversationTrustedEvent(
                                 graphScope: context.graphScope,
@@ -902,7 +799,7 @@ actor GraphChatOrchestrator {
                             )
                         )
                     }
-                    return fallback.value
+                    return fallback.answer
                 }
             }
             return GraphChatAnswer(
@@ -974,11 +871,13 @@ actor GraphChatOrchestrator {
                 normalizedQuestion?.isEmpty == false
                 ? normalizedQuestion!
                 : localizer.clarificationQuestion(reason: .ambiguous)
-            let pending = makePendingClarification(
+            let pending = localAnswerBuilder.makePendingClarification(
+                id: UUID(),
                 options: options,
                 operation: continuationOperation ?? .answerAboutReference,
                 state: candidateState,
-                continuationQuestion: requestQuestion
+                continuationQuestion: requestQuestion,
+                referenceDate: referenceDate()
             )
             if let pending {
                 try await transaction.apply(
@@ -1053,22 +952,19 @@ actor GraphChatOrchestrator {
     }
 
     private func completeLocalAnswer(
-        _ answer: GraphChatAnswer,
+        _ plan: GraphChatLocalTurnPlan,
         requestID: UUID,
-        baseState: GraphChatConversationState,
-        expectedCommittedState: GraphChatConversationState,
-        pendingClarification: GraphChatPendingClarification?,
         continuation: GraphChatEventStream.Continuation
     ) async throws {
         let transaction = GraphChatConversationStateTransaction(
-            baseState: baseState,
+            baseState: plan.baseState,
             reducer: conversationStateReducer
         )
-        if let pendingClarification {
+        if let pendingClarification = plan.pendingClarification {
             try await transaction.apply(
                 GraphChatConversationTrustedEvent(
-                    graphScope: baseState.graphScope,
-                    chatScope: baseState.chatScope,
+                    graphScope: plan.baseState.graphScope,
+                    chatScope: plan.baseState.chatScope,
                     payload: .clarificationRequested(pendingClarification)
                 )
             )
@@ -1076,197 +972,14 @@ actor GraphChatOrchestrator {
         let candidate = try await transaction.finalizedState(
             requestID: requestID,
             completedAt: referenceDate(),
-            validatedEvidenceIDs: answer.evidenceIDs
+            validatedEvidenceIDs: plan.answer.evidenceIDs
         )
         try Task.checkCancellation()
-        guard conversationState == expectedCommittedState else {
+        guard conversationState == plan.expectedCommittedState else {
             throw CancellationError()
         }
         conversationState = candidate
-        continuation.yield(.completed(answer))
-    }
-
-    private func answer(
-        for resolution: GraphChatConversationReferenceResolution,
-        language: GraphChatResponseLanguage,
-        operation: GraphChatConversationContinuationOperation,
-        state: GraphChatConversationState,
-        sourceTurnID: UUID?,
-        continuationQuestion: String
-    ) -> (value: GraphChatAnswer, pending: GraphChatPendingClarification?) {
-        let localizer = GraphChatResponseLocalizer(language: language)
-        switch resolution {
-        case .resolved:
-            return (
-                GraphChatAnswer(
-                    state: .answer,
-                    directAnswer: "",
-                    hasInsufficientEvidence: false
-                ),
-                nil
-            )
-        case .noResults(let issue):
-            let text =
-                issue == .emptyResults
-                ? localizer.noResults()
-                : localizer.clarificationQuestion(reason: issue)
-            return (
-                GraphChatAnswer(
-                    state: .noResults,
-                    directAnswer: text,
-                    hasInsufficientEvidence: true
-                ),
-                nil
-            )
-        case .rejected(let issue):
-            let question = localizer.clarificationQuestion(reason: issue)
-            return (
-                GraphChatAnswer(
-                    state: .clarification(
-                        GraphChatClarification(
-                            id: UUID(),
-                            question: question,
-                            options: []
-                        )
-                    ),
-                    directAnswer: question,
-                    hasInsufficientEvidence: true
-                ),
-                nil
-            )
-        case .clarification(let clarification):
-            let question = localizer.clarificationQuestion(reason: clarification.issue)
-            let pending = makePendingClarification(
-                options: clarification.options,
-                operation: operation,
-                state: state,
-                sourceTurnID: sourceTurnID,
-                continuationQuestion: continuationQuestion
-            )
-            return (
-                GraphChatAnswer(
-                    state: .clarification(
-                        GraphChatClarification(
-                            id: pending?.id ?? UUID(),
-                            question: question,
-                            options: clarification.options.map {
-                                GraphChatClarificationOption(id: $0.id, title: $0.title)
-                            }
-                        )
-                    ),
-                    directAnswer: question,
-                    hasInsufficientEvidence: true
-                ),
-                pending
-            )
-        }
-    }
-
-    private func clarificationAnswer(
-        pending: GraphChatPendingClarification,
-        question: String
-    ) -> GraphChatAnswer {
-        GraphChatAnswer(
-            state: .clarification(
-                GraphChatClarification(
-                    id: pending.id,
-                    question: question,
-                    options: pending.options.map {
-                        GraphChatClarificationOption(id: $0.id, title: $0.title)
-                    }
-                )
-            ),
-            directAnswer: question,
-            hasInsufficientEvidence: true
-        )
-    }
-
-    private func makePendingClarification(
-        options: [GraphChatPendingClarificationOption],
-        operation: GraphChatConversationContinuationOperation,
-        state: GraphChatConversationState,
-        sourceTurnID: UUID? = nil,
-        continuationQuestion: String
-    ) -> GraphChatPendingClarification? {
-        guard options.isEmpty == false else {
-            return nil
-        }
-        let now = referenceDate()
-        return GraphChatPendingClarification(
-            id: UUID(),
-            decision: .conversationReference,
-            options: Array(options.prefix(8)),
-            sourceTurnID: sourceTurnID ?? state.turnContexts.last?.id,
-            graphScope: state.graphScope,
-            chatScope: state.chatScope,
-            continuationOperation: operation,
-            continuationQuestion: bounded(continuationQuestion, limit: 500),
-            createdAt: now,
-            expiresAt: now.addingTimeInterval(10 * 60)
-        )
-    }
-
-    private func clearedClarification(
-        in state: GraphChatConversationState
-    ) throws -> GraphChatConversationState {
-        try conversationStateReducer.reduce(
-            state,
-            event: GraphChatConversationTrustedEvent(
-                graphScope: state.graphScope,
-                chatScope: state.chatScope,
-                payload: .clarificationResolved
-            )
-        ).state
-    }
-
-    private func shouldDeferReferenceResolutionToProvider(
-        _ resolution: GraphChatConversationReferenceResolution
-    ) -> Bool {
-        switch resolution {
-        case .clarification(let clarification):
-            return clarification.issue == .missingContext
-                && clarification.options.isEmpty
-        case .noResults(let issue), .rejected(let issue):
-            return issue == .missingContext
-        case .resolved:
-            return false
-        }
-    }
-
-    private func shouldIgnoreUnresolvedReferenceProposal(
-        _ resolution: GraphChatConversationReferenceResolution,
-        directAnswer: String
-    ) -> Bool {
-        guard directAnswer.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false else {
-            return false
-        }
-        return shouldDeferReferenceResolutionToProvider(resolution)
-    }
-
-    private func initialContextProfile(
-        question: String,
-        schemaContext: GraphSchemaContext,
-        chatScope: GraphChatScope,
-        conversationContext: GraphChatConversationContextSnapshot,
-        responseLanguage: GraphChatResponseLanguage
-    ) -> GraphChatModelContextProfile {
-        let standardSchema = schemaPrompt(
-            from: schemaContext,
-            chatScope: chatScope,
-            language: responseLanguage,
-            profile: .standard
-        )
-        let standardConversation = GraphChatConversationContextFormatter().format(
-            conversationContext,
-            language: responseLanguage,
-            maximumCharacters: GraphChatModelContextProfile.standard.maximumConversationCharacters
-        )
-        let estimatedCharacters = standardSchema.count
-            + standardConversation.count
-            + min(question.count, GraphChatModelContextProfile.standard.maximumQuestionCharacters)
-            + systemInstructions(for: chatScope, language: responseLanguage).count
-
-        return estimatedCharacters > 5_000 ? .compact : .standard
+        continuation.yield(.completed(plan.answer))
     }
 
     private func providerContext(
@@ -1406,7 +1119,7 @@ actor GraphChatOrchestrator {
     }
 
     private func takeOrCreateSessionResources(
-        for key: ScopeKey,
+        for key: GraphChatOrchestrationScopeKey,
         conversationBaseState: GraphChatConversationState,
         conversationContext: GraphChatConversationContextSnapshot,
         responseLanguage: GraphChatResponseLanguage
@@ -1437,7 +1150,7 @@ actor GraphChatOrchestrator {
     }
 
     private func makeSessionResources(
-        for key: ScopeKey,
+        for key: GraphChatOrchestrationScopeKey,
         conversationBaseState: GraphChatConversationState,
         conversationContext: GraphChatConversationContextSnapshot,
         responseLanguage: GraphChatResponseLanguage
@@ -1671,7 +1384,7 @@ actor GraphChatOrchestrator {
     }
 
     private func discardPreparedSession(
-        unlessMatching key: ScopeKey,
+        unlessMatching key: GraphChatOrchestrationScopeKey,
         conversationBaseState: GraphChatConversationState
     ) async {
         guard let preparedSession else {
@@ -1692,7 +1405,7 @@ actor GraphChatOrchestrator {
     }
 
     private func artifactSessionResources(
-        for key: ScopeKey
+        for key: GraphChatOrchestrationScopeKey
     ) async -> ArtifactSessionResources {
         if let artifactSession, artifactSession.key == key {
             return artifactSession
@@ -1746,32 +1459,8 @@ actor GraphChatOrchestrator {
         }
     }
 
-    private func validatedKey(
-        graphScope: GraphScope,
-        chatScope: GraphChatScope
-    ) throws -> ScopeKey {
-        guard graphScope == chatScope.graphScope else {
-            throw GraphChatError(
-                code: .invalidRequest,
-                message: "Der Chat-Scope gehört nicht zum aktiven Graphen."
-            )
-        }
-        return ScopeKey(graphScope: graphScope, chatScope: chatScope)
-    }
-
-    private func validateQuestion(_ question: String) throws -> String {
-        let normalized = question.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard normalized.isEmpty == false else {
-            throw GraphChatError(
-                code: .invalidRequest,
-                message: "Die Graph-Chat-Frage darf nicht leer sein."
-            )
-        }
-        return String(normalized.prefix(4_000))
-    }
-
     private func conversationStateForTurn(
-        for key: ScopeKey
+        for key: GraphChatOrchestrationScopeKey
     ) -> GraphChatConversationState {
         if let conversationState {
             if conversationState.graphScope == key.graphScope,
