@@ -8,18 +8,40 @@ import Foundation
 
 /// Pure, deterministic graph-physics calculation.
 ///
-/// The engine owns no lifecycle, timer, view, or mutable global state. The
-/// calculation order intentionally matches the former
-/// `GraphCanvasView.stepSimulation()` implementation.
+/// The convenience API keeps the immutable PR-12 contract. The workspace API
+/// executes the same formulas and ordering while allowing the adaptive runtime
+/// to retain mutable buffers between ticks.
 nonisolated enum GraphPhysicsEngine {
     static func step(input: GraphPhysicsStepInput) -> GraphPhysicsStepResult {
+        var workspace = GraphPhysicsWorkspace()
+        workspace.fullReset(
+            positions: input.positions,
+            velocities: input.velocities
+        )
+        let workspaceResult = step(
+            input: GraphPhysicsWorkspaceStepInput(stepInput: input),
+            workspace: &workspace
+        )
+
+        return GraphPhysicsStepResult(
+            positions: workspace.positions,
+            velocities: workspace.velocities,
+            maxSimSpeed: workspaceResult.maxSimSpeed,
+            metrics: workspaceResult.metrics
+        )
+    }
+
+    static func step(
+        input: GraphPhysicsWorkspaceStepInput,
+        workspace: inout GraphPhysicsWorkspace
+    ) -> GraphPhysicsWorkspaceStepResult {
         let configuration = input.configuration
-        var positions = input.positions
-        var velocities = input.velocities
-        let relevant = input.physicsRelevant
-        let simulatedNodes = relevant == nil
-            ? input.nodes
-            : input.nodes.filter { relevant!.contains($0.key) }
+        workspace.prepareStep(
+            nodes: input.nodes,
+            fixedNodeKeys: input.fixedNodeKeys,
+            physicsRelevant: input.physicsRelevant
+        )
+        let simulatedNodes = workspace.simulatedNodes
         let interactionStrategy =
             GraphPhysicsInteractionStrategySelector.strategy(
                 simulatedNodeCount: simulatedNodes.count,
@@ -28,126 +50,41 @@ nonisolated enum GraphPhysicsEngine {
                     input.diagnosticInteractionStrategyOverride
             )
 
-        if let relevant {
-            for node in input.nodes where !relevant.contains(node.key) {
-                velocities[node.key] = .zero
-            }
+        if let relevant = input.physicsRelevant {
+            workspace.stopNonRelevantNodes(
+                allNodes: input.nodes,
+                physicsRelevant: relevant
+            )
         }
 
         let interactionMetrics: InteractionMetrics
 
         switch interactionStrategy {
         case .exactPairLoop:
-            var pairCount = 0
-
-            // This loop and its calculation order intentionally remain
-            // identical to the engine extracted in PR 12.
-            for i in 0..<simulatedNodes.count {
-                let firstKey = simulatedNodes[i].key
-                guard let firstPosition = positions[firstKey] else {
-                    continue
-                }
-
-                if (i + 1) >= simulatedNodes.count { continue }
-                for j in (i + 1)..<simulatedNodes.count {
-                    let secondKey = simulatedNodes[j].key
-                    guard let secondPosition = positions[secondKey] else {
-                        continue
-                    }
-                    pairCount += 1
-
-                    let dx = firstPosition.x - secondPosition.x
-                    let dy = firstPosition.y - secondPosition.y
-                    let distanceSquared = max(
-                        dx * dx + dy * dy,
-                        configuration.minimumPairDistanceSquared
-                    )
-                    let distance = sqrt(distanceSquared)
-
-                    let repulsionForce =
-                        configuration.repulsion / distanceSquared
-                    let repulsionX =
-                        dx * repulsionForce * configuration.repulsionScale
-                    let repulsionY =
-                        dy * repulsionForce * configuration.repulsionScale
-                    addVelocity(
-                        firstKey,
-                        dx: repulsionX,
-                        dy: repulsionY,
-                        fixedNodeKeys: input.fixedNodeKeys,
-                        velocities: &velocities
-                    )
-                    addVelocity(
-                        secondKey,
-                        dx: -repulsionX,
-                        dy: -repulsionY,
-                        fixedNodeKeys: input.fixedNodeKeys,
-                        velocities: &velocities
-                    )
-
-                    let minimumDistance = radius(
-                        for: firstKey,
-                        configuration: configuration
-                    ) + radius(
-                        for: secondKey,
-                        configuration: configuration
-                    ) + configuration.collisionPadding
-
-                    if distance < minimumDistance {
-                        let overlap = minimumDistance - distance
-                        let normalX =
-                            distance > 0.01 ? dx / distance : 1
-                        let normalY =
-                            distance > 0.01 ? dy / distance : 0
-                        let collisionX =
-                            normalX * overlap * configuration.collisionStrength
-                        let collisionY =
-                            normalY * overlap * configuration.collisionStrength
-                        addVelocity(
-                            firstKey,
-                            dx: collisionX,
-                            dy: collisionY,
-                            fixedNodeKeys: input.fixedNodeKeys,
-                            velocities: &velocities
-                        )
-                        addVelocity(
-                            secondKey,
-                            dx: -collisionX,
-                            dy: -collisionY,
-                            fixedNodeKeys: input.fixedNodeKeys,
-                            velocities: &velocities
-                        )
-                    }
-                }
-            }
-
-            interactionMetrics = InteractionMetrics(
-                exactCheckedNodePairCount: pairCount,
-                occupiedGridCellCount: 0,
-                neighboringCellPairCount: 0,
-                approximatedDistantCellPairCount: 0
+            interactionMetrics = applyExactPairLoopInteractions(
+                nodes: simulatedNodes,
+                configuration: configuration,
+                workspace: &workspace
             )
 
         case .spatialGrid:
             interactionMetrics = applySpatialGridInteractions(
-                nodes: simulatedNodes,
-                positions: positions,
-                fixedNodeKeys: input.fixedNodeKeys,
                 configuration: configuration,
-                velocities: &velocities
+                workspace: &workspace
             )
         }
 
         var springCount = 0
 
         for edge in input.edges {
-            if let relevant {
-                if !relevant.contains(edge.a) || !relevant.contains(edge.b) {
+            if let relevant = input.physicsRelevant {
+                if !relevant.contains(edge.a)
+                    || !relevant.contains(edge.b) {
                     continue
                 }
             }
-            guard let firstPosition = positions[edge.a],
-                  let secondPosition = positions[edge.b] else {
+            guard let firstPosition = workspace.positions[edge.a],
+                  let secondPosition = workspace.positions[edge.b] else {
                 continue
             }
             springCount += 1
@@ -170,19 +107,15 @@ nonisolated enum GraphPhysicsEngine {
             let forceX = dx / distance * difference * spring
             let forceY = dy / distance * difference * spring
 
-            addVelocity(
+            workspace.addVelocity(
                 edge.a,
                 dx: forceX,
-                dy: forceY,
-                fixedNodeKeys: input.fixedNodeKeys,
-                velocities: &velocities
+                dy: forceY
             )
-            addVelocity(
+            workspace.addVelocity(
                 edge.b,
                 dx: -forceX,
-                dy: -forceY,
-                fixedNodeKeys: input.fixedNodeKeys,
-                velocities: &velocities
+                dy: -forceY
             )
         }
 
@@ -191,12 +124,12 @@ nonisolated enum GraphPhysicsEngine {
         for node in simulatedNodes {
             let key = node.key
 
-            if input.fixedNodeKeys.contains(key) {
-                velocities[key] = .zero
+            if workspace.fixedNodeKeys.contains(key) {
+                workspace.setVelocity(.zero, for: key)
                 continue
             }
 
-            var velocity = velocities[key, default: .zero]
+            var velocity = workspace.velocities[key, default: .zero]
             velocity.dx *= configuration.damping
             velocity.dy *= configuration.damping
 
@@ -217,17 +150,15 @@ nonisolated enum GraphPhysicsEngine {
                 maxSimSpeed = clampedSpeed
             }
 
-            var position = positions[key, default: .zero]
+            var position = workspace.positions[key, default: .zero]
             position.x += velocity.dx
             position.y += velocity.dy
 
-            positions[key] = position
-            velocities[key] = velocity
+            workspace.setPosition(position, for: key)
+            workspace.setVelocity(velocity, for: key)
         }
 
-        return GraphPhysicsStepResult(
-            positions: positions,
-            velocities: velocities,
+        return GraphPhysicsWorkspaceStepResult(
             maxSimSpeed: maxSimSpeed,
             metrics: GraphPhysicsStepMetrics(
                 interactionStrategy: interactionStrategy,
@@ -256,75 +187,169 @@ nonisolated enum GraphPhysicsEngine {
         let approximatedDistantCellPairCount: Int
     }
 
-    private static func applySpatialGridInteractions(
+    private static func applyExactPairLoopInteractions(
         nodes: [GraphNode],
-        positions: [NodeKey: CGPoint],
-        fixedNodeKeys: Set<NodeKey>,
         configuration: GraphPhysicsConfiguration,
-        velocities: inout [NodeKey: CGVector]
+        workspace: inout GraphPhysicsWorkspace
     ) -> InteractionMetrics {
-        let grid = GraphPhysicsSpatialGrid(
-            nodes: nodes,
-            positions: positions,
+        var pairCount = 0
+
+        // This loop and its calculation order intentionally remain identical
+        // to the engine extracted in PR 12.
+        for i in 0..<nodes.count {
+            let firstKey = nodes[i].key
+            guard let firstPosition = workspace.positions[firstKey] else {
+                continue
+            }
+
+            if (i + 1) >= nodes.count { continue }
+            for j in (i + 1)..<nodes.count {
+                let secondKey = nodes[j].key
+                guard let secondPosition =
+                        workspace.positions[secondKey] else {
+                    continue
+                }
+                pairCount += 1
+
+                let dx = firstPosition.x - secondPosition.x
+                let dy = firstPosition.y - secondPosition.y
+                let distanceSquared = max(
+                    dx * dx + dy * dy,
+                    configuration.minimumPairDistanceSquared
+                )
+                let distance = sqrt(distanceSquared)
+
+                let repulsionForce =
+                    configuration.repulsion / distanceSquared
+                let repulsionX =
+                    dx * repulsionForce * configuration.repulsionScale
+                let repulsionY =
+                    dy * repulsionForce * configuration.repulsionScale
+                workspace.addVelocity(
+                    firstKey,
+                    dx: repulsionX,
+                    dy: repulsionY
+                )
+                workspace.addVelocity(
+                    secondKey,
+                    dx: -repulsionX,
+                    dy: -repulsionY
+                )
+
+                let minimumDistance = radius(
+                    for: firstKey,
+                    configuration: configuration
+                ) + radius(
+                    for: secondKey,
+                    configuration: configuration
+                ) + configuration.collisionPadding
+
+                if distance < minimumDistance {
+                    let overlap = minimumDistance - distance
+                    let normalX =
+                        distance > 0.01 ? dx / distance : 1
+                    let normalY =
+                        distance > 0.01 ? dy / distance : 0
+                    let collisionX =
+                        normalX
+                        * overlap
+                        * configuration.collisionStrength
+                    let collisionY =
+                        normalY
+                        * overlap
+                        * configuration.collisionStrength
+                    workspace.addVelocity(
+                        firstKey,
+                        dx: collisionX,
+                        dy: collisionY
+                    )
+                    workspace.addVelocity(
+                        secondKey,
+                        dx: -collisionX,
+                        dy: -collisionY
+                    )
+                }
+            }
+        }
+
+        return InteractionMetrics(
+            exactCheckedNodePairCount: pairCount,
+            occupiedGridCellCount: 0,
+            neighboringCellPairCount: 0,
+            approximatedDistantCellPairCount: 0
+        )
+    }
+
+    private static func applySpatialGridInteractions(
+        configuration: GraphPhysicsConfiguration,
+        workspace: inout GraphPhysicsWorkspace
+    ) -> InteractionMetrics {
+        workspace.prepareSpatialGrid(
             configuration: configuration.spatialGrid
         )
-        let cells = grid.cells
+        let coordinates = workspace.activeGridCoordinates
+        let aggregates = workspace.gridAggregates
         var exactCheckedNodePairCount = 0
         var neighboringCellPairCount = 0
         var approximatedDistantCellPairCount = 0
-        var distantVelocityByCell:
-            [GraphPhysicsGridCoordinate: CGVector] = [:]
-        distantVelocityByCell.reserveCapacity(cells.count)
 
-        for cellIndex in cells.indices {
-            let firstCell = cells[cellIndex]
+        for cellIndex in coordinates.indices {
+            let firstCoordinate = coordinates[cellIndex]
+            let firstNodes = workspace.gridNodes(
+                at: firstCoordinate
+            )
 
-            if firstCell.nodes.count >= 2 {
-                for firstNodeIndex in 0..<(firstCell.nodes.count - 1) {
-                    let firstNode = firstCell.nodes[firstNodeIndex]
+            if firstNodes.count >= 2 {
+                for firstNodeIndex in 0..<(firstNodes.count - 1) {
+                    let firstNode = firstNodes[firstNodeIndex]
                     for secondNodeIndex in
-                        (firstNodeIndex + 1)..<firstCell.nodes.count {
-                        let secondNode = firstCell.nodes[secondNodeIndex]
+                        (firstNodeIndex + 1)..<firstNodes.count {
+                        let secondNode = firstNodes[secondNodeIndex]
                         exactCheckedNodePairCount += 1
                         applyExactPairInteraction(
                             firstNode,
                             secondNode,
-                            fixedNodeKeys: fixedNodeKeys,
                             configuration: configuration,
-                            velocities: &velocities
+                            workspace: &workspace
                         )
                     }
                 }
             }
 
-            guard cellIndex < cells.count - 1 else { continue }
+            guard cellIndex < coordinates.count - 1 else {
+                continue
+            }
 
-            for secondCellIndex in (cellIndex + 1)..<cells.count {
-                let secondCell = cells[secondCellIndex]
+            for secondCellIndex in
+                (cellIndex + 1)..<coordinates.count {
+                let secondCoordinate =
+                    coordinates[secondCellIndex]
 
-                if firstCell.coordinate.isImmediatelyNeighboring(
-                    secondCell.coordinate
+                if firstCoordinate.isImmediatelyNeighboring(
+                    secondCoordinate
                 ) {
                     neighboringCellPairCount += 1
-                    for firstNode in firstCell.nodes {
-                        for secondNode in secondCell.nodes {
+                    let secondNodes = workspace.gridNodes(
+                        at: secondCoordinate
+                    )
+                    for firstNode in firstNodes {
+                        for secondNode in secondNodes {
                             exactCheckedNodePairCount += 1
                             applyExactPairInteraction(
                                 firstNode,
                                 secondNode,
-                                fixedNodeKeys: fixedNodeKeys,
                                 configuration: configuration,
-                                velocities: &velocities
+                                workspace: &workspace
                             )
                         }
                     }
                 } else {
                     approximatedDistantCellPairCount += 1
                     accumulateDistantCellRepulsion(
-                        firstCell,
-                        secondCell,
+                        first: aggregates[cellIndex],
+                        second: aggregates[secondCellIndex],
                         configuration: configuration,
-                        velocityByCell: &distantVelocityByCell
+                        workspace: &workspace
                     )
                 }
             }
@@ -332,26 +357,27 @@ nonisolated enum GraphPhysicsEngine {
 
         // Every distant cell-pair contribution is accumulated first. Each
         // movable node receives its cell delta exactly once per tick.
-        for cell in cells {
-            guard let velocity = distantVelocityByCell[cell.coordinate]
-            else {
+        for coordinate in coordinates {
+            guard let velocity =
+                    workspace.distantVelocityByCell[coordinate] else {
                 continue
             }
-            for node in cell.nodes {
-                addVelocity(
+            let nodes = workspace.gridNodes(at: coordinate)
+            for node in nodes {
+                workspace.addVelocity(
                     node.key,
                     dx: velocity.dx,
-                    dy: velocity.dy,
-                    fixedNodeKeys: fixedNodeKeys,
-                    velocities: &velocities
+                    dy: velocity.dy
                 )
             }
         }
 
         return InteractionMetrics(
-            exactCheckedNodePairCount: exactCheckedNodePairCount,
-            occupiedGridCellCount: cells.count,
-            neighboringCellPairCount: neighboringCellPairCount,
+            exactCheckedNodePairCount:
+                exactCheckedNodePairCount,
+            occupiedGridCellCount: coordinates.count,
+            neighboringCellPairCount:
+                neighboringCellPairCount,
             approximatedDistantCellPairCount:
                 approximatedDistantCellPairCount
         )
@@ -360,9 +386,8 @@ nonisolated enum GraphPhysicsEngine {
     private static func applyExactPairInteraction(
         _ firstNode: GraphPhysicsGridNode,
         _ secondNode: GraphPhysicsGridNode,
-        fixedNodeKeys: Set<NodeKey>,
         configuration: GraphPhysicsConfiguration,
-        velocities: inout [NodeKey: CGVector]
+        workspace: inout GraphPhysicsWorkspace
     ) {
         let dx = firstNode.position.x - secondNode.position.x
         let dy = firstNode.position.y - secondNode.position.y
@@ -372,24 +397,21 @@ nonisolated enum GraphPhysicsEngine {
         )
         let distance = sqrt(distanceSquared)
 
-        let repulsionForce = configuration.repulsion / distanceSquared
+        let repulsionForce =
+            configuration.repulsion / distanceSquared
         let repulsionX =
             dx * repulsionForce * configuration.repulsionScale
         let repulsionY =
             dy * repulsionForce * configuration.repulsionScale
-        addVelocity(
+        workspace.addVelocity(
             firstNode.key,
             dx: repulsionX,
-            dy: repulsionY,
-            fixedNodeKeys: fixedNodeKeys,
-            velocities: &velocities
+            dy: repulsionY
         )
-        addVelocity(
+        workspace.addVelocity(
             secondNode.key,
             dx: -repulsionX,
-            dy: -repulsionY,
-            fixedNodeKeys: fixedNodeKeys,
-            velocities: &velocities
+            dy: -repulsionY
         )
 
         let minimumDistance = radius(
@@ -408,60 +430,44 @@ nonisolated enum GraphPhysicsEngine {
                 normalX * overlap * configuration.collisionStrength
             let collisionY =
                 normalY * overlap * configuration.collisionStrength
-            addVelocity(
+            workspace.addVelocity(
                 firstNode.key,
                 dx: collisionX,
-                dy: collisionY,
-                fixedNodeKeys: fixedNodeKeys,
-                velocities: &velocities
+                dy: collisionY
             )
-            addVelocity(
+            workspace.addVelocity(
                 secondNode.key,
                 dx: -collisionX,
-                dy: -collisionY,
-                fixedNodeKeys: fixedNodeKeys,
-                velocities: &velocities
+                dy: -collisionY
             )
         }
     }
 
     private static func accumulateDistantCellRepulsion(
-        _ firstCell: GraphPhysicsGridCell,
-        _ secondCell: GraphPhysicsGridCell,
+        first: GraphPhysicsGridCellAggregate,
+        second: GraphPhysicsGridCellAggregate,
         configuration: GraphPhysicsConfiguration,
-        velocityByCell:
-            inout [GraphPhysicsGridCoordinate: CGVector]
+        workspace: inout GraphPhysicsWorkspace
     ) {
-        let firstCount = firstCell.aggregate.positionedNodeCount
-        let secondCount = secondCell.aggregate.positionedNodeCount
-        guard firstCount > 0, secondCount > 0 else { return }
+        guard first.positionedNodeCount > 0,
+              second.positionedNodeCount > 0 else {
+            return
+        }
 
         let interaction = GraphPhysicsDistantCellRepulsion.calculate(
-            first: firstCell.aggregate,
-            second: secondCell.aggregate,
+            first: first,
+            second: second,
             configuration: configuration
         )
 
-        velocityByCell[firstCell.coordinate, default: .zero].dx +=
-            interaction.firstCellVelocityPerMovableNode.dx
-        velocityByCell[firstCell.coordinate, default: .zero].dy +=
-            interaction.firstCellVelocityPerMovableNode.dy
-        velocityByCell[secondCell.coordinate, default: .zero].dx +=
-            interaction.secondCellVelocityPerMovableNode.dx
-        velocityByCell[secondCell.coordinate, default: .zero].dy +=
-            interaction.secondCellVelocityPerMovableNode.dy
-    }
-
-    private static func addVelocity(
-        _ key: NodeKey,
-        dx: CGFloat,
-        dy: CGFloat,
-        fixedNodeKeys: Set<NodeKey>,
-        velocities: inout [NodeKey: CGVector]
-    ) {
-        guard !fixedNodeKeys.contains(key) else { return }
-        velocities[key, default: .zero].dx += dx
-        velocities[key, default: .zero].dy += dy
+        workspace.accumulateDistantVelocity(
+            interaction.firstCellVelocityPerMovableNode,
+            for: first.coordinate
+        )
+        workspace.accumulateDistantVelocity(
+            interaction.secondCellVelocityPerMovableNode,
+            for: second.coordinate
+        )
     }
 
     private static func radius(

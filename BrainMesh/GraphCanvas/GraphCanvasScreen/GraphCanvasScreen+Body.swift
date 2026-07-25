@@ -20,6 +20,7 @@ extension GraphCanvasScreen {
                 emptyView
             } else {
                 GraphCanvasView(
+                    graphID: activeGraphID,
                     nodes: nodes,
                     iconSymbolCache: iconSymbolCache,
                     drawEdges: drawEdgesCache,

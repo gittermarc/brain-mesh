@@ -102,7 +102,7 @@ BrainMesh ist eine SwiftUI-iOS/iPadOS-App für graphbasiertes Wissens- und Entit
 - `BrainMesh/Mainscreen/`
   - Entitätenliste, Entity/Attribute-Details, Node-Details-Shared-Komponenten, Bulk-Link, Details-Schema.
 - `BrainMesh/GraphCanvas/`
-  - Graph-Rendering, Physics, Lens, Inspector, Focus, View Presets, GraphCanvas-Loader sowie der adaptive iPad-Copilot-Inspector. Der Workspace verwendet dieselbe Canvas-Instanz und denselben `GraphCanvasSelectionState`; Highlighting ist flüchtig und keine Graphmutation.
+  - Graph-Rendering, Lens, Inspector, Focus, View Presets, GraphCanvas-Loader sowie der adaptive iPad-Copilot-Inspector. Die reine `GraphPhysicsEngine` wählt bis 80 simulierte Nodes den exakten Pair-Loop und ab 81 Nodes das deterministische Spatial Grid. `GraphPhysicsRuntime` hält Positionen und Geschwindigkeiten intern in einem wiederverwendbaren Workspace, publiziert sie gemeinsam nach einer visuellen Commit-Policy, taktet Active/Settling/Quiet mit 30/20/12 FPS und schläft nach stabilen Quiet-Samples kontrolliert ein. Der Copilot-Workspace verwendet dieselbe Canvas-Instanz und denselben `GraphCanvasSelectionState`; Highlighting ist flüchtig und keine Graphmutation.
 - `BrainMesh/Stats/`
   - Stats-Dashboard, Counts, Media, Trends, Health.
 - `BrainMesh/Settings/`
@@ -357,6 +357,11 @@ BrainMesh ist eine SwiftUI-iOS/iPadOS-App für graphbasiertes Wissens- und Entit
 - Render/Physics:
   - `BrainMesh/GraphCanvas/GraphCanvasView/GraphCanvasView+Rendering.swift`
   - `BrainMesh/GraphCanvas/GraphCanvasView/GraphCanvasView+Physics.swift`
+  - `BrainMesh/GraphCanvas/Physics/GraphPhysicsEngine.swift`
+  - `BrainMesh/GraphCanvas/Physics/GraphPhysicsRuntime.swift`
+  - `BrainMesh/GraphCanvas/Physics/GraphPhysicsRuntimeState.swift`
+  - `BrainMesh/GraphCanvas/Physics/GraphPhysicsWorkspace.swift`
+  - `BrainMesh/GraphCanvas/Physics/GraphPhysicsAdaptivePolicy.swift`
 - Loader:
   - `BrainMesh/GraphCanvas/GraphCanvasDataLoader/GraphCanvasDataLoader.swift`
   - `GraphCanvasDataLoader+Global.swift`
@@ -481,7 +486,7 @@ BrainMesh ist eine SwiftUI-iOS/iPadOS-App für graphbasiertes Wissens- und Entit
 2. Bestehende Feature-Loader schrittweise auf die vorhandenen `GraphScopedFetches`, `GraphReadRepository` und `NodeRepository` migrieren, wenn dies ihren Hot Path vereinfacht.
 3. Die Entities-Home-Suche nur dann auf die bestehende Index-Candidate-Schicht migrieren, wenn Scope, Routing und UX ohne parallele Sonderlogik vollständig kompatibel bleiben; der globale Command-Center-Cutover ist abgeschlossen.
 4. `EntitiesHomeCockpitLoader.swift` Snapshot cachen oder inkrementell machen; aktuell lädt Cockpit Entity, Attribute, Links, DetailFields und Attachments graphweit und besitzt keinen langlebigen Derived-State, der invalidiert werden müsste.
-5. `GraphCanvasView+Physics.swift` O(n²)-Pair-Loop durch Grid/Bucket-Approximation ersetzen, mindestens oberhalb von etwa 80 simulierten Nodes.
+5. GraphCanvas-Physics ist umgesetzt: reine Engine, exakter Pair-Loop bis 80 simulierte Nodes, Spatial Grid ab 81 sowie adaptive Runtime mit wiederverwendbaren Buffern und gebündelten UI-Commits.
 6. Readiness-Fehler im App-Root bei Bedarf zusätzlich als sichtbaren Recovery-Zustand darstellen; die awaitbare Konfigurationsbarriere ist vorhanden.
 7. Große UI-Dateien splitten: `BrainMeshGuideView.swift`, `GraphTransferComponents.swift`, `GraphCanvasTypes.swift`, `GraphCanvasScreen+InspectorOverlay.swift`.
 8. Sync-Debuggability erweitern: letzte Container-Initialisierung, Storage-Fallback-Grund, letzte Hydration und Cache-Fehler in `SyncMaintenanceView` anzeigen.

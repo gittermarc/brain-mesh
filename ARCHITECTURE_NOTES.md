@@ -175,28 +175,26 @@
 
 ### Rendering / Scrolling — Graph Canvas
 
-#### 30-FPS Physics Loop
+#### Adaptive Physics Runtime
 
-- Datei: `BrainMesh/GraphCanvas/GraphCanvasView/GraphCanvasView+Physics.swift`.
+- Dateien:
+  - `BrainMesh/GraphCanvas/Physics/GraphPhysicsEngine.swift`.
+  - `BrainMesh/GraphCanvas/Physics/GraphPhysicsRuntime.swift`.
+  - `BrainMesh/GraphCanvas/Physics/GraphPhysicsRuntimeState.swift`.
+  - `BrainMesh/GraphCanvas/Physics/GraphPhysicsWorkspace.swift`.
+  - `BrainMesh/GraphCanvas/Physics/GraphPhysicsAdaptivePolicy.swift`.
+  - `BrainMesh/GraphCanvas/GraphCanvasView/GraphCanvasView+Physics.swift` als schmaler SwiftUI-Adapter.
 - Mechanik:
-  - `Timer.scheduledTimer(withTimeInterval: 1.0/30.0, repeats: true)`.
-  - `stepSimulation()` läuft bei aktivem Screen und erlaubter Simulation.
-  - Pairwise Repulsion/Collision: verschachtelte Schleife über `simNodes` mit `i < j`.
-  - Edge Springs: Schleife über `physicsEdges`.
-  - Am Ende werden `positions = pos` und `velocities = vel` gesetzt.
-- Hotspot-Grund:
-  - O(n²) pro Tick für Repulsion/Collision.
-  - Jede Positions-Assignment invalidiert SwiftUI-Views, Canvas und abhängige Overlays.
-  - Bei `maxNodes = 140` kann der Pair-Loop rund 9.730 Paare pro Tick erreichen, bevor Edge-Arbeit dazukommt.
-- Bereits vorhandene Mitigation:
+  - Die reine Engine bleibt die einzige Kraftberechnung und wählt bis 80 simulierte Nodes den exakten Pair-Loop, ab 81 das deterministische Spatial Grid. Collision und Springs bleiben exakt.
+  - Die Main-Actor-Runtime führt Positionen und Geschwindigkeiten intern in wiederverwendbaren Buffern weiter. SwiftUI erhält beide Dictionaries ausschließlich gemeinsam bei einem Commit.
+  - Active, Settling und Quiet laufen über genau einen neu geplanten One-shot-Timer mit 30, 20 beziehungsweise 12 FPS.
+  - Active committed jeden Tick. Settling und Quiet bündeln Sub-Epsilon-Bewegung bis maximal drei Ticks; Stop, Sleep, externe Synchronisierung und Drag-Ende flushen erzwungen.
+  - Externe Layout-, Load- und Gesture-Mutationen werden gegen den zuletzt publizierten Snapshot erkannt. Graph-/Node-Identitäten und Scheduling-Generationen verhindern stale Commits.
+  - Stabilität benötigt 24 aufeinanderfolgende Quiet-Samples unter der bisherigen `0.03`-Grenze und schläft damit kontrolliert vor dem früheren 90-Tick-Pfad.
+- Verbleibende Mitigation:
   - `simulationAllowed` gate-t nach Screen-Sichtbarkeit, ScenePhase und Sheets.
-  - Idle Sleep nach ca. 90 ruhigen Ticks.
   - `physicsRelevant` begrenzt Simulation im Spotlight/Focus.
-  - MiniMap wird auf 5 FPS gedrosselt.
-- Refactor-Hebel:
-  - Spatial Grid/Bucket für Repulsion/Collision.
-  - Pure `GraphPhysicsEngine` außerhalb der View.
-  - Positions-Diffing oder batched updates nur bei sichtbaren Änderungen.
+  - MiniMap bleibt auf 5 FPS gedrosselt.
 
 #### Frame Cache pro Render
 
@@ -608,17 +606,12 @@ Ziel: Storage- und Medienpfade entkoppeln.
 - Nutzen:
   - Entlastet `EntitiesHomeLoader+Counts`, Stats und Cockpit.
 
-#### GraphCanvas Spatial Index
+#### GraphCanvas Spatial Index — umgesetzt
 
-- Ziel:
-  - Repulsion/Collision nur für nahe Nodes berechnen.
-- Key-Struktur:
-  - Cell coordinate `(Int(x / cellSize), Int(y / cellSize))`.
-  - Map Cell → `[NodeKey]`.
-- Invalidation:
-  - Pro Physics Tick aus aktuellen Positionen neu bauen oder inkrementell aktualisieren.
-- Nutzen:
-  - O(n²) reduziert sich praktisch auf O(n * lokale Nachbarn).
+- Der deterministische Spatial-Grid-Pfad beginnt bei 81 simulierten Nodes; kleinere Graphen behalten den exakten PR-12-Pair-Loop.
+- Zellen verwenden mathematisches `floor`, eine unveränderte Größe von 76 World Points und stabile technische Sortierung.
+- Collision und Springs bleiben exakt. Nur entfernte Repulsion wird über Zellaggregate angenähert.
+- `GraphPhysicsWorkspace` verwendet Grid-Buckets, aktive Zellkoordinaten, Zellaggregate und entfernte Velocity-Deltas über Ticks wieder und leert sie mit Kapazitätserhalt.
 
 #### Hydration State
 
@@ -767,8 +760,8 @@ Ziel: Storage- und Medienpfade entkoppeln.
 ### Performance Edge Cases
 
 - GraphCanvas bei vielen Nodes/Links:
-  - O(n²) Physics.
-  - 30-FPS State Updates.
+  - Bis 80 simulierte Nodes bleibt der exakte O(n²)-Pfad bewusst erhalten; ab 81 reduziert das Spatial Grid die exakten Pair-Prüfungen.
+  - UI-Commits bleiben in Active bei 30 FPS responsiv, werden in Settling/Quiet aber nach Epsilon und maximaler Bündelungsdauer reduziert.
   - Per-frame Dictionaries.
 - Search bei vielen DetailValues/Attachments/Links:
   - der normale Command-Center-Pfad verwendet begrenzte SQLite-Candidates; graphweite SwiftData-Scans und In-Memory-Candidate-Builds verbleiben als transparenter Fehler-/Readiness-Fallback.
@@ -788,8 +781,8 @@ Ziel: Storage- und Medienpfade entkoppeln.
   - `BMDuration` für Timing.
 - `GraphSearchIndexStore`
   - loggt ausschließlich technische Versionen, Backend, Counts, Dauer und Fehlercodes für Open, Rebuild, Writes, Deletes und Queries.
-- `GraphCanvasView+Physics.swift`
-  - rollierendes Physics-Timing alle 60 Ticks.
+- `GraphPhysicsRuntime`
+  - rollierende technische 60-Tick-Fenster für Engine-Ticks, UI-Commits, übersprungene/erzwungene Commits, Cadence-Verteilung, Sleep, Wake, Workspace-Reset/-Reuse, externe Resynchronisierung und durchschnittliche Ticks pro Commit.
 - Loader verwenden teilweise `Logger(subsystem: "BrainMesh", category: ...)`.
 - `SyncMaintenanceView` zeigt:
   - Storage Mode.
@@ -883,7 +876,7 @@ Ziel: Storage- und Medienpfade entkoppeln.
   - Weniger Akku-/CPU-Last beim Tippen.
   - Basis für bessere Ranking-Tests und Diagnostik.
 
-### 3) GraphCanvas Physics aus View extrahieren und Spatial Grid einführen
+### 3) GraphCanvas Physics aus View extrahieren, Spatial Grid und adaptive Runtime einführen — umgesetzt
 
 - Ziel:
   - Render-Hot-Path entlasten und O(n²)-Physics reduzieren.
@@ -894,10 +887,10 @@ Ziel: Storage- und Medienpfade entkoppeln.
   - `BrainMesh/GraphCanvas/GraphCanvasTypes.swift`
   - Tests unter `BrainMeshTests/GraphCanvas...`
 - Änderung:
-  - Pure `GraphPhysicsEngine` mit Input Snapshot und Output Positions/Velocities.
-  - Spatial Grid/Bucket für Repulsion/Collision.
-  - View hält nur Timer/Task und committed Engine-Ergebnis.
-  - Optional: adaptive tick rate oder stop threshold je Node-Anzahl.
+  - Reine `GraphPhysicsEngine` mit unveränderter Convenience-API und zusätzlichem Workspace-Pfad.
+  - Exakter Pair-Loop bis 80 simulierte Nodes, Spatial Grid ab 81; Forces, Collision, Springs und visuelle Konstanten bleiben unverändert.
+  - `GraphPhysicsRuntime` besitzt internen Zustand, externe Synchronisierung, Commit-Policy, 30/20/12-FPS-Cadence, Stability Sleep, One-shot-Scheduling und technische Metriken.
+  - `GraphCanvasView+Physics` ist nur noch Lifecycle-/Binding-Adapter.
 - Risiko:
   - Mittel bis hoch.
   - Layout-Verhalten ist sichtbar und subjektiv; Regressions können UX betreffen.

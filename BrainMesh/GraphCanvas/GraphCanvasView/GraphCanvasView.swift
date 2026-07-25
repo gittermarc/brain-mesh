@@ -13,6 +13,7 @@ struct GraphCanvasView: View {
     @EnvironmentObject private var appearance: AppearanceStore
     @Environment(\.colorScheme) private var colorScheme
 
+    let graphID: UUID?
     let nodes: [GraphNode]
     let iconSymbolCache: [NodeKey: String]
 
@@ -53,7 +54,7 @@ struct GraphCanvasView: View {
     let onTapNode: (NodeKey?) -> Void
 
     // NOTE: Zugriff in Extensions -> nicht `private` (private == file-scope)
-    @State var timer: Timer?
+    @State var physicsRuntime = GraphPhysicsRuntime()
     @State var panStart: CGSize = .zero
     @State var scaleStart: CGFloat = 1.0
 
@@ -66,18 +67,6 @@ struct GraphCanvasView: View {
     @State var cachedThumbPath: String?
     @State var cachedThumb: UIImage?
 
-    // MARK: - Observability (P0.2)
-    // NOTE: Zugriff in Extensions -> nicht `private` (private == file-scope)
-    @State var physicsTickCounter: Int = 0
-    @State var physicsTickAccumNanos: UInt64 = 0
-    @State var physicsTickMaxNanos: UInt64 = 0
-
-    // MARK: - Idle / Sleep (P0.1 optional)
-    // When the layout settles, we can pause the 30 FPS timer to save CPU/Battery.
-    // Wakes up automatically on interactions / state changes.
-    @State var physicsIdleTicks: Int = 0
-    @State var physicsIsSleeping: Bool = false
-
     private var theme: GraphTheme {
         GraphTheme(settings: appearance.settings.graph)
     }
@@ -88,8 +77,9 @@ struct GraphCanvasView: View {
             let alphas = zoomAlphas()
             let theme = self.theme
             let scheme = colorScheme
+            let nodeKeys: [NodeKey] = nodes.map { $0.key }
 
-            ZStack {
+            let canvas = ZStack {
                 GraphCanvasBackground(theme: theme)
 
                 Canvas { context, _ in
@@ -99,38 +89,82 @@ struct GraphCanvasView: View {
                 // ✅ Selection Thumbnail Overlay (nur near + nur wenn Bild vorhanden)
                 selectionThumbnailOverlay(size: size, thumbAlpha: alphas.thumbAlpha)
             }
-            .contentShape(Rectangle())
-            .highPriorityGesture(doubleTapPinGesture(in: size))
-            .gesture(singleTapSelectGesture(in: size))
-            .gesture(dragGesture(in: size))
-            .gesture(zoomGesture())
-            .onAppear {
-                updateSimulationState()
-                refreshThumbnailCache()
-            }
-            .onDisappear { stopSimulation() }
-            .onChange(of: simulationAllowed) { _, _ in
-                updateSimulationState()
-            }
-            .onChange(of: nodes.count) { _, _ in
-                wakeSimulationIfNeeded()
-            }
-            .onChange(of: cameraCommand?.id) { _, _ in
-                guard let cmd = cameraCommand else { return }
-                applyCameraCommand(cmd, in: size)
-                cameraCommand = nil
-            }
-            .onChange(of: selection) { _, _ in
-                wakeSimulationIfNeeded()
-                refreshThumbnailCache()
-            }
-            .onChange(of: pinned) { _, _ in
-                wakeSimulationIfNeeded()
-            }
-            .onChange(of: draggingKey) { _, _ in
-                wakeSimulationIfNeeded()
-            }
-            .onChange(of: selectedImagePath) { _, _ in refreshThumbnailCache() }
+
+            // Keep the modifier graph in named stages. The individual
+            // expressions stay small enough for Swift's type checker while
+            // preserving the exact modifier order and runtime behavior.
+            let interactiveCanvas = canvas
+                .contentShape(Rectangle())
+                .highPriorityGesture(doubleTapPinGesture(in: size))
+                .gesture(singleTapSelectGesture(in: size))
+                .gesture(dragGesture(in: size))
+                .gesture(zoomGesture())
+
+            let lifecycleCanvas = interactiveCanvas
+                .onAppear {
+                    updateSimulationState()
+                    refreshThumbnailCache()
+                }
+                .onDisappear { stopSimulation() }
+                .onChange(of: simulationAllowed) { _, _ in
+                    updateSimulationState()
+                }
+                .onChange(of: graphID) { _, _ in
+                    wakeSimulationIfNeeded(reason: .graphChanged)
+                }
+
+            let graphInputCanvas = lifecycleCanvas
+                .onChange(of: nodeKeys) { _, _ in
+                    wakeSimulationIfNeeded(reason: .nodeSet)
+                }
+                .onChange(of: physicsEdges) { _, _ in
+                    wakeSimulationIfNeeded(reason: .edges)
+                }
+                .onChange(of: physicsRelevant) { _, _ in
+                    wakeSimulationIfNeeded(reason: .spotlight)
+                }
+
+            let cameraCanvas = graphInputCanvas
+                .onChange(of: cameraCommand?.id) { _, _ in
+                    guard let cmd = cameraCommand else { return }
+                    applyCameraCommand(cmd, in: size)
+                    cameraCommand = nil
+                }
+
+            let interactionCanvas = cameraCanvas
+                .onChange(of: selection) { _, _ in
+                    wakeSimulationIfNeeded(reason: .selection)
+                    refreshThumbnailCache()
+                }
+                .onChange(of: pinned) { _, _ in
+                    wakeSimulationIfNeeded(reason: .pinning)
+                }
+                .onChange(of: draggingKey) { previous, current in
+                    wakeSimulationIfNeeded(
+                        reason: previous != nil && current == nil
+                            ? .draggingEnded
+                            : .draggingStarted
+                    )
+                }
+
+            let physicsConfigurationCanvas = interactionCanvas
+                .onChange(of: workMode) { _, _ in
+                    wakeSimulationIfNeeded(reason: .workMode)
+                }
+                .onChange(of: collisionStrength) { _, _ in
+                    wakeSimulationIfNeeded(
+                        reason: .collisionStrength
+                    )
+                }
+
+            physicsConfigurationCanvas
+                .onChange(of: positions) { _, _ in
+                    externalPhysicsStateDidChange()
+                }
+                .onChange(of: velocities) { _, _ in
+                    externalPhysicsStateDidChange()
+                }
+                .onChange(of: selectedImagePath) { _, _ in refreshThumbnailCache() }
         }
     }
 }
