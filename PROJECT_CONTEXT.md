@@ -216,6 +216,30 @@ Pfad: `BrainMesh/Attachments/MetaAttachment.swift`
 - Cascades decken Entity → Attributes/Definitions und Attribute → Values ab.
 - Links, Attachments und skalare Field-Referenzen benötigen explizite Cleanup-Services.
 
+### Detaildaten-Integrität und Authority
+
+Die zentrale, value-only Policy liegt in `BrainMesh/DataAccess/DetailDataIntegrityPolicy.swift`; SwiftData-facing Write-Validierung und datenschutzneutrale Diagnose liegen in `BrainMesh/DataAccess/DetailDataIntegrityValidation.swift`. UI, `GraphReadRepository`, Chat-Query-Quellen, Transfer und Search dürfen Detailwerte nicht unabhängig per Fetch-Reihenfolge auswählen.
+
+Invarianten:
+
+- Eine `MetaDetailFieldDefinition` ist nur gültig, wenn `owner` vorhanden ist, `entityID == owner.id` gilt und `graphID == owner.graphID` nicht nil ist.
+- Ein `MetaDetailFieldValue` ist nur gültig, wenn `attribute` samt Entity-Owner vorhanden ist, `attributeID == attribute.id` gilt und Value, Attribute, Entity sowie referenzierte Field Definition denselben nicht-nil Graphen besitzen.
+- Die Field Definition muss zur Entity des Attributes gehören.
+- Der Authority-Key ist `(graphID, attributeID, fieldID)`.
+- Genau der zum Field-Typ gehörende Storage-Slot darf belegt sein. Kein Slot bedeutet fachlich leer; mehrere Slots, ein falscher Slot oder ein nicht-endlicher Double-Wert sind ungültig.
+- Authority-Auswertungen und Actor-Grenzen verwenden ausschließlich `Sendable` Value-Snapshots/DTOs; SwiftData-Modelle verlassen ihren Context/Executor nicht.
+
+Duplicate-Resolution:
+
+- Records und Keys werden stabil nach der lexikographischen UUID-Darstellung sortiert; der kleinste passende Record ist der Keeper.
+- Bei ausschließlich leeren Records bleibt ein leerer Keeper.
+- Bei leer plus gefüllt gewinnt der gefüllte Record.
+- Gleich typisierte Werte werden nur für den Vergleich normalisiert: Text/Choice werden außen getrimmt und kanonisch Unicode-normalisiert, Zahlen, Datum und Bool anhand ihres exakten typisierten Werts verglichen. Der gespeicherte Keeper-Wert selbst wird nicht umgeschrieben.
+- Leere und nach dieser Regel identische Duplikate dürfen gelöscht werden.
+- Unterschiedliche gefüllte Werte sowie ungültige Typed-Storage-Records liefern keine Authority. Sie bleiben erhalten; UI zeigt einen neutralen Konfliktzustand, Repository, Chat und Search liefern daraus keinen Fakt.
+- Ein bewusster Save im Detail-Editor setzt den gewählten typisierten Wert und konsolidiert alle reparierbaren Records desselben Keys in derselben SwiftData-Transaktion auf einen Record. Ein Save-Fehler rollt die gesamte Konsolidierung zurück.
+- Es wird bewusst kein CloudKit-problematisches `@Attribute(.unique)` verwendet.
+
 ## Sync / Storage
 
 ### Autoritativer Store
@@ -243,7 +267,11 @@ Pfad: `BrainMesh/Attachments/MetaAttachment.swift`
 - Kein `VersionedSchema` und kein `SchemaMigrationPlan` im Quellstand.
 - `BrainMesh/Bootstrap/GraphBootstrap+Repair.swift`:
   - legt bei Bedarf einen Default-Graph an;
-  - füllt fehlende `graphID` für Entities, Attributes, Links und Templates.
+  - füllt fehlende `graphID` für Entities, Attributes, Links und Templates;
+  - klassifiziert vor der ersten Mutation alle Field Definitions und Detail Values;
+  - migriert Details ausschließlich über ihre tatsächlichen Owner-Relationships, repariert eindeutige skalare Owner-IDs und bereinigt nur sichere Duplikate;
+  - übernimmt Cross-Graph-, verwaiste oder mehrdeutige Detailrecords nicht in den Default-Graph;
+  - committed die gesamte Reparatur über `GraphMutationCommitter` und markiert betroffene Graphen per Integrity-Rebuild-Event.
 - `BrainMesh/Bootstrap/GraphBootstrap+Backfill.swift` füllt gefaltete Notes-Felder.
 - `BrainMesh/Attachments/AttachmentGraphIDMigration.swift` repariert Legacy-Attachments owner-lokal.
 - Attachment-Reparatur wird u. a. aus `BrainMesh/Attachments/MediaAllLoader.swift` und `BrainMesh/PhotoGallery/PhotoGalleryActions.swift` angestoßen.
@@ -258,6 +286,7 @@ Pfad: `BrainMesh/Attachments/MetaAttachment.swift`
 - Integritäts-/Versionsfehler lösen einen rekonstruierenden Rebuild aus.
 - Das Indexverzeichnis wird explizit vom Geräte-Backup ausgeschlossen.
 - Der Index ist abgeleitet, nicht autoritativ.
+- Detailwert-Dokumente entstehen ausschließlich aus der Authority-gefilterten `GraphReadRepository`-Quelle; konflikthafte oder ungültige Detailwerte werden nicht indexiert.
 
 ### Medien-Caches
 
@@ -395,6 +424,7 @@ Pfad: `BrainMesh/Attachments/MetaAttachment.swift`
 - Task-Handles bei UI-Lebensdauer behalten und bei Scope-/View-Wechsel abbrechen.
 - Medien-Cache als verwerfbar behandeln; autoritative Binärdaten im Modell erhalten.
 - Migrationen idempotent und mit Store-Fixtures testen.
+- Detailfeld- und Detailwert-Zuordnungen vor jeder Mutation mit der zentralen Integrity-Policy prüfen.
 
 ### Don’t
 
@@ -402,6 +432,7 @@ Pfad: `BrainMesh/Attachments/MetaAttachment.swift`
 - Keine SwiftData-Fetches, Sorts oder synchrone Disk-I/O in SwiftUI-`body`.
 - Keine persistenten Modelobjekte über Actor-Grenzen reichen.
 - IDs nicht graphübergreifend ohne Scope auflösen.
+- Detailwerte nicht per `first(where:)` oder Fetch-Reihenfolge auswählen; Authority immer über den gemeinsamen `(graphID, attributeID, fieldID)`-Vertrag bestimmen.
 - `CURRENT` oder andere Conversation-Aliase nicht als String bis in Query-Plan oder Repository weiterreichen; zuerst in einen `GraphChatResolvedConversationScope` überführen.
 - `imagePath`/`localPath` nicht als autoritative Daten behandeln.
 - Keine unbegrenzten UI-Listen oder graphweiten Snapshots ohne bewusstes Limit einführen.

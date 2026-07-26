@@ -16,6 +16,8 @@ extension GraphTransferViewModel {
                 return "Diese Datei ist keine gültige BrainMesh-.bmgraph-Datei. Wähle bitte einen Struktur-Export aus BrainMesh."
             case .unsupportedVersion:
                 return "Diese .bmgraph-Datei wurde mit einer neueren BrainMesh-Version erstellt. Aktualisiere BrainMesh und versuche es danach erneut."
+            case .invalidDetailData:
+                return "Die Detaildaten der Importdatei sind nicht eindeutig oder passen nicht zum enthaltenen Graphen. Der Import wurde abgebrochen, damit keine inkonsistenten Daten übernommen werden."
             case .decodeFailed:
                 return "Die .bmgraph-Datei konnte nicht gelesen werden. Sie ist möglicherweise unvollständig oder beschädigt."
             case .readFailed:

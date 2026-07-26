@@ -31,6 +31,10 @@ nonisolated enum BMLog {
         subsystem: subsystem,
         category: "mutation-events"
     )
+    static let detailIntegrity = Logger(
+        subsystem: subsystem,
+        category: "detail-integrity"
+    )
     static let chat = Logger(subsystem: subsystem, category: "chat")
 }
 

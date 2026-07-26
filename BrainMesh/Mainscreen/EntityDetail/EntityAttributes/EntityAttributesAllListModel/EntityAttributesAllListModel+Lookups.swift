@@ -47,11 +47,11 @@ extension EntityAttributesAllListModel {
         pinnedFields: [MetaDetailFieldDefinition],
         graphID: UUID?,
         attributeIDs: Set<UUID>
-    ) -> [UUID: [UUID: MetaDetailFieldValue]] {
+    ) -> [UUID: [UUID: DetailValuePresentationSnapshot]] {
         guard !pinnedFields.isEmpty else { return [:] }
         guard !attributeIDs.isEmpty else { return [:] }
 
-        var result: [UUID: [UUID: MetaDetailFieldValue]] = [:]
+        var result: [UUID: [UUID: DetailValuePresentationSnapshot]] = [:]
         result.reserveCapacity(256)
 
         let gid: UUID? = graphID
@@ -73,9 +73,23 @@ extension EntityAttributesAllListModel {
                 values = (try? context.fetch(fd)) ?? []
             }
 
-            for v in values {
-                guard attributeIDs.contains(v.attributeID) else { continue }
-                result[v.attributeID, default: [:]][fieldID] = v
+            let grouped = Dictionary(grouping: values) { value in
+                value.attribute?.id ?? value.attributeID
+            }
+            for attributeID in grouped.keys.sorted(by: {
+                $0.uuidString < $1.uuidString
+            }) {
+                guard attributeIDs.contains(attributeID),
+                      let records = grouped[attributeID],
+                      let attribute = records.compactMap(\.attribute).first else {
+                    continue
+                }
+                result[attributeID, default: [:]][fieldID] =
+                    DetailsFormatting.presentationSnapshot(
+                        for: field,
+                        on: attribute,
+                        records: records
+                    )
             }
         }
 

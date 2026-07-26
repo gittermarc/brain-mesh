@@ -34,6 +34,7 @@ enum GraphTransferError: Error, Sendable {
     // Validation
     case invalidFormat
     case unsupportedVersion(found: Int)
+    case invalidDetailData
 
     // Domain
     case graphNotFound(graphID: UUID)
@@ -92,6 +93,8 @@ extension GraphTransferError: LocalizedError {
             return "Diese Datei ist keine gültige BrainMesh-.bmgraph-Datei."
         case .unsupportedVersion:
             return "Diese .bmgraph-Datei wurde mit einer neueren BrainMesh-Version erstellt."
+        case .invalidDetailData:
+            return "Die Detaildaten der Importdatei sind nicht eindeutig oder graphkonsistent."
 
         case .graphNotFound:
             return "Der gewählte Graph wurde nicht gefunden."

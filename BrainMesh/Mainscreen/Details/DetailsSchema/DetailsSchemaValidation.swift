@@ -14,7 +14,7 @@ enum DetailsSchemaPinning {
     static let maxPinnedFields: Int = 3
 
     static func pinnedCount(in entity: MetaEntity) -> Int {
-        entity.detailFieldsList.filter { $0.isPinned }.count
+        entity.authoritativeDetailFieldsList.filter { $0.isPinned }.count
     }
 
     static func canPinAnotherField(in entity: MetaEntity) -> Bool {
@@ -32,7 +32,7 @@ enum DetailsSchemaPinning {
     }
 
     static func enforcePinnedLimitIfNeeded(on entity: MetaEntity) {
-        let pinned = entity.detailFieldsList
+        let pinned = entity.authoritativeDetailFieldsList
             .filter { $0.isPinned }
             .sorted(by: { $0.sortIndex < $1.sortIndex })
 

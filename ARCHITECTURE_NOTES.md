@@ -177,6 +177,40 @@ Empfehlung:
 - Debug-Assertions in Mutation Services ergänzen: referenzierte Datensätze müssen denselben `graphID` besitzen.
 - Importtests mit absichtlich kollidierenden UUIDs ergänzen.
 
+### 4.3.1 Detaildaten-Integrity und Authority
+
+Pfade:
+
+- `BrainMesh/DataAccess/DetailDataIntegrityPolicy.swift`
+- `BrainMesh/DataAccess/DetailDataIntegrityValidation.swift`
+- `BrainMesh/Mainscreen/Details/DetailsValueEditorSheet/DetailValueMutationService.swift`
+- `BrainMesh/DataAccess/GraphReadRepository+Fetch.swift`
+
+Vertrag:
+
+- Die Policy arbeitet ausschließlich auf `Sendable` Value-Snapshots. SwiftData-Modelle werden im besitzenden Context in Snapshots projiziert.
+- Eine Field Definition benötigt einen vorhandenen Owner und exakt übereinstimmende `entityID`, `graphID`, Owner-ID und Owner-Graph-ID.
+- Ein Value benötigt ein vorhandenes Attribute mit Entity-Owner, exakt übereinstimmende `attributeID`, eine vorhandene Field Definition derselben Entity und einen gemeinsamen Graphen für Value, Attribute, Entity und Definition.
+- Der einzige Authority-Key für Detailwerte ist `(graphID, attributeID, fieldID)`.
+- Typed Storage ist exakt: kein Slot ist leer; genau der zum Field-Typ passende Slot ist gültig; mehrere oder fremde Slots sind ungültig. `Double` muss endlich sein.
+
+Deterministische Duplicate-Policy:
+
+1. Keys und Records werden lexikographisch nach UUID sortiert.
+2. Bei nur leeren Records bleibt die kleinste UUID.
+3. Bei leer plus gefüllt bleibt ein gefüllter Record.
+4. Bei mehreren gefüllten, äquivalenten typisierten Werten bleibt die kleinste UUID. Text und Choice werden nur für den Vergleich außen getrimmt und kanonisch Unicode-normalisiert; der persistierte Keeper wird nicht konvertiert.
+5. Leere und äquivalente Duplikate sind sicher löschbar.
+6. Unterschiedliche gefüllte Werte oder ungültige Typed-Storage-Records besitzen keine Authority. Sie werden nicht anhand einer geratenen zeitlichen Reihenfolge gelöscht.
+7. Der Detail-Editor kann einen solchen Konflikt durch einen bewussten Save atomar auf genau einen gewählten typisierten Wert konsolidieren; der Save-then-publish-Committer rollt bei Fehler vollständig zurück.
+
+Konsumenten:
+
+- `DetailsFormatting`, vorberechnete Listen-/Canvas-Snapshots und der Value Editor verwenden dieselbe Authority.
+- `GraphReadRepository` liefert pro Key höchstens ein autoritatives Value-DTO. Graph Chat und Search konsumieren diese gefilterten DTOs und geben Konflikte nicht als Fakten aus.
+- Transfer-Import validiert den vollständigen Detailgraphen vor dem ersten Insert. Export schreibt nur autoritative Definitions und Values.
+- Es gibt kein `@Attribute(.unique)`; die Lösung bleibt mit der bestehenden SwiftData-/CloudKit-Persistenz kompatibel.
+
 ### 4.4 Bootstrap und Legacy-Reparatur
 
 Pfade:
@@ -191,7 +225,9 @@ Startup:
 
 - wartet auf Loader-Konfiguration;
 - stellt mindestens einen Graphen sicher;
-- migriert Legacy-Scopes für Entity, Attribute, Link und Template;
+- migriert Legacy-Scopes für Entity, Attribute, Link, Template, Detail Field Definition und Detail Field Value;
+- klassifiziert Detailrecords vor der ersten Mutation owner-basiert, repariert eindeutige skalare Owner-IDs, bereinigt nur sichere Duplikate und markiert betroffene Graphen für Full Rebuild;
+- lässt Cross-Graph-, verwaiste und mehrdeutige Detailrecords unverändert, statt sie dem Default-Graphen zuzuordnen;
 - füllt gefaltete Notes-Felder;
 - startet begrenzte Bildhydration;
 - reconciled den Suchindex.
@@ -287,6 +323,7 @@ Remote-Pfad:
 Hotspot-Grund:
 
 - `GraphReadRepository` lädt graphweit Entities, Attributes, Links, Definitions, Values und Attachment-Metadaten.
+- Für Detailwerte gruppiert das Repository nach dem zentralen Authority-Key und erzeugt nur bei konfliktfreier Authority ein DTO; dadurch verwenden Search Index und Graph Chat dieselbe Faktengrundlage wie die Detail-UI.
 - Der Indexer baut Dokumente/Manifeste als komplette Collections und sortiert sie.
 - `sourceBatchSize` steuert Yield/Progress, streamt aber nicht den Source-Snapshot durch SQLite.
 - Dadurch steigen Peak Memory und Latenz mit der gesamten Graphgröße.
@@ -1109,7 +1146,8 @@ Logging darf Fehlerklasse und Operation-ID enthalten, aber keine Nutzinhalte.
 
 Pfad: `BrainMesh/Observability/BMObservability.swift`
 
-- `Logger`-Kategorien für Load, Expand, Physics, Canvas-Derived-State, Canvas-Static-Render, Search, Mutation Events und Chat.
+- `Logger`-Kategorien für Load, Expand, Physics, Canvas-Derived-State, Canvas-Static-Render, Search, Mutation Events, Detail-Integrity und Chat.
+- Detail-Integrity loggt ausschließlich technische Zähler beziehungsweise Fehlerklassen: migrierte Definitions/Values, reparierte Owner-IDs, sichere Duplikatlöschungen, Konfliktgruppen, Cross-Graph-Ablehnungen und verwaiste/mehrdeutige Records. Namen, Notizen und Detailwerte werden nicht geloggt.
 - Dauerhelfer.
 - Debug-Signposts für Connections-/Media-Preview-Pfade.
 - Search loggt Open/Rebuild/Reconcile mit Mengen und Dauer.
@@ -1216,6 +1254,7 @@ Die realistischen Obergrenzen sind **UNKNOWN U7** und müssen produktseitig fest
 - Mutation Write Path Inventory.
 - Search Index Store, Indexer, Reconciliation und Dokumentbildung.
 - Graph Transfer, Import und Cleanup.
+- Detaildaten-Authority mit In-Memory-`ModelContainer`, Bootstrap, UI-Formatierung, Repository, Graph Chat und Search-Reconciliation.
 - Graph Canvas Physics/Derived State.
 - Graph Chat Provider, Query, Conversation, Tools und UI-Controller.
 

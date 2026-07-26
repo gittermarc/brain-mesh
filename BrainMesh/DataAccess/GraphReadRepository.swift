@@ -181,9 +181,13 @@ actor GraphReadRepository {
             GraphScopedFetches.detailFieldDefinition(id: id, in: scope)
         ).first
         try checkCancellation()
-        return model.map {
-            GraphReadDTOMapper.detailFieldDefinition($0, scope: scope)
+        guard let model else { return nil }
+        let snapshot = DetailDataModelSnapshotMapper.field(model)
+        guard snapshot.graphID == scope.graphID,
+              DetailDataIntegrityPolicy.fieldViolations(snapshot).isEmpty else {
+            return nil
         }
+        return GraphReadDTOMapper.detailFieldDefinition(model, scope: scope)
     }
 
     func detailFieldDefinitions(
@@ -223,11 +227,19 @@ actor GraphReadRepository {
             return nil
         }
         try checkCancellation()
-        return try fetchDetailValues(
+        let siblingModels = try context.fetch(
+            GraphScopedFetches.detailValues(
+                attributeID: model.attributeID,
+                fieldID: model.fieldID,
+                in: scope
+            )
+        )
+        let resolved = try fetchDetailValues(
             in: scope,
             context: context,
-            models: [model]
-        ).first
+            models: siblingModels
+        )
+        return resolved.first { $0.id == model.id }
     }
 
     func detailValues(

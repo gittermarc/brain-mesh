@@ -9,7 +9,7 @@ import Foundation
 
 extension NodeDetailsValuesCard {
     var fields: [MetaDetailFieldDefinition] {
-        owner.detailFieldsList
+        owner.authoritativeDetailFieldsList
     }
 
     struct FieldRow: Identifiable {

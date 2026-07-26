@@ -26,11 +26,15 @@ extension GraphBootstrap {
         return graph
     }
 
+    @discardableResult
     static func migrateLegacyRecordsIfNeeded(
         defaultGraphID: UUID,
         using modelContext: ModelContext,
-        committer: GraphMutationCommitter = GraphMutationCommitter()
-    ) async throws {
+        committer: GraphMutationCommitter = GraphMutationCommitter(),
+        preMutationCancellationCheck: @Sendable () throws -> Void = {
+            try Task.checkCancellation()
+        }
+    ) async throws -> DetailDataIntegrityReport {
         // Fetch and classify every affected record before the first mutation. A later fetch or
         // validation failure must not leave an unsaved, partially migrated context behind.
         let entityDescriptor = FetchDescriptor<MetaEntity>(
@@ -62,6 +66,10 @@ extension GraphBootstrap {
         let attributeAssignments = attributes.map { attribute in
             (attribute: attribute, graphID: attribute.owner?.graphID ?? defaultGraphID)
         }
+        let detailRepairPlan = try makeDetailIntegrityRepairPlan(
+            defaultGraphID: defaultGraphID,
+            using: modelContext
+        )
 
         var affectedGraphIDs = Set<UUID>()
         if entities.isEmpty == false || links.isEmpty == false || templates.isEmpty == false {
@@ -70,10 +78,14 @@ extension GraphBootstrap {
         for assignment in attributeAssignments {
             affectedGraphIDs.insert(assignment.graphID)
         }
+        affectedGraphIDs.formUnion(detailRepairPlan.affectedGraphIDs)
 
-        guard affectedGraphIDs.isEmpty == false else { return }
+        guard affectedGraphIDs.isEmpty == false else {
+            DetailDataIntegrityObservability.logBootstrap(detailRepairPlan.report)
+            return detailRepairPlan.report
+        }
         let batches = try integrityRepairBatches(graphIDs: affectedGraphIDs)
-        try Task.checkCancellation()
+        try preMutationCancellationCheck()
 
         for entity in entities {
             entity.graphID = defaultGraphID
@@ -87,7 +99,13 @@ extension GraphBootstrap {
         for template in templates {
             template.graphID = defaultGraphID
         }
+        applyDetailIntegrityRepairPlan(
+            detailRepairPlan,
+            using: modelContext
+        )
 
         _ = try await committer.commit(batches, in: modelContext)
+        DetailDataIntegrityObservability.logBootstrap(detailRepairPlan.report)
+        return detailRepairPlan.report
     }
 }

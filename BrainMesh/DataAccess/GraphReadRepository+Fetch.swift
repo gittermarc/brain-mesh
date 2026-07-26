@@ -125,16 +125,75 @@ extension GraphReadRepository {
 
         let definitionMap = Self.detailFieldMap(definitions)
         let attributeMap = Self.attributeMap(attributes)
-        var values: [GraphDetailValueDTO] = []
-        values.reserveCapacity(models.count)
+        var groupedModels: [DetailValueAuthorityKey: [MetaDetailFieldValue]] = [:]
+        var fieldSnapshots: [DetailValueAuthorityKey: DetailFieldIntegritySnapshot] = [:]
+        var attributeSnapshots: [DetailValueAuthorityKey: DetailAttributeIntegritySnapshot] = [:]
+
         for (index, model) in models.enumerated() {
             try checkCancellation(at: index)
+            guard let field = definitionMap[model.fieldID],
+                  let attribute = attributeMap[model.attributeID],
+                  let ownerEntityID = attribute.ownerEntityID else {
+                continue
+            }
+            let fieldSnapshot = DetailFieldIntegritySnapshot(
+                id: field.id,
+                graphID: field.scope.graphID,
+                entityID: field.entityID,
+                ownerID: field.entityID,
+                ownerGraphID: field.scope.graphID,
+                type: field.type
+            )
+            let attributeSnapshot = DetailAttributeIntegritySnapshot(
+                id: attribute.id,
+                graphID: attribute.scope.graphID,
+                ownerEntityID: ownerEntityID,
+                ownerGraphID: attribute.scope.graphID
+            )
+            guard let key = DetailDataIntegrityPolicy.key(
+                for: fieldSnapshot,
+                attribute: attributeSnapshot
+            ) else {
+                continue
+            }
+            groupedModels[key, default: []].append(model)
+            fieldSnapshots[key] = fieldSnapshot
+            attributeSnapshots[key] = attributeSnapshot
+        }
+
+        var values: [GraphDetailValueDTO] = []
+        values.reserveCapacity(groupedModels.count)
+        let orderedKeys = groupedModels.keys.sorted { lhs, rhs in
+            if lhs.attributeID != rhs.attributeID {
+                return lhs.attributeID.uuidString < rhs.attributeID.uuidString
+            }
+            return lhs.fieldID.uuidString < rhs.fieldID.uuidString
+        }
+        for (index, key) in orderedKeys.enumerated() {
+            try checkCancellation(at: index)
+            guard let fieldSnapshot = fieldSnapshots[key],
+                  let attributeSnapshot = attributeSnapshots[key] else {
+                continue
+            }
+            let candidates = groupedModels[key] ?? []
+            let resolution = DetailDataIntegrityPolicy.resolveAuthority(
+                field: fieldSnapshot,
+                attribute: attributeSnapshot,
+                records: candidates.map {
+                    DetailDataModelSnapshotMapper.value($0)
+                }
+            )
+            guard case .authoritative(let recordID, let authoritativeValue, _) = resolution,
+                  let model = candidates.first(where: { $0.id == recordID }) else {
+                continue
+            }
             values.append(
                 GraphReadDTOMapper.detailValue(
                     model,
                     scope: scope,
                     field: definitionMap[model.fieldID],
-                    attribute: attributeMap[model.attributeID]
+                    attribute: attributeMap[model.attributeID],
+                    authoritativeValue: authoritativeValue
                 )
             )
         }
@@ -268,6 +327,11 @@ extension GraphReadRepository {
         values.reserveCapacity(models.count)
         for (index, model) in models.enumerated() {
             try checkCancellation(at: index)
+            let snapshot = DetailDataModelSnapshotMapper.field(model)
+            guard snapshot.graphID == scope.graphID,
+                  DetailDataIntegrityPolicy.fieldViolations(snapshot).isEmpty else {
+                continue
+            }
             values.append(GraphReadDTOMapper.detailFieldDefinition(model, scope: scope))
         }
         try checkCancellation()

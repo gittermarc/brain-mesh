@@ -11,7 +11,7 @@ import SwiftData
 extension EntityAttributesAllListModel {
     static func computePinnedFields(for entity: MetaEntity) -> [MetaDetailFieldDefinition] {
         Array(
-            entity.detailFieldsList
+            entity.authoritativeDetailFieldsList
                 .filter { $0.isPinned }
                 .sorted(by: { $0.sortIndex < $1.sortIndex })
                 .prefix(3)

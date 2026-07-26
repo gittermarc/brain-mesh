@@ -4,54 +4,49 @@ import Foundation
 
 extension DetailsValueEditorSheet {
     var resolvedGraphID: UUID? {
-        let modelGraphIDs = [
-            attribute.graphID,
-            attribute.owner?.graphID,
-            field.graphID,
-            field.owner?.graphID
-        ].compactMap { $0 }
-
-        guard Set(modelGraphIDs).count <= 1 else {
-            return nil
-        }
-        return modelGraphIDs.first ?? UUID(uuidString: activeGraphIDString)
+        try? DetailDataWriteValidator.validate(
+            field: field,
+            attribute: attribute
+        )
     }
 
     func loadExistingValue() {
         error = nil
 
-        guard let value = existingRecord() else {
+        let authority: (
+            resolution: DetailValueAuthorityResolution,
+            records: [MetaDetailFieldValue]
+        )
+        do {
+            authority = try DetailValueMutationService.authority(
+                attribute: attribute,
+                field: field,
+                modelContext: modelContext
+            )
+        } catch {
             hasExistingValue = false
-
-            // Sensible defaults, but only written on save.
-            stringInput = ""
-            numberInput = ""
-            selectedChoice = nil
-            dateInput = Date()
-            boolInput = false
+            resetInputs()
+            self.error = error.localizedDescription
             return
         }
 
-        hasExistingValue = true
-
-        switch field.type {
-        case .singleLineText, .multiLineText:
-            stringInput = value.stringValue ?? ""
-
-        case .numberInt:
-            numberInput = value.intValue.map(String.init) ?? ""
-
-        case .numberDouble:
-            numberInput = value.doubleValue.map { String($0) } ?? ""
-
-        case .date:
-            dateInput = value.dateValue ?? Date()
-
-        case .toggle:
-            boolInput = value.boolValue ?? false
-
-        case .singleChoice:
-            selectedChoice = value.stringValue
+        switch authority.resolution {
+        case .missing:
+            hasExistingValue = false
+            resetInputs()
+            return
+        case .conflict, .invalid:
+            hasExistingValue = true
+            resetInputs()
+            error = "Für dieses Feld sind mehrere oder ungültige Werte gespeichert. Sichern fasst sie atomar zu deinem gewählten Wert zusammen."
+        case .authoritative(let recordID, _, _):
+            guard let value = authority.records.first(where: { $0.id == recordID }) else {
+                hasExistingValue = false
+                resetInputs()
+                return
+            }
+            hasExistingValue = true
+            loadInputs(from: value)
         }
     }
 
@@ -73,44 +68,16 @@ extension DetailsValueEditorSheet {
             await deleteValue()
 
         case .value(let payload):
-            guard let graphID = resolvedGraphID else {
-                error = DetailValuePersistenceError.missingGraphScope.localizedDescription
-                return
-            }
-
-            if let existing = existingRecord() {
-                do {
-                    try validateGraphScope(of: existing, expectedGraphID: graphID)
-                } catch {
-                    self.error = error.localizedDescription
-                    return
-                }
-                if payload.matches(existing) {
-                    dismiss()
-                    return
-                }
-            }
-
             isSaving = true
             defer { isSaving = false }
 
-            let record = upsertRecord()
-            record.graphID = graphID
-            record.attributeID = attribute.id
-            record.fieldID = field.id
-            payload.apply(to: record)
-            let reference = GraphMutationDetailValueReference(
-                id: record.id,
-                ownerAttributeID: attribute.id,
-                fieldID: field.id
-            )
-
             do {
-                let batch = try GraphMutationBatchFactory.detailValueChanged(
-                    graphID: graphID,
-                    value: reference
+                _ = try await DetailValueMutationService.save(
+                    payload,
+                    attribute: attribute,
+                    field: field,
+                    modelContext: modelContext
                 )
-                try await GraphMutationCommitter().commit(batch, in: modelContext)
                 hasExistingValue = true
                 dismiss()
             } catch is CancellationError {
@@ -125,39 +92,16 @@ extension DetailsValueEditorSheet {
     @MainActor
     func deleteValue() async {
         guard !isSaving else { return }
-        guard let existing = existingRecord() else {
-            dismiss()
-            return
-        }
-        guard let graphID = resolvedGraphID else {
-            error = DetailValuePersistenceError.missingGraphScope.localizedDescription
-            return
-        }
-
-        do {
-            try validateGraphScope(of: existing, expectedGraphID: graphID)
-        } catch {
-            self.error = error.localizedDescription
-            return
-        }
 
         isSaving = true
         defer { isSaving = false }
 
-        let reference = GraphMutationDetailValueReference(
-            id: existing.id,
-            ownerAttributeID: existing.attributeID,
-            fieldID: existing.fieldID
-        )
-        attribute.detailValues?.removeAll(where: { $0.id == existing.id })
-        modelContext.delete(existing)
-
         do {
-            let batch = try GraphMutationBatchFactory.detailValueDeleted(
-                graphID: graphID,
-                value: reference
+            _ = try await DetailValueMutationService.delete(
+                attribute: attribute,
+                field: field,
+                modelContext: modelContext
             )
-            try await GraphMutationCommitter().commit(batch, in: modelContext)
             hasExistingValue = false
             dismiss()
         } catch is CancellationError {
@@ -169,26 +113,15 @@ extension DetailsValueEditorSheet {
     }
 
     func existingRecord() -> MetaDetailFieldValue? {
-        attribute.detailValuesList.first(where: { $0.fieldID == field.id })
-    }
-
-    @MainActor
-    func upsertRecord() -> MetaDetailFieldValue {
-        if let existing = existingRecord() {
-            return existing
+        guard let authority = try? DetailValueMutationService.authority(
+            attribute: attribute,
+            field: field,
+            modelContext: modelContext
+        ),
+        let recordID = authority.resolution.authoritativeRecordID else {
+            return nil
         }
-
-        let newValue = MetaDetailFieldValue(attribute: attribute, fieldID: field.id)
-        modelContext.insert(newValue)
-
-        if attribute.detailValues == nil {
-            attribute.detailValues = []
-        }
-        if attribute.detailValues?.contains(where: { $0.id == newValue.id }) != true {
-            attribute.detailValues?.append(newValue)
-        }
-
-        return newValue
+        return authority.records.first { $0.id == recordID }
     }
 
     private func prepareInput() throws -> PreparedDetailValueInput {
@@ -227,99 +160,43 @@ extension DetailsValueEditorSheet {
         }
     }
 
-    private func validateGraphScope(
-        of value: MetaDetailFieldValue,
-        expectedGraphID: UUID
-    ) throws {
-        if let valueGraphID = value.graphID,
-           valueGraphID != expectedGraphID
-        {
-            throw DetailValuePersistenceError.inconsistentGraphScope
-        }
-        if let ownerGraphID = value.attribute?.graphID,
-           ownerGraphID != expectedGraphID
-        {
-            throw DetailValuePersistenceError.inconsistentGraphScope
+    private func resetInputs() {
+        stringInput = ""
+        numberInput = ""
+        selectedChoice = nil
+        dateInput = Date()
+        boolInput = false
+    }
+
+    private func loadInputs(from value: MetaDetailFieldValue) {
+        switch field.type {
+        case .singleLineText, .multiLineText:
+            stringInput = value.stringValue ?? ""
+        case .numberInt:
+            numberInput = value.intValue.map(String.init) ?? ""
+        case .numberDouble:
+            numberInput = value.doubleValue.map { String($0) } ?? ""
+        case .date:
+            dateInput = value.dateValue ?? Date()
+        case .toggle:
+            boolInput = value.boolValue ?? false
+        case .singleChoice:
+            selectedChoice = value.stringValue
         }
     }
 }
 
 private enum PreparedDetailValueInput {
     case empty
-    case value(DetailValuePayload)
-}
-
-private enum DetailValuePayload: Equatable {
-    case string(String)
-    case integer(Int)
-    case double(Double)
-    case date(Date)
-    case boolean(Bool)
-
-    func matches(_ record: MetaDetailFieldValue) -> Bool {
-        switch self {
-        case .string(let value):
-            return record.stringValue == value &&
-                record.intValue == nil &&
-                record.doubleValue == nil &&
-                record.dateValue == nil &&
-                record.boolValue == nil
-        case .integer(let value):
-            return record.stringValue == nil &&
-                record.intValue == value &&
-                record.doubleValue == nil &&
-                record.dateValue == nil &&
-                record.boolValue == nil
-        case .double(let value):
-            return record.stringValue == nil &&
-                record.intValue == nil &&
-                record.doubleValue == value &&
-                record.dateValue == nil &&
-                record.boolValue == nil
-        case .date(let value):
-            return record.stringValue == nil &&
-                record.intValue == nil &&
-                record.doubleValue == nil &&
-                record.dateValue == value &&
-                record.boolValue == nil
-        case .boolean(let value):
-            return record.stringValue == nil &&
-                record.intValue == nil &&
-                record.doubleValue == nil &&
-                record.dateValue == nil &&
-                record.boolValue == value
-        }
-    }
-
-    func apply(to record: MetaDetailFieldValue) {
-        record.clearTypedValues()
-        switch self {
-        case .string(let value):
-            record.stringValue = value
-        case .integer(let value):
-            record.intValue = value
-        case .double(let value):
-            record.doubleValue = value
-        case .date(let value):
-            record.dateValue = value
-        case .boolean(let value):
-            record.boolValue = value
-        }
-    }
+    case value(DetailValueWritePayload)
 }
 
 private enum DetailValuePersistenceError: LocalizedError {
-    case missingGraphScope
-    case inconsistentGraphScope
     case invalidInteger
     case invalidDouble
 
     var errorDescription: String? {
         switch self {
-        case .missingGraphScope:
-            return "Für dieses Detail ist kein Graph zugeordnet."
-        case .inconsistentGraphScope:
-            return "Das Detail gehört nicht eindeutig zu diesem Graphen."
         case .invalidInteger:
             return "Bitte gib eine gültige Ganzzahl ein."
         case .invalidDouble:

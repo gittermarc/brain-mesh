@@ -106,6 +106,14 @@ final class MetaEntity {
             .sorted(by: { $0.sortIndex < $1.sortIndex })
     }
 
+    var authoritativeDetailFieldsList: [MetaDetailFieldDefinition] {
+        detailFieldsList.filter { field in
+            DetailDataIntegrityPolicy.fieldViolations(
+                DetailDataModelSnapshotMapper.field(field)
+            ).isEmpty
+        }
+    }
+
     func addDetailField(_ field: MetaDetailFieldDefinition) {
         if detailFields == nil { detailFields = [] }
         if detailFields?.contains(where: { $0.id == field.id }) == true { return }

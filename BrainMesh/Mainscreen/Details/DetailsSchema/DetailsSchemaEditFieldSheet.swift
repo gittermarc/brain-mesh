@@ -151,16 +151,17 @@ struct DetailsEditFieldSheet: View {
         isSaving = true
         defer { isSaving = false }
 
-        field.name = cleanedName
-        field.type = type
-        field.unit = finalUnit
-        field.isPinned = isPinned
-        field.setOptions(finalOptions)
-
         do {
-            _ = try await DetailsSchemaActions.commitFieldUpdate(
+            _ = try await DetailsSchemaActions.updateField(
                 field,
                 in: entity,
+                update: DetailsSchemaActions.FieldUpdate(
+                    name: cleanedName,
+                    type: type,
+                    unit: finalUnit,
+                    options: finalOptions,
+                    isPinned: isPinned
+                ),
                 modelContext: modelContext
             )
             onResult(.saved)

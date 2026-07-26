@@ -11,11 +11,11 @@ struct NodeDetailsSchemaCard: View {
     @Bindable var entity: MetaEntity
 
     private var fieldCount: Int {
-        entity.detailFieldsList.count
+        entity.authoritativeDetailFieldsList.count
     }
 
     private var pinnedCount: Int {
-        entity.detailFieldsList.filter { $0.isPinned }.count
+        entity.authoritativeDetailFieldsList.filter { $0.isPinned }.count
     }
 
     var body: some View {

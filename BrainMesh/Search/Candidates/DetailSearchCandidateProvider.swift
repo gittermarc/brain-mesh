@@ -48,6 +48,10 @@ nonisolated struct DetailSearchCandidateProvider: BrainMeshSearchCandidateProvid
 
         for field in definitions {
             try request.checkCancellation()
+            let integrity = DetailDataModelSnapshotMapper.field(field)
+            guard DetailDataIntegrityPolicy.fieldViolations(integrity).isEmpty else {
+                continue
+            }
 
             let ownerName = field.owner?.name ?? "Details-Schema"
             let fields = [
@@ -119,9 +123,14 @@ nonisolated struct DetailSearchCandidateProvider: BrainMeshSearchCandidateProvid
         )
 
         var candidates: [BrainMeshSearchCandidate] = []
-        candidates.reserveCapacity(values.count)
+        let authoritativeValues = authoritativeValueModels(
+            values: values,
+            fieldMap: fieldMap,
+            attributeMap: attributeMap
+        )
+        candidates.reserveCapacity(authoritativeValues.count)
 
-        for value in values {
+        for value in authoritativeValues {
             try request.checkCancellation()
 
             let components = BrainMeshSearchDetailValueContent(
@@ -203,7 +212,17 @@ nonisolated struct DetailSearchCandidateProvider: BrainMeshSearchCandidateProvid
 
         let definitions = try request.modelContext.fetch(descriptor)
         try request.checkCancellation()
-        return Dictionary(uniqueKeysWithValues: definitions.map { ($0.id, $0) })
+        var result: [UUID: MetaDetailFieldDefinition] = [:]
+        for definition in definitions.sorted(by: { $0.id.uuidString < $1.id.uuidString }) {
+            let snapshot = DetailDataModelSnapshotMapper.field(definition)
+            guard DetailDataIntegrityPolicy.fieldViolations(snapshot).isEmpty else {
+                continue
+            }
+            if result[definition.id] == nil {
+                result[definition.id] = definition
+            }
+        }
+        return result
     }
 
     private func fetchAttributesByID(
@@ -230,6 +249,69 @@ nonisolated struct DetailSearchCandidateProvider: BrainMeshSearchCandidateProvid
 
         let attributes = try request.modelContext.fetch(descriptor)
         try request.checkCancellation()
-        return Dictionary(uniqueKeysWithValues: attributes.map { ($0.id, $0) })
+        var result: [UUID: MetaAttribute] = [:]
+        for attribute in attributes.sorted(by: { $0.id.uuidString < $1.id.uuidString }) {
+            let snapshot = DetailDataModelSnapshotMapper.attribute(attribute)
+            guard DetailDataIntegrityPolicy.attributeViolations(snapshot).isEmpty else {
+                continue
+            }
+            if result[attribute.id] == nil {
+                result[attribute.id] = attribute
+            }
+        }
+        return result
+    }
+
+    private func authoritativeValueModels(
+        values: [MetaDetailFieldValue],
+        fieldMap: [UUID: MetaDetailFieldDefinition],
+        attributeMap: [UUID: MetaAttribute]
+    ) -> [MetaDetailFieldValue] {
+        var grouped: [DetailValueAuthorityKey: [MetaDetailFieldValue]] = [:]
+        var fieldByKey: [DetailValueAuthorityKey: MetaDetailFieldDefinition] = [:]
+        var attributeByKey: [DetailValueAuthorityKey: MetaAttribute] = [:]
+
+        for value in values {
+            guard let field = fieldMap[value.fieldID],
+                  let attribute = attributeMap[value.attributeID],
+                  let key = DetailDataIntegrityPolicy.key(
+                    for: DetailDataModelSnapshotMapper.field(field),
+                    attribute: DetailDataModelSnapshotMapper.attribute(attribute)
+                  ) else {
+                continue
+            }
+            grouped[key, default: []].append(value)
+            fieldByKey[key] = field
+            attributeByKey[key] = attribute
+        }
+
+        var result: [MetaDetailFieldValue] = []
+        let keys = grouped.keys.sorted { lhs, rhs in
+            if lhs.graphID != rhs.graphID {
+                return lhs.graphID.uuidString < rhs.graphID.uuidString
+            }
+            if lhs.attributeID != rhs.attributeID {
+                return lhs.attributeID.uuidString < rhs.attributeID.uuidString
+            }
+            return lhs.fieldID.uuidString < rhs.fieldID.uuidString
+        }
+        for key in keys {
+            guard let field = fieldByKey[key],
+                  let attribute = attributeByKey[key] else {
+                continue
+            }
+            let records = grouped[key] ?? []
+            let resolution = DetailDataModelSnapshotMapper.authority(
+                field: field,
+                attribute: attribute,
+                records: records
+            )
+            guard let recordID = resolution.authoritativeRecordID,
+                  let value = records.first(where: { $0.id == recordID }) else {
+                continue
+            }
+            result.append(value)
+        }
+        return result
     }
 }

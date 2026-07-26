@@ -27,6 +27,7 @@ nonisolated final class GraphTransferImportCoordinator {
 
     var entitiesByNewID: [UUID: MetaEntity] = [:]
     var attributesByNewID: [UUID: MetaAttribute] = [:]
+    var fieldsByNewID: [UUID: MetaDetailFieldDefinition] = [:]
 
     var importedValues = 0
     var importedLinks = 0
@@ -82,11 +83,17 @@ nonisolated final class GraphTransferImportCoordinator {
     }
 
     func runCoreAsNewGraphRemap() async throws -> GraphTransferCoreImportResult {
+        // Validate and select detail authority before the first insert in this context. Entry
+        // points validate the file as well, but the coordinator remains a complete write boundary.
+        let authoritativeDetailValues = try GraphTransferValidator.authoritativeDetailValues(
+            in: file
+        )
+
         createGraph()
         try await importEntities()
         try await importFieldDefinitions()
         try await importAttributes()
-        try await importDetailFieldValues()
+        try await importDetailFieldValues(authoritativeDetailValues)
         try await importLinks()
 
         return GraphTransferCoreImportResult(

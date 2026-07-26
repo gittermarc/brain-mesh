@@ -46,9 +46,14 @@ nonisolated extension GraphTransferImportCoordinator {
             )
             definition.id = newID
             definition.graphID = newGraphID
+            _ = try DetailDataWriteValidator.validate(
+                field: definition,
+                owner: owner
+            )
             owner.addDetailField(definition)
 
             context.insert(definition)
+            fieldsByNewID[newID] = definition
             try recordInsertion()
             reportPhaseStepIfNeeded(
                 phase: .fields,
@@ -60,15 +65,17 @@ nonisolated extension GraphTransferImportCoordinator {
         }
     }
 
-    func importDetailFieldValues() async throws {
-        let totalValues = file.detailFieldValues.count
+    func importDetailFieldValues(
+        _ authoritativeValues: [DetailFieldValueDTO]
+    ) async throws {
+        let totalValues = authoritativeValues.count
         progress?(GraphTransferImportProgressFactory.phaseStart(
             .values,
             total: totalValues,
             label: "Details-Werte werden importiert…"
         ))
 
-        for (idx, dto) in file.detailFieldValues.enumerated() {
+        for (idx, dto) in authoritativeValues.enumerated() {
             try await performCheckpoint(
                 index: idx,
                 cancellationStride: GraphTransferService.ImportTuning.cancellationStrideValuesAndLinks,
@@ -77,7 +84,8 @@ nonisolated extension GraphTransferImportCoordinator {
 
             guard let newAttrID = attributeIDMap[dto.attributeID],
                   let attribute = attributesByNewID[newAttrID],
-                  let newFieldID = fieldIDMap[dto.fieldID]
+                  let newFieldID = fieldIDMap[dto.fieldID],
+                  let field = fieldsByNewID[newFieldID]
             else {
                 continue
             }
@@ -87,7 +95,23 @@ nonisolated extension GraphTransferImportCoordinator {
                 continue
             }
 
-            let value = MetaDetailFieldValue(attribute: attribute, fieldID: newFieldID)
+            let proposedStorage = DetailTypedStorageSnapshot(
+                stringValue: dto.stringValue,
+                intValue: dto.intValue,
+                doubleValue: dto.doubleValue,
+                dateValue: dto.dateValue,
+                boolValue: dto.boolValue
+            )
+            _ = try DetailDataWriteValidator.validateProposedValue(
+                storage: proposedStorage,
+                field: field,
+                attribute: attribute
+            )
+
+            let value = MetaDetailFieldValue(
+                attribute: attribute,
+                fieldID: newFieldID
+            )
             value.id = UUID()
             value.graphID = newGraphID
             value.stringValue = dto.stringValue

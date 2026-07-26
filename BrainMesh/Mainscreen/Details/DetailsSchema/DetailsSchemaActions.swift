@@ -12,6 +12,7 @@ enum DetailsSchemaActions {
     enum ActionError: LocalizedError {
         case missingGraphScope
         case fieldNotFound
+        case templateGraphMismatch
 
         var errorDescription: String? {
             switch self {
@@ -19,8 +20,18 @@ enum DetailsSchemaActions {
                 return "Für diese Details ist kein Graph zugeordnet."
             case .fieldNotFound:
                 return "Das Detailfeld wurde nicht gefunden."
+            case .templateGraphMismatch:
+                return "Dieses Detail-Set gehört zu einem anderen Graphen."
             }
         }
+    }
+
+    struct FieldUpdate {
+        let name: String
+        let type: DetailFieldType
+        let unit: String?
+        let options: [String]
+        let isPinned: Bool
     }
 
     private struct NewFieldSpec {
@@ -61,6 +72,11 @@ enum DetailsSchemaActions {
         to entity: MetaEntity,
         modelContext: ModelContext
     ) async throws -> Bool {
+        guard let graphID = entity.graphID,
+              template.graphID == graphID else {
+            DetailDataIntegrityObservability.logRejectedWrite(.crossGraphAssignment)
+            throw ActionError.templateGraphMismatch
+        }
         let specs = template.fields.map { definition in
             NewFieldSpec(
                 name: definition.name,
@@ -87,9 +103,15 @@ enum DetailsSchemaActions {
         modelContext: ModelContext,
         committer: GraphMutationCommitter = GraphMutationCommitter()
     ) async throws -> Bool {
-        guard entity.detailFieldsList.isEmpty == false else { return false }
+        guard entity.authoritativeDetailFieldsList.isEmpty == false else { return false }
         guard let graphID = entity.graphID else {
             throw ActionError.missingGraphScope
+        }
+        for field in entity.authoritativeDetailFieldsList {
+            _ = try DetailDataWriteValidator.validate(
+                field: field,
+                owner: entity
+            )
         }
 
         let cleaned = rawName.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -103,7 +125,7 @@ enum DetailsSchemaActions {
             modelContext: modelContext
         )
 
-        let fields: [MetaDetailsTemplate.FieldDef] = entity.detailFieldsList.map { field in
+        let fields: [MetaDetailsTemplate.FieldDef] = entity.authoritativeDetailFieldsList.map { field in
             MetaDetailsTemplate.FieldDef(
                 name: field.name,
                 typeRaw: field.typeRaw,
@@ -138,6 +160,13 @@ enum DetailsSchemaActions {
         guard let graphID = entity.graphID else {
             throw ActionError.missingGraphScope
         }
+        let validatedGraphID = try DetailDataWriteValidator.validate(
+            field: field,
+            owner: entity
+        )
+        guard graphID == validatedGraphID else {
+            throw DetailDataWriteError.crossGraphAssignment
+        }
 
         modelContext.insert(field)
         entity.addDetailField(field)
@@ -157,14 +186,29 @@ enum DetailsSchemaActions {
     }
 
     @discardableResult
-    static func commitFieldUpdate(
+    static func updateField(
         _ field: MetaDetailFieldDefinition,
         in entity: MetaEntity,
+        update: FieldUpdate,
         modelContext: ModelContext
     ) async throws -> Bool {
-        guard let graphID = entity.graphID else {
-            throw ActionError.missingGraphScope
-        }
+        let graphID = try DetailDataWriteValidator.validate(
+            field: field,
+            owner: entity
+        )
+        try validateExistingValues(
+            for: field,
+            newType: update.type,
+            graphID: graphID,
+            modelContext: modelContext
+        )
+
+        try Task.checkCancellation()
+        field.name = update.name
+        field.type = update.type
+        field.unit = update.unit
+        field.isPinned = update.isPinned
+        field.setOptions(update.options)
 
         do {
             let batch = try GraphMutationBatchFactory.detailSchemaChanged(
@@ -187,12 +231,18 @@ enum DetailsSchemaActions {
         from source: IndexSet,
         to destination: Int
     ) async throws -> Bool {
-        let original = entity.detailFieldsList
+        let original = entity.authoritativeDetailFieldsList
         guard !source.isEmpty else { return false }
         guard source.allSatisfy({ original.indices.contains($0) }) else { return false }
         guard destination >= 0, destination <= original.count else { return false }
         guard let graphID = entity.graphID else {
             throw ActionError.missingGraphScope
+        }
+        for field in original {
+            _ = try DetailDataWriteValidator.validate(
+                field: field,
+                owner: entity
+            )
         }
 
         var working = original
@@ -233,7 +283,7 @@ enum DetailsSchemaActions {
         modelContext: ModelContext,
         at offsets: IndexSet
     ) async throws -> Bool {
-        let original = entity.detailFieldsList
+        let original = entity.authoritativeDetailFieldsList
         let fieldsToDelete = offsets.compactMap { index in
             original.indices.contains(index) ? original[index] : nil
         }
@@ -250,7 +300,7 @@ enum DetailsSchemaActions {
         from entity: MetaEntity,
         modelContext: ModelContext
     ) async throws -> Bool {
-        guard entity.detailFieldsList.contains(where: { $0.id == field.id }) else {
+        guard entity.authoritativeDetailFieldsList.contains(where: { $0.id == field.id }) else {
             throw ActionError.fieldNotFound
         }
         return try await deleteFields(
@@ -270,6 +320,7 @@ enum DetailsSchemaActions {
         guard let graphID = entity.graphID else {
             throw ActionError.missingGraphScope
         }
+        _ = try DetailDataWriteValidator.validateNewFieldOwner(owner: entity)
 
         try Task.checkCancellation()
 
@@ -284,6 +335,10 @@ enum DetailsSchemaActions {
                 unit: spec.unit,
                 options: spec.options,
                 isPinned: spec.isPinned
+            )
+            _ = try DetailDataWriteValidator.validate(
+                field: field,
+                owner: entity
             )
             modelContext.insert(field)
             entity.addDetailField(field)
@@ -317,15 +372,21 @@ enum DetailsSchemaActions {
             throw ActionError.missingGraphScope
         }
 
-        let original = entity.detailFieldsList
+        let original = entity.authoritativeDetailFieldsList
         let fieldsToDelete = original.filter { uniqueRequestedIDs.contains($0.id) }
         guard !fieldsToDelete.isEmpty else { return false }
+        for field in fieldsToDelete {
+            _ = try DetailDataWriteValidator.validate(
+                field: field,
+                owner: entity
+            )
+        }
 
         try Task.checkCancellation()
 
         let values = try fetchValues(
             graphID: graphID,
-            fieldIDs: Set(fieldsToDelete.map(\.id)),
+            fields: fieldsToDelete,
             modelContext: modelContext
         )
         let deletedValueReferences = values.map { value in
@@ -374,11 +435,16 @@ enum DetailsSchemaActions {
 
     private static func fetchValues(
         graphID: UUID,
-        fieldIDs: Set<UUID>,
+        fields: [MetaDetailFieldDefinition],
         modelContext: ModelContext
     ) throws -> [MetaDetailFieldValue] {
         var valuesByID: [UUID: MetaDetailFieldValue] = [:]
-        let orderedFieldIDs = fieldIDs.sorted { $0.uuidString < $1.uuidString }
+        let fieldsByID = Dictionary(
+            uniqueKeysWithValues: fields.map { ($0.id, $0) }
+        )
+        let orderedFieldIDs = fieldsByID.keys.sorted {
+            $0.uuidString < $1.uuidString
+        }
 
         for fieldID in orderedFieldIDs {
             let requestedFieldID = fieldID
@@ -388,14 +454,17 @@ enum DetailsSchemaActions {
                 }
             )
             for value in try modelContext.fetch(descriptor) {
-                if let valueGraphID = value.graphID,
-                   valueGraphID != graphID
-                {
+                guard let field = fieldsByID[fieldID],
+                      let attribute = value.attribute else {
                     continue
                 }
-                if let ownerGraphID = value.attribute?.graphID,
-                   ownerGraphID != graphID
-                {
+                guard let validatedGraphID = try? DetailDataWriteValidator.validate(
+                        field: field,
+                        attribute: attribute
+                      ),
+                      validatedGraphID == graphID,
+                      value.graphID == graphID,
+                      value.attributeID == attribute.id else {
                     continue
                 }
                 valuesByID[value.id] = value
@@ -403,6 +472,36 @@ enum DetailsSchemaActions {
         }
 
         return Array(valuesByID.values)
+    }
+
+    private static func validateExistingValues(
+        for field: MetaDetailFieldDefinition,
+        newType: DetailFieldType,
+        graphID: UUID,
+        modelContext: ModelContext
+    ) throws {
+        let fieldID = field.id
+        let descriptor = FetchDescriptor<MetaDetailFieldValue>(
+            predicate: #Predicate { value in
+                value.fieldID == fieldID && value.graphID == graphID
+            }
+        )
+        for value in try modelContext.fetch(descriptor) {
+            guard let attribute = value.attribute else {
+                continue
+            }
+            guard let validatedGraphID = try? DetailDataWriteValidator.validate(
+                    field: field,
+                    attribute: attribute
+                  ),
+                  validatedGraphID == graphID else {
+                continue
+            }
+            try DetailDataWriteValidator.validate(
+                storage: DetailDataModelSnapshotMapper.storage(value),
+                fieldType: newType
+            )
+        }
     }
 
     private static func makeUniqueTemplateName(

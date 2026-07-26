@@ -62,7 +62,7 @@ struct DetailsOnboardingSheetView: View {
                 if let id = pendingValueAttributeID {
                     pendingValueAttributeID = nil
                     if let attr = fetchAttribute(id: id), let owner = attr.owner {
-                        let fields = owner.detailFieldsList
+                        let fields = owner.authoritativeDetailFieldsList
                         if let field = fields.first(where: { $0.isPinned }) ?? fields.first {
                             valueRoute = DetailsValueRoute(attribute: attr, field: field)
                         } else {

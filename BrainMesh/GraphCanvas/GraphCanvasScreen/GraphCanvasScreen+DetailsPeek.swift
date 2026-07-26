@@ -99,7 +99,7 @@ extension GraphCanvasScreen {
         guard let sel = selection, sel.kind == .attribute else { return }
         guard let attr = fetchAttribute(id: sel.uuid) else { return }
         guard let owner = attr.owner else { return }
-        guard let field = owner.detailFieldsList.first(where: { $0.id == fieldID }) else { return }
+        guard let field = owner.authoritativeDetailFieldsList.first(where: { $0.id == fieldID }) else { return }
         detailsValueEditRequest = GraphDetailsValueEditRequest(attribute: attr, field: field)
     }
 
@@ -108,7 +108,7 @@ extension GraphCanvasScreen {
     func openDetailsFocusEditor(fieldID: UUID) {
         guard let selection, selection.kind == .entity else { return }
         guard let entity = fetchEntity(id: selection.uuid) else { return }
-        guard let field = entity.detailFieldsList.first(where: { $0.id == fieldID }) else { return }
+        guard let field = entity.authoritativeDetailFieldsList.first(where: { $0.id == fieldID }) else { return }
         guard field.type.supportsGraphDetailsFocus else { return }
 
         detailsFocusEditorRequest = GraphDetailsFocusEditorRequest(
@@ -132,26 +132,20 @@ extension GraphCanvasScreen {
         guard preparedLimit > 0 else { return [] }
         guard let owner = attribute.owner else { return [] }
 
-        let pinnedFields = owner.detailFieldsList
+        let pinnedFields = owner.authoritativeDetailFieldsList
             .filter { $0.isPinned }
             .sorted(by: { $0.sortIndex < $1.sortIndex })
 
         guard !pinnedFields.isEmpty else { return [] }
 
-        // Pre-index values to avoid repeatedly searching `detailValuesList`.
-        var valueByFieldID: [UUID: MetaDetailFieldValue] = [:]
-        for v in attribute.detailValuesList {
-            if valueByFieldID[v.fieldID] == nil {
-                valueByFieldID[v.fieldID] = v
-            }
-        }
-
         var filled: [GraphDetailsPeekChip] = []
         var empty: [GraphDetailsPeekChip] = []
 
         for field in pinnedFields {
-            let value = valueByFieldID[field.id]
-            if let short = DetailsFormatting.shortPillValue(for: field, value: value) {
+            if let short = DetailsFormatting.shortPillValue(
+                for: field,
+                on: attribute
+            ) {
                 filled.append(
                     GraphDetailsPeekChip(
                         fieldID: field.id,
@@ -193,7 +187,7 @@ extension GraphCanvasScreen {
 
 
     func buildEntityFieldsPeekItems(for entity: MetaEntity) -> [GraphEntityFieldPeekItem] {
-        entity.detailFieldsList
+        entity.authoritativeDetailFieldsList
             .map { field in
                 GraphEntityFieldPeekItem(
                     fieldID: field.id,
@@ -217,8 +211,8 @@ extension GraphCanvasScreen {
     }
 
     func buildEntitySummaryChips(for entity: MetaEntity) -> [GraphDetailsPeekChip] {
-        let total = entity.detailFieldsList.count
-        let pinned = entity.detailFieldsList.filter { $0.isPinned }.count
+        let total = entity.authoritativeDetailFieldsList.count
+        let pinned = entity.authoritativeDetailFieldsList.filter { $0.isPinned }.count
 
         return [
             GraphDetailsPeekChip(

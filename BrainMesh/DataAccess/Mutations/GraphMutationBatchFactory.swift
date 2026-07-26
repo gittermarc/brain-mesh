@@ -360,6 +360,44 @@ nonisolated enum GraphMutationBatchFactory {
         )
     }
 
+    static func detailValueConsolidated(
+        graphID: UUID,
+        authoritativeValue: GraphMutationDetailValueReference,
+        deletedValues: [GraphMutationDetailValueReference]
+    ) throws -> GraphMutationBatch {
+        var events = orderedDetailValues(deletedValues).map { value in
+            detailValueEvent(
+                graphID: graphID,
+                kind: .detailValueDeleted,
+                value: value
+            )
+        }
+        events.append(
+            detailValueEvent(
+                graphID: graphID,
+                kind: .detailValueChanged,
+                value: authoritativeValue
+            )
+        )
+        return try batch(graphID: graphID, events: events)
+    }
+
+    static func detailValuesDeleted(
+        graphID: UUID,
+        values: [GraphMutationDetailValueReference]
+    ) throws -> GraphMutationBatch {
+        try batch(
+            graphID: graphID,
+            events: orderedDetailValues(values).map { value in
+                detailValueEvent(
+                    graphID: graphID,
+                    kind: .detailValueDeleted,
+                    value: value
+                )
+            }
+        )
+    }
+
     /// Emits value deletions first, ordered by field ID and then value ID, followed by one schema
     /// event whose definition references are ordered by technical ID.
     static func detailFieldsDeleted(

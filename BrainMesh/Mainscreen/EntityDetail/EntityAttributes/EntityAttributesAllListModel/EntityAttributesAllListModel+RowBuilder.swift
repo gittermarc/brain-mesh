@@ -12,7 +12,7 @@ extension EntityAttributesAllListModel {
     func makeRow(
         attribute: MetaAttribute,
         pinnedFields: [MetaDetailFieldDefinition],
-        pinnedValuesByAttribute: [UUID: [UUID: MetaDetailFieldValue]],
+        pinnedValuesByAttribute: [UUID: [UUID: DetailValuePresentationSnapshot]],
         showPinnedDetails: Bool,
         includeNotesPreview: Bool,
         ownersWithMedia: Set<UUID>
@@ -39,8 +39,11 @@ extension EntityAttributesAllListModel {
         if showPinnedDetails {
             let valuesByField = pinnedValuesByAttribute[attribute.id] ?? [:]
             pinnedChips = pinnedFields.compactMap { field in
-                let value = valuesByField[field.id]
-                guard let short = DetailsFormatting.shortPillValue(for: field, value: value) else { return nil }
+                let snapshot = valuesByField[field.id] ?? .empty
+                guard let short = DetailsFormatting.shortPillValue(
+                    for: field,
+                    snapshot: snapshot
+                ) else { return nil }
 
                 let key = EntityAttributesAllListModel.compactFieldName(field.name)
                 let title = "\(key): \(short)"
@@ -66,7 +69,10 @@ extension EntityAttributesAllListModel {
 
         let valuesByField = pinnedValuesByAttribute[attribute.id] ?? [:]
         for field in pinnedFields {
-            guard let value = DetailsFormatting.displayValue(for: field, value: valuesByField[field.id]) else { continue }
+            guard let value = DetailsFormatting.displayValue(
+                for: field,
+                snapshot: valuesByField[field.id] ?? .empty
+            ) else { continue }
             let combined = "\(field.name) \(value)"
             searchParts.append(BMSearch.fold(combined))
         }
@@ -88,14 +94,17 @@ extension EntityAttributesAllListModel {
     }
 
     static func attributeHasAnyDetails(_ attribute: MetaAttribute) -> Bool {
-        for v in attribute.detailValuesList {
-            if let s = v.stringValue?.trimmingCharacters(in: .whitespacesAndNewlines), !s.isEmpty {
+        guard let owner = attribute.owner else { return false }
+        for field in owner.authoritativeDetailFieldsList {
+            switch DetailsFormatting.presentationSnapshot(
+                for: field,
+                on: attribute
+            ) {
+            case .empty:
+                continue
+            case .value, .conflict:
                 return true
             }
-            if v.intValue != nil { return true }
-            if v.doubleValue != nil { return true }
-            if v.dateValue != nil { return true }
-            if v.boolValue != nil { return true }
         }
         return false
     }

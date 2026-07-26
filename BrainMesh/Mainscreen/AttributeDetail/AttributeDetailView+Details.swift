@@ -98,7 +98,7 @@ extension AttributeDetailView {
         switch section {
         case .detailsFields:
             guard let owner = attribute.owner else { return nil }
-            let n = owner.detailFieldsList.count
+            let n = owner.authoritativeDetailFieldsList.count
             return "\(n) \(n == 1 ? "Feld" : "Felder")"
 
         case .notes:

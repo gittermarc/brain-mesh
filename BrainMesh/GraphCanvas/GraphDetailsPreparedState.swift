@@ -48,19 +48,22 @@ nonisolated struct GraphDetailsPreparedValue: Equatable, Sendable {
     let doubleValue: Double?
     let dateValue: Date?
     let boolValue: Bool?
+    let isAuthoritative: Bool
 
     nonisolated init(
         stringValue: String?,
         intValue: Int?,
         doubleValue: Double?,
         dateValue: Date?,
-        boolValue: Bool?
+        boolValue: Bool?,
+        isAuthoritative: Bool = true
     ) {
         self.stringValue = stringValue
         self.intValue = intValue
         self.doubleValue = doubleValue
         self.dateValue = dateValue
         self.boolValue = boolValue
+        self.isAuthoritative = isAuthoritative
     }
 
     nonisolated init(value: MetaDetailFieldValue) {
@@ -69,6 +72,16 @@ nonisolated struct GraphDetailsPreparedValue: Equatable, Sendable {
         self.doubleValue = value.doubleValue
         self.dateValue = value.dateValue
         self.boolValue = value.boolValue
+        self.isAuthoritative = true
+    }
+
+    nonisolated init(conflict: Bool) {
+        self.stringValue = nil
+        self.intValue = nil
+        self.doubleValue = nil
+        self.dateValue = nil
+        self.boolValue = nil
+        self.isAuthoritative = !conflict
     }
 }
 
@@ -129,7 +142,7 @@ nonisolated struct GraphDetailsPreparedState: Equatable, Sendable {
 
         var fieldsByEntityID: [UUID: [GraphDetailsPreparedField]] = [:]
         for entity in entities where visibleEntityIDs.contains(entity.id) {
-            let fields = entity.detailFieldsList
+            let fields = entity.authoritativeDetailFieldsList
                 .filter { $0.type.supportsGraphDetailsFocus }
                 .map { GraphDetailsPreparedField(field: $0) }
             if !fields.isEmpty {
@@ -143,9 +156,31 @@ nonisolated struct GraphDetailsPreparedState: Equatable, Sendable {
 
                 var valuesByFieldID: [UUID: GraphDetailsPreparedValue] = [:]
                 valuesByFieldID.reserveCapacity(attribute.detailValuesList.count)
-                for value in attribute.detailValuesList {
-                    if valuesByFieldID[value.fieldID] == nil {
-                        valuesByFieldID[value.fieldID] = GraphDetailsPreparedValue(value: value)
+                let fields = owner.authoritativeDetailFieldsList
+                let recordsByFieldID = Dictionary(
+                    grouping: attribute.detailValuesList,
+                    by: \.fieldID
+                )
+                for field in fields {
+                    let records = recordsByFieldID[field.id] ?? []
+                    let resolution = DetailDataModelSnapshotMapper.authority(
+                        field: field,
+                        attribute: attribute,
+                        records: records
+                    )
+                    switch resolution {
+                    case .missing:
+                        break
+                    case .authoritative(let recordID, _, _):
+                        if let value = records.first(where: { $0.id == recordID }) {
+                            valuesByFieldID[field.id] = GraphDetailsPreparedValue(
+                                value: value
+                            )
+                        }
+                    case .conflict, .invalid:
+                        valuesByFieldID[field.id] = GraphDetailsPreparedValue(
+                            conflict: true
+                        )
                     }
                 }
 

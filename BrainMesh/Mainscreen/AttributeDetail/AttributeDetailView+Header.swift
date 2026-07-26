@@ -81,7 +81,7 @@ extension AttributeDetailView {
         var pills: [NodeStatPill] = []
 
         if let owner = attribute.owner {
-            let pinned = owner.detailFieldsList
+            let pinned = owner.authoritativeDetailFieldsList
                 .filter { $0.isPinned }
                 .sorted(by: { $0.sortIndex < $1.sortIndex })
                 .prefix(3)

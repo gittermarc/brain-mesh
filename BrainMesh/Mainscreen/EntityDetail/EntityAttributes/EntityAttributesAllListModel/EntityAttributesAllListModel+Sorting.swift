@@ -84,7 +84,7 @@ extension EntityAttributesAllListModel {
         _ attrs: [MetaAttribute],
         sortSelection: EntityAttributesAllSortSelection,
         pinnedFields: [MetaDetailFieldDefinition],
-        pinnedValuesByAttribute: [UUID: [UUID: MetaDetailFieldValue]]
+        pinnedValuesByAttribute: [UUID: [UUID: DetailValuePresentationSnapshot]]
     ) -> [MetaAttribute] {
         switch sortSelection {
         case .base(let mode):
@@ -112,7 +112,7 @@ extension EntityAttributesAllListModel {
         lhs: MetaAttribute,
         rhs: MetaAttribute,
         direction: EntityAttributesAllSortDirection,
-        pinnedValuesByAttribute: [UUID: [UUID: MetaDetailFieldValue]]
+        pinnedValuesByAttribute: [UUID: [UUID: DetailValuePresentationSnapshot]]
     ) -> Bool {
         let l = pinnedValuesByAttribute[lhs.id]?[field.id]
         let r = pinnedValuesByAttribute[rhs.id]?[field.id]
@@ -134,23 +134,33 @@ extension EntityAttributesAllListModel {
         let isAscending = (direction == .ascending)
         switch field.type {
         case .numberInt:
-            let lv = l?.intValue ?? 0
-            let rv = r?.intValue ?? 0
+            guard case .some(.value(.integer(let lv))) = l,
+                  case .some(.value(.integer(let rv))) = r else {
+                return lhs.nameFolded < rhs.nameFolded
+            }
             if lv != rv { return isAscending ? (lv < rv) : (lv > rv) }
 
         case .numberDouble:
-            let lv = l?.doubleValue ?? 0
-            let rv = r?.doubleValue ?? 0
+            guard case .some(.value(.decimal(let lv))) = l,
+                  case .some(.value(.decimal(let rv))) = r else {
+                return lhs.nameFolded < rhs.nameFolded
+            }
             if lv != rv { return isAscending ? (lv < rv) : (lv > rv) }
 
         case .date:
-            let lv = l?.dateValue ?? .distantPast
-            let rv = r?.dateValue ?? .distantPast
+            guard case .some(.value(.date(let lv))) = l,
+                  case .some(.value(.date(let rv))) = r else {
+                return lhs.nameFolded < rhs.nameFolded
+            }
             if lv != rv { return isAscending ? (lv < rv) : (lv > rv) }
 
         case .toggle:
-            let lv = (l?.boolValue ?? false) ? 1 : 0
-            let rv = (r?.boolValue ?? false) ? 1 : 0
+            guard case .some(.value(.boolean(let leftBoolean))) = l,
+                  case .some(.value(.boolean(let rightBoolean))) = r else {
+                return lhs.nameFolded < rhs.nameFolded
+            }
+            let lv = leftBoolean ? 1 : 0
+            let rv = rightBoolean ? 1 : 0
             if lv != rv { return isAscending ? (lv < rv) : (lv > rv) }
 
         case .singleChoice:
@@ -168,8 +178,14 @@ extension EntityAttributesAllListModel {
         return lhs.nameFolded < rhs.nameFolded
     }
 
-    private static func choiceIndex(field: MetaDetailFieldDefinition, value: MetaDetailFieldValue?) -> Int {
-        let raw = (value?.stringValue ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+    private static func choiceIndex(
+        field: MetaDetailFieldDefinition,
+        value: DetailValuePresentationSnapshot?
+    ) -> Int {
+        guard case .some(.value(.choice(let choice))) = value else {
+            return Int.max
+        }
+        let raw = choice.trimmingCharacters(in: .whitespacesAndNewlines)
         if raw.isEmpty { return Int.max }
 
         if let idx = field.options.firstIndex(of: raw) {
@@ -180,20 +196,28 @@ extension EntityAttributesAllListModel {
         return 10_000
     }
 
-    private static func isMissingValue(field: MetaDetailFieldDefinition, value: MetaDetailFieldValue?) -> Bool {
+    private static func isMissingValue(
+        field: MetaDetailFieldDefinition,
+        value: DetailValuePresentationSnapshot?
+    ) -> Bool {
         guard let value else { return true }
-        switch field.type {
-        case .singleLineText, .multiLineText, .singleChoice:
-            let s = (value.stringValue ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
-            return s.isEmpty
-        case .numberInt:
-            return value.intValue == nil
-        case .numberDouble:
-            return value.doubleValue == nil
-        case .date:
-            return value.dateValue == nil
-        case .toggle:
-            return value.boolValue == nil
+        switch value {
+        case .empty, .conflict:
+            return true
+        case .value(let typedValue):
+            switch (field.type, typedValue) {
+            case (.singleLineText, .text(let text)),
+                 (.multiLineText, .text(let text)),
+                 (.singleChoice, .choice(let text)):
+                return text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            case (.numberInt, .integer),
+                 (.numberDouble, .decimal),
+                 (.date, .date),
+                 (.toggle, .boolean):
+                return false
+            default:
+                return true
+            }
         }
     }
 }

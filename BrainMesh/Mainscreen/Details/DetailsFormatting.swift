@@ -7,43 +7,82 @@
 
 import Foundation
 
+nonisolated enum DetailValuePresentationSnapshot: Hashable, Sendable {
+    case empty
+    case value(DetailTypedValue)
+    case conflict
+}
+
 enum DetailsFormatting {
+    static let conflictDisplayText = "Mehrere Werte – bitte prüfen"
+
+    static func presentationSnapshot(
+        for field: MetaDetailFieldDefinition,
+        on attribute: MetaAttribute
+    ) -> DetailValuePresentationSnapshot {
+        presentationSnapshot(
+            for: field,
+            on: attribute,
+            records: attribute.detailValuesList.filter {
+                $0.fieldID == field.id
+            }
+        )
+    }
+
+    static func presentationSnapshot(
+        for field: MetaDetailFieldDefinition,
+        on attribute: MetaAttribute,
+        records: [MetaDetailFieldValue]
+    ) -> DetailValuePresentationSnapshot {
+        switch DetailDataModelSnapshotMapper.authority(
+            field: field,
+            attribute: attribute,
+            records: records
+        ) {
+        case .missing:
+            return .empty
+        case .authoritative(_, let value, _):
+            return value.isEmpty ? .empty : .value(value)
+        case .conflict, .invalid:
+            return .conflict
+        }
+    }
+
     static func displayValue(
         for field: MetaDetailFieldDefinition,
         on attribute: MetaAttribute
     ) -> String? {
-        let value = attribute.detailValuesList.first(where: { $0.fieldID == field.id })
-        return displayValue(for: field, value: value)
+        displayValue(
+            for: field,
+            snapshot: presentationSnapshot(for: field, on: attribute)
+        )
     }
 
-    /// Like `displayValue(for:on:)`, but takes a pre-fetched value.
-    /// Useful when building list snapshots to avoid touching relationships in SwiftUI render paths.
     static func displayValue(
         for field: MetaDetailFieldDefinition,
-        value: MetaDetailFieldValue?
+        snapshot: DetailValuePresentationSnapshot
     ) -> String? {
-        guard let value else { return nil }
-
-        switch field.type {
-        case .singleLineText, .multiLineText, .singleChoice:
-            let s = (value.stringValue ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
-            return s.isEmpty ? nil : s
-
-        case .numberInt:
-            guard let v = value.intValue else { return nil }
-            return formatNumber(v, unit: field.unit)
-
-        case .numberDouble:
-            guard let v = value.doubleValue else { return nil }
-            return formatNumber(v, unit: field.unit)
-
-        case .date:
-            guard let d = value.dateValue else { return nil }
-            return formatDate(d)
-
-        case .toggle:
-            guard let b = value.boolValue else { return nil }
-            return b ? "Ja" : "Nein"
+        switch snapshot {
+        case .empty:
+            return nil
+        case .conflict:
+            return conflictDisplayText
+        case .value(let value):
+            switch value {
+            case .text(let text), .choice(let text):
+                let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+                return trimmed.isEmpty ? nil : text
+            case .integer(let integer):
+                return formatNumber(integer, unit: field.unit)
+            case .decimal(let decimal):
+                return formatNumber(decimal, unit: field.unit)
+            case .date(let date):
+                return formatDate(date)
+            case .boolean(let boolean):
+                return boolean ? "Ja" : "Nein"
+            case .empty:
+                return nil
+            }
         }
     }
 
@@ -51,16 +90,19 @@ enum DetailsFormatting {
         for field: MetaDetailFieldDefinition,
         on attribute: MetaAttribute
     ) -> String? {
-        let value = attribute.detailValuesList.first(where: { $0.fieldID == field.id })
-        return shortPillValue(for: field, value: value)
+        shortPillValue(
+            for: field,
+            snapshot: presentationSnapshot(for: field, on: attribute)
+        )
     }
 
-    /// Like `shortPillValue(for:on:)`, but takes a pre-fetched value.
     static func shortPillValue(
         for field: MetaDetailFieldDefinition,
-        value: MetaDetailFieldValue?
+        snapshot: DetailValuePresentationSnapshot
     ) -> String? {
-        guard let raw = displayValue(for: field, value: value) else { return nil }
+        guard let raw = displayValue(for: field, snapshot: snapshot) else {
+            return nil
+        }
 
         let maxLen: Int = 22
 

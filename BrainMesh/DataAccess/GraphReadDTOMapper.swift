@@ -93,7 +93,8 @@ nonisolated enum GraphReadDTOMapper {
         _ value: MetaDetailFieldValue,
         scope: GraphScope,
         field: GraphDetailFieldDefinitionDTO?,
-        attribute: GraphAttributeDTO?
+        attribute: GraphAttributeDTO?,
+        authoritativeValue: DetailTypedValue
     ) -> GraphDetailValueDTO {
         GraphDetailValueDTO(
             id: value.id,
@@ -103,43 +104,27 @@ nonisolated enum GraphReadDTOMapper {
             fieldID: value.fieldID,
             fieldName: field?.name,
             fieldTypeRaw: field?.typeRaw,
-            value: detailValuePayload(value, fieldType: field?.type)
+            value: detailValuePayload(authoritativeValue)
         )
     }
 
     private static func detailValuePayload(
-        _ value: MetaDetailFieldValue,
-        fieldType: DetailFieldType?
+        _ value: DetailTypedValue
     ) -> GraphDetailValuePayload {
-        switch fieldType {
-        case .singleLineText, .multiLineText:
-            return value.stringValue.map(GraphDetailValuePayload.text) ?? .empty
-        case .numberInt:
-            return value.intValue.map(GraphDetailValuePayload.integer) ?? .empty
-        case .numberDouble:
-            return value.doubleValue.map(GraphDetailValuePayload.decimal) ?? .empty
-        case .date:
-            return value.dateValue.map(GraphDetailValuePayload.date) ?? .empty
-        case .toggle:
-            return value.boolValue.map(GraphDetailValuePayload.boolean) ?? .empty
-        case .singleChoice:
-            return value.stringValue.map(GraphDetailValuePayload.choice) ?? .empty
-        case .none:
-            if let stringValue = value.stringValue {
-                return .text(stringValue)
-            }
-            if let intValue = value.intValue {
-                return .integer(intValue)
-            }
-            if let doubleValue = value.doubleValue {
-                return .decimal(doubleValue)
-            }
-            if let dateValue = value.dateValue {
-                return .date(dateValue)
-            }
-            if let boolValue = value.boolValue {
-                return .boolean(boolValue)
-            }
+        switch value {
+        case .text(let text):
+            return .text(text)
+        case .integer(let integer):
+            return .integer(integer)
+        case .decimal(let decimal):
+            return .decimal(decimal)
+        case .date(let date):
+            return .date(date)
+        case .boolean(let boolean):
+            return .boolean(boolean)
+        case .choice(let choice):
+            return .choice(choice)
+        case .empty:
             return .empty
         }
     }

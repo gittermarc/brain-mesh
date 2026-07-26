@@ -34,8 +34,8 @@ struct DetailsSchemaSaveTemplateSheet: View {
                 }
 
                 Section {
-                    let total = entity.detailFieldsList.count
-                    let pinned = entity.detailFieldsList.filter { $0.isPinned }.count
+                    let total = entity.authoritativeDetailFieldsList.count
+                    let pinned = entity.authoritativeDetailFieldsList.filter { $0.isPinned }.count
                     LabeledContent("Felder", value: "\(total)")
                     LabeledContent("Pins", value: "\(pinned)")
                 } header: {
@@ -106,6 +106,6 @@ struct DetailsSchemaSaveTemplateSheet: View {
 
     private var isSaveDisabled: Bool {
         let cleaned = name.trimmingCharacters(in: .whitespacesAndNewlines)
-        return cleaned.isEmpty || entity.detailFieldsList.isEmpty
+        return cleaned.isEmpty || entity.authoritativeDetailFieldsList.isEmpty
     }
 }

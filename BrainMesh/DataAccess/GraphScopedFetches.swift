@@ -258,6 +258,23 @@ nonisolated enum GraphScopedFetches {
         )
     }
 
+    static func detailValues(
+        attributeID: UUID,
+        fieldID: UUID,
+        in scope: GraphScope
+    ) -> FetchDescriptor<MetaDetailFieldValue> {
+        let graphID = scope.graphID
+        let ownerID = attributeID
+        let definitionID = fieldID
+        return FetchDescriptor<MetaDetailFieldValue>(
+            predicate: #Predicate<MetaDetailFieldValue> { value in
+                value.graphID == graphID
+                    && value.attributeID == ownerID
+                    && value.fieldID == definitionID
+            }
+        )
+    }
+
     static func detailValue(
         id: UUID,
         in scope: GraphScope

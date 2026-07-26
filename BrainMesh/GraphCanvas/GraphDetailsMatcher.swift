@@ -75,6 +75,7 @@ enum GraphDetailsMatcher {
         guard field.id == rule.fieldID else { return false }
         guard field.type == rule.fieldType else { return false }
         guard field.type.supportsGraphDetailsFocus else { return false }
+        guard value?.isAuthoritative != false else { return false }
 
         switch rule.comparison {
         case .isEmpty:

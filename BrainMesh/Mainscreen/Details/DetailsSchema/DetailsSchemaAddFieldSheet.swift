@@ -138,7 +138,7 @@ struct DetailsAddFieldSheet: View {
         isSaving = true
         defer { isSaving = false }
 
-        let sortIndex = (entity.detailFieldsList.map(\.sortIndex).max() ?? -1) + 1
+        let sortIndex = (entity.authoritativeDetailFieldsList.map(\.sortIndex).max() ?? -1) + 1
         let cleanedUnit = unit.trimmingCharacters(in: .whitespacesAndNewlines)
         let field = MetaDetailFieldDefinition(
             owner: entity,

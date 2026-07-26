@@ -15,7 +15,7 @@ struct DetailsSchemaFieldsList: View {
 
     var body: some View {
         Section {
-            if entity.detailFieldsList.isEmpty {
+            if entity.authoritativeDetailFieldsList.isEmpty {
                 ContentUnavailableView {
                     Label("Keine Felder", systemImage: "list.bullet.rectangle")
                 } description: {
@@ -23,7 +23,7 @@ struct DetailsSchemaFieldsList: View {
                 }
                 .listRowBackground(Color.clear)
             } else {
-                ForEach(entity.detailFieldsList) { field in
+                ForEach(entity.authoritativeDetailFieldsList) { field in
                     Button {
                         onEditField(field)
                     } label: {

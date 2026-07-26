@@ -93,7 +93,7 @@ extension EntityDetailView {
             return "\(n) \(n == 1 ? "Attribut" : "Attribute")"
 
         case .detailsFields:
-            let n = entity.detailFieldsList.count
+            let n = entity.authoritativeDetailFieldsList.count
             return "\(n) \(n == 1 ? "Feld" : "Felder")"
 
         case .notes:

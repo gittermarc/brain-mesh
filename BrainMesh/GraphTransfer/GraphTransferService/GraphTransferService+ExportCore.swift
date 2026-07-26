@@ -40,13 +40,24 @@ extension GraphTransferService {
             attribute.graphID == gid
         }))
 
-        let fieldDefs = try context.fetch(FetchDescriptor<MetaDetailFieldDefinition>(predicate: #Predicate { definition in
+        let fetchedFieldDefs = try context.fetch(FetchDescriptor<MetaDetailFieldDefinition>(predicate: #Predicate { definition in
             definition.graphID == gid
         }))
 
-        let fieldValues = try context.fetch(FetchDescriptor<MetaDetailFieldValue>(predicate: #Predicate { value in
+        let fetchedFieldValues = try context.fetch(FetchDescriptor<MetaDetailFieldValue>(predicate: #Predicate { value in
             value.graphID == gid
         }))
+        let fieldDefs = fetchedFieldDefs.filter { field in
+            let snapshot = DetailDataModelSnapshotMapper.field(field)
+            return snapshot.graphID == graphID
+                && DetailDataIntegrityPolicy.fieldViolations(snapshot).isEmpty
+        }
+        let fieldValues = authoritativeDetailValues(
+            values: fetchedFieldValues,
+            fields: fieldDefs,
+            attributes: attributes,
+            graphID: graphID
+        )
 
         let links = try context.fetch(FetchDescriptor<MetaLink>(predicate: #Predicate { link in
             link.graphID == gid
@@ -160,5 +171,69 @@ extension GraphTransferService {
         )
 
         return GraphTransferCoreExportPayload(graphName: graph.name, exportFile: exportFile)
+    }
+
+    private func authoritativeDetailValues(
+        values: [MetaDetailFieldValue],
+        fields: [MetaDetailFieldDefinition],
+        attributes: [MetaAttribute],
+        graphID: UUID
+    ) -> [MetaDetailFieldValue] {
+        let fieldsByID = Dictionary(grouping: fields, by: \.id)
+        let attributesByID = Dictionary(grouping: attributes, by: \.id)
+        var grouped: [DetailValueAuthorityKey: [MetaDetailFieldValue]] = [:]
+        var fieldByKey: [DetailValueAuthorityKey: MetaDetailFieldDefinition] = [:]
+        var attributeByKey: [DetailValueAuthorityKey: MetaAttribute] = [:]
+
+        for value in values {
+            guard fieldsByID[value.fieldID]?.count == 1,
+                  let field = fieldsByID[value.fieldID]?.first,
+                  attributesByID[value.attributeID]?.count == 1,
+                  let attribute = attributesByID[value.attributeID]?.first,
+                  attribute.graphID == graphID else {
+                continue
+            }
+            let fieldSnapshot = DetailDataModelSnapshotMapper.field(field)
+            let attributeSnapshot = DetailDataModelSnapshotMapper.attribute(attribute)
+            guard let key = DetailDataIntegrityPolicy.key(
+                for: fieldSnapshot,
+                attribute: attributeSnapshot
+            ) else {
+                continue
+            }
+            grouped[key, default: []].append(value)
+            fieldByKey[key] = field
+            attributeByKey[key] = attribute
+        }
+
+        var authoritative: [MetaDetailFieldValue] = []
+        for key in grouped.keys.sorted(by: Self.detailAuthorityKeyOrder) {
+            guard let field = fieldByKey[key],
+                  let attribute = attributeByKey[key] else {
+                continue
+            }
+            let candidates = grouped[key] ?? []
+            let resolution = DetailDataModelSnapshotMapper.authority(
+                field: field,
+                attribute: attribute,
+                records: candidates
+            )
+            guard let recordID = resolution.authoritativeRecordID,
+                  let value = candidates.first(where: { $0.id == recordID }) else {
+                continue
+            }
+            authoritative.append(value)
+        }
+        return authoritative
+    }
+
+    private static func detailAuthorityKeyOrder(
+        _ lhs: DetailValueAuthorityKey,
+        _ rhs: DetailValueAuthorityKey
+    ) -> Bool {
+        if lhs.attributeID != rhs.attributeID {
+            return lhs.attributeID.uuidString < rhs.attributeID.uuidString
+        }
+        return lhs.fieldID.uuidString < rhs.fieldID.uuidString
     }
 }

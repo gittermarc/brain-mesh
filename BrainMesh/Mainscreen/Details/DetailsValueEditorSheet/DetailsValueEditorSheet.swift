@@ -12,7 +12,6 @@ import Foundation
 struct DetailsValueEditorSheet: View {
     @Environment(\.modelContext) var modelContext
     @Environment(\.dismiss) var dismiss
-    @AppStorage(BMAppStorageKeys.activeGraphID) var activeGraphIDString: String = ""
 
     @Bindable var attribute: MetaAttribute
     let field: MetaDetailFieldDefinition

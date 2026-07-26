@@ -23,6 +23,12 @@ extension GraphBootstrap {
         || hasRecords(matching: FetchDescriptor<MetaDetailsTemplate>(predicate: #Predicate<MetaDetailsTemplate> { template in
             template.graphID == nil
         }), using: modelContext)
+        || hasRecords(matching: FetchDescriptor<MetaDetailFieldDefinition>(predicate: #Predicate<MetaDetailFieldDefinition> { field in
+            field.graphID == nil
+        }), using: modelContext)
+        || hasRecords(matching: FetchDescriptor<MetaDetailFieldValue>(predicate: #Predicate<MetaDetailFieldValue> { value in
+            value.graphID == nil
+        }), using: modelContext)
     }
 
     /// Returns true if there are any records with non-empty notes but missing the stored `notesFolded` index.

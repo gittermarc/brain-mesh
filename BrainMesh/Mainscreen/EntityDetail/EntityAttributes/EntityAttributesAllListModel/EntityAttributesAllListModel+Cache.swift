@@ -15,7 +15,7 @@ extension EntityAttributesAllListModel {
         var attributeIDs: [UUID] = []
 
         var pinnedFieldIDs: [UUID] = []
-        var pinnedValuesByAttribute: [UUID: [UUID: MetaDetailFieldValue]] = [:]
+        var pinnedValuesByAttribute: [UUID: [UUID: DetailValuePresentationSnapshot]] = [:]
 
         var ownersWithMedia: Set<UUID> = []
         var rowsByID: [UUID: Row] = [:]

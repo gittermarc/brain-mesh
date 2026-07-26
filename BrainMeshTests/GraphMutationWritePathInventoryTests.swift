@@ -75,6 +75,21 @@ struct GraphMutationWritePathInventoryTests {
             try GraphMutationBatchFactory.detailTemplateCreated(
                 graphID: graphID,
                 templateID: inventoryTestUUID(4)
+            ),
+            try GraphMutationBatchFactory.detailValueConsolidated(
+                graphID: graphID,
+                authoritativeValue: GraphMutationDetailValueReference(
+                    id: inventoryTestUUID(5),
+                    ownerAttributeID: inventoryTestUUID(6),
+                    fieldID: inventoryTestUUID(7)
+                ),
+                deletedValues: [
+                    GraphMutationDetailValueReference(
+                        id: inventoryTestUUID(8),
+                        ownerAttributeID: inventoryTestUUID(6),
+                        fieldID: inventoryTestUUID(7)
+                    )
+                ]
             )
         ]
 
@@ -118,7 +133,7 @@ private enum GraphMutationWritePathInventory {
         precise("details.schema.actions", "BrainMesh/Mainscreen/Details/DetailsSchema/DetailsSchemaActions.swift", "Detail schema apply, reorder and delete", [.detailSchemaChanged, .detailValueDeleted], .pr05A),
         precise("details.schema.add", "BrainMesh/Mainscreen/Details/DetailsSchema/DetailsSchemaAddFieldSheet.swift", "Detail definition creation", [.detailSchemaChanged], .pr05A),
         precise("details.schema.edit", "BrainMesh/Mainscreen/Details/DetailsSchema/DetailsSchemaEditFieldSheet.swift", "Detail definition update", [.detailSchemaChanged], .pr05A),
-        precise("details.value.persistence", "BrainMesh/Mainscreen/Details/DetailsValueEditorSheet/DetailsValueEditorSheet+Persistence.swift", "Detail value upsert and delete", [.detailValueChanged, .detailValueDeleted], .pr05A),
+        precise("details.value.persistence", "BrainMesh/Mainscreen/Details/DetailsValueEditorSheet/DetailValueMutationService.swift", "Validated detail value upsert, conflict consolidation and delete", [.detailValueChanged, .detailValueDeleted], .pr05A),
 
         precise("node.rename.entity", "BrainMesh/Mainscreen/EntityDetail/EntityDetailView+Actions.swift", "Entity rename with denormalized link relabeling", [.entityUpdated, .linkUpdated], .pr05B),
         precise("node.rename.attribute", "BrainMesh/Mainscreen/AttributeDetail/AttributeDetailView+Sheets.swift", "Attribute rename with denormalized link relabeling", [.attributeUpdated, .linkUpdated], .pr05B),

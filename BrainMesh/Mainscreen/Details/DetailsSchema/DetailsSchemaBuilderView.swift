@@ -50,7 +50,7 @@ struct DetailsSchemaBuilderView: View {
 
     var body: some View {
         List {
-            if entity.detailFieldsList.isEmpty {
+            if entity.authoritativeDetailFieldsList.isEmpty {
                 DetailsSchemaTemplatesSection { template in
                     performMutation {
                         _ = try await DetailsSchemaActions.applyTemplate(
@@ -106,7 +106,7 @@ struct DetailsSchemaBuilderView: View {
         .navigationBarTitleDisplayMode(.inline)
         .toolbar {
             ToolbarItemGroup(placement: .topBarTrailing) {
-                if !entity.detailFieldsList.isEmpty {
+                if !entity.authoritativeDetailFieldsList.isEmpty {
                     Button {
                         showSaveTemplateSheet = true
                     } label: {
@@ -123,7 +123,7 @@ struct DetailsSchemaBuilderView: View {
             }
 
             ToolbarItem(placement: .topBarLeading) {
-                if !entity.detailFieldsList.isEmpty {
+                if !entity.authoritativeDetailFieldsList.isEmpty {
                     EditButton()
                 }
             }

@@ -205,36 +205,42 @@ struct GraphReadRepositoryTests {
             type: .singleLineText,
             sortIndex: 0
         )
+        let multilineField = fixtures.makeDetailField(
+            owner: entity,
+            name: "Multiline",
+            type: .multiLineText,
+            sortIndex: 1
+        )
         let intField = fixtures.makeDetailField(
             owner: entity,
             name: "Integer",
             type: .numberInt,
-            sortIndex: 1
+            sortIndex: 2
         )
         let doubleField = fixtures.makeDetailField(
             owner: entity,
             name: "Double",
             type: .numberDouble,
-            sortIndex: 2,
+            sortIndex: 3,
             unit: "kg"
         )
         let dateField = fixtures.makeDetailField(
             owner: entity,
             name: "Date",
             type: .date,
-            sortIndex: 3
+            sortIndex: 4
         )
         let boolField = fixtures.makeDetailField(
             owner: entity,
             name: "Boolean",
             type: .toggle,
-            sortIndex: 4
+            sortIndex: 5
         )
         let choiceField = fixtures.makeDetailField(
             owner: entity,
             name: "Choice",
             type: .singleChoice,
-            sortIndex: 5,
+            sortIndex: 6,
             options: ["Alpha", "Beta"]
         )
 
@@ -242,6 +248,11 @@ struct GraphReadRepositoryTests {
             attribute: attribute,
             field: textField,
             stringValue: "Text Value"
+        )
+        _ = fixtures.makeDetailValue(
+            attribute: attribute,
+            field: multilineField,
+            stringValue: "Line one\nLine two"
         )
         _ = fixtures.makeDetailValue(
             attribute: attribute,
@@ -282,10 +293,14 @@ struct GraphReadRepositoryTests {
         )
         let valuesByFieldID = Dictionary(uniqueKeysWithValues: values.map { ($0.fieldID, $0) })
 
-        #expect(fields.count == 6)
+        #expect(fields.count == 7)
         #expect(fields.first { $0.id == doubleField.id }?.unit == "kg")
         #expect(fields.first { $0.id == choiceField.id }?.options == ["Alpha", "Beta"])
         #expect(valuesByFieldID[textField.id]?.value == .text("Text Value"))
+        #expect(
+            valuesByFieldID[multilineField.id]?.value
+                == .text("Line one\nLine two")
+        )
         #expect(valuesByFieldID[intField.id]?.value == .integer(42))
         #expect(valuesByFieldID[doubleField.id]?.value == .decimal(3.5))
         #expect(valuesByFieldID[dateField.id]?.value == .date(date))

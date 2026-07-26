@@ -96,6 +96,7 @@ struct GraphTransferViewModelLogicTests {
 
         #expect(model.userFacingMessage(for: GraphTransferError.invalidFormat) == "Diese Datei ist keine gültige BrainMesh-.bmgraph-Datei. Wähle bitte einen Struktur-Export aus BrainMesh.")
         #expect(model.userFacingMessage(for: GraphTransferError.unsupportedVersion(found: 99)) == "Diese .bmgraph-Datei wurde mit einer neueren BrainMesh-Version erstellt. Aktualisiere BrainMesh und versuche es danach erneut.")
+        #expect(model.userFacingMessage(for: GraphTransferError.invalidDetailData) == "Die Detaildaten der Importdatei sind nicht eindeutig oder passen nicht zum enthaltenen Graphen. Der Import wurde abgebrochen, damit keine inkonsistenten Daten übernommen werden.")
         #expect(model.userFacingMessage(for: GraphTransferError.graphNotFound(graphID: UUID())) == "Der gewählte Graph wurde nicht gefunden. Wähle einen vorhandenen Graph aus und starte den Export erneut.")
         #expect(model.userFacingMessage(for: GraphTransferError.backupManifestReadFailed(underlying: "missing")) == "Das Full-Backup-Manifest konnte nicht gelesen werden. Wähle ein vollständiges .bmbackup-Paket aus BrainMesh.")
         #expect(model.userFacingMessage(for: GraphTransferError.fullBackupImportNotAvailable) == "Full-Backup-Import ist für diese Datei nicht möglich. Prüfe die Hinweise und wähle bei Bedarf eine andere Datei.")
