@@ -32,6 +32,9 @@ struct GraphChatEndToEndTravelTests {
         let repository = GraphReadRepository(
             container: AnyModelContainer(store.container)
         )
+        let evidenceValidator = GraphEvidenceSourceValidator(
+            repository: repository
+        )
         let schemaService = GraphSchemaService(repository: repository)
         let schema = try await schemaService.makeSnapshot(
             in: GraphScope(graphID: fixture.graph.id)
@@ -78,9 +81,7 @@ struct GraphChatEndToEndTravelTests {
         )
         let expected = try await GraphChatQueryEngine(
             repository: repository,
-            evidenceValidator: GraphEvidenceSourceValidator(
-                repository: repository
-            )
+            evidenceValidator: evidenceValidator
         ).execute(plan)
         #expect(expected.rows.map(\.label) == [
             "Reisen · Paris Neujahr",
@@ -138,6 +139,7 @@ struct GraphChatEndToEndTravelTests {
             provider: provider,
             schemaProvider: schemaService,
             toolRunnerFactory: runtimeFactory,
+            evidenceValidator: evidenceValidator,
             referenceDate: { referenceDate },
             calendar: calendar,
             timeZone: timeZone
