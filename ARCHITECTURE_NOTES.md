@@ -1,0 +1,1324 @@
+# BrainMesh – Architecture Notes
+
+> Detaillierte statische Analyse des bereitgestellten Quellstands. Fakten sind mit konkreten Pfaden belegt; nicht aus dem Archiv ableitbare Punkte sind als **UNKNOWN** markiert.
+
+## 1. Executive Assessment
+
+BrainMesh besitzt bereits mehrere wichtige Schutzlinien:
+
+- SwiftData ist die autoritative Quelle.
+- Normale Graphmutationen werden über eine Save-then-publish-Grenze geführt.
+- Der Suchindex ist rekonstruierbar und erkennt Sequenzlücken.
+- Renderpfade des Canvas sind nach statischen und dynamischen Daten getrennt.
+- Große Graph-Canvas-Loads sind mit Node-/Link-Caps begrenzt.
+- Detail-Medien und Connections besitzen fetch-limitierte Loader.
+- Importfehler werden mit persistenter Cleanup-Logik behandelt.
+- Graph Chat ist read-only, graphgescoped und evidenzgebunden.
+
+Die höchsten Architektur-Risiken liegen trotzdem an drei Systemgrenzen:
+
+1. **SwiftData/CloudKit-Schema und Store-Lifecycle**
+   - kein `VersionedSchema`/`SchemaMigrationPlan`;
+   - Release-Fallback auf einen lokalen Store;
+   - optionale `graphID` und mehrere skalare Fremdschlüssel.
+2. **Abgeleitete Vollgraph-Snapshots**
+   - Search-Rebuild/Reconciliation, Home-Health und Stats laden bei Cache Miss große Datenmengen;
+   - mehrere Schritte materialisieren und sortieren komplette Arrays im Speicher.
+3. **Main-Actor- und Task-Lifecycle**
+   - Canvas-Physics und Dictionary-Publikation laufen auf dem MainActor;
+   - Graph-Chat-State ist komplex und stark taskgetrieben;
+   - Event-Streams sind prozesslokal und standardmäßig unbounded.
+
+## 2. Analyseumfang und Größenprofil
+
+- Produktionscode: ca. 116.442 Swift-Zeilen.
+- Tests: ca. 56.874 Swift-Zeilen.
+- Größte Produktionsbereiche:
+  - `BrainMesh/GraphChat/`: ca. 35.686 Zeilen in 126 Dateien;
+  - `BrainMesh/Mainscreen/`: ca. 23.006 Zeilen in 161 Dateien;
+  - `BrainMesh/GraphCanvas/`: ca. 11.177 Zeilen in 69 Dateien;
+  - `BrainMesh/Search/`: ca. 11.097 Zeilen in 32 Dateien;
+  - `BrainMesh/GraphTransfer/`: ca. 5.462 Zeilen in 45 Dateien;
+  - `BrainMesh/Stats/`: ca. 5.492 Zeilen in 39 Dateien.
+- Die Analyse ist statisch. Ein Xcode-Build und Instruments-Profiling waren in der Analyseumgebung nicht verfügbar.
+- Reale P50/P95-Latenzen und produktive Datenmengen sind **UNKNOWN U7**.
+
+## 3. Big Files List – Top 15 nach Zeilen
+
+| Rang | Zeilen | Pfad | Grober Zweck | Warum riskant |
+|---:|---:|---|---|---|
+| 1 | 1.344 | `BrainMesh/Search/Index/GraphSearchIndexer.swift` | Vollaufbau, Eventkonsum, inkrementelle Mutation, Status | Mehrere Zustandsmaschinen in einem Actor; Full Build hält Source-Snapshot, Dokumente und Manifeste gleichzeitig; Fehler-/Gap-Matrix ist änderungssensitiv |
+| 2 | 1.329 | `BrainMesh/Search/Index/GraphSearchIndexStore+Operations.swift` | SQLite-Suche, CRUD, Transaktionen, Row Mapping | SQL-, Encoding-, Query- und Recovery-Verantwortung gekoppelt; kleine Schemaänderung berührt viele Pfade; hohe Testmatrix |
+| 3 | 1.078 | `BrainMesh/GraphChat/Provider/GraphChatModelToolRuntime.swift` | Ausführung aller sechs Chat-Tools, Budgets, Scope, Evidenz | Read-only-/Scope-Sicherheitsgrenze; Tool-spezifische Logik und Sessionbudget teilen Zustand; Fehler kann Evidenz oder Alias-Auflösung verfälschen |
+| 4 | 935 | `BrainMesh/Search/Index/GraphSearchIndexStore+Schema.swift` | Pfad, Open, PRAGMAs, Schema, Backendwahl, Integritätsprüfung | DDL, Migration, Recovery und potenziell destruktiver Rebuild liegen zusammen; Fehler betrifft gesamten Index-Lifecycle |
+| 5 | 880 | `BrainMesh/Search/Index/GraphSearchIndexReconciler.swift` | Foreground-/On-Demand-Abgleich, Manifest-Diff, Coalescing | Remote-Sync-Korrektheitsgrenze; Full-Snapshot-Kosten; Waiter/Throttle/Coalescing erhöhen Concurrency-Komplexität |
+| 6 | 851 | `BrainMesh/GraphChat/Provider/FoundationModelsGraphChatProvider.swift` | FoundationModels-Schemas, Tool-Adapter, Sessions, Streaming | Framework-Verfügbarkeit, Session-Lifecycle, Cancellation und Error Mapping gekoppelt; Compiler-/OS-Fallbacks ändern viele Zweige |
+| 7 | 834 | `BrainMesh/GraphChat/UI/GraphChatMessageActionController.swift` | Edit, Resend, Regenerate, Feedback, Checkpoints | Viele verzweigte User-Aktionen mit Task-Cancellation; Gefahr inkonsistenter Conversation-/UI-Zustände |
+| 8 | 827 | `BrainMesh/GraphChat/UI/GraphChatViewModel.swift` | UI-State, Lifecycle, Composer, Generation, Navigation | `@MainActor`-State mit breiter Invalidierungsfläche; hohe Abhängigkeit zu Controllern/Coordinators |
+| 9 | 813 | `BrainMesh/GraphChat/Artifacts/GraphChatAnswerArtifacts.swift` | Artifact-Domain, Payloads, Validierung | Viele Domänentypen in einer Datei; Change Amplification und lange Compile-/Review-Fläche |
+| 10 | 812 | `BrainMesh/Search/Index/GraphSearchDocumentBuilder.swift` | Domainquellen → Suchdokumente, Ranking, Evidenz | Muss mit Model, Indexschema und Chat-Evidenz synchron bleiben; Full Build erzeugt viele Zwischenwerte |
+| 11 | 777 | `BrainMesh/GraphChat/Query/GraphQueryPlanValidation.swift` | Query-Normalisierung und semantische Validierung | Korrektheits-/Sicherheitsgrenze für Typen, Operatoren und Scope; viele Kombinationen, schwer vollständig zu überblicken |
+| 12 | 777 | `BrainMesh/GraphChat/Conversation/GraphChatConversationReferenceResolver.swift` | Multi-Turn-Referenzen und Alias-Revalidierung | Ambiguität, gelöschte Nodes und Graphwechsel erzeugen zeitabhängige Edge Cases |
+| 13 | 773 | `BrainMesh/GraphChat/Conversation/GraphChatConversationContext.swift` | Kontext-Snapshot, Budgets, Formatierung | Token-/Größenbudgets und stale References gekoppelt; Änderungen beeinflussen Antwortqualität und Laufzeit |
+| 14 | 762 | `BrainMesh/Search/Index/GraphSearchIndexStore+SourceManifest.swift` | Source-Manifeste, Hashes und Reconcile-Operationen | Atomizität zwischen Dokumenten und Manifesten; große Diff-Schleifen; Schema-/Hash-Drift |
+| 15 | 745 | `BrainMesh/Search/Index/GraphSearchDocument.swift` | Dokument-/Metadatenschema, Hashing, Validierung | Zentrale Cross-Layer-Datenstruktur; Änderungen propagieren in Builder, Store, Queries und Chat |
+
+### Bewertung der Dateigröße
+
+- Größe allein ist kein Fehler.
+- Die Search-Dateien sind riskant, weil sie Persistenz, Recovery und Konsistenz koordinieren.
+- Die Graph-Chat-Dateien sind riskant, weil sie viele Zustandsübergänge und Sicherheitsgrenzen enthalten.
+- Reine Aufteilung in weitere `Type+Concern.swift`-Extensions reduziert die fachliche Kopplung nicht.
+- Bevorzugt werden neue, testbare Typen mit engem Input/Output und klarer Zustandsverantwortung.
+
+## 4. Persistenz-, Sync- und Modellanalyse
+
+### 4.1 Store-Erstellung
+
+Pfad: `BrainMesh/BrainMeshApp.swift`
+
+- Das Schema umfasst acht Typen.
+- Primär wird `ModelConfiguration(schema:cloudKitDatabase: .automatic)` verwendet.
+- CloudKit arbeitet über den privaten Container aus `BrainMesh/BrainMesh.entitlements`.
+- Debug stoppt bei Containerfehlern sofort.
+- Release erstellt bei Containerfehlern einen lokalen ModelContainer.
+- `BrainMesh/Settings/SyncRuntime.swift` zeigt `.cloudKit` oder `.localOnly`.
+
+#### Risiko: zwei mögliche Store-Lebenszyklen
+
+Konkreter Grund:
+
+- CloudKit- und lokaler Fallback werden als getrennte `ModelConfiguration`-Initialisierungen erstellt.
+- Im Code existiert keine explizite Promotion-, Merge- oder Recovery-Operation zwischen beiden Modi.
+- Ein Release-Start im local-only-Modus kann deshalb Daten erzeugen, deren späterer Übergang nicht fachlich definiert ist.
+
+**UNKNOWN U2**: Ob SwiftData beim nächsten CloudKit-fähigen Start denselben Store übernimmt, einen separaten Store öffnet oder eine manuelle Überführung benötigt, ist im Projekt nicht spezifiziert.
+
+Empfehlung:
+
+- Store-Modus und persistente Store-URL explizit protokollieren.
+- Local-only-Fallback als benannten Recovery-Zustand modellieren.
+- Vor Einführung eine Gerätetestmatrix mit iCloud aus/an, App-Neustart und bereits vorhandenen Daten ausführen.
+- Keine automatische Datenkopie implementieren, bevor die tatsächlichen Store-URLs und SwiftData-Semantik verifiziert sind.
+
+### 4.2 Schema und Migration
+
+Belegte Fakten:
+
+- Kein `VersionedSchema`, `SchemaMigrationPlan` oder `MigrationStage` gefunden.
+- Der App-Start baut direkt ein aktuelles `Schema`.
+- App-level Backfills reparieren Daten nach Containeröffnung.
+- `graphID` bleibt auf mehreren Typen optional.
+- Keine `@Attribute(.unique)`-Deklaration gefunden.
+
+Konkrete Risiken:
+
+- Ein inkompatibler Modelwechsel kann vor App-level Backfills bereits beim Containeröffnen scheitern.
+- CloudKit-kompatible Schemaänderungen sind enger als rein lokale SwiftData-Änderungen.
+- App-level Reparaturen besitzen keine explizite Schema-Version als Voraussetzung.
+- Backfills und CloudKit-Remote-Imports können zeitlich überlappen.
+- Ohne Fixture eines alten Stores bleibt die reale Migrationsfähigkeit ungetestet.
+
+**UNKNOWN U1**: Deployed CloudKit-Schema, Development-/Production-Status und Freigabeprozess.
+
+**UNKNOWN U3**: Welche produktiven Vorgängerstores als Migrationsfixtures gelten müssen.
+
+Empfohlene Reihenfolge:
+
+1. Aktuellen Modelstand als `VersionedSchemaV1` einfrieren.
+2. `SchemaMigrationPlan` einführen, selbst wenn die erste Migration leer ist.
+3. Store-Fixtures aus jeder produktiv relevanten Version versionieren.
+4. Backfills mit eigener idempotenter Repair-Version ausstatten.
+5. Erst danach optionale Scopes verschärfen oder Relationships ändern.
+
+### 4.3 Graph Scope und Referenzintegrität
+
+Betroffene Modelle:
+
+- `BrainMesh/Models/MetaEntity.swift`
+- `BrainMesh/Models/MetaAttribute.swift`
+- `BrainMesh/Models/MetaLink.swift`
+- `BrainMesh/Models/DetailsModels.swift`
+- `BrainMesh/Models/MetaDetailsTemplate.swift`
+- `BrainMesh/Attachments/MetaAttachment.swift`
+
+Beobachtung:
+
+- `MetaGraph` besitzt keine Relationship-Sammlung seiner Inhalte.
+- Membership läuft über optionale `graphID`.
+- Link-Endpunkte, Attachment-Owner und mehrere Detailreferenzen sind skalare UUIDs.
+- Integrität wird in `GraphScopedFetches`, Mutation Services und Cleanup-Services erzwungen.
+
+Vorteile:
+
+- CloudKit-freundliche, flache Records.
+- Value-Snapshots können ohne tiefe Objektgraphen erzeugt werden.
+- Import kann IDs explizit remappen.
+- Links bleiben unabhängig von SwiftData-Relationship-Lazy-Loading.
+
+Kosten:
+
+- Cascades decken nicht alle Referenzen ab.
+- Jede Fetch-/Route-Implementierung muss den Scope korrekt hinzufügen.
+- Dedupe/Import muss Kollisionen aktiv verhindern.
+- Denormalisierte Linklabels müssen bei Rename aktualisiert werden.
+- Eine gelöschte Definition kann verwaiste skalare `fieldID`-Werte hinterlassen, falls Cleanup umgangen wird.
+
+Konkreter Hotspot:
+
+- `BrainMesh/Mainscreen/EntitiesHome/EntitiesHomeRoutes.swift` löst ein Ziel über Entity-ID auf, ohne `graphID` in derselben Predicate zu prüfen.
+- IDs sind nicht als unique markiert.
+- Das ist eine Cross-Graph-Correctness-Lücke, auch wenn UUID-Kollisionen regulär selten sind.
+
+Empfehlung:
+
+- Einen `GraphScopedID<T>`-Value-Type für Routes und Services einführen.
+- Ungescopte Fetch-Helper nicht öffentlich anbieten.
+- Debug-Assertions in Mutation Services ergänzen: referenzierte Datensätze müssen denselben `graphID` besitzen.
+- Importtests mit absichtlich kollidierenden UUIDs ergänzen.
+
+### 4.4 Bootstrap und Legacy-Reparatur
+
+Pfade:
+
+- `BrainMesh/AppRoot/AppRootView+Startup.swift`
+- `BrainMesh/Bootstrap/GraphBootstrap+Detection.swift`
+- `BrainMesh/Bootstrap/GraphBootstrap+Repair.swift`
+- `BrainMesh/Bootstrap/GraphBootstrap+Backfill.swift`
+- `BrainMesh/Attachments/AttachmentGraphIDMigration.swift`
+
+Startup:
+
+- wartet auf Loader-Konfiguration;
+- stellt mindestens einen Graphen sicher;
+- migriert Legacy-Scopes für Entity, Attribute, Link und Template;
+- füllt gefaltete Notes-Felder;
+- startet begrenzte Bildhydration;
+- reconciled den Suchindex.
+
+Attachment-Sonderfall:
+
+- `AttachmentGraphIDMigration` repariert nur Attachments eines konkreten Owners.
+- Aufrufe erfolgen u. a. beim Media-All-Load und in Gallery-Aktionen.
+- Vorteil: kleine, owner-lokale Reparatur statt globaler Startblockade.
+- Risiko: ungeöffnete Owner können länger Legacy-Records ohne Scope behalten.
+
+**UNKNOWN U11**: Ob graphweite Export-, Delete-, Stats- und Backup-Pfade ungeöffnete Legacy-Attachments vollständig erfassen.
+
+Refactor-Hebel:
+
+- Einmalige, versionierte Attachment-Scope-Reconciliation als backgroundfähigen, paginierten Job ergänzen.
+- Jobfortschritt pro Migration-Version persistieren.
+- Owner-lokale Reparatur als Defensive Fallback behalten.
+- Vollständigkeit mit orphaned/missing-owner Fixtures testen.
+
+### 4.5 Mutation Boundary
+
+Pfade:
+
+- `BrainMesh/DataAccess/Mutations/GraphMutationCommitter.swift`
+- `BrainMesh/DataAccess/Mutations/GraphMutationEventBus.swift`
+- `BrainMeshTests/GraphMutationWritePathInventoryTests.swift`
+
+Stärken:
+
+- Save erfolgt vor Eventpublikation.
+- Save-Fehler rollt den Kontext zurück.
+- Cancellation unmittelbar vor Save wird respektiert.
+- Nach erfolgreichem Save wird das Invalidierungsereignis publiziert.
+- Batches enthalten keine Nutzinhalte.
+- Ein Testinventar klassifiziert bekannte produktive Schreibpfade.
+
+Bewusste Ausnahmen:
+
+- rekonstruierbares `imagePath`;
+- Security-Metadaten;
+- lokale Canvas-Presets;
+- Import-Checkpoint-Saves mit finalem Full-Rebuild-Event.
+
+Risiken:
+
+- Die Vollständigkeit des Inventars ist manuell.
+- Ein neuer direkter `context.save()` kompiliert ohne Mutation Event.
+- Der Event Bus ist in-memory; Prozessabbruch zwischen Save und Event kann den Event verlieren.
+- CloudKit-Imports erzeugen keine lokalen Events.
+
+Gegenmaßnahmen:
+
+- Reconciliation bleibt die letzte Konsistenzinstanz.
+- CI-Scan für `save()`-Aufrufe außerhalb erlaubter Dateien.
+- Persistente graphweite `mutationRevision` oder Source-Manifest-Version prüfen.
+- Bei Appstart einen billigen Manifest-Header-Vergleich vor vollständigem Reconcile nutzen.
+
+### 4.6 Search Index
+
+Pfade:
+
+- `BrainMesh/Search/Index/GraphSearchIndexStore+Schema.swift`
+- `BrainMesh/Search/Index/GraphSearchIndexStore+Operations.swift`
+- `BrainMesh/Search/Index/GraphSearchIndexer.swift`
+- `BrainMesh/Search/Index/GraphSearchIndexReconciler.swift`
+- `BrainMesh/Search/Index/GraphSearchDocumentBuilder.swift`
+- `BrainMesh/DataAccess/GraphReadRepository.swift`
+
+Speicher:
+
+- SQLite unter `Application Support/BrainMesh/Search/Index/GraphSearchIndex.sqlite`.
+- WAL, Foreign Keys, Busy Timeout, `synchronous=NORMAL`.
+- Indexverzeichnis ist vom Geräte-Backup ausgeschlossen.
+- Schema-/Integritätsfehler lösen Rebuild aus.
+- FTS5 wird genutzt, wenn verfügbar; sonst indexed fallback.
+
+Eventpfad:
+
+1. Fachlicher Save wird committed.
+2. Mutation Batch wird in `GraphMutationEventBus` publiziert.
+3. `GraphSearchIndexer` plant präzise Mutation oder Full Rebuild.
+4. Source-Dokumente und Manifeste werden atomar aktualisiert.
+5. Sequenzlücke führt zu Rebuild.
+
+Remote-Pfad:
+
+1. CloudKit importiert SwiftData-Daten.
+2. Kein lokaler Mutation Batch entsteht.
+3. `GraphSearchIndexReconciler` erzeugt Source-Snapshot und Manifestvergleich.
+4. Viele Änderungen führen zu Full Rebuild; wenige zu atomarem Reconcile.
+
+Hotspot-Grund:
+
+- `GraphReadRepository` lädt graphweit Entities, Attributes, Links, Definitions, Values und Attachment-Metadaten.
+- Der Indexer baut Dokumente/Manifeste als komplette Collections und sortiert sie.
+- `sourceBatchSize` steuert Yield/Progress, streamt aber nicht den Source-Snapshot durch SQLite.
+- Dadurch steigen Peak Memory und Latenz mit der gesamten Graphgröße.
+
+Refactor:
+
+- Staging-Tabellen pro Rebuild verwenden.
+- Sources paginiert laden.
+- Dokumente chunkweise bauen und in einer Staging-Transaktion schreiben.
+- Manifest-Root/Generation erst nach erfolgreichem Abschluss atomar umschalten.
+- Abbruch verwirft Staging-Generation.
+
+### 4.7 Medien
+
+Headerbilder:
+
+- `BrainMesh/ImageStore.swift` hält `NSCache` mit `countLimit = 120`.
+- Diskpfad: `Application Support/BrainMeshImages`.
+- Async Load de-dupliziert In-flight-Requests und lädt off-main.
+- `BrainMesh/ImageHydrator.swift` scannt Entities und Attributes mit `imageData != nil`.
+- Hydration ist pro Launch begrenzt und über einen Limiter serialisiert.
+
+Attachments:
+
+- `MetaAttachment.fileData` nutzt SwiftData External Storage.
+- `BrainMesh/Attachments/AttachmentStore.swift` hält Previewdateien im Application Support.
+- `BrainMesh/Attachments/AttachmentHydrator.swift` materialisiert bei Bedarf.
+- `BrainMesh/Mainscreen/NodeDetailShared/NodeMediaPreviewLoader.swift` lädt Count plus kleine Previewsets off-main.
+- Media-All besitzt Paging.
+
+Risiken:
+
+- Image-Hydration fetcht alle Records mit Bilddaten in zwei unpaginierten Arrays.
+- In den Recordschleifen fehlen explizite Cancellation-Checks.
+- Fehler werden weitgehend ignoriert; der Nutzer sieht nur indirekt fehlende Caches.
+- Bild- und Attachment-Cacheverzeichnisse setzen keine `isExcludedFromBackup`.
+- External Storage plus CloudKit kann bei großen Dateien Sync-Latenz und Quota belasten.
+
+**UNKNOWN U9**: Ob Cachedateien absichtlich Teil des Gerätebackups sind.
+
+**UNKNOWN U7**: Reale maximale Attachmentanzahl, Einzeldateigröße und CloudKit-Transferbudgets.
+
+## 5. Entry Points und Navigation
+
+### 5.1 App Entry
+
+`BrainMesh/BrainMeshApp.swift`:
+
+- `@main` App-Struct;
+- ModelContainer;
+- Appearance/Display/Onboarding/Security/Pro/Router/Chat-Coordinators;
+- iCloud-Accountstatus-Refresh;
+- Loader-Konfiguration.
+
+Architekturhinweis:
+
+- Die Composition Root ist klar sichtbar.
+- Gleichzeitig entstehen viele globale `StateObject`-Abhängigkeiten.
+- Ein neuer globaler Coordinator erweitert App-Init, Environment und Root-Tests.
+
+Refactor-Option:
+
+- `AppEnvironment` in fachliche Gruppen teilen:
+  - `AppNavigationEnvironment`;
+  - `AppSecurityEnvironment`;
+  - `AppChatEnvironment`;
+  - `AppPersistenceEnvironment`.
+- SwiftUI-Environment-Einträge gezielt pro Subtree injizieren.
+
+### 5.2 Root Lifecycle
+
+`BrainMesh/AppRoot/AppRootView.swift` und `BrainMesh/AppRoot/AppRootView+Startup.swift`:
+
+- Startup Task;
+- aktive Graphänderung;
+- Scene-Phase;
+- Entitlementänderung;
+- Onboarding Sheet;
+- Unlock Full-screen Cover.
+
+Risiko:
+
+- Startup, Locking, Hydration und Search-Reconcile teilen Root-Lebensdauer.
+- Reihenfolgefehler können sensible Chatdaten, graphfremde Navigation oder veralteten Index sichtbar lassen.
+
+Schutz:
+
+- Chat-sensitive State wird bei Background/Lock verworfen.
+- Lock besitzt Debounce und Graph-Picker-Grace.
+- Startup wartet auf konfigurierte Loader.
+
+Empfehlung:
+
+- Root-Lifecycle als explizite `AppLifecycleCoordinator`-State Machine testen:
+  - launching;
+  - awaitingServices;
+  - bootstrapping;
+  - ready;
+  - backgroundLocked;
+  - graphSwitching.
+
+### 5.3 Tab- und Stack-Struktur
+
+`BrainMesh/ContentView.swift`:
+
+- Root `TabView` mit `RootTabRouter`.
+- Tabs: Entities, Graph, Chat, Stats, Settings.
+- Jeder große Featurebereich besitzt seinen eigenen `NavigationStack` oder wird in einen gesetzt.
+- Command Center ist global.
+
+Navigationseigentum:
+
+| Flow | Owner |
+|---|---|
+| Tabwechsel | `RootTabRouter` |
+| Global Search/Command Center | `CommandCenterCoordinator` |
+| Entity Home Routes | `EntitiesHomeRoutingCoordinator` |
+| Graph-Jump/Fokus | `GraphJumpCoordinator` |
+| Graph Chat Launch | `GraphChatLaunchCoordinator` |
+| Graph Copilot Inspector | `GraphCopilotWorkspaceCoordinator` |
+| Lock/Unlock | `GraphLockCoordinator` |
+| Systemmodale Zustände | `SystemModalCoordinator` |
+
+Risiko:
+
+- Ein Use Case kann Tabrouter, Feature-Coordinator und Sheet-State gleichzeitig berühren.
+- Stale Route nach Graphwechsel ist ohne graphgescopten Routetyp möglich.
+
+Empfehlung:
+
+- Jede Route trägt `graphID`.
+- Coordinator APIs liefern eine vollständige Navigation-Intent-Struktur.
+- Graphwechsel invalidiert alle featurelokalen Pfade atomar.
+- Navigationstests decken Graphwechsel bei offenem Detail/Sheet ab.
+
+### 5.4 Wichtige Sheets und Flows
+
+- App Root:
+  - Onboarding;
+  - Graph Unlock.
+- Entities:
+  - Graph Picker;
+  - Add Entity;
+  - Display Settings;
+  - Entity-/Attribute-Details.
+- Graph:
+  - Graph Picker;
+  - Focus Node Picker;
+  - Inspector;
+  - Entity-/Attribute-Detail;
+  - Details-Editor;
+  - Result Set;
+  - iPad Copilot Inspector.
+- Chat:
+  - Free Preview;
+  - Paywall;
+  - Tool-/Index-Verfügbarkeitsstatus.
+- Stats:
+  - Health Issue Detail.
+- Settings:
+  - Display;
+  - Pro;
+  - Transfer;
+  - Sync/Wartung;
+  - Guide/Support;
+  - Import Settings.
+
+## 6. Hot Path Analyse
+
+## 6.1 Rendering und Scrolling
+
+### P0/P1: Graph Canvas Physics
+
+Pfade:
+
+- `BrainMesh/GraphCanvas/Physics/GraphPhysicsRuntime.swift`
+- `BrainMesh/GraphCanvas/Physics/GraphPhysicsWorkspace.swift`
+- `BrainMesh/GraphCanvas/GraphCanvasDynamicFrameBuilder.swift`
+- `BrainMesh/GraphCanvas/GraphCanvasView/GraphCanvasView+Physics.swift`
+
+Konkreter Grund:
+
+- `GraphPhysicsRuntime` ist `@MainActor`.
+- Ein `Timer` taktet adaptiv mit 30/20/12 FPS.
+- Physics-Step, Maximum-Delta-Scan und Publish-Koordination liegen im Main-Actor-Runtimepfad.
+- Publish kopiert vollständige Positions- und Velocity-Dictionaries.
+- Der Commit aktualisiert beide Dictionaries in einer Main-Actor-Transaktion.
+- Der Dynamic Frame Builder iteriert Nodes und Edges und baut Screen-Point-Dictionaries neu.
+- Jede veröffentlichte Physics-Änderung kann die SwiftUI-/Canvas-Darstellung invalidieren.
+
+Vorhandene Begrenzung:
+
+- Global Load: maximal 140 Nodes und 800 Links.
+- Adaptive Cadence.
+- Sleep bei stabiler Simulation.
+- Publish-Epsilon und maximale Ticks ohne Commit.
+- statische Renderdaten werden separat gecacht.
+- Minimap-Snapshot ist gedrosselt.
+
+Bewertung:
+
+- Kein ungebremster Graph-Render.
+- Trotzdem ist der MainActor bei aktiver Simulation der dominante Frame-Budget-Kandidat.
+- Instruments muss Tickzeit, Dictionary-Allokationen und Canvas-Body getrennt messen.
+
+Optimierungshebel:
+
+- Physics-Step in einen Actor/Worker mit Value-Workspace verlagern.
+- Nur coalesced Positions-Snapshots zum MainActor publizieren.
+- Velocities nur publizieren, wenn UI/Interaktion sie wirklich benötigt.
+- Stable Node Index statt Dictionary-Rebuild im inneren Loop evaluieren.
+- `ContinuousClock`/display-synchronen Scheduler gegen `Timer` benchmarken.
+- Bestehende Caps als Produktinvariante dokumentieren und testen.
+
+Risiko des Refactors:
+
+- Hoch: Dragging, Wake/Sleep, Fokus und externe Positionsänderungen sind zeitkritisch.
+- Vorher Golden-/Determinismus-Tests und Frame-Signposts ausbauen.
+
+### P1: Entities Home
+
+Pfade:
+
+- `BrainMesh/Mainscreen/EntitiesHome/EntitiesHomeView.swift`
+- `BrainMesh/Mainscreen/EntitiesHome/EntitiesHomeView+Body.swift`
+- `BrainMesh/Mainscreen/EntitiesHome/EntitiesHomeView+Loading.swift`
+- `BrainMesh/Mainscreen/EntitiesHome/EntitiesHomeLoader/EntitiesHomeLoader.swift`
+- `BrainMesh/Mainscreen/EntitiesHome/EntitiesHomeLoader/EntitiesHomeLoader+Counts.swift`
+- `BrainMesh/Mainscreen/EntitiesHome/Cockpit/EntitiesHomeHealthSummaryProvider.swift`
+
+Konkreter Grund:
+
+- Leere Suche lädt alle Entities des aktiven Graphen ohne Paging.
+- Count Cache Miss lädt Attributes und Links und aggregiert im Speicher.
+- Health Cache Miss lädt Entities, Attributes, Links, Fields und Attachment-Metadaten.
+- Query ist zwar 250 ms debounced, breite Indexresultate können aber auf SwiftData-Fallback wechseln.
+- Maximal 500 Indexdokumente werden zurückgegeben; unvollständige Treffer können mehrere SwiftData-Contains-Fetches auslösen.
+
+Vorhandener Schutz:
+
+- Search Debounce.
+- Actor-/Background-Loader.
+- Count-TTL und Mutation-Invalidierung.
+- Lazy SwiftUI-Container.
+- separate Recent-/Health-Komponenten.
+
+Optimierungshebel:
+
+- Cursor-/Offset-Paging für leere Suche.
+- Zentrale `GraphHomeSnapshot`-Berechnung statt unabhängiger Vollfetches.
+- Incremental Aggregate Cache aus Mutation Batches.
+- Begrenzte initiale Health-Zusammenfassung, Details erst on demand.
+- UI-State nach graphgescopter Revision identifizieren.
+
+### P2: Detail- und Medienlisten
+
+Pfade:
+
+- `BrainMesh/Mainscreen/NodeDetailShared/NodeMediaPreviewLoader.swift`
+- `BrainMesh/Mainscreen/NodeDetailShared/NodeConnectionsLoader.swift`
+- `BrainMesh/Attachments/MediaAllLoader.swift`
+- `BrainMesh/PhotoGallery/`
+
+Beobachtung:
+
+- Preview-Loader sind fetch-limitiert und materialisieren kleine Sets.
+- Media-All ist paginiert.
+- Connection Preview ist limitiert.
+
+Resthotspots:
+
+- Thumbnail-/Video-Metadaten können bei schnellem Scroll viele Tasks erzeugen.
+- Cache Miss materialisiert External-Storage-Daten.
+- Full Gallery und große Attachments benötigen Device-Profiling.
+
+Maßnahmen:
+
+- sichtbarkeitsgebundene Cancellation für Thumbnail-/Duration-Tasks;
+- NSCache-Cost-Limits statt nur Count;
+- Dekompression/Thumbnailgröße an tatsächliche Zellgröße koppeln;
+- Prefetch-Fenster begrenzen.
+
+## 6.2 Sync und Storage
+
+### CloudKit-Containerstart
+
+Hotspot-Grund:
+
+- Containererstellung liegt synchron im App-`init`.
+- Debug stoppt hart; Release wechselt Storemodus.
+- Der Modus beeinflusst die gesamte Datenwahrheit der Session.
+
+Maßnahmen:
+
+- Startdauer signposten.
+- Store-URL, Modus und Fehlerklasse content-free loggen.
+- UI für local-only als Recovery-Zustand, nicht nur Statuslabel.
+
+### Foreground Search Reconciliation
+
+Hotspot-Grund:
+
+- Alle 15 Minuten bzw. on demand kann ein graphweiter Source-Snapshot entstehen.
+- Selbst bei unverändertem Graphen werden Daten gelesen und Manifeste berechnet.
+- Viele Änderungen führen ab `max(128, sourceCount / 2)` zum Full Rebuild.
+
+Maßnahmen:
+
+- persistente graphweite Source-Revision;
+- billiger Headervergleich vor Source-Materialisierung;
+- paginiertes Hashing;
+- adaptive Reconciliation abhängig von letzter CloudKit-Importzeit;
+- Work bei Background/Low Power verschieben oder abbrechen.
+
+### Image Hydration
+
+Hotspot-Grund:
+
+- zwei Vollfetches für alle Entity-/Attribute-Bilddaten;
+- potenziell große Binary-Felder;
+- keine Pagination/Cancellation in Recordschleifen;
+- direkte `context.save()`-Ausnahme für `imagePath`.
+
+Maßnahmen:
+
+- nur IDs/Pfade selektieren, soweit SwiftData dies effizient ermöglicht;
+- Batches mit `fetchLimit`/Offset;
+- `Task.checkCancellation()` je Batch;
+- Fortschritt und Fehleranzahl loggen;
+- `imagePath` langfristig vollständig aus dem synchronisierten Modell lösen.
+
+### Transfer Import/Export
+
+Pfade:
+
+- `BrainMesh/GraphTransfer/GraphTransferService/`
+- `BrainMesh/GraphTransfer/Backup/`
+- `BrainMesh/GraphTransfer/GraphTransferService/GraphTransferImportCoordinator+Cleanup.swift`
+
+Hotspot-Grund:
+
+- Vollbackup verarbeitet Binärdaten und Prüfsummen.
+- Import remappt mehrere ID-Tabellen.
+- Checkpoint-Saves alle 500 Datensätze erzeugen einen partiell persistenten Zustand.
+- Fehler-Cleanup muss jeden bereits gespeicherten Typ und lokale Caches entfernen.
+
+Vorhandener Schutz:
+
+- Manifest-/SHA-256-Prüfung;
+- temp package;
+- ID-Remapping;
+- Cancellation/Yield-Strides;
+- Cleanup bei Fehler;
+- finaler Full-Rebuild-Event.
+
+Maßnahmen:
+
+- Operation-ID über Export, Import, Save und Cleanup propagieren.
+- Vorab-Disk-Space- und Paketgrößenprüfung.
+- Import-State persistent markieren, damit Crash-Recovery beim nächsten Start möglich ist.
+- Fault-Injection-Tests nach jedem Checkpoint.
+
+## 6.3 Concurrency
+
+### Default MainActor Isolation
+
+Projektsetting:
+
+- `SWIFT_DEFAULT_ACTOR_ISOLATION = MainActor`.
+- Actor-Loader erstellen kurzlebige `ModelContext`-Instanzen.
+- DTOs sind häufig `Sendable`.
+- `AnyModelContainer` ist `@unchecked Sendable`.
+
+Stärke:
+
+- UI-/Modelzugriffe sind standardmäßig konservativ.
+- Backgroundarbeit ist meist explizit.
+
+Risiko:
+
+- Neue Helper erben MainActor unbemerkt.
+- `Task.detached` plus `@unchecked Sendable` kann Modelobjekte versehentlich über Grenzen tragen.
+- Laufzeitkosten landen leicht wieder auf dem MainActor.
+
+Regel:
+
+- Über Actor-Grenzen nur IDs, primitive Werte und explizite DTOs.
+- `ModelContext` dort erzeugen, wo er benutzt wird.
+- Persistente Modelinstanzen nicht zurück aus Detached Tasks geben.
+
+### Mutation Event Bus
+
+Konkreter Grund:
+
+- Prozesslokale AsyncStreams sind standardmäßig unbounded.
+- Langsame Consumer können Backlog und Speicherwachstum verursachen.
+- Ein Prozessabbruch verliert nicht konsumierte Events.
+
+Option:
+
+- Bounded Buffer mit explizitem Overflow-Signal.
+- Overflow bedeutet nicht „Event still verwerfen“, sondern „Graph invalidieren und Full Rebuild anfordern“.
+- Consumer-Ack ist nicht nötig, wenn Reconciliation die dauerhafte Wahrheit bleibt.
+
+### Graph Chat Tasks
+
+Pfade:
+
+- `BrainMesh/GraphChat/UI/GraphChatViewModel.swift`
+- `BrainMesh/GraphChat/UI/GraphChatGenerationController.swift`
+- `BrainMesh/GraphChat/UI/GraphChatMessageActionController.swift`
+- `BrainMesh/GraphChat/Provider/FoundationModelsGraphChatProvider.swift`
+
+Konkreter Grund:
+
+- Streaming, Provider Session, Tools, Conversation State, Edit/Retry und Feedback haben getrennte Lifetimes.
+- Cancellation muss Provider, Stream und UI-State in definierter Reihenfolge stoppen.
+- Scope-/Lock-/Entitlement-Wechsel invalidieren sensible Sessiondaten.
+- Provider-Cancellation nutzt bewusst einen separaten Task, um vor Streamende anzukommen.
+
+Risiko:
+
+- Doppelte Completion;
+- alte Generation überschreibt neue UI;
+- Session-Ressourcen bleiben nach Scopewechsel;
+- Feedback verweist auf ersetzte Nachricht;
+- Lock löscht nicht alle abgeleiteten Artefakte.
+
+Maßnahmen:
+
+- Generation durch `GenerationID`/State Machine serialisieren.
+- Jede Callback-Publikation prüft aktuelle Generation und Graph Scope.
+- Structured Concurrency bevorzugen; unstrukturierte Tasks in einem Registry-Typ besitzen.
+- Race-Tests für cancel/edit/regenerate/lock/graph-switch.
+
+### Nicht gehaltene Utility Tasks
+
+Beispiel:
+
+- `BrainMesh/Settings/SyncMaintenanceView.swift` startet Cachegrößenarbeit detached.
+
+Risiko:
+
+- View kann verschwinden, bevor Ergebnis zurückkehrt.
+- Stale Result überschreibt neuere Messung.
+
+Maßnahme:
+
+- Task Handle oder `.task(id:)`;
+- Generation Token;
+- Cancellation vor UI-Publikation prüfen.
+
+## 7. Refactor Map
+
+## 7.1 Konkrete Dateisplits
+
+### Search Indexer
+
+Aus:
+
+- `BrainMesh/Search/Index/GraphSearchIndexer.swift`
+
+Nach:
+
+- `GraphSearchIndexCoordinator.swift`
+  - öffentlicher Status, Start/Stop, Eventstream-Lifecycle.
+- `GraphSearchFullRebuildWorker.swift`
+  - paginierter Snapshot → Staging-Generation.
+- `GraphSearchMutationPlanner.swift`
+  - `GraphMutationBatch` → präzise Source-Operationen.
+- `GraphSearchMutationExecutor.swift`
+  - lädt betroffene Sources und schreibt atomar.
+- `GraphSearchIndexGapRecovery.swift`
+  - Sequenzlücken und Overflow → Rebuild.
+
+Nicht nur Extensions:
+
+- Worker erhalten immutable Dependencies.
+- Planner bleibt pure/`nonisolated`.
+- Coordinator besitzt als Einziger mutable Lifecycle-State.
+
+### Search Store
+
+Aus:
+
+- `GraphSearchIndexStore+Schema.swift`
+- `GraphSearchIndexStore+Operations.swift`
+- `GraphSearchIndexStore+SourceManifest.swift`
+
+Nach:
+
+- `GraphSearchDatabaseLifecycle.swift`
+  - URL, Open, PRAGMAs, Quick Check.
+- `GraphSearchSchemaMigrator.swift`
+  - Application ID, Schema-Version, DDL.
+- `GraphSearchRecoveryPolicy.swift`
+  - Rebuild-Entscheidung und Quarantäne.
+- `GraphSearchDocumentRepository.swift`
+  - Document CRUD.
+- `GraphSearchQueryRepository.swift`
+  - FTS/Fallback-Queries.
+- `GraphSearchManifestRepository.swift`
+  - Source-Manifeste.
+- `GraphSearchRowCodec.swift`
+  - bind/decode ohne DB-Lifecycle.
+
+### Graph Chat Tool Runtime
+
+Aus:
+
+- `BrainMesh/GraphChat/Provider/GraphChatModelToolRuntime.swift`
+
+Nach:
+
+- `GraphChatToolSession.swift`
+  - Scope, Gesamtbudget, Aliasregistry.
+- `DescribeGraphSchemaToolHandler.swift`
+- `SearchGraphToolHandler.swift`
+- `QueryDetailValuesToolHandler.swift`
+- `GetNodeToolHandler.swift`
+- `GetNeighborsToolHandler.swift`
+- `GraphStatsToolHandler.swift`
+- `GraphChatEvidenceAssembler.swift`
+- `GraphChatArtifactAssembler.swift`
+
+Invariante:
+
+- Jeder Handler erhält unveränderlichen `GraphChatToolContext`.
+- Scopeprüfung sitzt vor jedem Repositoryzugriff.
+- Gemeinsames Budget wird nur im Sessiontyp mutiert.
+
+### FoundationModels Provider
+
+Aus:
+
+- `BrainMesh/GraphChat/Provider/FoundationModelsGraphChatProvider.swift`
+
+Nach:
+
+- `FoundationModelsAvailability.swift`
+- `FoundationModelsGenerableContracts.swift`
+- `FoundationModelsToolAdapters.swift`
+- `FoundationModelsSessionActor.swift`
+- `FoundationModelsStreamAdapter.swift`
+- `FoundationModelsErrorMapper.swift`
+
+### Chat UI
+
+Aus:
+
+- `BrainMesh/GraphChat/UI/GraphChatViewModel.swift`
+- `BrainMesh/GraphChat/UI/GraphChatMessageActionController.swift`
+
+Nach:
+
+- `GraphChatPresentationState.swift`
+- `GraphChatLifecycleController.swift`
+- `GraphChatComposerController.swift`
+- `GraphChatGenerationStateMachine.swift`
+- `GraphChatEditController.swift`
+- `GraphChatRetryController.swift`
+- `GraphChatFeedbackController.swift`
+
+### Canvas Physics
+
+Aus:
+
+- `BrainMesh/GraphCanvas/Physics/GraphPhysicsRuntime.swift`
+
+Nach:
+
+- `GraphPhysicsSimulationActor.swift`
+  - Step und Workspace off-main.
+- `GraphPhysicsCadenceScheduler.swift`
+  - Zeitplanung/Lifecycle.
+- `GraphPhysicsSnapshotPublisher.swift`
+  - Coalescing und MainActor Commit.
+- `GraphPhysicsExternalStateReconciler.swift`
+  - Drag-/Scope-/Input-Resync.
+
+Voraussetzung:
+
+- Messbare Frame-/Determinismus-Baseline.
+
+## 7.2 Cache- und Index-Ideen
+
+| Cache | Key | Value | Invalidation |
+|---|---|---|---|
+| Home Entity Page | `(graphID, query, sort, cursor, pageSize, revision)` | Entity Summary DTOs | Entity create/update/delete; Graph delete |
+| Home Counts | `(graphID, aggregateRevision)` | Counts pro Entity | Attribute/Link/Entity-Mutation |
+| Health Summary | `(graphID, healthRulesVersion, revision)` | Issues + Scores | Jede healthrelevante Mutation |
+| Media Preview | `(graphID, ownerKind, ownerID, limits, mediaRevision)` | IDs + Counts | Attachment create/update/delete |
+| Detail Schema | `(graphID, entityID, schemaRevision)` | Field Definition DTOs | Detail schema mutation |
+| Canvas Static Snapshot | `(graphID, topologyRevision, focusPlan)` | Labels, Endpoint Map, Draw Edges | Node/Link/Focus-Mutation |
+| Search Manifest Root | `(graphID, sourceRevision)` | Generation + Root Hash | committed Mutation oder Remote-Reconcile |
+| Chat Schema Snapshot | `(graphID, schemaRevision)` | read-only Schema DTO | Detail schema/entity mutation |
+
+Designregeln:
+
+- Cachewerte sind `Sendable`-DTOs, keine SwiftData-Models.
+- Revision gehört in den Key; keine zeitbasierte Korrektheit.
+- TTL ist nur Speicherpolitik, nicht Konsistenzmechanismus.
+- Bei Event-Overflow wird eine ganze Graphrevision invalidiert.
+- Remote CloudKit-Änderungen aktualisieren Revision über Reconciliation.
+
+## 7.3 Vereinheitlichungen
+
+### Repositories und Stores
+
+- Schreibzugriff:
+  - Mutation Service plant fachliche Änderung;
+  - `GraphMutationCommitter` speichert;
+  - post-commit Side Effects reagieren auf Batch.
+- Lesezugriff:
+  - `GraphReadRepository` für graphweite Snapshots;
+  - kleine, fachliche Repositories für Detailabfragen;
+  - keine UI-eigenen ungescopten Fetchdeskriptoren.
+
+### Dependency Injection
+
+- Shared Singletons nur an Composition Root verwenden.
+- Services über Protokolle und immutable Dependencies konstruieren.
+- Feature-Subtrees erhalten einen kleinen Environment-Container.
+- Test doubles pro Boundary, nicht pro konkrete Datei.
+
+### Scope-Typen
+
+- `GraphScopedID<EntityKind>`.
+- `GraphMutationScope`.
+- `GraphRoute`.
+- `GraphSourceID`.
+
+Ziel:
+
+- Ein Aufruf ohne Graph Scope soll möglichst nicht typisieren.
+
+### Fehlerklassen
+
+- `StorageBootstrapError`
+- `GraphScopeIntegrityError`
+- `SearchIndexError`
+- `TransferIntegrityError`
+- `CloudSyncDiagnostic`
+
+Logging darf Fehlerklasse und Operation-ID enthalten, aber keine Nutzinhalte.
+
+## 8. Risiken und Edge Cases
+
+### Datenverlust / Store
+
+- Release-local-only-Fallback erzeugt potenziell einen nicht synchronisierten Datenzweig.
+- Fehlende Schema-Migrationsfixtures können Containerstart nach Update verhindern.
+- App-level Backfill hilft nicht, wenn der Container vorher nicht geöffnet werden kann.
+- Direkte Saves ohne Mutation Event können abgeleitete Zustände stale lassen.
+- Import-Crash nach Checkpoint kann einen partiellen Graph hinterlassen, wenn Startup-Cleanup fehlt.
+
+### Multi-Device / CloudKit
+
+- Prozesslokale Events sehen Remote-Änderungen nicht.
+- Foreground-Reconcile ist eventual, nicht sofort.
+- Gleichzeitige Renames müssen Linklabels/Index auf den finalen Zustand reconciliieren.
+- Delete versus Update kann skalare, verwaiste Referenzen erzeugen.
+- Exakte fachliche Konfliktsemantik ist **UNKNOWN U10**.
+- Kein CKShare-/Collaboration-Code gefunden; der aktuelle Entwurf ist private-DB-zentriert.
+
+### Graph Scope
+
+- Optionale `graphID` erlaubt Legacyzustände in normalen Fetches.
+- ID-only Route kann falschen Graphdatensatz auflösen.
+- Attachment-Migration ist lazy.
+- Import/Dedupe muss ID-Kollisionen und Scopekonsistenz gemeinsam prüfen.
+
+### Medien
+
+- Große `imageData`/`fileData` erhöhen Store-/CloudKit-Last.
+- Local Cache kann fehlen und muss rehydriert werden.
+- Cachedatei kann vorhanden, autoritatives Binary aber defekt oder nil sein.
+- Cache in Gerätebackup kann Backupgröße unnötig erhöhen.
+- Video-Kompression kann bei Background/Low Storage abbrechen.
+
+### Search
+
+- Eventverlust oder -overflow macht Index stale bis Reconcile.
+- Vollrebuild kann bei großem Graph Peak Memory erzeugen.
+- FTS5-Fallback muss semantisch ausreichend ähnlich bleiben.
+- Builder-/Manifest-Schema-Drift kann falsche „unverändert“-Entscheidung erzeugen.
+- Breite Home-Suche kann nach Index-Cap auf SwiftData-Fallback wechseln.
+
+### Canvas
+
+- MainActor-Physics kann Gesten und Animationen blockieren.
+- Scopewechsel während Simulation kann alte Positionen publizieren.
+- Fokus-/Lens-Filter und defensive Endpoint-Fallbacks können Edge-Rendering abweichen lassen.
+- Node-/Link-Caps bedeuten unvollständige Visualisierung großer Graphen; UI muss dies klar kommunizieren.
+
+### Graph Chat
+
+- Generierte Antwort darf keine nicht belegten Node-Referenzen als Fakten präsentieren.
+- Toolbudget kann Teilantworten erzeugen.
+- Alias kann nach Delete/Rename stale sein.
+- Lock/Background muss History, Artifacts und Provider Session vollständig invalidieren.
+- Indexunverfügbarkeit darf nicht als „keine Daten“ interpretiert werden.
+
+### Security
+
+- Graph-Sicherheitsfelder liegen teils auf Graph und Nodes.
+- Security-Saves sind bewusst vom Graph-Content-Event Bus ausgenommen.
+- Änderungen dürfen trotzdem Chat-/Navigation-State sofort invalidieren.
+- Passwortparameter und Migrationspfad müssen bei künftiger Änderung kompatibel bleiben.
+
+### Repository Hygiene
+
+- Außerhalb des App-Ordners existiert `Mainscreen/EntitiesHome/Cockpit/EntitiesHomeRecentNodesLoader.swift`.
+- Die Datei ist byte-identisch zu `BrainMesh/Mainscreen/EntitiesHome/Cockpit/EntitiesHomeRecentNodesLoader.swift`.
+- Sie liegt nicht in der synchronisierten App-Gruppe.
+- `BrainMeshTests/GraphMutationWritePathInventoryTests.swift` markiert drei produktive Dateien als unreferenziertes Legacy:
+  - `BrainMesh/NotesAndPhotoSection.swift`;
+  - `BrainMesh/Mainscreen/NodeLinksSectionView.swift`;
+  - `BrainMesh/GraphPicker/GraphPickerRenameSheet.swift`.
+- **UNKNOWN U8**: Ob diese Dateien bewusst als historische Referenz behalten werden.
+
+## 9. Observability und Debuggability
+
+### Vorhanden
+
+Pfad: `BrainMesh/Observability/BMObservability.swift`
+
+- `Logger`-Kategorien für Load, Expand, Physics, Canvas-Derived-State, Canvas-Static-Render, Search, Mutation Events und Chat.
+- Dauerhelfer.
+- Debug-Signposts für Connections-/Media-Preview-Pfade.
+- Search loggt Open/Rebuild/Reconcile mit Mengen und Dauer.
+- Canvas loggt Physics-/Derived-/Static-Metriken.
+- Graph Chat loggt content-free technische Metriken:
+  - Dauer;
+  - Toolkategorien;
+  - Evidence Count;
+  - Outcome/Error.
+- Settings zeigt Storage-Modus, iCloud-Accountstatus und Cachegrößen.
+
+### Fehlende Signale
+
+- kein expliziter „last successful CloudKit import/export“-Zeitstempel;
+- keine CloudKit-Fehlerhistorie in der App;
+- kein sichtbarer Search-Index-Generation-/Reconcile-Status;
+- keine durchgängige Operation-ID für Transfer;
+- kein Support-Diagnostics-Bundle;
+- keine P50/P95-Metrikbasis für reale große Graphen;
+- kein persistenter Hinweis auf partiellen Import nach Crash.
+
+### Empfohlene technische Events
+
+#### Storage
+
+- `storage.container_open`
+  - mode, duration, result, errorClass, storeIdentityHash.
+- `storage.fallback_entered`
+  - previousMode, reasonClass.
+- `storage.migration`
+  - fromVersion, toVersion, duration, itemCounts, result.
+
+#### CloudKit
+
+- `sync.account_status`
+- `sync.remote_change_observed`
+- `sync.reconciliation_scheduled`
+- `sync.reconciliation_completed`
+- Keine Graphnamen, Notes oder Dateinamen loggen.
+
+#### Search
+
+- current generation;
+- source count;
+- document count;
+- manifest diff count;
+- rebuild reason;
+- peak batch size;
+- time to first result.
+
+#### Canvas
+
+- Tick P50/P95/max;
+- Publish P50/P95;
+- Dictionary copy time;
+- Canvas dynamic-frame time;
+- skipped/fallback edge count;
+- visible node/link count.
+
+#### Transfer
+
+- Operation-ID;
+- Paketversion;
+- Record-/Attachmentanzahl;
+- Byteanzahl;
+- Checkpointnummer;
+- Cleanup Result;
+- Fehlerklasse.
+
+### Reproduktionsmatrix
+
+#### Sync
+
+- Gerät A online → Änderung → Gerät B online.
+- Gerät B offline → parallele Änderung → beide online.
+- Appstart ohne iCloud → lokale Änderung → iCloud wieder an.
+- Delete auf A, Rename auf B.
+- großes Attachment parallel ändern/löschen.
+
+#### Migration
+
+- leerer Store;
+- Store aus jeder produktiven Vorversion;
+- Legacy-Daten mit `graphID == nil`;
+- orphaned Attachment Owner;
+- unterbrochener Backfill;
+- CloudKit-Import während Reconcile.
+
+#### Performance
+
+- 1.000/10.000/100.000 Domainrecords im Store;
+- Canvas jeweils am Cap 140/800;
+- Home leerer Query mit großer Entitymenge;
+- Search Full Rebuild;
+- 500+ Attachments pro Owner;
+- mehrere große External-Storage-Dateien.
+
+Die realistischen Obergrenzen sind **UNKNOWN U7** und müssen produktseitig festgelegt werden.
+
+## 10. Teststrategie
+
+### Bereits stark abgedeckte Bereiche
+
+- Mutation Write Path Inventory.
+- Search Index Store, Indexer, Reconciliation und Dokumentbildung.
+- Graph Transfer, Import und Cleanup.
+- Graph Canvas Physics/Derived State.
+- Graph Chat Provider, Query, Conversation, Tools und UI-Controller.
+
+### Ergänzungen
+
+- echte SwiftData-Migrationstests mit alten Storedateien;
+- CloudKit-Container-Startmatrix auf Gerät;
+- Release-local-only → CloudKit-Recovery;
+- graphgescopte Navigation bei kollidierenden IDs;
+- Lazy Attachment Migration vor Export/Delete/Stats;
+- Event-Bus-Overflow → Full-Rebuild;
+- Crash nach jedem Import-Checkpoint;
+- MainActor Frame-Budget mit XCTest Metrics/OSSignposter;
+- Cache-Backup-Exclusion-Test;
+- Graphwechsel während Chatstream und Physics-Publish.
+
+### CI Guards
+
+- Neue `ModelContext.save()`-Stellen müssen im Inventar klassifiziert sein.
+- Ungescopte Fetches nach `id` in Route-/Service-Dateien melden.
+- Jede neue `@Model`-Property verlangt Migration-/Export-/Search-Checklist.
+- Top-Dateigrößen und Compile-Zeit als Trend reporten, nicht hart blocken.
+- `.xcconfig`/Entitlement-/Container-Identifier-Konsistenz testen.
+
+## 11. Typische Feature-Workflows
+
+### A. Neues indexiertes Feld
+
+- [ ] Model und Migration ergänzen.
+- [ ] Normalisierung/Folded-Semantik definieren.
+- [ ] Mutation Kind für Create/Update/Delete wählen.
+- [ ] Document Builder aktualisieren.
+- [ ] Source Manifest Hash aktualisieren.
+- [ ] Query/Ranking/Evidence prüfen.
+- [ ] Reconcile eines alten Indexes testen.
+- [ ] Graph Transfer und Backupformat prüfen.
+- [ ] Graph Chat Schema/Tools prüfen.
+
+### B. Neue Graphmutation
+
+- [ ] Graph Scope am API-Eingang verlangen.
+- [ ] Fachliche Invarianten vor Mutation prüfen.
+- [ ] Betroffene SwiftData-Records in einem Kontext ändern.
+- [ ] Minimalen `GraphMutationBatch` bauen.
+- [ ] Über Committer speichern.
+- [ ] Post-commit Cache-/Dateisystem-Side-Effects planen.
+- [ ] Save-Fehler und Cancellation testen.
+- [ ] Mutation Inventory ergänzen.
+
+### C. Neuer Loader
+
+- [ ] Konfiguration über `AppLoadersConfigurator`.
+- [ ] `ModelContext` im ausführenden Actor/Task erstellen.
+- [ ] Nur Value-DTOs zurückgeben.
+- [ ] `fetchLimit`/Paging definieren.
+- [ ] Sortierung und Aggregation nicht im SwiftUI-Renderpfad.
+- [ ] Cancellation je Batch prüfen.
+- [ ] Graph Scope und stale-result Token prüfen.
+- [ ] Dauer und Result Count loggen.
+
+### D. Neuer Screen oder Flow
+
+- [ ] besitzenden `NavigationStack` festlegen;
+- [ ] Route enthält `graphID`;
+- [ ] Sheet-/Push-Lifecycle definieren;
+- [ ] Graphwechsel und Lock behandeln;
+- [ ] Task-Handles an View-/Coordinator-Lifetime binden;
+- [ ] Pro-Entitlement und iPad-Layout prüfen;
+- [ ] UI-Test für Einstieg, Abbruch und Rücknavigation.
+
+## 12. Open Questions
+
+- **UNKNOWN U1 – CloudKit Schema**
+  - Welche Development- und Production-Schemas sind deployed?
+  - Wer genehmigt additive/kompatible Änderungen?
+  - Gibt es ein Rollback-/Recovery-Runbook?
+- **UNKNOWN U2 – Local-only Recovery**
+  - Welche Store-URL öffnet SwiftData je Modus?
+  - Wie werden local-only Änderungen später mit CloudKit zusammengeführt?
+  - Muss der Nutzer explizit exportieren/importieren?
+- **UNKNOWN U3 – Migrationsbasis**
+  - Welche Appversionen sind produktiv?
+  - Gibt es anonymisierte oder synthetische Store-Fixtures?
+- **UNKNOWN U4 – APNs Distribution**
+  - Welche `aps-environment` steht nach Signing im finalen Archiv?
+- **UNKNOWN U5 – StoreKit Scheme**
+  - Wird `BrainMesh/BrainMesh Pro.storekit` manuell oder in CI aktiviert?
+- **UNKNOWN U6 – Setup/CI**
+  - Development Team, CloudKit Dashboard, Testaccounts, CI-Schritte und Secret-Injection.
+- **UNKNOWN U7 – Daten- und Performancebudgets**
+  - maximale Entities/Attributes/Links;
+  - maximale Attachmentanzahl/-größe;
+  - Zielgeräte und P95-Latenzen.
+- **UNKNOWN U8 – Legacy-Dateien**
+  - externes exaktes Duplikat und drei im Testinventar als unreferenziert markierte Dateien.
+- **UNKNOWN U9 – Backup Policy**
+  - Sollen `BrainMeshImages` und `BrainMeshAttachments` in Gerätebackups enthalten sein?
+- **UNKNOWN U10 – Konfliktsemantik**
+  - erwartetes Verhalten für Update/Update, Update/Delete und Rename/Linklabel auf mehreren Geräten.
+- **UNKNOWN U11 – Attachment Migration**
+  - Decken Export, Delete, Stats, Search und Backup ungeöffnete Legacy-Attachments mit `graphID == nil` ab?
+
+## 13. First 3 Refactors I would do
+
+### P0.1 – Versionierte Persistenz- und Migrationsgrenze
+
+**Ziel**
+
+- Aktuellen Store als `VersionedSchemaV1` einfrieren.
+- `SchemaMigrationPlan` einführen.
+- Produktive Vorgängerstores als Fixtures testen.
+- `graphID`-Bereinigung versionieren und später kontrolliert verschärfen.
+- Local-only-Fallback als expliziten Recovery-Zustand dokumentieren und instrumentieren.
+
+**Betroffene Dateien**
+
+- `BrainMesh/BrainMeshApp.swift`
+- `BrainMesh/Models/MetaGraph.swift`
+- `BrainMesh/Models/MetaEntity.swift`
+- `BrainMesh/Models/MetaAttribute.swift`
+- `BrainMesh/Models/MetaLink.swift`
+- `BrainMesh/Models/DetailsModels.swift`
+- `BrainMesh/Models/MetaDetailsTemplate.swift`
+- `BrainMesh/Attachments/MetaAttachment.swift`
+- `BrainMesh/Bootstrap/`
+- neue Migration-Fixtures unter `BrainMeshTests/`
+
+**Risiko**
+
+- Hoch: SwiftData-/CloudKit-Schemaänderungen können bestehende Stores unlesbar machen.
+- Deshalb zuerst aktuelle Version abbilden und reale Fixtures testen; keine vorschnelle Non-null-/Relationship-Änderung.
+
+**Erwarteter Nutzen**
+
+- Schutz vor Update-bedingtem Datenverlust.
+- Reproduzierbare Migrationen.
+- Klare Freigabegrenze für Modeländerungen.
+- Grundlage für spätere Scope-Härtung.
+
+### P0.2 – Streaming Search Rebuild und kleinere Index-Komponenten
+
+**Ziel**
+
+- Full Rebuild nicht mehr als vollständige Source-/Document-/Manifest-Collections im Speicher halten.
+- Sources paginiert in Staging-Tabellen schreiben und Generation atomar umschalten.
+- Lifecycle, Planner, Executor, Schema und Row Mapping in testbare Typen trennen.
+
+**Betroffene Dateien**
+
+- `BrainMesh/Search/Index/GraphSearchIndexer.swift`
+- `BrainMesh/Search/Index/GraphSearchIndexStore+Operations.swift`
+- `BrainMesh/Search/Index/GraphSearchIndexStore+Schema.swift`
+- `BrainMesh/Search/Index/GraphSearchIndexStore+SourceManifest.swift`
+- `BrainMesh/Search/Index/GraphSearchIndexReconciler.swift`
+- `BrainMesh/Search/Index/GraphSearchDocumentBuilder.swift`
+- `BrainMesh/DataAccess/GraphReadRepository.swift`
+- zugehörige Search-Tests in `BrainMeshTests/`
+
+**Risiko**
+
+- Mittel bis hoch: Atomizität, Cancellation und Recovery dürfen keinen halbfertigen Index sichtbar machen.
+- Der bestehende Index ist gut getestet; Refactor muss verhaltensgleich in kleinen Schritten erfolgen.
+
+**Erwarteter Nutzen**
+
+- Niedrigerer Peak Memory.
+- Kürzere Foreground-Blockade bei großen Graphen.
+- Besser isolierbare SQL-/Rebuild-Fehler.
+- Kleinere Review- und Testflächen.
+
+### P0.3 – Strikt graphgescopte Identität und Mutation Boundary
+
+**Ziel**
+
+- Routes, Fetches und Services typseitig auf `graphID + id` verpflichten.
+- Direkte Saves/ungescopte Fetches per CI-Guard verhindern.
+- Lazy Attachment-Scope-Migration durch einen versionierten, vollständigen Hintergrundjob ergänzen.
+
+**Betroffene Dateien**
+
+- `BrainMesh/DataAccess/GraphScopedFetches.swift`
+- `BrainMesh/DataAccess/Mutations/GraphMutationCommitter.swift`
+- `BrainMesh/DataAccess/Mutations/GraphMutationEventBus.swift`
+- `BrainMesh/Mainscreen/EntitiesHome/EntitiesHomeRoutes.swift`
+- weitere Link-/Detail-Routen unter `BrainMesh/Mainscreen/`
+- `BrainMesh/Attachments/AttachmentGraphIDMigration.swift`
+- `BrainMesh/GraphTransfer/`
+- `BrainMesh/GraphPicker/`
+- `BrainMeshTests/GraphMutationWritePathInventoryTests.swift`
+
+**Risiko**
+
+- Mittel: Legacyrecords, Import-ID-Remapping und vorhandene Deep Links können betroffen sein.
+- Migration muss idempotent sein und graphübergreifende Fehlzuordnung sichtbar machen statt still zu raten.
+
+**Erwarteter Nutzen**
+
+- Verhindert Cross-Graph-Datenauflösung.
+- Reduziert verwaiste Referenzen und Cache-/Index-Drift.
+- Macht neue Features sicherer, weil fehlender Scope früher auffällt.
+- Vereinfacht spätere CloudKit- und Import-Diagnose.
