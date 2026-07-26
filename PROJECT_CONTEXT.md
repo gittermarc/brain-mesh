@@ -36,6 +36,7 @@ BrainMesh ist eine native SwiftUI-App für iPhone und iPad, in der Nutzer:innen 
 - **Graph Chat**: On-Device-LLM-Flow mit sechs read-only Tools und graphgebundener Evidenz.
 - **Typed Conversation Scope**: Appseitig revalidierte, an Graph, Chat-Scope und Conversation gebundene Auflösung von `CURRENT` und gleichwertigen Conversation-Referenzen; enthält eine konkrete Entity sowie die zulässigen Nodes und wird vor der Query-Ausführung erneut geprüft.
 - **Presentation Firewall**: Turn-gebundene Trust Boundary, die interne Chat-Aliase und technische IDs vor Streaming, finaler UI-Ausgabe und Copy deterministisch auf validierte Anzeigenamen abbildet oder durch eine lokalisierte Ersatzantwort ersetzt.
+- **Bounded Tool Repair**: Request-gebundene, explizit klassifizierte Korrektur eines semantisch ungültigen Modell-Tool-Calls. Der Provider erhält nur validierte Schema-/Scope-Hinweise und genau einen vollständigen Retry; Sicherheits-, Scope-, Repository-, Cancellation- und Budgetfehler bleiben harte Abbrüche.
 - **Pro**: StoreKit-gesteuerte Berechtigung für kostenpflichtige Funktionen.
 
 ## Architecture Map
@@ -90,6 +91,7 @@ BrainMesh ist eine native SwiftUI-App für iPhone und iPad, in der Nutzer:innen 
 - Lokale Medien-Caches → autoritative SwiftData-Binärdaten; Caches dürfen verworfen werden.
 - Graph Chat → read-only Tool Runtime → Search/Repositories; kein Chat-Tool schreibt Graphdaten.
 - Modell-Tool-Call → typisierte Conversation-Scope-Auflösung → Query-Plan-Validierung; ein Modell-Entity-Alias ist bei einer homogenen revalidierten Conversation-Referenz nur ein untrusted Hint.
+- Semantisch repair-fähiger Tool-Call → strukturiertes validiertes Repair-Ergebnis → höchstens ein vollständiger erneuter Tool-Call → unveränderte Validatoren und Tool-Budgets.
 - Modelltext → `GraphChatPresentationFirewall` → Streaming-/Answer-State → UI/Copy; Registry-Einträge stammen ausschließlich aus validierten Schema-, Conversation-, Tool-, Evidence- und Artifact-Strukturen.
 
 ## Folder Map

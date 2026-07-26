@@ -149,6 +149,7 @@ nonisolated struct EvidenceRegisteringFakeToolRunnerFactory: GraphChatModelToolR
         conversationTransaction: GraphChatConversationStateTransaction,
         conversationContext: GraphChatConversationContextSnapshot,
         referenceResolver: GraphChatConversationReferenceResolver,
+        recoveryCoordinator: GraphChatProviderRecoveryCoordinator,
         responseLanguage: GraphChatResponseLanguage,
         referenceDate: Date,
         calendar: Calendar,
@@ -363,6 +364,8 @@ nonisolated enum GraphChatProviderTestSupport {
         responseLanguageSelector: GraphChatResponseLanguageSelector = GraphChatResponseLanguageSelector(fallback: .german),
         artifactRevalidator: any GraphChatAnswerArtifactRevalidating = GraphChatLiveAnswerArtifactRevalidator(),
         evidenceValidator: any GraphEvidenceValidating = PassthroughGraphEvidenceValidator(),
+        observability: any GraphChatObservabilityRecording =
+            NoOpGraphChatObservabilityRecorder(),
         pipelineObserver: GraphChatRequestPipelineObserver = .disabled
     ) -> GraphChatOrchestrator {
         let contexts = graphIDs.map { GraphChatTestSupport.makeSchemaContext(graphID: $0) }
@@ -376,6 +379,7 @@ nonisolated enum GraphChatProviderTestSupport {
             responseLanguageSelector: responseLanguageSelector,
             artifactRevalidator: artifactRevalidator,
             evidenceValidator: evidenceValidator,
+            observability: observability,
             referenceDate: { Date(timeIntervalSince1970: 1_735_732_800) },
             calendar: Calendar(identifier: .gregorian),
             timeZone: TimeZone(identifier: "Europe/Berlin")!,
@@ -411,7 +415,9 @@ extension GraphChatProviderTestSupport {
         provider: any GraphChatModelProvider,
         schemaProvider: any GraphSchemaSnapshotProviding,
         toolRunnerFactory: any GraphChatModelToolRunnerFactory,
-        budgetPolicy: GraphChatToolBudgetPolicy = .default
+        budgetPolicy: GraphChatToolBudgetPolicy = .default,
+        observability: any GraphChatObservabilityRecording =
+            NoOpGraphChatObservabilityRecorder()
     ) -> GraphChatProviderSessionFactory {
         GraphChatProviderSessionFactory(
             provider: provider,
@@ -422,6 +428,7 @@ extension GraphChatProviderTestSupport {
             referenceResolver: GraphChatConversationReferenceResolver(),
             requestBuilder: GraphChatProviderRequestBuilder(),
             errorMapper: GraphChatProviderErrorMapper(),
+            observability: observability,
             referenceDate: { Date(timeIntervalSince1970: 1_735_732_800) },
             calendar: Calendar(identifier: .gregorian),
             timeZone: TimeZone(identifier: "Europe/Berlin")!

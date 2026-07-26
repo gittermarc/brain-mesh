@@ -107,6 +107,7 @@ nonisolated struct GraphChatModelRequest: Hashable, Sendable, Identifiable {
     let responseLanguage: GraphChatResponseLanguage
     let continuationOperation: GraphChatConversationContinuationOperation?
     let contextProfile: GraphChatModelContextProfile
+    let toolRepairContext: GraphChatToolRepairResult?
 
     init(
         id: UUID = UUID(),
@@ -115,7 +116,8 @@ nonisolated struct GraphChatModelRequest: Hashable, Sendable, Identifiable {
         conversationContext: GraphChatConversationContextSnapshot? = nil,
         responseLanguage: GraphChatResponseLanguage = .english,
         continuationOperation: GraphChatConversationContinuationOperation? = nil,
-        contextProfile: GraphChatModelContextProfile = .standard
+        contextProfile: GraphChatModelContextProfile = .standard,
+        toolRepairContext: GraphChatToolRepairResult? = nil
     ) {
         self.id = id
         self.question = question
@@ -124,6 +126,7 @@ nonisolated struct GraphChatModelRequest: Hashable, Sendable, Identifiable {
         self.responseLanguage = responseLanguage
         self.continuationOperation = continuationOperation
         self.contextProfile = contextProfile
+        self.toolRepairContext = toolRepairContext
     }
 }
 

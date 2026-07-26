@@ -52,9 +52,40 @@ nonisolated struct GraphChatRequestMetric: Hashable, Sendable {
     }
 }
 
+nonisolated enum GraphChatToolRepairOutcome: String, CaseIterable, Hashable, Sendable {
+    case offered
+    case succeeded
+    case failed
+    case notAllowed
+    case budgetExhausted
+}
+
+nonisolated struct GraphChatToolRepairMetric: Hashable, Sendable {
+    let outcome: GraphChatToolRepairOutcome
+    let tool: GraphChatToolKind
+    let reason: GraphChatToolRepairReason?
+    let nonRepairableReason: GraphChatToolNonRepairableReason?
+    let contextRetryCount: Int
+
+    init(
+        outcome: GraphChatToolRepairOutcome,
+        tool: GraphChatToolKind,
+        reason: GraphChatToolRepairReason?,
+        nonRepairableReason: GraphChatToolNonRepairableReason? = nil,
+        contextRetryCount: Int
+    ) {
+        self.outcome = outcome
+        self.tool = tool
+        self.reason = reason
+        self.nonRepairableReason = nonRepairableReason
+        self.contextRetryCount = max(0, contextRetryCount)
+    }
+}
+
 nonisolated enum GraphChatObservabilityEvent: Hashable, Sendable {
     case request(GraphChatRequestMetric)
     case availability(GraphChatAvailabilityMetricState)
+    case toolRepair(GraphChatToolRepairMetric)
 }
 
 nonisolated protocol GraphChatObservabilityRecording: Sendable {
@@ -76,6 +107,13 @@ actor GraphChatTechnicalObservabilityRecorder: GraphChatObservabilityRecording {
             let errorCode = metric.errorCode?.rawValue ?? "none"
             BMLog.chat.info(
                 "Request finished outcome=\(metric.outcome.rawValue, privacy: .public) durationMS=\(metric.durationMilliseconds, format: .fixed(precision: 2)) toolCount=\(metric.toolCount) toolTypes=\(toolTypes, privacy: .public) evidenceCount=\(metric.evidenceCount) indexFallback=\(metric.usedIndexFallback) errorCode=\(errorCode, privacy: .public)"
+            )
+        case .toolRepair(let metric):
+            let reason = metric.reason?.rawValue ?? "none"
+            let nonRepairableReason =
+                metric.nonRepairableReason?.rawValue ?? "none"
+            BMLog.chat.info(
+                "Tool repair outcome=\(metric.outcome.rawValue, privacy: .public) tool=\(metric.tool.rawValue, privacy: .public) reason=\(reason, privacy: .public) nonRepairableReason=\(nonRepairableReason, privacy: .public) contextRetryCount=\(metric.contextRetryCount)"
             )
         }
     }

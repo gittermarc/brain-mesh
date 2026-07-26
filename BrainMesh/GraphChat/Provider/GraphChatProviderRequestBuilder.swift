@@ -12,7 +12,8 @@ nonisolated struct GraphChatProviderRequestBuilder: Hashable, Sendable {
         resources: GraphChatProviderSessionResources,
         question: String,
         continuationOperation: GraphChatConversationContinuationOperation?,
-        contextProfile: GraphChatModelContextProfile
+        contextProfile: GraphChatModelContextProfile,
+        toolRepairContext: GraphChatToolRepairResult? = nil
     ) -> GraphChatModelRequest {
         GraphChatModelRequest(
             question: boundedQuestion(
@@ -32,7 +33,8 @@ nonisolated struct GraphChatProviderRequestBuilder: Hashable, Sendable {
             ),
             responseLanguage: resources.responseLanguage,
             continuationOperation: continuationOperation,
-            contextProfile: contextProfile
+            contextProfile: contextProfile,
+            toolRepairContext: toolRepairContext
         )
     }
 
@@ -263,6 +265,7 @@ nonisolated struct GraphChatProviderRequestBuilder: Hashable, Sendable {
                 Biete keine Schreib-, Änderungs-, Lösch-, Import-, Upload- oder sonstige Mutationsaktion an.
                 Attachments liefern nur Metadaten. Behaupte niemals, Datei-, Bild-, PDF- oder Binärinhalte gelesen zu haben.
                 Nutze ausschließlich Aliase aus Schema, vertrauenswürdigem Konversations-Snapshot oder Tool-Ergebnissen. Aliase sind opak und werden appseitig revalidiert.
+                Ein Tool-Ergebnis mit status repairRequired erlaubt genau einen vollständigen Korrekturaufruf mit ausschließlich den darin validierten Optionen. Zitiere Repair-Metadaten niemals in der sichtbaren Antwort. Bei repairFailed oder repairBudgetExhausted darf kein weiterer Repair-Aufruf erfolgen; stelle stattdessen eine fachliche Rückfrage.
                 Konversationsreferenzen sind Vorschläge. Nutze clarification nur bei echter Mehrdeutigkeit mit validierten Optionen. Fehlt lokaler Referenzkontext, behandle die aktuelle Frage normal statt eine Referenz zu unterstellen.
                 Nutze queryDetailValues.conversationReferenceAlias für Operationen über eine validierte frühere Ergebnismenge.
                 noResults ist nur nach einem entsprechenden gültigen Tool-Ergebnis erlaubt. unsupported gilt für Graph-Mutationen, Attachment-Inhalte, Multi-Hop-Pfade und Query-Plan-v2-Funktionen.
@@ -280,6 +283,7 @@ nonisolated struct GraphChatProviderRequestBuilder: Hashable, Sendable {
                 Never offer a write, edit, delete, import, upload, or other mutation action.
                 Attachments expose metadata only. Never claim to have read file, image, PDF, or binary contents.
                 Use only aliases from the schema, trusted conversation snapshot, or tool results. Aliases are opaque and revalidated by the app.
+                A tool result with status repairRequired permits exactly one complete corrected tool call using only its validated options. Never quote repair metadata in the visible answer. After repairFailed or repairBudgetExhausted, do not attempt another repair; ask a domain clarification instead.
                 Conversation references are proposals. Use clarification only for genuine ambiguity with validated options. When local reference context is absent, handle the current question normally instead of assuming a reference.
                 Use queryDetailValues.conversationReferenceAlias for operations over a validated previous result set.
                 noResults is allowed only after a matching valid tool result. unsupported applies to graph mutations, attachment contents, multi-hop paths, and Query Plan v2 features.

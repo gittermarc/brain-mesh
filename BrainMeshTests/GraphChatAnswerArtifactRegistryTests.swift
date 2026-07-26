@@ -294,7 +294,7 @@ struct GraphChatAnswerArtifactRegistryTests {
             withUnsafeCurrentTask { currentTask in
                 currentTask?.cancel()
             }
-            try await context.registry.stage(
+            _ = try await context.registry.stage(
                 fixture.draft(evidenceID: context.evidence.id),
                 transactionID: transactionID,
                 evidenceRegistry: context.evidenceRegistry

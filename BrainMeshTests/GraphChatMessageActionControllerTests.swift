@@ -315,21 +315,25 @@ private final class GraphChatMessageActionControllerHarness {
         messages[index].state = .assistant(state)
     }
 
-    static let readyDecision = GraphChatAccessDecision(
-        route: .ready,
-        canPresentChat: true,
-        canStartGeneration: true,
-        canCancelGeneration: true,
-        usesIndexFallback: false
-    )
+    nonisolated static var readyDecision: GraphChatAccessDecision {
+        GraphChatAccessDecision(
+            route: .ready,
+            canPresentChat: true,
+            canStartGeneration: true,
+            canCancelGeneration: true,
+            usesIndexFallback: false
+        )
+    }
 
-    static let deniedDecision = GraphChatAccessDecision(
-        route: .proRequired,
-        canPresentChat: false,
-        canStartGeneration: false,
-        canCancelGeneration: true,
-        usesIndexFallback: false
-    )
+    nonisolated static var deniedDecision: GraphChatAccessDecision {
+        GraphChatAccessDecision(
+            route: .proRequired,
+            canPresentChat: false,
+            canStartGeneration: false,
+            canCancelGeneration: true,
+            usesIndexFallback: false
+        )
+    }
 }
 
 @Suite("Graph chat message action controller")

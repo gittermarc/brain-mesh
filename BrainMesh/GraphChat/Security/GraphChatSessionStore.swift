@@ -61,7 +61,8 @@ final class GraphChatSessionStore: ObservableObject {
             schemaProvider: schemaProvider,
             toolRunnerFactory: GraphChatModelToolRuntimeFactory(
                 modelContainer: modelContainer
-            )
+            ),
+            observability: observability
         )
         let gate = GraphChatExecutionGate()
 

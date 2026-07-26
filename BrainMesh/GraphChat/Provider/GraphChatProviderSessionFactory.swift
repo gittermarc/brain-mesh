@@ -30,6 +30,7 @@ nonisolated struct GraphChatProviderSessionFactory: Sendable {
     private let referenceResolver: GraphChatConversationReferenceResolver
     private let requestBuilder: GraphChatProviderRequestBuilder
     private let errorMapper: GraphChatProviderErrorMapper
+    private let observability: any GraphChatObservabilityRecording
     private let referenceDate: @Sendable () -> Date
     private let calendar: Calendar
     private let timeZone: TimeZone
@@ -43,6 +44,8 @@ nonisolated struct GraphChatProviderSessionFactory: Sendable {
         referenceResolver: GraphChatConversationReferenceResolver,
         requestBuilder: GraphChatProviderRequestBuilder,
         errorMapper: GraphChatProviderErrorMapper,
+        observability: any GraphChatObservabilityRecording =
+            NoOpGraphChatObservabilityRecorder(),
         referenceDate: @escaping @Sendable () -> Date,
         calendar: Calendar,
         timeZone: TimeZone
@@ -55,6 +58,7 @@ nonisolated struct GraphChatProviderSessionFactory: Sendable {
         self.referenceResolver = referenceResolver
         self.requestBuilder = requestBuilder
         self.errorMapper = errorMapper
+        self.observability = observability
         self.referenceDate = referenceDate
         self.calendar = calendar
         self.timeZone = timeZone
@@ -75,7 +79,11 @@ nonisolated struct GraphChatProviderSessionFactory: Sendable {
             artifactSession: artifactSession,
             conversationBaseState: conversationBaseState,
             conversationContext: conversationContext,
-            responseLanguage: responseLanguage
+            responseLanguage: responseLanguage,
+            toolBudgetPolicy: budgetPolicy(for: .standard),
+            recoveryCoordinator: GraphChatProviderRecoveryCoordinator(
+                observability: observability
+            )
         )
     }
 
@@ -87,6 +95,8 @@ nonisolated struct GraphChatProviderSessionFactory: Sendable {
             sessionID: resources.artifactSessionID,
             registry: resources.artifactRegistry
         )
+        let carriesPendingRepair = await resources.recoveryCoordinator
+            .pendingRepairResult() != nil
         return try await makeSession(
             purpose: .recovery,
             key: resources.key,
@@ -94,7 +104,11 @@ nonisolated struct GraphChatProviderSessionFactory: Sendable {
             artifactSession: artifactSession,
             conversationBaseState: resources.conversationBaseState,
             conversationContext: resources.conversationContext,
-            responseLanguage: resources.responseLanguage
+            responseLanguage: resources.responseLanguage,
+            toolBudgetPolicy: recoveryBudgetPolicy(
+                carriesPendingRepair: carriesPendingRepair
+            ),
+            recoveryCoordinator: resources.recoveryCoordinator
         )
     }
 
@@ -175,6 +189,22 @@ nonisolated struct GraphChatProviderSessionFactory: Sendable {
         }
     }
 
+    private func recoveryBudgetPolicy(
+        carriesPendingRepair: Bool
+    ) -> GraphChatToolBudgetPolicy {
+        let recoveryPolicy = budgetPolicy(for: .recovery)
+        guard carriesPendingRepair else {
+            return recoveryPolicy
+        }
+        return GraphChatToolBudgetPolicy(
+            maximumCalls: recoveryPolicy.maximumCalls,
+            maximumResultCountPerTool:
+                standardToolBudgetPolicy.maximumResultCountPerTool,
+            maximumEvidenceCount:
+                standardToolBudgetPolicy.maximumEvidenceCount
+        )
+    }
+
     private func loadSchema(
         for key: GraphChatOrchestrationScopeKey
     ) async throws -> GraphSchemaContext {
@@ -219,7 +249,9 @@ nonisolated struct GraphChatProviderSessionFactory: Sendable {
         artifactSession: GraphChatArtifactSessionResources,
         conversationBaseState: GraphChatConversationState,
         conversationContext: GraphChatConversationContextSnapshot,
-        responseLanguage: GraphChatResponseLanguage
+        responseLanguage: GraphChatResponseLanguage,
+        toolBudgetPolicy: GraphChatToolBudgetPolicy,
+        recoveryCoordinator: GraphChatProviderRecoveryCoordinator
     ) async throws -> GraphChatProviderSessionResources {
         try Task.checkCancellation()
         guard schemaContext.graphScope == key.graphScope else {
@@ -245,9 +277,7 @@ nonisolated struct GraphChatProviderSessionFactory: Sendable {
             )
         }
 
-        let toolBudget = GraphChatToolBudget(
-            policy: budgetPolicy(for: purpose)
-        )
+        let toolBudget = GraphChatToolBudget(policy: toolBudgetPolicy)
         let evidenceRegistry = GraphChatEvidenceRegistry(scope: key.chatScope)
         let presentationRegistry = GraphChatPresentationRegistry(
             schemaContext: schemaContext,
@@ -271,6 +301,7 @@ nonisolated struct GraphChatProviderSessionFactory: Sendable {
             conversationTransaction: conversationTransaction,
             conversationContext: conversationContext,
             referenceResolver: referenceResolver,
+            recoveryCoordinator: recoveryCoordinator,
             responseLanguage: responseLanguage,
             referenceDate: referenceDate(),
             calendar: calendar,
@@ -324,6 +355,7 @@ nonisolated struct GraphChatProviderSessionFactory: Sendable {
                 conversationContext: conversationContext,
                 responseLanguage: responseLanguage,
                 conversationTransaction: conversationTransaction,
+                recoveryCoordinator: recoveryCoordinator,
                 toolRunner: toolRunner,
                 lifecycle: lifecycle
             )

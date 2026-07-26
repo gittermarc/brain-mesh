@@ -357,7 +357,9 @@ nonisolated struct GraphQueryPlanValidator: Sendable {
             return nil
         }
 
-        guard isOperator(filter.operation, validFor: field.type) else {
+        guard GraphChatQueryOperatorCompatibility
+            .allowedOperators(for: field.type)
+            .contains(filter.operation) else {
             issues.append(
                 issue(
                     .invalidOperator,
@@ -665,7 +667,8 @@ nonisolated struct GraphQueryPlanValidator: Sendable {
             else {
                 return nil
             }
-            guard Self.supportsMinimumMaximum(field.type) else {
+            guard GraphChatQueryOperatorCompatibility
+                .supportsMinimumMaximum(field.type) else {
                 issues.append(
                     issue(
                         .invalidAggregation,
@@ -683,52 +686,6 @@ nonisolated struct GraphQueryPlanValidator: Sendable {
             case .count, .groupCount:
                 return nil
             }
-        }
-    }
-
-    private func isOperator(
-        _ operation: GraphQueryFilterOperator,
-        validFor type: DetailFieldType
-    ) -> Bool {
-        switch type {
-        case .singleLineText, .multiLineText:
-            return [.contains, .equals, .startsWith, .isPresent, .isMissing]
-                .contains(operation)
-        case .numberInt, .numberDouble:
-            return [
-                .equals,
-                .lessThan,
-                .lessThanOrEqual,
-                .greaterThan,
-                .greaterThanOrEqual,
-                .between,
-                .isPresent,
-                .isMissing
-            ].contains(operation)
-        case .date:
-            return [
-                .before,
-                .after,
-                .between,
-                .inYear,
-                .inMonth,
-                .isOverdue,
-                .isPresent,
-                .isMissing
-            ].contains(operation)
-        case .toggle:
-            return [.equals, .isPresent, .isMissing].contains(operation)
-        case .singleChoice:
-            return [.equals, .oneOf, .isPresent, .isMissing].contains(operation)
-        }
-    }
-
-    private static func supportsMinimumMaximum(_ type: DetailFieldType) -> Bool {
-        switch type {
-        case .numberInt, .numberDouble, .date:
-            return true
-        case .singleLineText, .multiLineText, .toggle, .singleChoice:
-            return false
         }
     }
 

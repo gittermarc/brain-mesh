@@ -752,6 +752,27 @@ Bewusste Grenze:
 - Gemischte Entity-Mengen werden im Preflight in eine typisierte, lokalisierte Pending Clarification mit Anzeigenamen und Mengen aufgeteilt. Erst die ausgewählte, erneut revalidierte Entity-Teilmenge darf als `CURRENT` in einen Provider-Turn gelangen.
 - Prompt-Anweisungen bleiben unterstützend, sind aber nicht die Sicherheitsgrenze.
 
+### Request-gebundener Tool-Repair
+
+Pfade:
+
+- `BrainMesh/GraphChat/Provider/GraphChatToolRepair.swift`
+- `BrainMesh/GraphChat/Provider/GraphChatModelToolRuntime.swift`
+- `BrainMesh/GraphChat/Provider/GraphChatProviderContextRetry.swift`
+- `BrainMesh/GraphChat/Provider/GraphChatProviderSessionFactory.swift`
+- `BrainMesh/GraphChat/Observability/GraphChatObservability.swift`
+
+Vertrag:
+
+- Repair-fähig sind ausschließlich klassifizierte semantische Schemafehler wie unbekannte Entity-/Feldnamen, Field-Entity-Mismatches, typinkompatible Operatoren und Konflikte mit einer revalidierten typisierten Conversation-Referenz.
+- Nicht repair-fähige Fehler besitzen eine eigene Taxonomie für Graph-/Scope-Verletzungen, Repository-/Storage-Fehler, Cancellation, Session-/Turn-Mismatch, manipulierte technische IDs, stale Conversation-Referenzen und Sicherheits-/Tool-Budgets.
+- Ein `GraphChatProviderRecoveryCoordinator` gehört zum Nutzerturn und wird bei einem Context-Window-Recovery in die neue Provider-Session übernommen. Er erlaubt höchstens einen Context-Retry und einen Tool-Repair-Versuch innerhalb eines gemeinsamen begrenzten Recovery-Zustands.
+- Führt der Context-Retry einen bereits angebotenen Repair fort, behält die Recovery-Session die ursprünglichen per-Tool Ergebnis- und Evidence-Grenzen bei, damit ein zuvor gültiger vollständiger Tool-Call nicht allein durch den Sessionwechsel scheitert. Der engere Recovery-Call-Cap bleibt erhalten; ohne Pending Repair gilt weiterhin das vollständig komprimierte Recovery-Budget.
+- Das Repair-Ergebnis enthält nur Argumentpfad, erwartete Kategorie beziehungsweise Datentyp, validierte Entity-/Feldkandidaten, typkompatible Operatoren und gegebenenfalls eine ID-freie Darstellung des revalidierten `CURRENT`.
+- Kandidaten stammen ausschließlich aus dem aktuellen `GraphSchemaContext` und werden bei Feldhinweisen auf die ausgewählte beziehungsweise typisiert revalidierte Entity begrenzt. Ähnlichkeit erzeugt nur Hinweise und niemals eine appseitige automatische Auswahl.
+- Der korrigierte Tool-Call durchläuft erneut die vollständige Plan-, Scope-, Repository-, Evidence- und Budgetvalidierung. Ein zweiter semantischer Fehler liefert einen sicheren terminalen Repair-Status; ein weiterer Repair wird nicht angeboten.
+- Repair-Observability protokolliert nur Outcome, Tooltyp, Fehlerklasse und Context-Retry-Zähler; Fragen, Werte, Namen und technische IDs werden nicht geloggt.
+
 ### Nicht gehaltene Utility Tasks
 
 Beispiel:

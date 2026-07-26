@@ -27,6 +27,7 @@ nonisolated struct GraphChatProviderSessionResources: Sendable {
     let conversationContext: GraphChatConversationContextSnapshot
     let responseLanguage: GraphChatResponseLanguage
     let conversationTransaction: GraphChatConversationStateTransaction
+    let recoveryCoordinator: GraphChatProviderRecoveryCoordinator
     let toolRunner: any GraphChatModelToolRunning
     let lifecycle: GraphChatProviderAttemptLifecycle
 }

@@ -220,6 +220,58 @@ struct GraphChatProviderSessionFactoryTests {
     }
 
     @Test
+    func recoveryCarryingPendingRepairPreservesOriginalOutputLimits() async throws {
+        let provider = FakeGraphChatModelProvider()
+        let policy = GraphChatToolBudgetPolicy(
+            maximumCalls: 8,
+            maximumResultCountPerTool: 50,
+            maximumEvidenceCount: 200
+        )
+        let factory = makeFactory(
+            provider: provider,
+            budgetPolicy: policy
+        )
+        let standard = try await GraphChatProviderTestSupport
+            .makeInitialProviderResources(sessionFactory: factory)
+        let repair = GraphChatToolRepairResult(
+            reason: .unknownEntityAlias,
+            argumentPath: "entityAlias",
+            expectedCategory: .entityAlias,
+            expectedDataType: nil,
+            allowedCandidates: [],
+            allowedOperators: [],
+            validatedCurrent: nil
+        )
+        #expect(
+            await standard.recoveryCoordinator.offerRepair(
+                repair,
+                for: .queryDetailValues
+            )
+        )
+        await factory.cleanupFailedAttempt(
+            standard,
+            requestProviderCancellation: false
+        )
+
+        let recovery = try await factory.makeRecoverySession(
+            replacing: standard
+        )
+
+        #expect(
+            await recovery.toolBudget.policyForTesting()
+                == GraphChatToolBudgetPolicy(
+                    maximumCalls: 3,
+                    maximumResultCountPerTool: 50,
+                    maximumEvidenceCount: 200
+                )
+        )
+        await factory.cleanupFailedAttempt(
+            recovery,
+            requestProviderCancellation: false
+        )
+    }
+
+    @Test
     func sessionConfigurationRemainsGraphAndScopeBound() async throws {
         let provider = FakeGraphChatModelProvider()
         let factory = makeFactory(provider: provider)

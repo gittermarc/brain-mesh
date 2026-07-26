@@ -50,11 +50,14 @@ nonisolated struct GraphChatProviderContextRetry: Sendable {
             await onAttemptResources(resources)
             let profile: GraphChatModelContextProfile =
                 retryCount == 0 ? initialProfile : .recovery
+            let toolRepairContext = await resources.recoveryCoordinator
+                .pendingRepairResult()
             let request = requestBuilder.makeRequest(
                 resources: resources,
                 question: question,
                 continuationOperation: continuationOperation,
-                contextProfile: profile
+                contextProfile: profile,
+                toolRepairContext: toolRepairContext
             )
             do {
                 let finalAnswer = try await executor.execute(
@@ -69,8 +72,17 @@ nonisolated struct GraphChatProviderContextRetry: Sendable {
                     request: request
                 )
             } catch let error as GraphChatProviderError
-                where error.code == .contextWindowExceeded && retryCount == 0
+                where error.code == .contextWindowExceeded
+                    && retryCount == 0
             {
+                guard await resources.recoveryCoordinator
+                    .reserveContextRetry() else {
+                    await sessionFactory.cleanupFailedAttempt(
+                        resources,
+                        requestProviderCancellation: false
+                    )
+                    throw error
+                }
                 await sessionFactory.cleanupFailedAttempt(
                     resources,
                     requestProviderCancellation: false

@@ -612,7 +612,12 @@ actor FoundationModelsGraphChatProvider: GraphChatModelProvider {
             )
         } catch let error as LanguageModelSession.ToolCallError {
             if let toolError = error.underlyingError as? GraphChatToolError {
-                continuation.finish(throwing: providerError(from: toolError))
+                continuation.finish(
+                    throwing: providerError(
+                        from: toolError,
+                        language: request.responseLanguage
+                    )
+                )
             } else {
                 continuation.finish(
                     throwing: GraphChatProviderError(
@@ -623,7 +628,10 @@ actor FoundationModelsGraphChatProvider: GraphChatModelProvider {
             }
         } catch let error as GraphChatToolError {
             continuation.finish(
-                throwing: providerError(from: error)
+                throwing: providerError(
+                    from: error,
+                    language: request.responseLanguage
+                )
             )
         } catch let error as GraphChatProviderError {
             continuation.finish(throwing: error)
@@ -670,6 +678,10 @@ actor FoundationModelsGraphChatProvider: GraphChatModelProvider {
                 )
             )
         }
+        if let toolRepairContext = request.toolRepairContext {
+            sections.append(labels.toolRepair)
+            sections.append(toolRepairContext.modelContent)
+        }
         sections.append(labels.userQuestion)
         sections.append(request.question)
         return sections.joined(separator: "\n\n")
@@ -681,6 +693,7 @@ actor FoundationModelsGraphChatProvider: GraphChatModelProvider {
         schemaSnapshot: String,
         conversationSnapshot: String,
         resolvedClarification: String,
+        toolRepair: String,
         userQuestion: String
     ) {
         switch language {
@@ -689,6 +702,7 @@ actor FoundationModelsGraphChatProvider: GraphChatModelProvider {
                 "SCHEMA-SNAPSHOT",
                 "KONVERSATIONS-SNAPSHOT",
                 "AUFGELÖSTE KLÄRUNG",
+                "VALIDIERTER TOOL-REPAIR",
                 "AKTUELLE NUTZERFRAGE"
             )
         case .english:
@@ -696,6 +710,7 @@ actor FoundationModelsGraphChatProvider: GraphChatModelProvider {
                 "SCHEMA SNAPSHOT",
                 "CONVERSATION SNAPSHOT",
                 "RESOLVED CLARIFICATION",
+                "VALIDATED TOOL REPAIR",
                 "CURRENT USER QUESTION"
             )
         }
@@ -784,7 +799,10 @@ actor FoundationModelsGraphChatProvider: GraphChatModelProvider {
         }
     }
 
-    private func providerError(from error: GraphChatToolError) -> GraphChatProviderError {
+    private func providerError(
+        from error: GraphChatToolError,
+        language: GraphChatResponseLanguage
+    ) -> GraphChatProviderError {
         switch error.code {
         case .cancelled:
             return .cancelled()
@@ -793,10 +811,26 @@ actor FoundationModelsGraphChatProvider: GraphChatModelProvider {
                 code: .toolBudgetExceeded,
                 message: "Das kontrollierte Tool-Budget wurde erreicht."
             )
-        case .invalidInput, .graphScopeMismatch, .indexUnavailable, .sourceUnavailable, .unavailable:
+        case .invalidInput:
             return GraphChatProviderError(
                 code: .toolFailure,
-                message: error.message
+                message: language == .german
+                    ? "Der Tool-Aufruf konnte fachlich nicht validiert werden."
+                    : "The tool call could not be validated."
+            )
+        case .graphScopeMismatch:
+            return GraphChatProviderError(
+                code: .toolFailure,
+                message: language == .german
+                    ? "Die Anfrage liegt außerhalb des freigegebenen Chat-Scopes."
+                    : "The request is outside the authorized chat scope."
+            )
+        case .indexUnavailable, .sourceUnavailable, .unavailable:
+            return GraphChatProviderError(
+                code: .toolFailure,
+                message: language == .german
+                    ? "Die Graph-Daten konnten für diese Anfrage nicht sicher gelesen werden."
+                    : "The graph data could not be read safely for this request."
             )
         }
     }

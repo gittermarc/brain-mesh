@@ -81,12 +81,16 @@ nonisolated struct GraphChatModelToolResponse: Hashable, Sendable {
     let content: String
     let evidenceIDs: [GraphEvidenceID]
     let artifactIDs: [GraphChatAnswerArtifactID]
+    let repairResult: GraphChatToolRepairResult?
 
     var artifactID: GraphChatAnswerArtifactID? {
         artifactIDs.first
     }
 
     var modelContent: String {
+        if let repairResult {
+            return repairResult.modelContent
+        }
         guard artifactIDs.isEmpty == false else {
             return content
         }
@@ -102,12 +106,14 @@ nonisolated struct GraphChatModelToolResponse: Hashable, Sendable {
         content: String,
         evidenceIDs: [GraphEvidenceID],
         artifactID: GraphChatAnswerArtifactID? = nil,
-        artifactIDs: [GraphChatAnswerArtifactID] = []
+        artifactIDs: [GraphChatAnswerArtifactID] = [],
+        repairResult: GraphChatToolRepairResult? = nil
     ) {
         self.tool = tool
         self.state = state
         self.content = content
         self.evidenceIDs = evidenceIDs
+        self.repairResult = repairResult
         var seen = Set<GraphChatAnswerArtifactID>()
         let candidateArtifactIDs = artifactIDs + (artifactID.map { [$0] } ?? [])
         self.artifactIDs = candidateArtifactIDs.filter {
@@ -175,6 +181,7 @@ nonisolated protocol GraphChatModelToolRunnerFactory: Sendable {
         conversationTransaction: GraphChatConversationStateTransaction,
         conversationContext: GraphChatConversationContextSnapshot,
         referenceResolver: GraphChatConversationReferenceResolver,
+        recoveryCoordinator: GraphChatProviderRecoveryCoordinator,
         responseLanguage: GraphChatResponseLanguage,
         referenceDate: Date,
         calendar: Calendar,

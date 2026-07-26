@@ -63,6 +63,7 @@ nonisolated struct GraphChatModelToolRuntimeFactory: GraphChatModelToolRunnerFac
         conversationTransaction: GraphChatConversationStateTransaction,
         conversationContext: GraphChatConversationContextSnapshot,
         referenceResolver: GraphChatConversationReferenceResolver,
+        recoveryCoordinator: GraphChatProviderRecoveryCoordinator,
         responseLanguage: GraphChatResponseLanguage,
         referenceDate: Date,
         calendar: Calendar,
@@ -79,6 +80,7 @@ nonisolated struct GraphChatModelToolRuntimeFactory: GraphChatModelToolRunnerFac
             conversationTransaction: conversationTransaction,
             conversationContext: conversationContext,
             referenceResolver: referenceResolver,
+            recoveryCoordinator: recoveryCoordinator,
             responseLanguage: responseLanguage,
             outputBudget: outputBudget,
             validator: GraphQueryPlanValidator(
@@ -105,6 +107,7 @@ actor GraphChatModelToolRuntime: GraphChatModelToolRunning {
     private struct ResolvedQueryTarget: Sendable {
         let entity: GraphSchemaEntityResolution
         let scope: GraphChatScope
+        let validatedCurrent: GraphChatToolRepairCurrentContext?
     }
 
     private let scope: GraphChatScope
@@ -117,6 +120,7 @@ actor GraphChatModelToolRuntime: GraphChatModelToolRunning {
     private let conversationTransaction: GraphChatConversationStateTransaction
     private let conversationContext: GraphChatConversationContextSnapshot
     private let referenceResolver: GraphChatConversationReferenceResolver
+    private let recoveryCoordinator: GraphChatProviderRecoveryCoordinator
     private let responseLanguage: GraphChatResponseLanguage
     private let outputBudget: GraphChatModelToolOutputBudget
     private let validator: GraphQueryPlanValidator
@@ -126,6 +130,7 @@ actor GraphChatModelToolRuntime: GraphChatModelToolRunning {
     private let getNodeTool: GetNodeTool
     private let getNeighborsTool: GetNeighborsTool
     private let graphStatsTool: GraphStatsTool
+    private let repairHintBuilder: GraphChatToolRepairHintBuilder
 
     private var nodeByAlias: [String: NodeRefKey]
     private var aliasByNode: [NodeRefKey: String]
@@ -142,6 +147,7 @@ actor GraphChatModelToolRuntime: GraphChatModelToolRunning {
         conversationTransaction: GraphChatConversationStateTransaction,
         conversationContext: GraphChatConversationContextSnapshot,
         referenceResolver: GraphChatConversationReferenceResolver,
+        recoveryCoordinator: GraphChatProviderRecoveryCoordinator,
         responseLanguage: GraphChatResponseLanguage,
         outputBudget: GraphChatModelToolOutputBudget = .default,
         validator: GraphQueryPlanValidator,
@@ -162,6 +168,7 @@ actor GraphChatModelToolRuntime: GraphChatModelToolRunning {
         self.conversationTransaction = conversationTransaction
         self.conversationContext = conversationContext
         self.referenceResolver = referenceResolver
+        self.recoveryCoordinator = recoveryCoordinator
         self.responseLanguage = responseLanguage
         self.outputBudget = outputBudget
         self.validator = validator
@@ -171,6 +178,10 @@ actor GraphChatModelToolRuntime: GraphChatModelToolRunning {
         self.getNodeTool = getNodeTool
         self.getNeighborsTool = getNeighborsTool
         self.graphStatsTool = graphStatsTool
+        self.repairHintBuilder = GraphChatToolRepairHintBuilder(
+            schemaContext: schemaContext,
+            scope: scope
+        )
 
         var initialNodeByAlias: [String: NodeRefKey] = [:]
         var initialAliasByNode: [NodeRefKey: String] = [:]
@@ -193,20 +204,150 @@ actor GraphChatModelToolRuntime: GraphChatModelToolRunning {
         _ request: GraphChatModelToolRequest
     ) async throws -> GraphChatModelToolResponse {
         try Task.checkCancellation()
+        let isRepairAttempt =
+            await recoveryCoordinator.beginRepairAttempt(
+                for: request.kind
+            ) != nil
+        do {
+            let response = try await execute(request)
+            if isRepairAttempt {
+                await recoveryCoordinator.completeRepairAttempt(
+                    succeeded: true,
+                    tool: request.kind
+                )
+            }
+            return response
+        } catch is CancellationError {
+            if isRepairAttempt {
+                await recoveryCoordinator.completeRepairAttempt(
+                    succeeded: false,
+                    tool: request.kind
+                )
+            } else {
+                await recoveryCoordinator.recordRepairNotAllowed(
+                    tool: request.kind,
+                    reason: .cancellation
+                )
+            }
+            throw CancellationError()
+        } catch let error as GraphChatToolError
+            where error.code == .cancelled
+        {
+            if isRepairAttempt {
+                await recoveryCoordinator.completeRepairAttempt(
+                    succeeded: false,
+                    tool: request.kind
+                )
+            } else {
+                await recoveryCoordinator.recordRepairNotAllowed(
+                    tool: request.kind,
+                    reason: .cancellation
+                )
+            }
+            throw error
+        } catch let error as GraphChatToolNonRepairableError {
+            if isRepairAttempt {
+                await recoveryCoordinator.completeRepairAttempt(
+                    succeeded: false,
+                    tool: request.kind
+                )
+            } else {
+                await recoveryCoordinator.recordRepairNotAllowed(
+                    tool: request.kind,
+                    reason: error.reason
+                )
+            }
+            throw error.publicError
+        } catch let error as GraphChatToolRepairableError {
+            if isRepairAttempt {
+                await recoveryCoordinator.completeRepairAttempt(
+                    succeeded: false,
+                    tool: request.kind
+                )
+                return repairTerminalResponse(
+                    tool: request.kind,
+                    state: .failed
+                )
+            }
+            if await recoveryCoordinator.offerRepair(
+                error.result,
+                for: request.kind
+            ) {
+                return repairResponse(
+                    tool: request.kind,
+                    result: error.result
+                )
+            }
+            return repairTerminalResponse(
+                tool: request.kind,
+                state: .budgetExhausted
+            )
+        } catch {
+            if isRepairAttempt {
+                await recoveryCoordinator.completeRepairAttempt(
+                    succeeded: false,
+                    tool: request.kind
+                )
+            } else {
+                await recoveryCoordinator.recordRepairNotAllowed(
+                    tool: request.kind,
+                    reason:
+                        GraphChatToolFailureTaxonomy.nonRepairableReason(
+                            for: error
+                        )
+                )
+            }
+            throw error
+        }
+    }
+
+    private func execute(
+        _ request: GraphChatModelToolRequest
+    ) async throws -> GraphChatModelToolResponse {
         switch request {
         case .describeSchema(let exampleFieldAliases):
-            return try await describeSchema(exampleFieldAliases: exampleFieldAliases)
+            return try await describeSchema(
+                exampleFieldAliases: exampleFieldAliases
+            )
         case .searchGraph(let query, let limit):
             return try await searchGraph(query: query, limit: limit)
         case .queryDetailValues(let queryRequest):
             return try await queryDetailValues(queryRequest)
         case .getNode(let nodeAlias, let relatedLimit):
-            return try await getNode(alias: nodeAlias, relatedLimit: relatedLimit)
+            return try await getNode(
+                alias: nodeAlias,
+                relatedLimit: relatedLimit
+            )
         case .getNeighbors(let nodeAlias, let limit):
             return try await getNeighbors(alias: nodeAlias, limit: limit)
         case .graphStats(let hubLimit):
             return try await graphStats(hubLimit: hubLimit)
         }
+    }
+
+    private func repairResponse(
+        tool: GraphChatToolKind,
+        result: GraphChatToolRepairResult
+    ) -> GraphChatModelToolResponse {
+        GraphChatModelToolResponse(
+            tool: tool,
+            state: .noEvidence,
+            content: result.modelContent,
+            evidenceIDs: [],
+            repairResult: result
+        )
+    }
+
+    private func repairTerminalResponse(
+        tool: GraphChatToolKind,
+        state: GraphChatToolRepairTerminalState
+    ) -> GraphChatModelToolResponse {
+        GraphChatModelToolResponse(
+            tool: tool,
+            state: .noEvidence,
+            content: state.modelContent,
+            evidenceIDs: []
+        )
     }
 
     private func describeSchema(
@@ -334,8 +475,23 @@ actor GraphChatModelToolRuntime: GraphChatModelToolRunning {
     private func queryDetailValues(
         _ request: GraphChatModelQueryRequest
     ) async throws -> GraphChatModelToolResponse {
-        let plan = try await makeQueryPlan(request)
-        let validatedPlan = try validator.validate(plan, against: schemaContext)
+        let preparedQuery = try await makeQueryPlan(request)
+        let validatedPlan: ValidatedGraphQueryPlan
+        do {
+            validatedPlan = try validator.validate(
+                preparedQuery.plan,
+                against: schemaContext
+            )
+        } catch let error as GraphQueryPlanValidationError {
+            if let repairResult = repairResult(
+                for: error,
+                request: request,
+                target: preparedQuery.target
+            ) {
+                throw GraphChatToolRepairableError(result: repairResult)
+            }
+            throw error
+        }
         let result = try await queryDetailValuesTool.execute(
             QueryDetailValuesInput(plan: validatedPlan),
             context: context
@@ -567,7 +723,10 @@ actor GraphChatModelToolRuntime: GraphChatModelToolRunning {
 
     private func makeQueryPlan(
         _ request: GraphChatModelQueryRequest
-    ) async throws -> GraphQueryPlan {
+    ) async throws -> (
+        plan: GraphQueryPlan,
+        target: ResolvedQueryTarget
+    ) {
         guard (1...QueryDetailValuesTool.maximumResultCount).contains(request.limit) else {
             throw GraphChatToolError(
                 code: .budgetExceeded,
@@ -576,22 +735,126 @@ actor GraphChatModelToolRuntime: GraphChatModelToolRunning {
         }
 
         let target = try await resolvedQueryTarget(for: request)
-        let filters = try request.filters.map(makeFilter)
-        let sorting = try makeSorting(request)
-        let projection = try makeProjection(request.projectionFieldAliases)
+        let filters = try request.filters.enumerated().map {
+            try makeFilter(
+                $0.element,
+                index: $0.offset,
+                target: target
+            )
+        }
+        let sorting = try makeSorting(request, target: target)
+        let projection = try makeProjection(
+            request.projectionFieldAliases,
+            target: target
+        )
         let aggregation = try makeAggregation(
             name: request.aggregation,
-            fieldAlias: request.aggregationFieldAlias
+            fieldAlias: request.aggregationFieldAlias,
+            target: target
         )
-        return GraphQueryPlan(
-            entityAlias: target.entity.alias,
-            scope: target.scope,
-            filters: filters,
-            sorting: sorting,
-            projection: projection,
-            aggregation: aggregation,
-            limit: request.limit
+        return (
+            plan: GraphQueryPlan(
+                entityAlias: target.entity.alias,
+                scope: target.scope,
+                filters: filters,
+                sorting: sorting,
+                projection: projection,
+                aggregation: aggregation,
+                limit: request.limit
+            ),
+            target: target
         )
+    }
+
+    private func repairResult(
+        for error: GraphQueryPlanValidationError,
+        request: GraphChatModelQueryRequest,
+        target: ResolvedQueryTarget
+    ) -> GraphChatToolRepairResult? {
+        guard let issue = error.issues.first else {
+            return nil
+        }
+        switch issue.code {
+        case .invalidOperator:
+            guard let index = filterIndex(from: issue.path),
+                  request.filters.indices.contains(index),
+                  let field = schemaContext.aliases.field(
+                    for: GraphFieldAlias(
+                        normalizedAlias(
+                            request.filters[index].fieldAlias
+                        )
+                    )
+                  ) else {
+                return nil
+            }
+            return repairHintBuilder.invalidOperator(
+                path: issue.path,
+                field: field,
+                current: target.validatedCurrent
+            )
+
+        case .invalidValueType,
+            .emptyValue,
+            .invalidRange,
+            .invalidChoiceValue,
+            .ambiguousChoiceValue:
+            guard let index = filterIndex(from: issue.path),
+                  request.filters.indices.contains(index),
+                  let field = schemaContext.aliases.field(
+                    for: GraphFieldAlias(
+                        normalizedAlias(
+                            request.filters[index].fieldAlias
+                        )
+                    )
+                  ),
+                  let operation = GraphQueryFilterOperator(
+                    rawValue: request.filters[index].operation
+                  ) else {
+                return nil
+            }
+            return repairHintBuilder.invalidValue(
+                path: issue.path,
+                field: field,
+                operation: operation,
+                current: target.validatedCurrent
+            )
+
+        case .invalidAggregation:
+            guard let rawAlias = request.aggregationFieldAlias else {
+                return nil
+            }
+            return repairHintBuilder.fieldIssue(
+                rawValue: rawAlias,
+                path: issue.path,
+                expectedCategory: .aggregationField,
+                entity: target.entity,
+                reason: .schemaIncompatibility,
+                current: target.validatedCurrent
+            )
+
+        case .unsupportedVersion,
+            .unknownEntityAlias,
+            .unknownFieldAlias,
+            .fieldEntityMismatch,
+            .invalidLimit,
+            .graphScopeMismatch,
+            .unknownScopeEntity,
+            .unknownScopeNode,
+            .scopeEntityMismatch,
+            .duplicateProjection:
+            return nil
+        }
+    }
+
+    private func filterIndex(
+        from path: String
+    ) -> Int? {
+        guard path.hasPrefix("filters["),
+              let closingBracket = path.firstIndex(of: "]") else {
+            return nil
+        }
+        let start = path.index(path.startIndex, offsetBy: "filters[".count)
+        return Int(path[start..<closingBracket])
     }
 
     private func resolvedQueryTarget(
@@ -608,13 +871,30 @@ actor GraphChatModelToolRuntime: GraphChatModelToolRunning {
             guard
                 let entity = schemaContext.aliases.entity(for: entityAlias)
             else {
-                throw invalidInput(
-                    "Die angefragte Entity ist im aktuellen Schema nicht verfügbar."
+                if looksLikeTechnicalIdentifier(request.entityAlias) {
+                    throw nonRepairable(
+                        .manipulatedTechnicalIdentifier,
+                        message:
+                            "Technische IDs sind in Entity-Alias-Argumenten nicht zulässig."
+                    )
+                }
+                throw GraphChatToolRepairableError(
+                    result: repairHintBuilder.unknownEntity(
+                        rawValue: request.entityAlias
+                    )
+                )
+            }
+            guard isEntityAllowedByRequestScope(entity.entityID) else {
+                throw nonRepairable(
+                    .unauthorizedNodeOrSelectionScope,
+                    message:
+                        "Die gewählte Entity liegt außerhalb des freigegebenen Chat-Scopes."
                 )
             }
             return ResolvedQueryTarget(
                 entity: entity,
-                scope: scope
+                scope: scope,
+                validatedCurrent: nil
             )
         }
 
@@ -643,14 +923,20 @@ actor GraphChatModelToolRuntime: GraphChatModelToolRunning {
             switch resolution {
             case .clarification(let clarification)
             where clarification.issue == .mixedEntities:
-                throw invalidInput(
-                    "Die referenzierte Ergebnismenge umfasst mehrere Entities und muss zuerst fachlich geklärt werden."
+                throw nonRepairable(
+                    .staleConversationReference,
+                    message:
+                        "Die referenzierte Ergebnismenge muss zuerst fachlich geklärt werden."
                 )
             case .resolved:
                 preconditionFailure("Unreachable resolved scope branch.")
             case .clarification, .noResults, .rejected:
-                throw invalidInput(
-                    "Die Conversation-Referenz ist für diese Query nicht mehr gültig."
+                throw nonRepairable(
+                    looksLikeTechnicalIdentifier(rawReferenceAlias)
+                        ? .manipulatedTechnicalIdentifier
+                        : .staleConversationReference,
+                    message:
+                        "Die Conversation-Referenz ist für diese Query nicht mehr gültig."
                 )
             }
         }
@@ -660,33 +946,104 @@ actor GraphChatModelToolRuntime: GraphChatModelToolRunning {
                 .sorted(by: { $0.alias.rawValue < $1.alias.rawValue })
                 .first
         else {
-            throw invalidInput(
-                "Die validierte Entity der Conversation-Referenz ist im aktuellen Schema nicht verfügbar."
+            throw nonRepairable(
+                .staleConversationReference,
+                message:
+                    "Die validierte Conversation-Referenz ist im aktuellen Schema nicht mehr verfügbar."
             )
         }
         return ResolvedQueryTarget(
             entity: entity,
-            scope: try queryScope(for: resolvedScope)
+            scope: try queryScope(for: resolvedScope),
+            validatedCurrent: repairHintBuilder.currentContext(
+                for: resolvedScope,
+                entity: entity
+            )
         )
     }
 
     private func makeFilter(
-        _ request: GraphChatModelQueryFilterRequest
+        _ request: GraphChatModelQueryFilterRequest,
+        index: Int,
+        target: ResolvedQueryTarget
     ) throws -> GraphQueryFilter {
         let fieldAlias = GraphFieldAlias(normalizedAlias(request.fieldAlias))
         guard let field = schemaContext.aliases.field(for: fieldAlias) else {
-            throw invalidInput("Unbekannter Feld-Alias: \(request.fieldAlias)")
+            if looksLikeTechnicalIdentifier(request.fieldAlias) {
+                throw nonRepairable(
+                    .manipulatedTechnicalIdentifier,
+                    message:
+                        "Technische IDs sind in Feld-Alias-Argumenten nicht zulässig."
+                )
+            }
+            throw GraphChatToolRepairableError(
+                result: repairHintBuilder.fieldIssue(
+                    rawValue: request.fieldAlias,
+                    path: "filters[\(index)].fieldAlias",
+                    expectedCategory: .fieldAlias,
+                    entity: target.entity,
+                    reason: target.validatedCurrent == nil
+                        ? .schemaIncompatibility
+                        : .conversationReferenceMismatch,
+                    current: target.validatedCurrent
+                )
+            )
+        }
+        guard field.entityID == target.entity.entityID else {
+            throw GraphChatToolRepairableError(
+                result: repairHintBuilder.fieldIssue(
+                    rawValue: request.fieldAlias,
+                    path: "filters[\(index)].fieldAlias",
+                    expectedCategory: .fieldAlias,
+                    entity: target.entity,
+                    reason: target.validatedCurrent == nil
+                        ? .fieldEntityMismatch
+                        : .conversationReferenceMismatch,
+                    current: target.validatedCurrent
+                )
+            )
         }
         guard let operation = GraphQueryFilterOperator(rawValue: request.operation) else {
-            throw invalidInput("Unbekannter Filter-Operator: \(request.operation)")
+            throw GraphChatToolRepairableError(
+                result: repairHintBuilder.invalidOperator(
+                    path: "filters[\(index)].operation",
+                    field: field,
+                    current: target.validatedCurrent
+                )
+            )
         }
-        let value = try makeFilterValue(
-            operation: operation,
-            field: field,
-            value: request.value,
-            secondValue: request.secondValue,
-            values: request.values
-        )
+        guard GraphChatQueryOperatorCompatibility
+            .allowedOperators(for: field.type)
+            .contains(operation) else {
+            throw GraphChatToolRepairableError(
+                result: repairHintBuilder.invalidOperator(
+                    path: "filters[\(index)].operation",
+                    field: field,
+                    current: target.validatedCurrent
+                )
+            )
+        }
+        let value: GraphQueryFilterValue
+        do {
+            value = try makeFilterValue(
+                operation: operation,
+                field: field,
+                value: request.value,
+                secondValue: request.secondValue,
+                values: request.values
+            )
+        } catch let error as GraphChatToolError
+            where error.code == .invalidInput
+        {
+            throw GraphChatToolRepairableError(
+                result: repairHintBuilder.invalidValue(
+                    path: "filters[\(index)].value",
+                    field: field,
+                    operation: operation,
+                    current: target.validatedCurrent
+                )
+            )
+        }
         return GraphQueryFilter(
             fieldAlias: fieldAlias,
             operation: operation,
@@ -798,7 +1155,8 @@ actor GraphChatModelToolRuntime: GraphChatModelToolRunning {
     }
 
     private func makeSorting(
-        _ request: GraphChatModelQueryRequest
+        _ request: GraphChatModelQueryRequest,
+        target: ResolvedQueryTarget
     ) throws -> [GraphQuerySort] {
         guard let rawKey = request.sortFieldAlias else {
             return []
@@ -816,21 +1174,82 @@ actor GraphChatModelToolRuntime: GraphChatModelToolRunning {
             return [GraphQuerySort(key: .nodeName, direction: direction)]
         }
         let alias = GraphFieldAlias(normalizedAlias(rawKey))
-        guard schemaContext.aliases.field(for: alias) != nil else {
-            throw invalidInput("Unbekannter Sortierfeld-Alias: \(rawKey)")
+        guard let field = schemaContext.aliases.field(for: alias) else {
+            if looksLikeTechnicalIdentifier(rawKey) {
+                throw nonRepairable(
+                    .manipulatedTechnicalIdentifier,
+                    message:
+                        "Technische IDs sind in Sortierfeld-Alias-Argumenten nicht zulässig."
+                )
+            }
+            throw GraphChatToolRepairableError(
+                result: repairHintBuilder.fieldIssue(
+                    rawValue: rawKey,
+                    path: "sortFieldAlias",
+                    expectedCategory: .sortField,
+                    entity: target.entity,
+                    reason: .schemaIncompatibility,
+                    current: target.validatedCurrent
+                )
+            )
+        }
+        guard field.entityID == target.entity.entityID else {
+            throw GraphChatToolRepairableError(
+                result: repairHintBuilder.fieldIssue(
+                    rawValue: rawKey,
+                    path: "sortFieldAlias",
+                    expectedCategory: .sortField,
+                    entity: target.entity,
+                    reason: target.validatedCurrent == nil
+                        ? .fieldEntityMismatch
+                        : .conversationReferenceMismatch,
+                    current: target.validatedCurrent
+                )
+            )
         }
         return [GraphQuerySort(key: .field(alias), direction: direction)]
     }
 
     private func makeProjection(
-        _ rawAliases: [String]
+        _ rawAliases: [String],
+        target: ResolvedQueryTarget
     ) throws -> [GraphQueryProjection] {
         var result: [GraphQueryProjection] = [.nodeIdentity]
         var seen = Set<GraphFieldAlias>()
-        for rawAlias in rawAliases {
+        for (index, rawAlias) in rawAliases.enumerated() {
             let alias = GraphFieldAlias(normalizedAlias(rawAlias))
-            guard schemaContext.aliases.field(for: alias) != nil else {
-                throw invalidInput("Unbekannter Projektionsfeld-Alias: \(rawAlias)")
+            guard let field = schemaContext.aliases.field(for: alias) else {
+                if looksLikeTechnicalIdentifier(rawAlias) {
+                    throw nonRepairable(
+                        .manipulatedTechnicalIdentifier,
+                        message:
+                            "Technische IDs sind in Projektionsfeld-Alias-Argumenten nicht zulässig."
+                    )
+                }
+                throw GraphChatToolRepairableError(
+                    result: repairHintBuilder.fieldIssue(
+                        rawValue: rawAlias,
+                        path: "projectionFieldAliases[\(index)]",
+                        expectedCategory: .projectionField,
+                        entity: target.entity,
+                        reason: .schemaIncompatibility,
+                        current: target.validatedCurrent
+                    )
+                )
+            }
+            guard field.entityID == target.entity.entityID else {
+                throw GraphChatToolRepairableError(
+                    result: repairHintBuilder.fieldIssue(
+                        rawValue: rawAlias,
+                        path: "projectionFieldAliases[\(index)]",
+                        expectedCategory: .projectionField,
+                        entity: target.entity,
+                        reason: target.validatedCurrent == nil
+                            ? .fieldEntityMismatch
+                            : .conversationReferenceMismatch,
+                        current: target.validatedCurrent
+                    )
+                )
             }
             if seen.insert(alias).inserted {
                 result.append(.field(alias))
@@ -841,7 +1260,8 @@ actor GraphChatModelToolRuntime: GraphChatModelToolRunning {
 
     private func makeAggregation(
         name: String?,
-        fieldAlias: String?
+        fieldAlias: String?,
+        target: ResolvedQueryTarget
     ) throws -> GraphQueryAggregation? {
         guard let name, name.isEmpty == false else {
             return nil
@@ -853,15 +1273,71 @@ actor GraphChatModelToolRuntime: GraphChatModelToolRunning {
             throw invalidInput("Die Aggregation \(name) benötigt einen Feld-Alias.")
         }
         let alias = GraphFieldAlias(normalizedAlias(rawFieldAlias))
-        guard schemaContext.aliases.field(for: alias) != nil else {
-            throw invalidInput("Unbekannter Aggregationsfeld-Alias: \(rawFieldAlias)")
+        guard let field = schemaContext.aliases.field(for: alias) else {
+            if looksLikeTechnicalIdentifier(rawFieldAlias) {
+                throw nonRepairable(
+                    .manipulatedTechnicalIdentifier,
+                    message:
+                        "Technische IDs sind in Aggregationsfeld-Alias-Argumenten nicht zulässig."
+                )
+            }
+            throw GraphChatToolRepairableError(
+                result: repairHintBuilder.fieldIssue(
+                    rawValue: rawFieldAlias,
+                    path: "aggregationFieldAlias",
+                    expectedCategory: .aggregationField,
+                    entity: target.entity,
+                    reason: .schemaIncompatibility,
+                    current: target.validatedCurrent
+                )
+            )
+        }
+        guard field.entityID == target.entity.entityID else {
+            throw GraphChatToolRepairableError(
+                result: repairHintBuilder.fieldIssue(
+                    rawValue: rawFieldAlias,
+                    path: "aggregationFieldAlias",
+                    expectedCategory: .aggregationField,
+                    entity: target.entity,
+                    reason: target.validatedCurrent == nil
+                        ? .fieldEntityMismatch
+                        : .conversationReferenceMismatch,
+                    current: target.validatedCurrent
+                )
+            )
         }
         switch name {
         case "groupCount":
             return .groupCount(alias)
         case "minimum":
+            guard GraphChatQueryOperatorCompatibility
+                .supportsMinimumMaximum(field.type) else {
+                throw GraphChatToolRepairableError(
+                    result: repairHintBuilder.fieldIssue(
+                        rawValue: rawFieldAlias,
+                        path: "aggregationFieldAlias",
+                        expectedCategory: .aggregationField,
+                        entity: target.entity,
+                        reason: .schemaIncompatibility,
+                        current: target.validatedCurrent
+                    )
+                )
+            }
             return .minimum(alias)
         case "maximum":
+            guard GraphChatQueryOperatorCompatibility
+                .supportsMinimumMaximum(field.type) else {
+                throw GraphChatToolRepairableError(
+                    result: repairHintBuilder.fieldIssue(
+                        rawValue: rawFieldAlias,
+                        path: "aggregationFieldAlias",
+                        expectedCategory: .aggregationField,
+                        entity: target.entity,
+                        reason: .schemaIncompatibility,
+                        current: target.validatedCurrent
+                    )
+                )
+            }
             return .maximum(alias)
         default:
             throw invalidInput("Unbekannte Aggregation: \(name)")
@@ -881,7 +1357,13 @@ actor GraphChatModelToolRuntime: GraphChatModelToolRunning {
         )
         guard case .resolved(let reference) = resolution,
               let node = reference.singleNode else {
-            throw invalidInput("Der Conversation-Alias \(rawAlias) ist nicht eindeutig und aktuell auflösbar.")
+            throw nonRepairable(
+                looksLikeTechnicalIdentifier(rawAlias)
+                    ? .manipulatedTechnicalIdentifier
+                    : .staleConversationReference,
+                message:
+                    "Die Conversation-Referenz ist nicht eindeutig und aktuell auflösbar."
+            )
         }
         nodeByAlias[alias] = node
         aliasByNode[node] = alias
@@ -900,15 +1382,19 @@ actor GraphChatModelToolRuntime: GraphChatModelToolRunning {
             )
         case .node:
             guard let node = reference.singleNode else {
-                throw invalidInput(
-                    "Die validierte Conversation-Referenz enthält keinen einzelnen Node."
+                throw nonRepairable(
+                    .staleConversationReference,
+                    message:
+                        "Die validierte Conversation-Referenz enthält keinen einzelnen Node."
                 )
             }
             return .node(node, in: resolvedScope.graphScope)
         case .resultSet, .resultSubset, .group, .comparison:
             guard resolvedScope.nodes.isEmpty == false else {
-                throw invalidInput(
-                    "Die validierte Conversation-Ergebnismenge ist leer."
+                throw nonRepairable(
+                    .staleConversationReference,
+                    message:
+                        "Die validierte Conversation-Ergebnismenge ist leer."
                 )
             }
             return try .selection(
@@ -916,8 +1402,10 @@ actor GraphChatModelToolRuntime: GraphChatModelToolRunning {
                 in: resolvedScope.graphScope
             )
         case .field:
-            throw invalidInput(
-                "Eine Feldreferenz kann nicht als Query-Ergebnismenge verwendet werden."
+            throw nonRepairable(
+                .staleConversationReference,
+                message:
+                    "Eine Feldreferenz kann nicht als Query-Ergebnismenge verwendet werden."
             )
         }
     }
@@ -1263,5 +1751,47 @@ actor GraphChatModelToolRuntime: GraphChatModelToolRunning {
 
     private func invalidInput(_ message: String) -> GraphChatToolError {
         GraphChatToolError(code: .invalidInput, message: message)
+    }
+
+    private func nonRepairable(
+        _ reason: GraphChatToolNonRepairableReason,
+        message: String
+    ) -> GraphChatToolNonRepairableError {
+        GraphChatToolNonRepairableError(
+            reason: reason,
+            publicError: GraphChatToolError(
+                code: .invalidInput,
+                message: message
+            )
+        )
+    }
+
+    private func looksLikeTechnicalIdentifier(
+        _ value: String
+    ) -> Bool {
+        UUID(
+            uuidString: value.trimmingCharacters(
+                in: .whitespacesAndNewlines
+            )
+        ) != nil
+    }
+
+    private func isEntityAllowedByRequestScope(
+        _ entityID: UUID
+    ) -> Bool {
+        switch scope.target {
+        case .graph:
+            return true
+        case .entity(let scopedEntityID):
+            return entityID == scopedEntityID
+        case .node(let node):
+            return schemaContext.aliases.owningEntityID(for: node) == entityID
+        case .selection(let nodes):
+            return nodes.isEmpty == false
+                && nodes.allSatisfy {
+                    schemaContext.aliases.owningEntityID(for: $0)
+                        == entityID
+                }
+        }
     }
 }

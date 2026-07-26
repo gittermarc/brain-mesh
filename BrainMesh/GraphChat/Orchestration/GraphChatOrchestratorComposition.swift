@@ -30,6 +30,7 @@ nonisolated struct GraphChatOrchestratorComposition: Sendable {
         responseLanguageSelector: GraphChatResponseLanguageSelector,
         artifactRevalidator: any GraphChatAnswerArtifactRevalidating,
         evidenceValidator: any GraphEvidenceValidating,
+        observability: any GraphChatObservabilityRecording,
         referenceDate: @escaping @Sendable () -> Date,
         calendar: Calendar,
         timeZone: TimeZone,
@@ -54,6 +55,7 @@ nonisolated struct GraphChatOrchestratorComposition: Sendable {
             referenceResolver: referenceResolver,
             requestBuilder: requestBuilder,
             errorMapper: errorMapper,
+            observability: observability,
             referenceDate: referenceDate,
             calendar: calendar,
             timeZone: timeZone

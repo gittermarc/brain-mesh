@@ -163,11 +163,43 @@ nonisolated struct GraphChatProviderExecutor: Sendable {
     ) async -> GraphChatToolError {
         GraphChatToolError(
             code: error.code,
-            message: await presentationSafeMessage(
-                error.message,
-                resources: resources
+            message: safeToolFailureMessage(
+                for: error.code,
+                language: resources.responseLanguage
             )
         )
+    }
+
+    private func safeToolFailureMessage(
+        for code: GraphChatToolErrorCode,
+        language: GraphChatResponseLanguage
+    ) -> String {
+        switch (language, code) {
+        case (.german, .invalidInput):
+            return "Der Tool-Aufruf konnte fachlich nicht validiert werden."
+        case (.english, .invalidInput):
+            return "The tool call could not be validated."
+        case (.german, .graphScopeMismatch):
+            return "Die Anfrage liegt außerhalb des freigegebenen Chat-Scopes."
+        case (.english, .graphScopeMismatch):
+            return "The request is outside the authorized chat scope."
+        case (.german, .budgetExceeded):
+            return "Das sichere Tool-Budget für diese Anfrage wurde erreicht."
+        case (.english, .budgetExceeded):
+            return "The safe tool budget for this request was reached."
+        case (.german, .cancelled):
+            return "Die Graph-Chat-Anfrage wurde abgebrochen."
+        case (.english, .cancelled):
+            return "The graph chat request was cancelled."
+        case (.german, .indexUnavailable),
+            (.german, .sourceUnavailable),
+            (.german, .unavailable):
+            return "Die Graph-Daten konnten für diese Anfrage nicht sicher gelesen werden."
+        case (.english, .indexUnavailable),
+            (.english, .sourceUnavailable),
+            (.english, .unavailable):
+            return "The graph data could not be read safely for this request."
+        }
     }
 
     private func presentationSafeError(

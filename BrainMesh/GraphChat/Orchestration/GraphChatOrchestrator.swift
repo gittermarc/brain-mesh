@@ -44,6 +44,8 @@ actor GraphChatOrchestrator {
             GraphChatLiveAnswerArtifactRevalidator(),
         evidenceValidator: any GraphEvidenceValidating =
             GraphEvidenceSourceValidator.shared,
+        observability: any GraphChatObservabilityRecording =
+            NoOpGraphChatObservabilityRecorder(),
         referenceDate: @escaping @Sendable () -> Date = Date.init,
         calendar: Calendar = Calendar(identifier: .gregorian),
         timeZone: TimeZone = .current,
@@ -61,6 +63,7 @@ actor GraphChatOrchestrator {
             responseLanguageSelector: responseLanguageSelector,
             artifactRevalidator: artifactRevalidator,
             evidenceValidator: evidenceValidator,
+            observability: observability,
             referenceDate: referenceDate,
             calendar: calendar,
             timeZone: timeZone,

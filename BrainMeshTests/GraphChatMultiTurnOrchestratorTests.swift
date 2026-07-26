@@ -194,6 +194,98 @@ struct GraphChatMultiTurnOrchestratorTests {
 
     @MainActor
     @Test
+    func currentFieldMismatchRepairUsesTheRevalidatedTypedReference() async throws {
+        let setup = try await makeProjectSetup(
+            continuationScript: FakeGraphChatProviderScript(
+                steps: [
+                    .toolRequest(
+                        .queryDetailValues(
+                            GraphChatModelQueryRequest(
+                                entityAlias: "E999",
+                                conversationReferenceAlias: "CURRENT",
+                                filters: [
+                                    GraphChatModelQueryFilterRequest(
+                                        fieldAlias: "F999",
+                                        operation:
+                                            GraphQueryFilterOperator.equals
+                                                .rawValue,
+                                        value: "Offen",
+                                        secondValue: nil,
+                                        values: []
+                                    )
+                                ],
+                                sortFieldAlias: nil,
+                                sortDirection: nil,
+                                projectionFieldAliases: [],
+                                aggregation: nil,
+                                aggregationFieldAlias: nil,
+                                limit: 20
+                            )
+                        )
+                    ),
+                    .toolRequest(
+                        .queryDetailValues(
+                            GraphChatModelQueryRequest(
+                                entityAlias: "",
+                                conversationReferenceAlias: "CURRENT",
+                                filters: [],
+                                sortFieldAlias: nil,
+                                sortDirection: nil,
+                                projectionFieldAliases: [],
+                                aggregation: nil,
+                                aggregationFieldAlias: nil,
+                                limit: 20
+                            )
+                        )
+                    ),
+                    .event(
+                        .completed(
+                            GraphChatProviderTestSupport.makeFinalAnswer(
+                                directAnswer:
+                                    "Die weiterhin offenen Aufgaben wurden innerhalb der validierten Auswahl geprüft.",
+                                hasInsufficientEvidence: true
+                            )
+                        )
+                    ),
+                ]
+            )
+        )
+
+        _ = await GraphChatProviderTestSupport.collect(
+            await setup.orchestrator.streamAnswer(
+                question: "Zeige alle Projektaufgaben nach Deadline.",
+                graphScope: setup.graphScope,
+                chatScope: setup.chatScope
+            )
+        )
+        let events = await GraphChatProviderTestSupport.collect(
+            await setup.orchestrator.streamAnswer(
+                question: "Welche davon sind weiterhin offen?",
+                graphScope: setup.graphScope,
+                chatScope: setup.chatScope
+            )
+        )
+        let answer = try #require(completedAnswer(in: events))
+        let responses = await setup.provider.snapshot().toolResponses
+        let repair = try #require(responses[1].repairResult)
+        let current = try #require(repair.validatedCurrent)
+
+        #expect(answer.state == .answer)
+        #expect(repair.reason == .conversationReferenceMismatch)
+        #expect(repair.argumentPath == "filters[0].fieldAlias")
+        #expect(current.entityName == "Aufgaben")
+        #expect(current.referenceKind == "resultSet")
+        #expect(current.nodeCount == setup.fixture.tasksByName.count)
+        #expect(
+            repair.allowedCandidates.contains {
+                $0.displayName == "Status"
+            }
+        )
+        #expect(responses[2].repairResult == nil)
+    }
+
+    @MainActor
+    @Test
     func graphLockDiscardsAPendingClarificationBeforeTheNextTurn() async throws {
         let setup = try await makeProjectSetup(
             continuationScript: Self.answerScript("Neuer Turn nach Entsperrung")
