@@ -367,6 +367,8 @@ struct DetailDataIntegrityTests {
             field: field,
             intValue: 42
         )
+        let fieldID = field.id
+        let valueID = value.id
         field.graphID = nil
         value.graphID = nil
         try fixtures.save()
@@ -387,8 +389,31 @@ struct DetailDataIntegrityTests {
             )
         }
 
-        #expect(field.graphID == nil)
-        #expect(value.graphID == nil)
+        let verificationContext = BrainMeshTestContainer.makeContext(
+            for: store.container
+        )
+        let storedField = try #require(
+            verificationContext.fetch(
+                FetchDescriptor<MetaDetailFieldDefinition>(
+                    predicate: #Predicate { candidate in
+                        candidate.id == fieldID
+                    }
+                )
+            ).first
+        )
+        let storedValue = try #require(
+            verificationContext.fetch(
+                FetchDescriptor<MetaDetailFieldValue>(
+                    predicate: #Predicate { candidate in
+                        candidate.id == valueID
+                    }
+                )
+            ).first
+        )
+
+        #expect(storedField.graphID == nil)
+        #expect(storedValue.graphID == nil)
+        #expect(store.context.hasChanges == false)
         #expect(await publisher.recordedBatches.isEmpty)
     }
 

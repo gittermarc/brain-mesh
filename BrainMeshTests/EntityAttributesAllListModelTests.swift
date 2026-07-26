@@ -47,8 +47,20 @@ struct EntityAttributesAllListModelTests {
             sortSelection: .pinned(fieldID: field.id, direction: .ascending),
             pinnedFields: [field],
             pinnedValuesByAttribute: [
-                low.id: [field.id: lowValue],
-                high.id: [field.id: highValue]
+                low.id: [
+                    field.id: DetailsFormatting.presentationSnapshot(
+                        for: field,
+                        on: low,
+                        records: [lowValue]
+                    )
+                ],
+                high.id: [
+                    field.id: DetailsFormatting.presentationSnapshot(
+                        for: field,
+                        on: high,
+                        records: [highValue]
+                    )
+                ]
             ]
         )
 
