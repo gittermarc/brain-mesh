@@ -353,7 +353,8 @@ nonisolated enum GraphChatProviderTestSupport {
         referenceResolver: GraphChatConversationReferenceResolver = GraphChatConversationReferenceResolver(),
         responseLanguageSelector: GraphChatResponseLanguageSelector = GraphChatResponseLanguageSelector(fallback: .german),
         artifactRevalidator: any GraphChatAnswerArtifactRevalidating = GraphChatLiveAnswerArtifactRevalidator(),
-        evidenceValidator: any GraphEvidenceValidating = PassthroughGraphEvidenceValidator()
+        evidenceValidator: any GraphEvidenceValidating = PassthroughGraphEvidenceValidator(),
+        pipelineObserver: GraphChatRequestPipelineObserver = .disabled
     ) -> GraphChatOrchestrator {
         let contexts = graphIDs.map { GraphChatTestSupport.makeSchemaContext(graphID: $0) }
         return GraphChatOrchestrator(
@@ -368,7 +369,8 @@ nonisolated enum GraphChatProviderTestSupport {
             evidenceValidator: evidenceValidator,
             referenceDate: { Date(timeIntervalSince1970: 1_735_732_800) },
             calendar: Calendar(identifier: .gregorian),
-            timeZone: TimeZone(identifier: "Europe/Berlin")!
+            timeZone: TimeZone(identifier: "Europe/Berlin")!,
+            pipelineObserver: pipelineObserver
         )
     }
 

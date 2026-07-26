@@ -316,6 +316,24 @@ actor GraphChatAnswerArtifactRegistry {
         stagedByTransaction.removeValue(forKey: transactionID)
     }
 
+    func removeCommittedArtifacts(
+        _ artifactIDs: [GraphChatAnswerArtifactID],
+        sessionID expectedSessionID: GraphChatAnswerArtifactSessionID
+    ) {
+        guard expectedSessionID == sessionID else {
+            return
+        }
+        var didRemoveArtifact = false
+        for artifactID in artifactIDs {
+            didRemoveArtifact =
+                committedByID.removeValue(forKey: artifactID) != nil
+                || didRemoveArtifact
+        }
+        if didRemoveArtifact {
+            revision &+= 1
+        }
+    }
+
     func removeAll(reason: GraphChatAnswerArtifactRegistryClearReason) {
         committedByID.removeAll(keepingCapacity: false)
         stagedByTransaction.removeAll(keepingCapacity: false)

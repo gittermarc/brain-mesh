@@ -2,7 +2,7 @@
 //  GraphChatOrchestrator.swift
 //  BrainMesh
 //
-//  UI-independent orchestration for graph-scoped, streamed model answers.
+//  Lifecycle and composition actor for graph-scoped streamed answers.
 //
 
 import Foundation
@@ -12,30 +12,21 @@ nonisolated enum GraphChatConcurrentRequestPolicy: String, CaseIterable, Hashabl
 }
 
 actor GraphChatOrchestrator {
-    private struct ActiveGeneration {
-        let requestID: UUID
-        let task: Task<Void, Never>
-        var resources: GraphChatProviderSessionResources?
-    }
-
     private let concurrentRequestPolicy: GraphChatConcurrentRequestPolicy
     private let conversationStateReducer: GraphChatConversationStateReducer
     private let conversationContextBuilder: GraphChatConversationContextBuilder
     private let requestPreflight: GraphChatRequestPreflight
     private let responseLanguageSelector: GraphChatResponseLanguageSelector
-    private let answerFinalizer: GraphChatAnswerFinalizer
     private let artifactRevalidator: any GraphChatAnswerArtifactRevalidating
-    private let evidenceValidator: any GraphEvidenceValidating
     private let sessionFactory: GraphChatProviderSessionFactory
-    private let contextRetry: GraphChatProviderContextRetry
+    private let requestPipeline: GraphChatRequestPipeline
     private let errorMapper: GraphChatProviderErrorMapper
+    private let presentationResolver: GraphChatAnswerPresentationResolver
     private let referenceDate: @Sendable () -> Date
 
-    private var preparedSession: GraphChatProviderSessionResources?
-    private var artifactSession: GraphChatArtifactSessionResources?
-    private var activeGeneration: ActiveGeneration?
-    private var conversationState: GraphChatConversationState?
-    private var pendingResetReason: GraphChatConversationResetReason = .newConversation
+    private var stateMachine = GraphChatOrchestratorStateMachine()
+    private var resources = GraphChatOrchestratorResourceStore()
+    private var conversationRuntime = GraphChatOrchestratorConversationRuntime()
 
     init(
         provider: any GraphChatModelProvider,
@@ -51,67 +42,41 @@ actor GraphChatOrchestrator {
             GraphChatResponseLanguageSelector(),
         artifactRevalidator: any GraphChatAnswerArtifactRevalidating =
             GraphChatLiveAnswerArtifactRevalidator(),
-        evidenceValidator: any GraphEvidenceValidating = GraphEvidenceSourceValidator.shared,
+        evidenceValidator: any GraphEvidenceValidating =
+            GraphEvidenceSourceValidator.shared,
         referenceDate: @escaping @Sendable () -> Date = Date.init,
         calendar: Calendar = Calendar(identifier: .gregorian),
-        timeZone: TimeZone = .current
+        timeZone: TimeZone = .current,
+        pipelineObserver: GraphChatRequestPipelineObserver = .disabled
     ) {
         self.concurrentRequestPolicy = concurrentRequestPolicy
-        let stateReducer = GraphChatConversationStateReducer(
-            policy: conversationStatePolicy
-        )
-        let contextBuilder = GraphChatConversationContextBuilder(
-            budget: conversationContextBudget
-        )
-        let missingContextPolicy = GraphChatReferenceMissingContextDeferPolicy()
-        let localAnswerBuilder = GraphChatLocalAnswerBuilder()
-        let requestBuilder = GraphChatProviderRequestBuilder()
-        let errorMapper = GraphChatProviderErrorMapper()
-        let sessionFactory = GraphChatProviderSessionFactory(
+        let composition = GraphChatOrchestratorComposition(
             provider: provider,
             schemaProvider: schemaProvider,
             toolRunnerFactory: toolRunnerFactory,
-            standardToolBudgetPolicy: toolBudgetPolicy,
-            conversationStateReducer: stateReducer,
-            referenceResolver: referenceResolver,
-            requestBuilder: requestBuilder,
-            errorMapper: errorMapper,
-            referenceDate: referenceDate,
-            calendar: calendar,
-            timeZone: timeZone
-        )
-        let providerExecutor = GraphChatProviderExecutor(
-            provider: provider,
-            sessionFactory: sessionFactory
-        )
-        self.conversationStateReducer = stateReducer
-        self.conversationContextBuilder = contextBuilder
-        self.requestPreflight = GraphChatRequestPreflight(
-            conversationStateReducer: stateReducer,
-            conversationContextBuilder: contextBuilder,
+            toolBudgetPolicy: toolBudgetPolicy,
+            conversationStatePolicy: conversationStatePolicy,
+            conversationContextBudget: conversationContextBudget,
             referenceResolver: referenceResolver,
             responseLanguageSelector: responseLanguageSelector,
-            missingContextPolicy: missingContextPolicy,
-            localAnswerBuilder: localAnswerBuilder
+            artifactRevalidator: artifactRevalidator,
+            evidenceValidator: evidenceValidator,
+            referenceDate: referenceDate,
+            calendar: calendar,
+            timeZone: timeZone,
+            pipelineObserver: pipelineObserver
         )
-        self.answerFinalizer = GraphChatAnswerFinalizer(
-            conversationStateReducer: stateReducer,
-            referenceResolver: referenceResolver,
-            missingContextPolicy: missingContextPolicy,
-            localAnswerBuilder: localAnswerBuilder,
-            evidenceValidator: evidenceValidator
-        )
-        self.responseLanguageSelector = responseLanguageSelector
-        self.artifactRevalidator = artifactRevalidator
-        self.evidenceValidator = evidenceValidator
-        self.sessionFactory = sessionFactory
-        self.contextRetry = GraphChatProviderContextRetry(
-            sessionFactory: sessionFactory,
-            requestBuilder: requestBuilder,
-            executor: providerExecutor
-        )
-        self.errorMapper = errorMapper
-        self.referenceDate = referenceDate
+
+        self.conversationStateReducer = composition.conversationStateReducer
+        self.conversationContextBuilder = composition.conversationContextBuilder
+        self.requestPreflight = composition.requestPreflight
+        self.responseLanguageSelector = composition.responseLanguageSelector
+        self.artifactRevalidator = composition.artifactRevalidator
+        self.sessionFactory = composition.sessionFactory
+        self.requestPipeline = composition.requestPipeline
+        self.errorMapper = composition.errorMapper
+        self.presentationResolver = composition.presentationResolver
+        self.referenceDate = composition.referenceDate
     }
 
     func prepare(
@@ -123,31 +88,42 @@ actor GraphChatOrchestrator {
             chatScope: chatScope
         )
         try await cancelActiveGenerationForNewRequest()
-        let baseState = conversationStateForTurn(for: key)
-        await discardPreparedSession(
-            unlessMatching: key,
-            conversationBaseState: baseState
+        await discardScopeMismatchedResources(matching: key)
+
+        let turn = conversationRuntime.stateForTurn(
+            key: key,
+            reducer: conversationStateReducer
+        )
+        let responseLanguage = responseLanguageSelector.language(for: "")
+        let conversationContext = conversationContextBuilder.makeSnapshot(
+            from: turn.state.snapshot
         )
 
-        if preparedSession?.key == key,
-            preparedSession?.conversationBaseState == baseState
-        {
+        if resources.preparedSessionMatches(
+            key: key,
+            conversationBaseState: turn.state,
+            conversationContext: conversationContext,
+            responseLanguage: responseLanguage
+        ) {
             return
         }
+        await discardPreparedSession()
 
-        let preparationLanguage = responseLanguageSelector.language(for: "")
-        let preparationContext = conversationContextBuilder.makeSnapshot(
-            from: baseState.snapshot
-        )
-        let resources = try await makeSessionResources(
+        let sessionResources = try await makeSessionResources(
             for: key,
-            conversationBaseState: baseState,
-            conversationContext: preparationContext,
-            responseLanguage: preparationLanguage
+            conversationBaseState: turn.state,
+            conversationContext: conversationContext,
+            responseLanguage: responseLanguage
         )
         do {
-            try await sessionFactory.prewarm(resources)
-            preparedSession = resources
+            try await sessionFactory.prewarm(sessionResources)
+            resources.installPreparedSession(sessionResources)
+            stateMachine.transition(
+                .prepared(
+                    key: key,
+                    sessionID: sessionResources.sessionID
+                )
+            )
         } catch {
             throw mapError(error)
         }
@@ -159,7 +135,12 @@ actor GraphChatOrchestrator {
         chatScope: GraphChatScope
     ) async -> GraphChatEventStream {
         let requestID = UUID()
+        let generation = GraphChatGenerationIdentity(requestID: requestID)
         let pair = GraphChatEventStream.makeStream()
+        let streamController = GraphChatRequestStreamController(
+            requestID: requestID,
+            continuation: pair.continuation
+        )
 
         do {
             try await cancelActiveGenerationForNewRequest()
@@ -167,37 +148,51 @@ actor GraphChatOrchestrator {
                 graphScope: graphScope,
                 chatScope: chatScope
             )
-            let turnStateSnapshot = conversationStateForTurn(for: key)
-            await discardPreparedSession(
-                unlessMatching: key,
-                conversationBaseState: turnStateSnapshot
+            await discardScopeMismatchedResources(matching: key)
+            let turn = conversationRuntime.stateForTurn(
+                key: key,
+                reducer: conversationStateReducer
             )
 
             let task = Task { [weak self] in
                 guard let self else {
-                    pair.continuation.yield(
-                        .failure(
-                            GraphChatError(
-                                code: .unexpected,
-                                message: "Der Graph-Chat-Orchestrator wurde verworfen."
-                            )
+                    await streamController.start()
+                    await streamController.fail(
+                        GraphChatError(
+                            code: .unexpected,
+                            message: "Der Graph-Chat-Orchestrator wurde verworfen."
                         )
                     )
-                    pair.continuation.finish()
+                    await streamController.finish()
                     return
                 }
-                await self.performRequest(
-                    requestID: requestID,
+                await self.runRequest(
+                    generation: generation,
                     question: question,
                     key: key,
-                    turnStateSnapshot: turnStateSnapshot,
+                    turnStateSnapshot: turn.state,
+                    expectedCommittedState: turn.committedStateSnapshot,
+                    streamController: streamController,
                     continuation: pair.continuation
                 )
             }
-            activeGeneration = ActiveGeneration(
-                requestID: requestID,
-                task: task,
-                resources: nil
+
+            let transition = stateMachine.transition(
+                .requestStarted(
+                    key: key,
+                    generation: generation
+                )
+            )
+            guard transition.wasApplied else {
+                task.cancel()
+                throw GraphChatError(
+                    code: .concurrentRequest,
+                    message: "Eine andere Graph-Chat-Anfrage ist noch aktiv."
+                )
+            }
+            resources.installActiveGeneration(
+                identity: generation,
+                task: task
             )
             pair.continuation.onTermination = { @Sendable [weak self] _ in
                 Task {
@@ -205,23 +200,19 @@ actor GraphChatOrchestrator {
                 }
             }
         } catch {
-            pair.continuation.yield(.started(requestID: requestID))
-            pair.continuation.yield(.failure(mapError(error)))
-            pair.continuation.finish()
+            await streamController.start()
+            await streamController.fail(mapError(error))
+            await streamController.finish()
         }
 
         return pair.stream
     }
 
     func cancelCurrentGeneration() async {
-        guard let activeGeneration else {
+        guard let activeGeneration = resources.activeGeneration else {
             return
         }
-        activeGeneration.task.cancel()
-        if let resources = activeGeneration.resources {
-            await sessionFactory.requestCancellation(resources)
-        }
-        await activeGeneration.task.value
+        await cancelAndWait(activeGeneration)
     }
 
     func discardSession() async {
@@ -231,26 +222,30 @@ actor GraphChatOrchestrator {
     func discardSession(
         reason: GraphChatConversationResetReason
     ) async {
-        await cancelCurrentGeneration()
-        if let preparedSession {
-            await sessionFactory.cleanupFailedAttempt(
-                preparedSession,
-                requestProviderCancellation: false
-            )
-            self.preparedSession = nil
+        stateMachine.transition(.discardStarted(reason: reason))
+        if let activeGeneration = resources.activeGeneration {
+            await cancelAndWait(activeGeneration)
         }
-        if let artifactSession {
+
+        let discarded = resources.removeAll()
+        await cleanupPreparedSession(discarded.preparedSession)
+        if let artifactSession = discarded.artifactSession {
             await artifactSession.registry.removeAll(
-                reason: artifactClearReason(for: reason)
+                reason: GraphChatArtifactClearReasonMapper.reason(for: reason)
             )
-            self.artifactSession = nil
+            stateMachine.transition(
+                .artifactSessionDiscarded(
+                    sessionID: artifactSession.sessionID
+                )
+            )
         }
-        conversationState = nil
-        pendingResetReason = reason
+        stateMachine.transition(.resourcesDiscarded)
+        conversationRuntime.discard(reason: reason)
+        stateMachine.transition(.discardFinished)
     }
 
     func conversationStateSnapshot() -> GraphChatConversationState? {
-        conversationState
+        conversationRuntime.snapshot()
     }
 
     func resolveAnswerPresentation(
@@ -259,80 +254,12 @@ actor GraphChatOrchestrator {
         graphScope: GraphScope,
         chatScope: GraphChatScope
     ) async -> GraphChatAnswerPresentationResolution {
-        guard graphScope == chatScope.graphScope else {
-            return .unavailable(
-                graphScope: graphScope,
-                chatScope: chatScope,
-                requestedArtifactIDs: artifactIDs,
-                reason: .scopeMismatch
-            )
-        }
-
-        let validatedEvidence: [GraphEvidence]
-        do {
-            validatedEvidence = try await evidenceValidator.validatedEvidence(
-                evidence,
-                in: chatScope
-            )
-        } catch {
-            return .unavailable(
-                graphScope: graphScope,
-                chatScope: chatScope,
-                requestedArtifactIDs: artifactIDs,
-                reason: .notRegisteredOrInvalidated
-            )
-        }
-
-        let expectedKey = GraphChatOrchestrationScopeKey(
-            graphScope: graphScope,
-            chatScope: chatScope
-        )
-        guard let artifactSession, artifactSession.key == expectedKey else {
-            return .unavailable(
-                graphScope: graphScope,
-                chatScope: chatScope,
-                requestedArtifactIDs: artifactIDs,
-                evidence: validatedEvidence,
-                reason: .sessionUnavailable
-            )
-        }
-
-        let revalidatedAt = referenceDate()
-        var resolvedArtifacts: [GraphChatResolvedAnswerArtifact] = []
-        var artifactEvidence: [GraphEvidence] = []
-        resolvedArtifacts.reserveCapacity(artifactIDs.count)
-
-        var seenArtifactIDs = Set<GraphChatAnswerArtifactID>()
-        for artifactID in artifactIDs where seenArtifactIDs.insert(artifactID).inserted {
-            do {
-                guard let resolution = try await artifactSession.registry.resolvedArtifact(
-                    for: artifactID,
-                    graphScope: graphScope,
-                    sessionID: artifactSession.sessionID
-                ) else {
-                    continue
-                }
-                resolvedArtifacts.append(
-                    GraphChatResolvedAnswerArtifact(
-                        artifact: resolution.artifact,
-                        revalidatedAt: revalidatedAt
-                    )
-                )
-                artifactEvidence.append(contentsOf: resolution.evidence)
-            } catch {
-                continue
-            }
-        }
-
-        return GraphChatAnswerPresentationResolution(
+        await presentationResolver.resolve(
+            artifactIDs: artifactIDs,
+            evidence: evidence,
             graphScope: graphScope,
             chatScope: chatScope,
-            artifactSessionID: artifactSession.sessionID,
-            requestedArtifactIDs: artifactIDs,
-            artifacts: resolvedArtifacts,
-            evidence: GraphEvidenceCollection(
-                validatedEvidence + artifactEvidence
-            ).values
+            artifactSession: resources.artifactSession
         )
     }
 
@@ -346,111 +273,103 @@ actor GraphChatOrchestrator {
         guard checkpoint.belongsTo(
             graphScope: key.graphScope,
             chatScope: key.chatScope
-        ) else {
+        ),
+            conversationRuntime.acceptsRestore(
+                for: key,
+                lifecycleKey: stateMachine.state.scopeKey
+            )
+        else {
             throw GraphChatError(
                 code: .invalidRequest,
                 message: "Der Conversation-State gehört nicht zum aktiven Graph-Chat-Scope."
             )
         }
 
-        await cancelCurrentGeneration()
-        if let preparedSession {
-            await sessionFactory.cleanupFailedAttempt(
-                preparedSession,
-                requestProviderCancellation: false
+        stateMachine.transition(.restoreStarted)
+        if let activeGeneration = resources.activeGeneration {
+            await cancelAndWait(activeGeneration)
+        }
+        let discarded = resources.removeAll()
+        await cleanupPreparedSession(discarded.preparedSession)
+        if let artifactSession = discarded.artifactSession {
+            await artifactSession.registry.removeAll(
+                reason: GraphChatArtifactClearReasonMapper.restoredCheckpoint
             )
-            self.preparedSession = nil
-        }
-        if let artifactSession {
-            await artifactSession.registry.removeAll(reason: .restoredCheckpoint)
-            self.artifactSession = nil
-        }
-
-        if let state = checkpoint.state {
-            guard state.graphScope == key.graphScope,
-                  state.chatScope == key.chatScope else {
-                throw GraphChatError(
-                    code: .invalidRequest,
-                    message: "Der wiederherzustellende Conversation-State ist scopefremd."
+            stateMachine.transition(
+                .artifactSessionDiscarded(
+                    sessionID: artifactSession.sessionID
                 )
-            }
-            conversationState = state
-        } else {
-            conversationState = GraphChatConversationState.initial(
-                graphScope: key.graphScope,
-                chatScope: key.chatScope,
-                resetReason: .newConversation
             )
         }
-        pendingResetReason = .newConversation
+        stateMachine.transition(.resourcesDiscarded)
+
+        do {
+            try conversationRuntime.restore(checkpoint, key: key)
+            stateMachine.transition(.restoreFinished(key: key))
+        } catch {
+            stateMachine.transition(.restoreFinished(key: key))
+            throw error
+        }
     }
 
-    private func performRequest(
-        requestID: UUID,
+    func stateSnapshotForTesting() -> GraphChatOrchestratorState {
+        stateMachine.state
+    }
+
+    private func runRequest(
+        generation: GraphChatGenerationIdentity,
         question: String,
         key: GraphChatOrchestrationScopeKey,
         turnStateSnapshot: GraphChatConversationState,
+        expectedCommittedState: GraphChatConversationState?,
+        streamController: GraphChatRequestStreamController,
         continuation: GraphChatEventStream.Continuation
     ) async {
-        continuation.yield(.started(requestID: requestID))
-        var completedResourcesForCleanup: GraphChatProviderSessionResources?
-        defer {
-            continuation.finish()
-            clearActiveGeneration(requestID: requestID)
-        }
+        await streamController.start()
+        let outcome: GraphChatRequestOutcome
 
         do {
-            let preflightResult = try await requestPreflight.evaluate(
-                GraphChatRequestPreflightInput(
-                    requestID: requestID,
+            try validateCurrentGeneration(generation)
+            let completion = try await requestPipeline.execute(
+                GraphChatRequestPipelineInput(
+                    requestID: generation.requestID,
                     requestedAt: referenceDate(),
                     question: question,
-                    graphScope: key.graphScope,
-                    chatScope: key.chatScope,
-                    conversationState: turnStateSnapshot
-                )
-            )
-            guard case .provider(let plan) = preflightResult else {
-                if case .local(let localPlan) = preflightResult {
-                    guard let currentCommittedState = conversationState else {
+                    key: key,
+                    turnStateSnapshot: turnStateSnapshot
+                ),
+                sessionResources: { [weak self] plan in
+                    guard let self else {
                         throw CancellationError()
                     }
-                    let finalizedTurn = try await answerFinalizer.finalizeLocalTurn(
-                        GraphChatLocalAnswerFinalizationInput(
-                            requestID: requestID,
-                            completedAt: referenceDate(),
-                            answer: localPlan.answer,
-                            baseState: localPlan.baseState,
-                            expectedCommittedState: localPlan.expectedCommittedState,
-                            pendingClarification: localPlan.pendingClarification
-                        ),
-                        currentCommittedState: currentCommittedState
-                    )
-                    conversationState = finalizedTurn.conversationState
-                    continuation.yield(
-                        .completed(finalizedTurn.answer)
-                    )
-                }
-                return
-            }
-
-            let initialResources = try await takeOrCreateSessionResources(
-                for: plan.scopeKey,
-                conversationBaseState: plan.requestBaseState,
-                conversationContext: plan.conversationContext,
-                responseLanguage: plan.responseLanguage
-            )
-            let execution = try await contextRetry.execute(
-                initialResources: initialResources,
-                question: plan.providerQuestion,
-                continuationOperation: plan.continuationOperation,
-                onAttemptResources: { [weak self] resources in
-                    await self?.setActiveResources(
-                        resources,
-                        requestID: requestID
+                    return try await self.takeOrCreateSessionResources(
+                        for: plan,
+                        requestID: generation.requestID
                     )
                 },
-                onEvent: { event in
+                onAttemptResources: { [weak self] attemptResources in
+                    await self?.setActiveResources(
+                        attemptResources,
+                        requestID: generation.requestID
+                    )
+                },
+                validateCurrentRequest: { [weak self] in
+                    guard let self else {
+                        throw CancellationError()
+                    }
+                    try await self.validateCurrentGeneration(generation)
+                },
+                commitFinalizedTurn: { [weak self] finalizedTurn in
+                    guard let self else {
+                        throw CancellationError()
+                    }
+                    try await self.commit(
+                        finalizedTurn,
+                        generation: generation,
+                        expectedCommittedState: expectedCommittedState
+                    )
+                },
+                onProviderEvent: { event in
                     switch event {
                     case .toolActivity(let activity):
                         continuation.yield(.toolActivity(activity))
@@ -459,103 +378,73 @@ actor GraphChatOrchestrator {
                     }
                 }
             )
-            let completedResources = execution.resources
-            completedResourcesForCleanup = completedResources
-            let validationContext =
-                execution.request.conversationContext
-                ?? completedResources.conversationContext
-            guard let currentCommittedState = conversationState else {
-                throw CancellationError()
+            if completion.usedProvider == false {
+                await discardPreparedSession()
             }
-            let finalizedTurn = try await answerFinalizer.finalizeProviderTurn(
-                GraphChatProviderAnswerFinalizationInput(
-                    requestID: requestID,
-                    completedAt: referenceDate(),
-                    providerAnswer: execution.finalAnswer,
-                    conversationContext: validationContext,
-                    responseLanguage: completedResources.responseLanguage,
-                    continuationOperation: plan.continuationOperation,
-                    requestQuestion: plan.providerQuestion,
-                    expectedCommittedState: plan.expectedCommittedState,
-                    artifactContext: GraphChatArtifactCommitContext(
-                        graphScope: completedResources.key.graphScope,
-                        chatScope: completedResources.key.chatScope,
-                        sessionID: completedResources.artifactSessionID,
-                        transactionID: completedResources.artifactTransactionID
-                    )
-                ),
-                evidenceRegistry: completedResources.evidenceRegistry,
-                artifactRegistry: completedResources.artifactRegistry,
-                conversationTransaction: completedResources.conversationTransaction,
-                currentCommittedState: currentCommittedState
-            )
-            conversationState = finalizedTurn.conversationState
-            await sessionFactory.finishCommittedAttempt(completedResources)
-            completedResourcesForCleanup = nil
-            continuation.yield(.completed(finalizedTurn.answer))
+            outcome = .completed
+            await streamController.complete(completion.finalizedTurn.answer)
         } catch is CancellationError {
-            if let completedResourcesForCleanup {
-                await sessionFactory.cleanupFailedAttempt(
-                    completedResourcesForCleanup,
-                    requestProviderCancellation: false
-                )
-            }
-            continuation.yield(.cancelled)
-        } catch let error as GraphChatProviderError where error.code == .cancelled {
-            if let completedResourcesForCleanup {
-                await sessionFactory.cleanupFailedAttempt(
-                    completedResourcesForCleanup,
-                    requestProviderCancellation: false
-                )
-            }
-            continuation.yield(.cancelled)
-        } catch let error as GraphChatToolError where error.code == .cancelled {
-            if let completedResourcesForCleanup {
-                await sessionFactory.cleanupFailedAttempt(
-                    completedResourcesForCleanup,
-                    requestProviderCancellation: false
-                )
-            }
-            continuation.yield(.cancelled)
+            outcome = .cancelled
+            await streamController.cancel()
+        } catch let error as GraphChatProviderError
+        where error.code == .cancelled {
+            outcome = .cancelled
+            await streamController.cancel()
+        } catch let error as GraphChatToolError
+        where error.code == .cancelled {
+            outcome = .cancelled
+            await streamController.cancel()
         } catch {
-            if let completedResourcesForCleanup {
-                await sessionFactory.cleanupFailedAttempt(
-                    completedResourcesForCleanup,
-                    requestProviderCancellation: false
-                )
-            }
-            continuation.yield(.failure(mapError(error)))
+            outcome = .failed
+            await streamController.fail(mapError(error))
         }
+
+        finishRequest(
+            requestID: generation.requestID,
+            outcome: outcome
+        )
+        await streamController.finish()
     }
 
     private func takeOrCreateSessionResources(
-        for key: GraphChatOrchestrationScopeKey,
-        conversationBaseState: GraphChatConversationState,
-        conversationContext: GraphChatConversationContextSnapshot,
-        responseLanguage: GraphChatResponseLanguage
+        for plan: GraphChatProviderTurnPlan,
+        requestID: UUID
     ) async throws -> GraphChatProviderSessionResources {
-        if let preparedSession,
-            preparedSession.key == key,
-            preparedSession.conversationBaseState == conversationBaseState,
-            preparedSession.conversationContext == conversationContext,
-            preparedSession.responseLanguage == responseLanguage
-        {
-            self.preparedSession = nil
-            return preparedSession
-        }
-        if let preparedSession {
-            await sessionFactory.cleanupFailedAttempt(
-                preparedSession,
-                requestProviderCancellation: false
+        switch resources.takePreparedSession(
+            matching: plan.scopeKey,
+            conversationBaseState: plan.requestBaseState,
+            conversationContext: plan.conversationContext,
+            responseLanguage: plan.responseLanguage
+        ) {
+        case .missing:
+            return try await makeSessionResources(
+                for: plan.scopeKey,
+                conversationBaseState: plan.requestBaseState,
+                conversationContext: plan.conversationContext,
+                responseLanguage: plan.responseLanguage
             )
-            self.preparedSession = nil
+
+        case .reused(let prepared):
+            stateMachine.transition(
+                .preparedConsumed(
+                    requestID: requestID,
+                    sessionID: prepared.sessionID
+                )
+            )
+            return prepared
+
+        case .discarded(let prepared):
+            stateMachine.transition(
+                .preparedDiscarded(sessionID: prepared.sessionID)
+            )
+            await cleanupPreparedSession(prepared)
+            return try await makeSessionResources(
+                for: plan.scopeKey,
+                conversationBaseState: plan.requestBaseState,
+                conversationContext: plan.conversationContext,
+                responseLanguage: plan.responseLanguage
+            )
         }
-        return try await makeSessionResources(
-            for: key,
-            conversationBaseState: conversationBaseState,
-            conversationContext: conversationContext,
-            responseLanguage: responseLanguage
-        )
     }
 
     private func makeSessionResources(
@@ -564,89 +453,37 @@ actor GraphChatOrchestrator {
         conversationContext: GraphChatConversationContextSnapshot,
         responseLanguage: GraphChatResponseLanguage
     ) async throws -> GraphChatProviderSessionResources {
-        let artifactResources = await artifactSessionResources(for: key)
+        let artifactSession = await artifactSessionResources(for: key)
         return try await sessionFactory.makeInitialSession(
             for: key,
-            artifactSession: artifactResources,
+            artifactSession: artifactSession,
             conversationBaseState: conversationBaseState,
             conversationContext: conversationContext,
             responseLanguage: responseLanguage
         )
     }
 
-    private func cancelActiveGenerationForNewRequest() async throws {
-        guard let activeGeneration else {
-            return
-        }
-        switch concurrentRequestPolicy {
-        case .cancelPrevious:
-            activeGeneration.task.cancel()
-            if let resources = activeGeneration.resources {
-                await sessionFactory.requestCancellation(resources)
-            }
-            await activeGeneration.task.value
-        }
-    }
-
-    private func cancel(requestID: UUID) async {
-        guard let activeGeneration, activeGeneration.requestID == requestID else {
-            return
-        }
-        activeGeneration.task.cancel()
-        if let resources = activeGeneration.resources {
-            await sessionFactory.requestCancellation(resources)
-        }
-    }
-
-    private func setActiveResources(
-        _ resources: GraphChatProviderSessionResources,
-        requestID: UUID
-    ) {
-        guard var activeGeneration, activeGeneration.requestID == requestID else {
-            return
-        }
-        activeGeneration.resources = resources
-        self.activeGeneration = activeGeneration
-    }
-
-    private func clearActiveGeneration(requestID: UUID) {
-        guard activeGeneration?.requestID == requestID else {
-            return
-        }
-        activeGeneration = nil
-    }
-
-    private func discardPreparedSession(
-        unlessMatching key: GraphChatOrchestrationScopeKey,
-        conversationBaseState: GraphChatConversationState
-    ) async {
-        guard let preparedSession else {
-            return
-        }
-        guard
-            preparedSession.key != key
-                || preparedSession.conversationBaseState != conversationBaseState
-        else {
-            return
-        }
-        await sessionFactory.cleanupFailedAttempt(
-            preparedSession,
-            requestProviderCancellation: false
-        )
-        self.preparedSession = nil
-    }
-
     private func artifactSessionResources(
         for key: GraphChatOrchestrationScopeKey
     ) async -> GraphChatArtifactSessionResources {
-        if let artifactSession, artifactSession.key == key {
+        if let artifactSession = resources.artifactSession,
+           artifactSession.key == key {
             return artifactSession
         }
-        if let artifactSession {
-            await artifactSession.registry.removeAll(reason: .scopeChanged)
+
+        if let oldSession = resources.removeArtifactSession() {
+            await oldSession.registry.removeAll(
+                reason: GraphChatArtifactClearReasonMapper.scopeChangeReason(
+                    from: oldSession.key,
+                    to: key
+                )
+            )
+            stateMachine.transition(
+                .artifactSessionDiscarded(sessionID: oldSession.sessionID)
+            )
         }
         let sessionID = GraphChatAnswerArtifactSessionID()
-        let resources = GraphChatArtifactSessionResources(
+        let artifactSession = GraphChatArtifactSessionResources(
             key: key,
             sessionID: sessionID,
             registry: GraphChatAnswerArtifactRegistry(
@@ -656,55 +493,155 @@ actor GraphChatOrchestrator {
                 revalidator: artifactRevalidator
             )
         )
-        artifactSession = resources
-        return resources
-    }
-
-    private func artifactClearReason(
-        for reason: GraphChatConversationResetReason
-    ) -> GraphChatAnswerArtifactRegistryClearReason {
-        switch reason {
-        case .newConversation:
-            return .newConversation
-        case .graphChanged:
-            return .graphChanged
-        case .scopeChanged:
-            return .scopeChanged
-        case .graphLocked, .accessRevoked:
-            return .graphLocked
-        case .graphDeleted:
-            return .graphDeleted
-        case .sessionDiscarded:
-            return .sessionDiscarded
-        }
-    }
-
-    private func conversationStateForTurn(
-        for key: GraphChatOrchestrationScopeKey
-    ) -> GraphChatConversationState {
-        if let conversationState {
-            if conversationState.graphScope == key.graphScope,
-                conversationState.chatScope == key.chatScope
-            {
-                return conversationState
-            }
-            let transition = conversationStateReducer.transition(
-                conversationState,
-                to: key.chatScope
+        resources.installArtifactSession(artifactSession)
+        stateMachine.transition(
+            .artifactSessionInstalled(
+                key: key,
+                sessionID: sessionID
             )
-            self.conversationState = transition.state
-            pendingResetReason = .newConversation
-            return transition.state
-        }
-
-        let initial = GraphChatConversationState.initial(
-            graphScope: key.graphScope,
-            chatScope: key.chatScope,
-            resetReason: pendingResetReason
         )
-        conversationState = initial
-        pendingResetReason = .newConversation
-        return initial
+        return artifactSession
+    }
+
+    private func discardScopeMismatchedResources(
+        matching key: GraphChatOrchestrationScopeKey
+    ) async {
+        let discarded = resources.removeScopeMismatchedResources(
+            matching: key
+        )
+        if let preparedSession = discarded.preparedSession {
+            stateMachine.transition(
+                .preparedDiscarded(sessionID: preparedSession.sessionID)
+            )
+            await cleanupPreparedSession(preparedSession)
+        }
+        if let artifactSession = discarded.artifactSession {
+            await artifactSession.registry.removeAll(
+                reason: GraphChatArtifactClearReasonMapper.scopeChangeReason(
+                    from: artifactSession.key,
+                    to: key
+                )
+            )
+            stateMachine.transition(
+                .artifactSessionDiscarded(
+                    sessionID: artifactSession.sessionID
+                )
+            )
+        }
+    }
+
+    private func discardPreparedSession() async {
+        guard let preparedSession = resources.removePreparedSession() else {
+            return
+        }
+        stateMachine.transition(
+            .preparedDiscarded(sessionID: preparedSession.sessionID)
+        )
+        await cleanupPreparedSession(preparedSession)
+    }
+
+    private func cleanupPreparedSession(
+        _ preparedSession: GraphChatProviderSessionResources?
+    ) async {
+        guard let preparedSession else {
+            return
+        }
+        await sessionFactory.cleanupFailedAttempt(
+            preparedSession,
+            requestProviderCancellation: false
+        )
+    }
+
+    private func cancelActiveGenerationForNewRequest() async throws {
+        guard let activeGeneration = resources.activeGeneration else {
+            return
+        }
+        switch concurrentRequestPolicy {
+        case .cancelPrevious:
+            await cancelAndWait(activeGeneration)
+        }
+    }
+
+    private func cancelAndWait(
+        _ activeGeneration: GraphChatActiveGenerationResources
+    ) async {
+        stateMachine.transition(
+            .cancellationRequested(
+                requestID: activeGeneration.identity.requestID
+            )
+        )
+        activeGeneration.task.cancel()
+        if let providerResources = activeGeneration.providerResources {
+            await sessionFactory.requestCancellation(providerResources)
+        }
+        await activeGeneration.task.value
+    }
+
+    private func cancel(requestID: UUID) async {
+        guard let activeGeneration = resources.activeGeneration,
+              activeGeneration.identity.requestID == requestID else {
+            return
+        }
+        stateMachine.transition(
+            .cancellationRequested(requestID: requestID)
+        )
+        activeGeneration.task.cancel()
+        if let providerResources = activeGeneration.providerResources {
+            await sessionFactory.requestCancellation(providerResources)
+        }
+    }
+
+    private func setActiveResources(
+        _ providerResources: GraphChatProviderSessionResources,
+        requestID: UUID
+    ) {
+        guard resources.setActiveProviderResources(
+            providerResources,
+            requestID: requestID
+        ) else {
+            return
+        }
+        stateMachine.transition(
+            .activeSessionChanged(
+                requestID: requestID,
+                sessionID: providerResources.sessionID
+            )
+        )
+    }
+
+    private func commit(
+        _ finalizedTurn: GraphChatFinalizedTurn,
+        generation: GraphChatGenerationIdentity,
+        expectedCommittedState: GraphChatConversationState?
+    ) throws {
+        try validateCurrentGeneration(generation)
+        try conversationRuntime.commit(
+            finalizedTurn.conversationState,
+            expectedCommittedState: expectedCommittedState
+        )
+    }
+
+    private func validateCurrentGeneration(
+        _ generation: GraphChatGenerationIdentity
+    ) throws {
+        try Task.checkCancellation()
+        guard stateMachine.isCurrent(generation),
+              resources.activeGeneration?.identity == generation else {
+            throw CancellationError()
+        }
+    }
+
+    private func finishRequest(
+        requestID: UUID,
+        outcome: GraphChatRequestOutcome
+    ) {
+        _ = resources.clearActiveGeneration(requestID: requestID)
+        stateMachine.transition(
+            .requestFinished(
+                requestID: requestID,
+                outcome: outcome
+            )
+        )
     }
 
     private func mapError(_ error: Error) -> GraphChatError {
