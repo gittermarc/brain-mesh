@@ -508,6 +508,207 @@ struct GraphChatAnswerFinalizerTests {
     }
 
     @Test
+    func primaryEvidenceIsRetainedWhenModelOmitsAllEvidenceIDs() async throws {
+        let fixture = AnswerFinalizerFixture()
+        let evidence = fixture.makeEvidence(40)
+        let resources = try await fixture.makeResources(evidence: [evidence])
+        let primary = try await fixture.makePrimaryResult(
+            in: resources,
+            evidence: [evidence]
+        )
+
+        let turn = try await fixture.finalize(
+            fixture.providerAnswer(),
+            resources: resources,
+            primaryResult: primary
+        )
+
+        #expect(turn.answer.evidence == [evidence])
+        #expect(turn.answer.hasInsufficientEvidence == false)
+        #expect(turn.conversationState.turnContexts.last?.evidenceIDs == [evidence.id])
+    }
+
+    @Test
+    func primaryArtifactIsRetainedWhenModelOmitsAllArtifactIDs() async throws {
+        let fixture = AnswerFinalizerFixture()
+        let evidence = fixture.makeEvidence(41)
+        let resources = try await fixture.makeResources(evidence: [evidence])
+        let artifactID = try await fixture.stageArtifact(
+            in: resources,
+            evidenceID: evidence.id
+        )
+        let primary = try await fixture.makePrimaryResult(
+            in: resources,
+            evidence: [evidence],
+            artifactIDs: [artifactID]
+        )
+
+        let turn = try await fixture.finalize(
+            fixture.providerAnswer(),
+            resources: resources,
+            primaryResult: primary
+        )
+
+        #expect(turn.answer.evidenceIDs == [evidence.id])
+        #expect(turn.answer.artifactIDs == [artifactID])
+        #expect(turn.committedArtifactIDs == [artifactID])
+    }
+
+    @Test
+    func hallucinatedModelUUIDsCannotReplaceThePrimaryResult() async throws {
+        let fixture = AnswerFinalizerFixture()
+        let evidence = fixture.makeEvidence(42)
+        let resources = try await fixture.makeResources(evidence: [evidence])
+        let artifactID = try await fixture.stageArtifact(
+            in: resources,
+            evidenceID: evidence.id
+        )
+        let primary = try await fixture.makePrimaryResult(
+            in: resources,
+            evidence: [evidence],
+            artifactIDs: [artifactID]
+        )
+        let inventedEvidenceID = GraphEvidenceID(rawValue: fixture.uuid(942))
+        let inventedArtifactID = GraphChatAnswerArtifactID(
+            rawValue: fixture.uuid(943)
+        )
+
+        let turn = try await fixture.finalize(
+            fixture.providerAnswer(
+                evidenceIDs: [inventedEvidenceID],
+                artifactIDs: [inventedArtifactID]
+            ),
+            resources: resources,
+            primaryResult: primary
+        )
+
+        #expect(turn.answer.evidenceIDs == [evidence.id])
+        #expect(turn.answer.artifactIDs == [artifactID])
+    }
+
+    @Test
+    func foreignValidLookingEvidenceIDIsDiscardedWhilePrimaryEvidenceRemains() async throws {
+        let fixture = AnswerFinalizerFixture()
+        let primaryEvidence = fixture.makeEvidence(43)
+        let foreignEvidence = fixture.makeEvidence(44)
+        let resources = try await fixture.makeResources(
+            evidence: [primaryEvidence]
+        )
+        let primary = try await fixture.makePrimaryResult(
+            in: resources,
+            evidence: [primaryEvidence]
+        )
+
+        let turn = try await fixture.finalize(
+            fixture.providerAnswer(evidenceIDs: [foreignEvidence.id]),
+            resources: resources,
+            primaryResult: primary
+        )
+
+        #expect(turn.answer.evidenceIDs == [primaryEvidence.id])
+        #expect(turn.answer.evidenceIDs.contains(foreignEvidence.id) == false)
+    }
+
+    @Test
+    func additionalCurrentTurnEvidenceSupplementsWithoutRemovingPrimaryEvidence() async throws {
+        let fixture = AnswerFinalizerFixture()
+        let primaryEvidence = fixture.makeEvidence(45)
+        let supplementalEvidence = fixture.makeEvidence(46)
+        let resources = try await fixture.makeResources(
+            evidence: [primaryEvidence, supplementalEvidence]
+        )
+        let primary = try await fixture.makePrimaryResult(
+            in: resources,
+            evidence: [primaryEvidence]
+        )
+
+        let turn = try await fixture.finalize(
+            fixture.providerAnswer(evidenceIDs: [supplementalEvidence.id]),
+            resources: resources,
+            primaryResult: primary
+        )
+
+        #expect(
+            turn.answer.evidenceIDs
+                == [primaryEvidence.id, supplementalEvidence.id]
+        )
+    }
+
+    @Test
+    func primaryResultFromAnEarlierTurnIsIgnored() async throws {
+        let fixture = AnswerFinalizerFixture()
+        let evidence = fixture.makeEvidence(47)
+        let resources = try await fixture.makeResources(evidence: [evidence])
+        let foreignTurn = try await fixture.makePrimaryResult(
+            in: resources,
+            evidence: [evidence],
+            requestID: fixture.uuid(947)
+        )
+
+        let turn = try await fixture.finalize(
+            fixture.providerAnswer(),
+            resources: resources,
+            primaryResult: foreignTurn
+        )
+
+        #expect(turn.answer.evidence.isEmpty)
+        #expect(turn.answer.artifactIDs.isEmpty)
+    }
+
+    @Test
+    func primaryEmptyQueryForcesTypedNoResultsEvenWhenModelClaimsAnswer() async throws {
+        let fixture = AnswerFinalizerFixture()
+        let resources = try await fixture.makeResources()
+        let primary = try await fixture.makePrimaryResult(
+            in: resources,
+            state: .noResults,
+            evidence: []
+        )
+
+        let turn = try await fixture.finalize(
+            fixture.providerAnswer(
+                responseState: .answer,
+                directAnswer: "There are no matching projects."
+            ),
+            resources: resources,
+            primaryResult: primary
+        )
+
+        #expect(turn.answer.state == .noResults)
+        #expect(turn.answer.evidence.isEmpty)
+        #expect(turn.answer.artifactIDs.isEmpty)
+    }
+
+    @Test
+    func presentationFallbackNeverDropsPrimaryReferencesOrShowsTechnicalIDs() async throws {
+        let fixture = AnswerFinalizerFixture()
+        let evidence = fixture.makeEvidence(48)
+        let resources = try await fixture.makeResources(evidence: [evidence])
+        let artifactID = try await fixture.stageArtifact(
+            in: resources,
+            evidenceID: evidence.id
+        )
+        let primary = try await fixture.makePrimaryResult(
+            in: resources,
+            evidence: [evidence],
+            artifactIDs: [artifactID]
+        )
+        let technicalID = fixture.uuid(948).uuidString
+
+        let turn = try await fixture.finalize(
+            fixture.providerAnswer(
+                directAnswer: "Internal reference: \(technicalID)"
+            ),
+            resources: resources,
+            primaryResult: primary
+        )
+
+        #expect(turn.answer.directAnswer.contains(technicalID) == false)
+        #expect(turn.answer.evidenceIDs == [evidence.id])
+        #expect(turn.answer.artifactIDs == [artifactID])
+    }
+
+    @Test
     func localAnswerUsesTheFinalizerAndAtomicallyCommitsPendingClarification() async throws {
         let fixture = AnswerFinalizerFixture()
         let option = GraphChatPendingClarificationOption(
@@ -657,6 +858,7 @@ private struct AnswerFinalizerFixture {
         artifactContext: GraphChatArtifactCommitContext? = nil,
         context: GraphChatConversationContextSnapshot? = nil,
         language: GraphChatResponseLanguage = .english,
+        primaryResult: GraphChatToolExecutionLedgerEntry? = nil,
         answerFinalizer: GraphChatAnswerFinalizer? = nil
     ) async throws -> GraphChatFinalizedTurn {
         try await (answerFinalizer ?? finalizer).finalizeProviderTurn(
@@ -669,6 +871,7 @@ private struct AnswerFinalizerFixture {
                 continuationOperation: nil,
                 requestQuestion: "Continue the trusted operation",
                 expectedCommittedState: baseState,
+                primaryResult: primaryResult,
                 artifactContext: artifactContext ?? resources.artifactContext,
                 presentationRegistry: resources.presentationRegistry
             ),
@@ -706,6 +909,49 @@ private struct AnswerFinalizerFixture {
             transactionID: resources.artifactContext.transactionID,
             evidenceRegistry: resources.evidenceRegistry
         )
+    }
+
+    func makePrimaryResult(
+        in resources: Resources,
+        tool: GraphChatToolKind = .queryDetailValues,
+        state: GraphChatToolResultState = .success,
+        evidence: [GraphEvidence],
+        artifactIDs: [GraphChatAnswerArtifactID] = [],
+        requestID: UUID? = nil
+    ) async throws -> GraphChatToolExecutionLedgerEntry {
+        let ledger = GraphChatPrimaryResultLedger(
+            graphScope: graphScope,
+            chatScope: chatScope,
+            artifactSessionID: resources.artifactContext.sessionID
+        )
+        try await ledger.bind(requestID: requestID ?? self.requestID)
+        let artifacts = try await resources.artifactRegistry.validatedArtifacts(
+            for: artifactIDs.map { $0.rawValue.uuidString },
+            graphScope: graphScope,
+            sessionID: resources.artifactContext.sessionID,
+            transactionID: resources.artifactContext.transactionID
+        )
+        try await ledger.record(
+            response: GraphChatModelToolResponse(
+                tool: tool,
+                state: state,
+                content: "Validated primary result",
+                evidenceIDs: evidence.map(\.id),
+                artifactIDs: artifactIDs
+            ),
+            evidence: evidence,
+            artifacts: artifacts,
+            transactionID: resources.artifactContext.transactionID
+        )
+        guard let primary = await ledger.snapshotForTesting(
+            transactionID: resources.artifactContext.transactionID
+        ).primaryResult else {
+            throw GraphChatError(
+                code: .unexpected,
+                message: "The primary-result fixture could not create an eligible result."
+            )
+        }
+        return primary
     }
 
     func makeEvidence(_ index: Int) -> GraphEvidence {

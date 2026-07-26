@@ -16,6 +16,7 @@ nonisolated struct GraphChatProviderAnswerFinalizationInput: Sendable {
     let continuationOperation: GraphChatConversationContinuationOperation?
     let requestQuestion: String
     let expectedCommittedState: GraphChatConversationState
+    let primaryResult: GraphChatToolExecutionLedgerEntry?
     let artifactContext: GraphChatArtifactCommitContext
     let presentationRegistry: GraphChatPresentationRegistry
 }
@@ -180,9 +181,23 @@ nonisolated struct GraphChatAnswerFinalizer: Sendable {
         case .safe(let safeAnswer):
             return safeAnswer
         case .unsafe:
-            return presentationFirewall.replacementAnswer(
+            let replacement = presentationFirewall.replacementAnswer(
                 language: input.responseLanguage,
                 registry: registry
+            )
+            guard validatedPrimaryResult(
+                input.primaryResult,
+                input: input
+            ) != nil else {
+                return replacement
+            }
+            return GraphChatAnswer(
+                state: answer.state == .noResults ? .noResults : .answer,
+                directAnswer: replacement.directAnswer,
+                evidence: answer.evidence,
+                artifactIDs: answer.artifactIDs,
+                hasInsufficientEvidence: answer.hasInsufficientEvidence,
+                presentationContext: replacement.presentationContext
             )
         }
     }
@@ -195,7 +210,16 @@ nonisolated struct GraphChatAnswerFinalizer: Sendable {
     ) async throws -> GraphChatAnswer {
         try validateInputScopes(input)
         let providerAnswer = input.providerAnswer
-        let requestedArtifactIDValues = providerAnswer.artifactIDValues
+        let primaryResult = validatedPrimaryResult(input.primaryResult, input: input)
+        let responseState = authoritativeResponseState(
+            providerState: providerAnswer.responseState,
+            primaryResult: primaryResult
+        )
+        let primaryArtifactIDValues = primaryResult.map {
+            $0.artifactIDs.map { $0.rawValue.uuidString }
+        } ?? []
+        let requestedArtifactIDValues = primaryArtifactIDValues
+            + providerAnswer.artifactIDValues
             + providerAnswer.sections.flatMap(\.artifactIDValues)
         let registryArtifacts = try await artifactRegistry.validatedArtifacts(
             for: requestedArtifactIDValues,
@@ -204,8 +228,11 @@ nonisolated struct GraphChatAnswerFinalizer: Sendable {
             transactionID: input.artifactContext.transactionID
         )
 
+        let primaryEvidenceIDValues = primaryResult.map {
+            $0.evidenceIDs.map { $0.rawValue.uuidString }
+        } ?? []
         let rootRegisteredEvidence = await evidenceRegistry.validatedEvidence(
-            for: providerAnswer.evidenceIDValues
+            for: primaryEvidenceIDValues + providerAnswer.evidenceIDValues
         )
         let artifactRegisteredEvidence = await evidenceRegistry.evidence(
             for: registryArtifacts.flatMap(\.allEvidenceIDs)
@@ -278,7 +305,7 @@ nonisolated struct GraphChatAnswerFinalizer: Sendable {
                     querySummary: sectionArtifactIDs.compactMap {
                         artifactsByID[$0]?.querySummary
                     }.first,
-                    state: sectionAnswerState(for: providerAnswer.responseState)
+                    state: sectionAnswerState(for: responseState)
                 )
             )
         }
@@ -315,9 +342,10 @@ nonisolated struct GraphChatAnswerFinalizer: Sendable {
         let candidateState = await conversationTransaction.snapshot()
         let latestToolState = candidateState.resultContexts.last?.state
 
-        switch providerAnswer.responseState {
+        switch responseState {
         case .answer:
-            if let proposal = providerAnswer.referenceProposal {
+            if primaryResult == nil,
+               let proposal = providerAnswer.referenceProposal {
                 let resolution = try await referenceResolver.resolve(
                     proposal,
                     in: input.conversationContext,
@@ -363,7 +391,8 @@ nonisolated struct GraphChatAnswerFinalizer: Sendable {
             )
 
         case .noResults:
-            guard latestToolState == .noResults else {
+            guard primaryResult?.completionStatus == .noResults
+                    || latestToolState == .noResults else {
                 return GraphChatAnswer(
                     state: .answer,
                     directAnswer: providerAnswer.directAnswer,
@@ -612,6 +641,64 @@ nonisolated struct GraphChatAnswerFinalizer: Sendable {
               input.expectedCommittedState.graphScope == input.artifactContext.graphScope,
               input.expectedCommittedState.chatScope == input.artifactContext.chatScope else {
             throw GraphChatTurnCommitError.artifactContextMismatch
+        }
+    }
+
+    private func validatedPrimaryResult(
+        _ candidate: GraphChatToolExecutionLedgerEntry?,
+        input: GraphChatProviderAnswerFinalizationInput
+    ) -> GraphChatToolExecutionLedgerEntry? {
+        guard let candidate,
+              candidate.isEligibleAsPrimary,
+              candidate.kind == GraphChatPrimaryResultKind(tool: candidate.tool),
+              candidate.belongsTo(
+                requestID: input.requestID,
+                graphScope: input.artifactContext.graphScope,
+                chatScope: input.artifactContext.chatScope,
+                artifactSessionID: input.artifactContext.sessionID,
+                transactionID: input.artifactContext.transactionID
+              ),
+              candidate.evidence.allSatisfy({
+                  $0.sourceReference.graphID
+                      == input.artifactContext.graphScope.graphID
+              }),
+              candidate.artifacts.allSatisfy({
+                  $0.graphScope == input.artifactContext.graphScope
+                      && $0.sessionID == input.artifactContext.sessionID
+              }) else {
+            return nil
+        }
+
+        switch candidate.completionStatus {
+        case .succeeded:
+            guard candidate.metadata.resultState == .success,
+                  candidate.hasAuthoritativeReferences else {
+                return nil
+            }
+        case .noResults:
+            guard candidate.metadata.resultState == .noResults else {
+                return nil
+            }
+        case .unverified:
+            return nil
+        }
+        return candidate
+    }
+
+    private func authoritativeResponseState(
+        providerState: GraphChatProviderResponseState,
+        primaryResult: GraphChatToolExecutionLedgerEntry?
+    ) -> GraphChatProviderResponseState {
+        guard let primaryResult else {
+            return providerState
+        }
+        switch primaryResult.completionStatus {
+        case .succeeded:
+            return .answer
+        case .noResults:
+            return .noResults
+        case .unverified:
+            return providerState
         }
     }
 

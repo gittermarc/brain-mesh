@@ -23,6 +23,7 @@ nonisolated struct GraphChatProviderSessionResources: Sendable {
     let artifactRegistry: GraphChatAnswerArtifactRegistry
     let artifactSessionID: GraphChatAnswerArtifactSessionID
     let artifactTransactionID: GraphChatAnswerArtifactTransactionID
+    let primaryResultLedger: GraphChatPrimaryResultLedger
     let conversationBaseState: GraphChatConversationState
     let conversationContext: GraphChatConversationContextSnapshot
     let responseLanguage: GraphChatResponseLanguage
@@ -106,6 +107,9 @@ actor GraphChatProviderAttemptLifecycle {
             registry: resources.artifactRegistry,
             transactionID: resources.artifactTransactionID
         )
+        await resources.primaryResultLedger.discard(
+            transactionID: resources.artifactTransactionID
+        )
         await discardProviderSessionIfNeeded(
             provider: provider,
             sessionID: resources.sessionID
@@ -113,9 +117,12 @@ actor GraphChatProviderAttemptLifecycle {
     }
 
     func finishCommittedAttempt(
-        evidenceRegistry: GraphChatEvidenceRegistry
+        evidenceRegistry: GraphChatEvidenceRegistry,
+        primaryResultLedger: GraphChatPrimaryResultLedger,
+        requestID: UUID
     ) async {
         await cleanEvidenceIfNeeded(evidenceRegistry)
+        await primaryResultLedger.finish(requestID: requestID)
     }
 
     func snapshotForTesting() -> GraphChatProviderAttemptLifecycleSnapshot {

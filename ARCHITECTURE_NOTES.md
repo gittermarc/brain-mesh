@@ -773,6 +773,26 @@ Vertrag:
 - Der korrigierte Tool-Call durchläuft erneut die vollständige Plan-, Scope-, Repository-, Evidence- und Budgetvalidierung. Ein zweiter semantischer Fehler liefert einen sicheren terminalen Repair-Status; ein weiterer Repair wird nicht angeboten.
 - Repair-Observability protokolliert nur Outcome, Tooltyp, Fehlerklasse und Context-Retry-Zähler; Fragen, Werte, Namen und technische IDs werden nicht geloggt.
 
+### Deterministische Primary-Result-Retention
+
+Pfade:
+
+- `BrainMesh/GraphChat/Provider/GraphChatPrimaryResultLedger.swift`
+- `BrainMesh/GraphChat/Provider/GraphChatProviderSessionFactory.swift`
+- `BrainMesh/GraphChat/Provider/GraphChatProviderSessionResources.swift`
+- `BrainMesh/GraphChat/Orchestration/GraphChatRequestPipeline.swift`
+- `BrainMesh/GraphChat/Orchestration/GraphChatAnswerFinalizer.swift`
+
+Vertrag:
+
+- Jeder Provider-Request erhält ein actor-isoliertes, nicht persistiertes Execution Ledger. Es enthält ausschließlich value-only Evidence-/Artifact-Snapshots und Bindungen an Graph, Chat-Scope, Artifact-Session, Request und Artifact-Transaktion.
+- Ein Wrapper um den kontrollierten Tool Runner erfasst nur vollständig zurückgekehrte Tool-Responses. Failed- oder Cancellation-Pfade erzeugen keinen Eintrag; ein fehlgeschlagener Context-Retry-Versuch verwirft seine Transaktion vor dem neuen Versuch.
+- Primär sind ausschließlich revalidierte `.success`-Ergebnisse mit Evidence beziehungsweise Artifact sowie typisierte `.noResults`-Ergebnisse antworttragender Read-Tools.
+- Die stabile Tool-Priorität lautet `queryDetailValues` vor `getNode`, `getNeighbors`, `searchGraph`, `graphStats` und `describeGraphSchema`. Innerhalb desselben Tooltyps steht ein verifiziertes datenhaltiges Success-Ergebnis vor einem leeren No-Results-Ergebnis; bei gleichem Status gewinnt die später vollständig abgeschlossene Ausführung.
+- Der Finalizer vereinigt autoritative primäre Referenzen zuerst mit zusätzlich modellseitig genannten, aktuell registrierten Referenzen. Anschließend laufen unverändert Live-Evidence-, Artifact-, Scope-, Session- und Transaktionsvalidierung.
+- Ein primäres No-Results-Ergebnis setzt den typisierten Antwortzustand appseitig. Ein primäres Success-Ergebnis kann durch modellseitiges `unsupported`, `clarification` oder fehlerhafte IDs nicht entfernt werden.
+- Die Presentation Firewall bleibt die letzte Textgrenze. Bei einer Ersatzantwort bleiben bereits validierte primäre Evidence-/Artifact-Referenzen erhalten, technische IDs erscheinen aber nicht im sichtbaren Text.
+
 ### Nicht gehaltene Utility Tasks
 
 Beispiel:

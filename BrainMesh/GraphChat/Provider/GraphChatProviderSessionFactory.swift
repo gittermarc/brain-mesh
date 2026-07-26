@@ -72,6 +72,11 @@ nonisolated struct GraphChatProviderSessionFactory: Sendable {
         responseLanguage: GraphChatResponseLanguage
     ) async throws -> GraphChatProviderSessionResources {
         let schemaContext = try await loadSchema(for: key)
+        let primaryResultLedger = GraphChatPrimaryResultLedger(
+            graphScope: key.graphScope,
+            chatScope: key.chatScope,
+            artifactSessionID: artifactSession.sessionID
+        )
         return try await makeSession(
             purpose: .standard,
             key: key,
@@ -83,7 +88,8 @@ nonisolated struct GraphChatProviderSessionFactory: Sendable {
             toolBudgetPolicy: budgetPolicy(for: .standard),
             recoveryCoordinator: GraphChatProviderRecoveryCoordinator(
                 observability: observability
-            )
+            ),
+            primaryResultLedger: primaryResultLedger
         )
     }
 
@@ -108,7 +114,8 @@ nonisolated struct GraphChatProviderSessionFactory: Sendable {
             toolBudgetPolicy: recoveryBudgetPolicy(
                 carriesPendingRepair: carriesPendingRepair
             ),
-            recoveryCoordinator: resources.recoveryCoordinator
+            recoveryCoordinator: resources.recoveryCoordinator,
+            primaryResultLedger: resources.primaryResultLedger
         )
     }
 
@@ -161,10 +168,13 @@ nonisolated struct GraphChatProviderSessionFactory: Sendable {
     }
 
     func finishCommittedAttempt(
-        _ resources: GraphChatProviderSessionResources
+        _ resources: GraphChatProviderSessionResources,
+        requestID: UUID
     ) async {
         await resources.lifecycle.finishCommittedAttempt(
-            evidenceRegistry: resources.evidenceRegistry
+            evidenceRegistry: resources.evidenceRegistry,
+            primaryResultLedger: resources.primaryResultLedger,
+            requestID: requestID
         )
     }
 
@@ -251,7 +261,8 @@ nonisolated struct GraphChatProviderSessionFactory: Sendable {
         conversationContext: GraphChatConversationContextSnapshot,
         responseLanguage: GraphChatResponseLanguage,
         toolBudgetPolicy: GraphChatToolBudgetPolicy,
-        recoveryCoordinator: GraphChatProviderRecoveryCoordinator
+        recoveryCoordinator: GraphChatProviderRecoveryCoordinator,
+        primaryResultLedger: GraphChatPrimaryResultLedger
     ) async throws -> GraphChatProviderSessionResources {
         try Task.checkCancellation()
         guard schemaContext.graphScope == key.graphScope else {
@@ -290,7 +301,7 @@ nonisolated struct GraphChatProviderSessionFactory: Sendable {
             reducer: conversationStateReducer
         )
         let lifecycle = GraphChatProviderAttemptLifecycle()
-        let toolRunner = toolRunnerFactory.makeRunner(
+        let baseToolRunner = toolRunnerFactory.makeRunner(
             scope: key.chatScope,
             schemaContext: schemaContext,
             budget: toolBudget,
@@ -307,6 +318,15 @@ nonisolated struct GraphChatProviderSessionFactory: Sendable {
             calendar: calendar,
             timeZone: timeZone
         )
+        let toolRunner = GraphChatPrimaryResultRecordingToolRunner(
+            base: baseToolRunner,
+            ledger: primaryResultLedger,
+            graphScope: key.graphScope,
+            artifactSessionID: artifactSession.sessionID,
+            transactionID: artifactTransactionID,
+            evidenceRegistry: evidenceRegistry,
+            artifactRegistry: artifactSession.registry
+        )
 
         let registeredKinds = await toolRunner.registeredToolKinds()
         let registeredIdentifiers = await toolRunner.registeredToolIdentifiers()
@@ -318,6 +338,9 @@ nonisolated struct GraphChatProviderSessionFactory: Sendable {
               registeredKinds.count == 6 else {
             await evidenceRegistry.removeAll()
             await artifactSession.registry.rollback(
+                transactionID: artifactTransactionID
+            )
+            await primaryResultLedger.discard(
                 transactionID: artifactTransactionID
             )
             throw controlledToolRegistrationError(for: purpose)
@@ -351,6 +374,7 @@ nonisolated struct GraphChatProviderSessionFactory: Sendable {
                 artifactRegistry: artifactSession.registry,
                 artifactSessionID: artifactSession.sessionID,
                 artifactTransactionID: artifactTransactionID,
+                primaryResultLedger: primaryResultLedger,
                 conversationBaseState: conversationBaseState,
                 conversationContext: conversationContext,
                 responseLanguage: responseLanguage,
@@ -365,6 +389,9 @@ nonisolated struct GraphChatProviderSessionFactory: Sendable {
             }
             await evidenceRegistry.removeAll()
             await artifactSession.registry.rollback(
+                transactionID: artifactTransactionID
+            )
+            await primaryResultLedger.discard(
                 transactionID: artifactTransactionID
             )
             if error is CancellationError || Task.isCancelled {

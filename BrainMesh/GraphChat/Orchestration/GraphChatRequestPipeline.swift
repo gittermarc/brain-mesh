@@ -177,6 +177,17 @@ nonisolated struct GraphChatRequestPipeline: Sendable {
                 phase: .completed,
                 usesProvider: true
             )
+            do {
+                try await initialResources.primaryResultLedger.bind(
+                    requestID: input.requestID
+                )
+            } catch {
+                await sessionFactory.cleanupFailedAttempt(
+                    initialResources,
+                    requestProviderCancellation: false
+                )
+                throw error
+            }
 
             var completedResourcesForCleanup: GraphChatProviderSessionResources?
             do {
@@ -207,6 +218,16 @@ nonisolated struct GraphChatRequestPipeline: Sendable {
                 let validationContext =
                     execution.request.conversationContext
                     ?? execution.resources.conversationContext
+                let primaryResult = await execution.resources
+                    .primaryResultLedger.primaryResult(
+                        requestID: input.requestID,
+                        graphScope: execution.resources.key.graphScope,
+                        chatScope: execution.resources.key.chatScope,
+                        artifactSessionID:
+                            execution.resources.artifactSessionID,
+                        transactionID:
+                            execution.resources.artifactTransactionID
+                    )
                 await record(
                     input.requestID,
                     stage: .answerFinalization,
@@ -223,6 +244,7 @@ nonisolated struct GraphChatRequestPipeline: Sendable {
                         continuationOperation: plan.continuationOperation,
                         requestQuestion: plan.providerQuestion,
                         expectedCommittedState: plan.expectedCommittedState,
+                        primaryResult: primaryResult,
                         artifactContext: GraphChatArtifactCommitContext(
                             graphScope: execution.resources.key.graphScope,
                             chatScope: execution.resources.key.chatScope,
@@ -261,7 +283,8 @@ nonisolated struct GraphChatRequestPipeline: Sendable {
                     throw error
                 }
                 await sessionFactory.finishCommittedAttempt(
-                    execution.resources
+                    execution.resources,
+                    requestID: input.requestID
                 )
                 completedResourcesForCleanup = nil
                 return GraphChatRequestPipelineCompletion(

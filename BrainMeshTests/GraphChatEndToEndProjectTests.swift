@@ -6,6 +6,23 @@ struct GraphChatEndToEndProjectTests {
     @MainActor
     @Test
     func importantOpenProjectTasksExposeValidatedEvidenceAndVisibleInterpretationFilters() async throws {
+        try await runImportantOpenProjectTasksScenario(
+            modelIncludesEvidenceIDs: true
+        )
+    }
+
+    @MainActor
+    @Test
+    func importantOpenProjectTasksRetainEvidenceAndArtifactWhenModelOmitsTheirIDs() async throws {
+        try await runImportantOpenProjectTasksScenario(
+            modelIncludesEvidenceIDs: false
+        )
+    }
+
+    @MainActor
+    private func runImportantOpenProjectTasksScenario(
+        modelIncludesEvidenceIDs: Bool
+    ) async throws {
         let store = try BrainMeshTestContainer.makeInMemoryStore()
         let fixtures = BrainMeshFixtureBuilder(context: store.context)
         let timeZone = try #require(TimeZone(identifier: "Europe/Berlin"))
@@ -147,7 +164,9 @@ struct GraphChatEndToEndProjectTests {
                             .completed(
                                 GraphChatProviderTestSupport.makeFinalAnswer(
                                     directAnswer: "Als wichtig wurden hohe Priorität, offener Status und überfällige Deadline verwendet.",
-                                    evidenceIDs: expected.evidence.map(\.id)
+                                    evidenceIDs: modelIncludesEvidenceIDs
+                                        ? expected.evidence.map(\.id)
+                                        : []
                                 )
                             )
                         )
@@ -167,6 +186,10 @@ struct GraphChatEndToEndProjectTests {
                     store: store,
                     schemaService: schemaService,
                     repository: repository
+                ),
+                artifactRevalidator: GraphChatLiveAnswerArtifactRevalidator(
+                    evidenceValidator: evidenceValidator,
+                    sourceRepository: repository
                 ),
                 evidenceValidator: evidenceValidator,
                 referenceDate: { referenceDate },
@@ -202,6 +225,7 @@ struct GraphChatEndToEndProjectTests {
             Set(answer.evidence.map { evidence in evidence.id })
                 == Set(expected.evidence.map { evidence in evidence.id })
         )
+        #expect(answer.artifactIDs.isEmpty == false)
         #expect(answer.appliedFilters.map { filter in filter.fieldName } == [
             "Priorität", "Status", "Deadline"
         ])
