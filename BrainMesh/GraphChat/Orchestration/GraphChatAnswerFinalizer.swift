@@ -31,6 +31,14 @@ nonisolated struct GraphChatLocalAnswerFinalizationInput: Hashable, Sendable {
     let responseLanguage: GraphChatResponseLanguage
 }
 
+nonisolated enum GraphChatAnswerFinalizationError:
+    Error,
+    Hashable,
+    Sendable
+{
+    case missingAuthoritativeReferences
+}
+
 nonisolated struct GraphChatAnswerFinalizer: Sendable {
     private let conversationStateReducer: GraphChatConversationStateReducer
     private let referenceResolver: GraphChatConversationReferenceResolver
@@ -39,6 +47,8 @@ nonisolated struct GraphChatAnswerFinalizer: Sendable {
     private let evidenceValidator: any GraphEvidenceValidating
     private let commitCoordinator: GraphChatTurnCommitCoordinator
     private let presentationFirewall: GraphChatPresentationFirewall
+    private let fallbackPolicy: GraphChatDeterministicAnswerFallbackPolicy
+    private let fallbackRenderer: GraphChatDeterministicAnswerFallbackRenderer
 
     init(
         conversationStateReducer: GraphChatConversationStateReducer =
@@ -54,7 +64,11 @@ nonisolated struct GraphChatAnswerFinalizer: Sendable {
         commitCoordinator: GraphChatTurnCommitCoordinator =
             GraphChatTurnCommitCoordinator(),
         presentationFirewall: GraphChatPresentationFirewall =
-            GraphChatPresentationFirewall()
+            GraphChatPresentationFirewall(),
+        fallbackPolicy: GraphChatDeterministicAnswerFallbackPolicy =
+            GraphChatDeterministicAnswerFallbackPolicy(),
+        fallbackRenderer: GraphChatDeterministicAnswerFallbackRenderer =
+            GraphChatDeterministicAnswerFallbackRenderer()
     ) {
         self.conversationStateReducer = conversationStateReducer
         self.referenceResolver = referenceResolver
@@ -63,6 +77,8 @@ nonisolated struct GraphChatAnswerFinalizer: Sendable {
         self.evidenceValidator = evidenceValidator
         self.commitCoordinator = commitCoordinator
         self.presentationFirewall = presentationFirewall
+        self.fallbackPolicy = fallbackPolicy
+        self.fallbackRenderer = fallbackRenderer
     }
 
     func finalizeProviderTurn(
@@ -130,19 +146,11 @@ nonisolated struct GraphChatAnswerFinalizer: Sendable {
             registry: registry,
             language: input.responseLanguage
         )
-        let answer: GraphChatAnswer
-        switch presentationFirewall.present(
-            validatedAnswer,
+        let answer = try finalizedPresentation(
+            for: validatedAnswer,
+            source: nil,
             context: presentationContext
-        ) {
-        case .safe(let safeAnswer):
-            answer = safeAnswer
-        case .unsafe:
-            answer = presentationFirewall.replacementAnswer(
-                language: input.responseLanguage,
-                registry: registry
-            )
-        }
+        )
         return try await commitCoordinator.commit(
             GraphChatTurnCommitInput(
                 requestID: input.requestID,
@@ -174,30 +182,228 @@ nonisolated struct GraphChatAnswerFinalizer: Sendable {
             registry: registry,
             language: input.responseLanguage
         )
+        let primaryResult = validatedPrimaryResult(
+            input.primaryResult,
+            input: input
+        )
+        let source = GraphChatDeterministicAnswerFallbackSource(
+            primaryResult: primaryResult,
+            retaining: answer
+        )
+        return try finalizedPresentation(
+            for: answer,
+            source: source,
+            context: presentationContext
+        )
+    }
+
+    private func finalizedPresentation(
+        for answer: GraphChatAnswer,
+        source: GraphChatDeterministicAnswerFallbackSource?,
+        context: GraphChatPresentationContext
+    ) throws -> GraphChatAnswer {
+        try Task.checkCancellation()
         switch presentationFirewall.present(
             answer,
-            context: presentationContext
+            context: context
+        ) {
+        case .safe(let safeAnswer):
+            return try finalizedSafeAnswer(
+                safeAnswer,
+                source: source,
+                context: context
+            )
+        case .unsafe:
+            return try typedFallbackAnswer(
+                replacing: answer,
+                source: source,
+                context: context,
+                unsafePresentation: true
+            )
+        }
+    }
+
+    private func finalizedSafeAnswer(
+        _ answer: GraphChatAnswer,
+        source: GraphChatDeterministicAnswerFallbackSource?,
+        context: GraphChatPresentationContext
+    ) throws -> GraphChatAnswer {
+        guard answer.state == .answer else {
+            return answer
+        }
+
+        if let source, source.completionStatus == .succeeded {
+            guard source.hasAuthoritativeReferences,
+                  (
+                    answer.evidence.isEmpty == false
+                        || answer.artifactIDs.isEmpty == false
+                  ) else {
+                throw GraphChatAnswerFinalizationError
+                    .missingAuthoritativeReferences
+            }
+            if fallbackPolicy.fallbackReason(
+                for: answer,
+                source: source
+            ) != nil {
+                return try typedFallbackAnswer(
+                    replacing: answer,
+                    source: source,
+                    context: context,
+                    unsafePresentation: false
+                )
+            }
+            return answer
+        }
+
+        guard answer.directAnswer.trimmingCharacters(
+            in: .whitespacesAndNewlines
+        ).isEmpty else {
+            return answer
+        }
+        return try typedFallbackAnswer(
+            replacing: answer,
+            source: nil,
+            context: context,
+            unsafePresentation: false
+        )
+    }
+
+    private func typedFallbackAnswer(
+        replacing answer: GraphChatAnswer,
+        source: GraphChatDeterministicAnswerFallbackSource?,
+        context: GraphChatPresentationContext,
+        unsafePresentation: Bool
+    ) throws -> GraphChatAnswer {
+        try Task.checkCancellation()
+        let localizer = GraphChatResponseLocalizer(
+            language: context.language
+        )
+
+        switch answer.state {
+        case .answer:
+            let text: String
+            if let source, source.completionStatus == .succeeded {
+                guard source.hasAuthoritativeReferences,
+                      (
+                        answer.evidence.isEmpty == false
+                            || answer.artifactIDs.isEmpty == false
+                      ) else {
+                    throw GraphChatAnswerFinalizationError
+                        .missingAuthoritativeReferences
+                }
+                let rendered = fallbackRenderer.render(
+                    source: source,
+                    language: context.language
+                )
+                text = fallbackPolicy.containsTechnicalPresentation(rendered)
+                    ? fallbackRenderer.genericValidatedResult(
+                        language: context.language
+                    )
+                    : rendered
+            } else {
+                text = unsafePresentation
+                    ? localizer.unsafePresentation()
+                    : localizer.answerUnavailable()
+            }
+            return presentationSafeFallbackAnswer(
+                text: text,
+                replacing: answer,
+                source: source,
+                context: context
+            )
+
+        case .noResults:
+            return GraphChatAnswer(
+                state: .noResults,
+                directAnswer: localizer.noResults(),
+                evidence: answer.evidence,
+                artifactIDs: answer.artifactIDs,
+                hasInsufficientEvidence: true,
+                presentationContext: context
+            )
+
+        case .unsupported(let capability):
+            return GraphChatAnswer(
+                state: .unsupported(capability),
+                directAnswer: localizer.unsupported(capability),
+                hasInsufficientEvidence: false,
+                presentationContext: context
+            )
+
+        case .clarification(let clarification):
+            let options = clarification.options.compactMap { option in
+                switch presentationFirewall.present(
+                    option.title,
+                    using: context.registry
+                ) {
+                case .safe(let title):
+                    return GraphChatClarificationOption(
+                        id: option.id,
+                        title: title
+                    )
+                case .unsafe:
+                    return nil
+                }
+            }
+            let question = localizer.clarificationQuestion(
+                reason: .ambiguous
+            )
+            return GraphChatAnswer(
+                state: .clarification(
+                    GraphChatClarification(
+                        id: clarification.id,
+                        question: question,
+                        options: options
+                    )
+                ),
+                directAnswer: question,
+                hasInsufficientEvidence: true,
+                presentationContext: context
+            )
+        }
+    }
+
+    private func presentationSafeFallbackAnswer(
+        text: String,
+        replacing answer: GraphChatAnswer,
+        source: GraphChatDeterministicAnswerFallbackSource?,
+        context: GraphChatPresentationContext
+    ) -> GraphChatAnswer {
+        let candidate = GraphChatAnswer(
+            state: .answer,
+            directAnswer: text,
+            evidence: answer.evidence,
+            artifactIDs: answer.artifactIDs,
+            appliedFilters: source?.appliedFilters ?? [],
+            hasInsufficientEvidence: answer.evidence.isEmpty
+                && answer.artifactIDs.isEmpty,
+            presentationContext: context
+        )
+        switch presentationFirewall.present(
+            candidate,
+            context: context
         ) {
         case .safe(let safeAnswer):
             return safeAnswer
         case .unsafe:
-            let replacement = presentationFirewall.replacementAnswer(
-                language: input.responseLanguage,
-                registry: registry
-            )
-            guard validatedPrimaryResult(
-                input.primaryResult,
-                input: input
-            ) != nil else {
-                return replacement
+            let genericText: String
+            if source?.hasAuthoritativeReferences == true {
+                genericText = fallbackRenderer.genericValidatedResult(
+                    language: context.language
+                )
+            } else {
+                genericText = GraphChatResponseLocalizer(
+                    language: context.language
+                ).unsafePresentation()
             }
             return GraphChatAnswer(
-                state: answer.state == .noResults ? .noResults : .answer,
-                directAnswer: replacement.directAnswer,
+                state: .answer,
+                directAnswer: genericText,
                 evidence: answer.evidence,
                 artifactIDs: answer.artifactIDs,
-                hasInsufficientEvidence: answer.hasInsufficientEvidence,
-                presentationContext: replacement.presentationContext
+                hasInsufficientEvidence: answer.evidence.isEmpty
+                    && answer.artifactIDs.isEmpty,
+                presentationContext: context
             )
         }
     }

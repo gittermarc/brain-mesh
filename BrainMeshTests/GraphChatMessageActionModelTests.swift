@@ -91,7 +91,7 @@ struct GraphChatMessageActionModelTests {
     }
 
     @Test
-    func copyRejectsEmptyAndStreamingAssistantStates() {
+    func copyRejectsStreamingAndUsesTheNormalizedTerminalAnswer() throws {
         let streaming = GraphChatAssistantMessageState(question: "Frage")
         var empty = GraphChatAssistantMessageState(question: "Frage")
         empty.apply(
@@ -103,7 +103,15 @@ struct GraphChatMessageActionModelTests {
         )
 
         #expect(GraphChatCopyContentBuilder.payload(for: streaming) == nil)
-        #expect(GraphChatCopyContentBuilder.payload(for: empty) == nil)
+        let payload = try #require(
+            GraphChatCopyContentBuilder.payload(for: empty)
+        )
+        #expect(
+            payload.text
+                == GraphChatResponseLocalizer(language: .german)
+                    .answerUnavailable()
+        )
+        #expect(payload.text == empty.text)
     }
 
     @Test

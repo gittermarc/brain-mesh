@@ -20,8 +20,147 @@ struct GraphChatEndToEndProjectTests {
     }
 
     @MainActor
+    @Test
+    func emptyModelTextRendersTheValidatedFilteredProjectResults() async throws {
+        try await runImportantOpenProjectTasksScenario(
+            modelIncludesEvidenceIDs: false,
+            modelDirectAnswer: "   ",
+            expectsDeterministicFallback: true
+        )
+    }
+
+    @MainActor
+    @Test
+    func technicalModelTextRendersTheValidatedFilteredProjectResults() async throws {
+        try await runImportantOpenProjectTasksScenario(
+            modelIncludesEvidenceIDs: false,
+            modelDirectAnswer:
+                "RepositoryError: QueryDetailValuesTool failed to resolve E1.",
+            expectsDeterministicFallback: true
+        )
+    }
+
+    @MainActor
+    @Test
+    func emptyModelTextRendersTheValidatedGroupedProjectCount() async throws {
+        let store = try BrainMeshTestContainer.makeInMemoryStore()
+        let fixtures = BrainMeshFixtureBuilder(context: store.context)
+        let timeZone = try #require(TimeZone(identifier: "Europe/Berlin"))
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = timeZone
+        let referenceDate = try #require(
+            calendar.date(
+                from: DateComponents(
+                    calendar: calendar,
+                    timeZone: timeZone,
+                    year: 2026,
+                    month: 7,
+                    day: 21,
+                    hour: 14
+                )
+            )
+        )
+        let fixture = fixtures.makeGraphChatProjectFixture(
+            calendar: calendar,
+            timeZone: timeZone,
+            referenceDate: referenceDate
+        )
+        try fixtures.save()
+
+        let repository = GraphReadRepository(
+            container: AnyModelContainer(store.container)
+        )
+        let evidenceValidator = GraphEvidenceSourceValidator(
+            repository: repository
+        )
+        let schemaService = GraphSchemaService(repository: repository)
+        let schema = try await schemaService.makeSnapshot(
+            in: GraphScope(graphID: fixture.graph.id)
+        )
+        let entityAlias = try #require(schema.entityAlias(named: "Aufgaben"))
+        let statusAlias = try #require(
+            schema.fieldAlias(named: "Status", in: entityAlias)
+        )
+        let provider = FakeGraphChatModelProvider(
+            scripts: [
+                FakeGraphChatProviderScript(
+                    steps: [
+                        .toolRequest(
+                            .queryDetailValues(
+                                GraphChatModelQueryRequest(
+                                    entityAlias: entityAlias.rawValue,
+                                    filters: [],
+                                    sortFieldAlias: nil,
+                                    sortDirection: nil,
+                                    projectionFieldAliases: [],
+                                    aggregation: "groupCount",
+                                    aggregationFieldAlias: statusAlias.rawValue,
+                                    limit: 20
+                                )
+                            )
+                        ),
+                        .event(
+                            .completed(
+                                GraphChatProviderTestSupport.makeFinalAnswer(
+                                    directAnswer: " \n "
+                                )
+                            )
+                        ),
+                    ]
+                ),
+            ]
+        )
+        let graphScope = GraphScope(graphID: fixture.graph.id)
+        let orchestrator = GraphChatOrchestrator(
+            provider: provider,
+            schemaProvider: schemaService,
+            toolRunnerFactory: GraphChatProviderTestSupport.makeRealRuntimeFactory(
+                store: store,
+                schemaService: schemaService,
+                repository: repository
+            ),
+            artifactRevalidator: GraphChatLiveAnswerArtifactRevalidator(
+                evidenceValidator: evidenceValidator,
+                sourceRepository: repository
+            ),
+            evidenceValidator: evidenceValidator,
+            referenceDate: { referenceDate },
+            calendar: calendar,
+            timeZone: timeZone
+        )
+        // The generation task intentionally captures its orchestrator weakly.
+        defer { withExtendedLifetime(orchestrator) {} }
+        let events = await GraphChatProviderTestSupport.collect(
+            await orchestrator.streamAnswer(
+                question: "Wie viele Projektaufgaben gibt es je Status?",
+                graphScope: graphScope,
+                chatScope: .entireGraph(graphScope)
+            )
+        )
+        let answer = try #require(
+            events.reversed().compactMap { event -> GraphChatAnswer? in
+                guard case .completed(let answer) = event else {
+                    return nil
+                }
+                return answer
+            }.first
+        )
+
+        #expect(answer.state == .answer)
+        #expect(answer.directAnswer.contains("5 Aufgaben"))
+        #expect(answer.directAnswer.contains("3 Gruppen"))
+        #expect(answer.directAnswer.contains("Offen: 3"))
+        #expect(answer.evidence.isEmpty == false || answer.artifactIDs.isEmpty == false)
+        #expect(answer.directAnswer.contains(entityAlias.rawValue) == false)
+        #expect(answer.directAnswer.contains(statusAlias.rawValue) == false)
+    }
+
+    @MainActor
     private func runImportantOpenProjectTasksScenario(
-        modelIncludesEvidenceIDs: Bool
+        modelIncludesEvidenceIDs: Bool,
+        modelDirectAnswer: String =
+            "Als wichtig wurden hohe Priorität, offener Status und überfällige Deadline verwendet.",
+        expectsDeterministicFallback: Bool = false
     ) async throws {
         let store = try BrainMeshTestContainer.makeInMemoryStore()
         let fixtures = BrainMeshFixtureBuilder(context: store.context)
@@ -163,7 +302,7 @@ struct GraphChatEndToEndProjectTests {
                         .event(
                             .completed(
                                 GraphChatProviderTestSupport.makeFinalAnswer(
-                                    directAnswer: "Als wichtig wurden hohe Priorität, offener Status und überfällige Deadline verwendet.",
+                                    directAnswer: modelDirectAnswer,
                                     evidenceIDs: modelIncludesEvidenceIDs
                                         ? expected.evidence.map(\.id)
                                         : []
@@ -236,7 +375,16 @@ struct GraphChatEndToEndProjectTests {
             $0.valueDescription?.isEmpty != true
                 || $0.fieldName == "Deadline"
         })
-        #expect(answer.directAnswer.contains("Als wichtig"))
+        if expectsDeterministicFallback {
+            #expect(answer.directAnswer.contains("2 Aufgaben"))
+            #expect(answer.directAnswer.contains("Security Review"))
+            #expect(answer.directAnswer.contains("API Migration"))
+            #expect(answer.directAnswer.contains("RepositoryError") == false)
+            #expect(answer.directAnswer.contains("QueryDetailValuesTool") == false)
+            #expect(answer.directAnswer.contains(entityAlias.rawValue) == false)
+        } else {
+            #expect(answer.directAnswer.contains("Als wichtig"))
+        }
 
         let providerSnapshot = await provider.snapshot()
         #expect(providerSnapshot.toolResponses.count == 1)

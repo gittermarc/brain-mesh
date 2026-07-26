@@ -68,6 +68,21 @@ nonisolated struct GraphChatProviderErrorMapper: Hashable, Sendable {
         )
     }
 
+    func mapForPresentation(
+        _ error: Error,
+        language: GraphChatResponseLanguage
+    ) -> GraphChatError {
+        let mapped = map(error)
+        let localizer = GraphChatResponseLocalizer(language: language)
+        return GraphChatError(
+            code: mapped.code,
+            message: localizer.userFacingFailure(mapped.code),
+            recoverySuggestion: localizer.userFacingRecoverySuggestion(
+                mapped.code
+            )
+        )
+    }
+
     private func map(_ error: GraphChatProviderError) -> GraphChatError {
         switch error.code {
         case .unavailable:

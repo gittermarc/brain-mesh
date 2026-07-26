@@ -111,9 +111,10 @@ nonisolated struct GraphChatProviderExecutor: Sendable {
                         in: .whitespacesAndNewlines
                     )
                     if rawText.isEmpty == false {
-                        let text = await presentationFirewall
-                            .presentCumulativeText(rawText)
-                        onEvent(.partialAnswer(text))
+                        if let text = await presentationFirewall
+                            .presentCumulativeText(rawText) {
+                            onEvent(.partialAnswer(text))
+                        }
                     }
                 case .completed(let answer):
                     finalAnswer = answer

@@ -731,6 +731,8 @@ Pfade:
 - `BrainMesh/GraphChat/Provider/GraphChatModelToolRuntime.swift`
 - `BrainMesh/GraphChat/Provider/GraphChatProviderExecutor.swift`
 - `BrainMesh/GraphChat/Orchestration/GraphChatAnswerFinalizer.swift`
+- `BrainMesh/GraphChat/Orchestration/GraphChatDeterministicAnswerFallbackPolicy.swift`
+- `BrainMesh/GraphChat/Orchestration/GraphChatDeterministicAnswerFallbackRenderer.swift`
 - `BrainMesh/GraphChat/UI/GraphChatMessageActions.swift`
 
 Vertrag:
@@ -738,9 +740,9 @@ Vertrag:
 - Jede Provider-Session besitzt eine turn-gebundene `GraphChatPresentationRegistry`.
 - Initiale Einträge stammen aus dem validierten Schema- und Conversation-Kontext.
 - Der Tool-Runtime ergänzt ausschließlich validierte Node-, Evidence- und Artifact-Präsentationen.
-- Partials werden als kumulative Foundation-Models-Snapshots vollständig erneut geprüft; ein vollständiges internes Token wird nie an den UI-Stream weitergereicht.
-- Modellbeeinflusste Provider- und Tool-Fehlermeldungen passieren vor dem öffentlichen Error-State dieselbe Firewall.
-- Der Finalizer prüft direkte Antwort, Sections, Filter, Follow-ups und Clarifications gemeinsam. Ein unbekannter Alias, eine unbekannte Conversation-Referenz oder UUID erzeugt ein typisiertes unsicheres Ergebnis und eine lokalisierte deterministische Ersatzantwort.
+- Partials werden als kumulative Foundation-Models-Snapshots vollständig erneut geprüft. Unvollständige Suffixe technischer Tokens werden gepuffert, sodass auch ein über mehrere Chunks verteiltes Alias nie kurzzeitig im UI erscheint.
+- Öffentliche Failure-Texte werden ausschließlich aus dem typisierten `GraphChatErrorCode` lokalisiert. Modell-, Tool-, Resolver-, Provider-, Repository- und Validierungsdetails werden nicht in UI-State oder Copy übernommen.
+- Der Finalizer prüft direkte Antwort, Sections, Filter, Follow-ups und Clarifications gemeinsam. Bei einem erfolgreichen Primärergebnis führen unbekannte Aliase, Conversation-Referenzen, UUIDs oder andere Firewall-Verstöße zum deterministischen Result-Fallback. Ohne erfolgreiches Primärergebnis bleiben die bestehenden typisierten Zustände und sicheren lokalisierten Ersatztexte maßgeblich.
 - `GraphChatAnswer` trägt den geprüften turn-bezogenen Presentation-Kontext bis zum Copy-Pfad. Copy verwendet dieselbe Firewall; der frühere separate UUID-Redactor existiert nicht mehr.
 - Die Xcode-Gruppen sind filesystem-synchronisiert; neue Dateien unter `BrainMesh/` und `BrainMeshTests/` werden automatisch den jeweiligen Targets zugeordnet.
 
@@ -791,7 +793,28 @@ Vertrag:
 - Die stabile Tool-Priorität lautet `queryDetailValues` vor `getNode`, `getNeighbors`, `searchGraph`, `graphStats` und `describeGraphSchema`. Innerhalb desselben Tooltyps steht ein verifiziertes datenhaltiges Success-Ergebnis vor einem leeren No-Results-Ergebnis; bei gleichem Status gewinnt die später vollständig abgeschlossene Ausführung.
 - Der Finalizer vereinigt autoritative primäre Referenzen zuerst mit zusätzlich modellseitig genannten, aktuell registrierten Referenzen. Anschließend laufen unverändert Live-Evidence-, Artifact-, Scope-, Session- und Transaktionsvalidierung.
 - Ein primäres No-Results-Ergebnis setzt den typisierten Antwortzustand appseitig. Ein primäres Success-Ergebnis kann durch modellseitiges `unsupported`, `clarification` oder fehlerhafte IDs nicht entfernt werden.
-- Die Presentation Firewall bleibt die letzte Textgrenze. Bei einer Ersatzantwort bleiben bereits validierte primäre Evidence-/Artifact-Referenzen erhalten, technische IDs erscheinen aber nicht im sichtbaren Text.
+- Die Presentation Firewall bleibt die letzte Textgrenze. Eine normale erfolgreiche `.answer` wird nur ausgeliefert, wenn nach Live-Revalidierung mindestens primäre Evidence oder ein primäres Result-Artefakt erhalten ist.
+
+### Deterministischer Answer Fallback
+
+Pfade:
+
+- `BrainMesh/GraphChat/Orchestration/GraphChatDeterministicAnswerFallbackPolicy.swift`
+- `BrainMesh/GraphChat/Orchestration/GraphChatDeterministicAnswerFallbackRenderer.swift`
+- `BrainMesh/GraphChat/Orchestration/GraphChatAnswerFinalizer.swift`
+- `BrainMesh/GraphChat/Core/GraphChatResponseLanguage.swift`
+- `BrainMesh/GraphChat/UI/GraphChatPresentationModels.swift`
+
+Vertrag:
+
+- Der Renderer akzeptiert ausschließlich Evidence und Artifacts, die zugleich zum appseitig gewählten Primärergebnis gehören und die abschließende Live-Revalidierung überstanden haben. Modell-IDs, Modelltext und nicht primäre Tool-Ergebnisse sind keine Renderquelle.
+- Unterstützte Artefaktformen werden typisiert und begrenzt zusammengefasst: Listen und Tabellen, Node-Details, Count/Metric, Gruppierungen, Vergleiche, Graph-Health-Befunde, Rankings sowie Timelines und Datumsintervalle. Pro Antwort werden höchstens drei Artefakte und je Artefakt höchstens drei Beispiele dargestellt.
+- Anzeigenamen, bereits typisierte Fachwerte, Einheiten und lokalisierte Datums-/Zahlenformate sind die einzigen sichtbaren Daten. Aliase, UUIDs, technische Enum-Rohwerte und Debug-Beschreibungen werden nicht gerendert.
+- Fallback-Auslöser sind leerer oder Whitespace-only Modelltext, technische Fehlertexte, ein Widerspruch zwischen behaupteter Leermenge beziehungsweise Anzahl und Primärergebnis sowie jede Ablehnung durch die Presentation Firewall. Eine sichere, konsistente Modellantwort bleibt unverändert.
+- Der Fallback behält die revalidierten primären Evidence-/Artifact-Referenzen, entfernt aber modellgenerierte Sections, Follow-ups und Filterdarstellungen. So kann untrusted Zusatztext nicht neben der sicheren Mindestantwort verbleiben.
+- Clarification, No Results, Unsupported und Failure werden nicht zu `.answer` konvertiert. Eine normale `.answer` ist dagegen immer nicht leer, presentation-sicher, mit dem erfolgreichen Primärergebnis vereinbar und mit Evidence oder Result-Artefakt verbunden.
+- Unmittelbar vor der Fallback-Erzeugung wird Cancellation erneut geprüft. Der bestehende Generation-/Terminal-State-Vertrag verhindert verspätete Fallbacks und doppelte Completion.
+- `GraphChatAssistantMessageState` normalisiert auch alternative oder Test-Producer defensiv: leere sichtbare Texte erhalten einen zustandsspezifischen lokalisierten Text, Failure-Texte werden aus dem Fehlercode neu aufgebaut, und Copy liest exakt denselben finalen Answer-State wie die UI.
 
 ### Nicht gehaltene Utility Tasks
 

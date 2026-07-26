@@ -709,6 +709,153 @@ struct GraphChatAnswerFinalizerTests {
     }
 
     @Test
+    func emptyModelAnswerUsesThePrimaryArtifactFallback() async throws {
+        let fixture = AnswerFinalizerFixture()
+        let evidence = fixture.makeEvidence(49)
+        let resources = try await fixture.makeResources(evidence: [evidence])
+        let artifactID = try await fixture.stageArtifact(
+            in: resources,
+            evidenceID: evidence.id
+        )
+        let primary = try await fixture.makePrimaryResult(
+            in: resources,
+            evidence: [evidence],
+            artifactIDs: [artifactID]
+        )
+
+        let turn = try await fixture.finalize(
+            fixture.providerAnswer(directAnswer: " \n "),
+            resources: resources,
+            primaryResult: primary
+        )
+
+        #expect(turn.answer.state == .answer)
+        #expect(turn.answer.directAnswer == "Count: 1.")
+        #expect(turn.answer.evidenceIDs == [evidence.id])
+        #expect(turn.answer.artifactIDs == [artifactID])
+    }
+
+    @Test
+    func technicalModelAnswerUsesThePrimaryArtifactFallback() async throws {
+        let fixture = AnswerFinalizerFixture()
+        let evidence = fixture.makeEvidence(50)
+        let resources = try await fixture.makeResources(evidence: [evidence])
+        let deterministicFilter = GraphChatAppliedFilter(
+            fieldName: "Status",
+            operationDescription: "equals",
+            valueDescription: "Active"
+        )
+        try await resources.evidenceRegistry.registerAppliedFilters(
+            [deterministicFilter]
+        )
+        let queryFilter = GraphChatAnswerArtifactQueryFilterSummary(
+            field: GraphChatAnswerArtifactQueryFieldSummary(
+                fieldID: fixture.uuid(350),
+                label: "Status"
+            ),
+            operation: .equals,
+            operationLabel: "equals",
+            values: [
+                .choice(
+                    GraphChatAnswerArtifactChoiceValue(value: "Active")
+                )
+            ],
+            valueDescription: "Active"
+        )
+        let artifactID = try await fixture.stageArtifact(
+            in: resources,
+            evidenceID: evidence.id,
+            querySummary: fixture.querySummary(filters: [queryFilter])
+        )
+        let primary = try await fixture.makePrimaryResult(
+            in: resources,
+            evidence: [evidence],
+            artifactIDs: [artifactID]
+        )
+
+        let turn = try await fixture.finalize(
+            fixture.providerAnswer(
+                directAnswer:
+                    "RepositoryError: QueryDetailValuesTool failed to execute.",
+                appliedFilters: [
+                    GraphChatProviderAppliedFilter(
+                        fieldName: "Invented",
+                        operationDescription: "contains",
+                        valueDescription: "unsafe"
+                    )
+                ]
+            ),
+            resources: resources,
+            primaryResult: primary
+        )
+
+        #expect(turn.answer.directAnswer == "Count: 1.")
+        #expect(turn.answer.directAnswer.contains("RepositoryError") == false)
+        #expect(turn.answer.sections.isEmpty)
+        #expect(turn.answer.followUpSuggestions.isEmpty)
+        #expect(turn.answer.appliedFilters.map(\.fieldName) == ["Status"])
+        #expect(
+            turn.answer.appliedFilters.map(\.operationDescription)
+                == ["equals"]
+        )
+        #expect(turn.answer.appliedFilters.first?.valueDescription == "Active")
+    }
+
+    @Test
+    func safeConsistentModelAnswerIsNotReplaced() async throws {
+        let fixture = AnswerFinalizerFixture()
+        let evidence = fixture.makeEvidence(51)
+        let resources = try await fixture.makeResources(evidence: [evidence])
+        let artifactID = try await fixture.stageArtifact(
+            in: resources,
+            evidenceID: evidence.id
+        )
+        let primary = try await fixture.makePrimaryResult(
+            in: resources,
+            evidence: [evidence],
+            artifactIDs: [artifactID]
+        )
+        let modelText = "The validated result contains one matching project."
+
+        let turn = try await fixture.finalize(
+            fixture.providerAnswer(directAnswer: modelText),
+            resources: resources,
+            primaryResult: primary
+        )
+
+        #expect(turn.answer.directAnswer == modelText)
+    }
+
+    @Test
+    func unsafeClarificationRemainsATypedClarification() async throws {
+        let fixture = AnswerFinalizerFixture()
+        let context = fixture.makeContext()
+        let resources = try await fixture.makeResources(context: context)
+
+        let turn = try await fixture.finalize(
+            fixture.providerAnswer(
+                responseState: .clarification,
+                directAnswer: "Which E99?",
+                clarificationQuestion: "Which E99?"
+            ),
+            resources: resources,
+            context: context,
+            language: .english
+        )
+
+        guard case .clarification = turn.answer.state else {
+            Issue.record("Expected the unsafe clarification to remain typed.")
+            return
+        }
+        #expect(
+            turn.answer.directAnswer
+                == GraphChatResponseLocalizer(language: .english)
+                    .clarificationQuestion(reason: .ambiguous)
+        )
+        #expect(turn.answer.directAnswer.contains("E99") == false)
+    }
+
+    @Test
     func localAnswerUsesTheFinalizerAndAtomicallyCommitsPendingClarification() async throws {
         let fixture = AnswerFinalizerFixture()
         let option = GraphChatPendingClarificationOption(
@@ -1027,12 +1174,14 @@ private struct AnswerFinalizerFixture {
         )
     }
 
-    func querySummary() -> GraphChatAnswerArtifactQuerySummary {
+    func querySummary(
+        filters: [GraphChatAnswerArtifactQueryFilterSummary] = []
+    ) -> GraphChatAnswerArtifactQuerySummary {
         GraphChatAnswerArtifactQuerySummary(
             language: .english,
             entityID: uuid(300),
             entityLabel: "Projects",
-            filters: [],
+            filters: filters,
             grouping: nil,
             sorting: [],
             projection: [],

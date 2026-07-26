@@ -119,7 +119,10 @@ nonisolated struct GraphChatAssistantMessageState: Hashable, Sendable {
             answer = nil
             error = nil
         case .completed(let completedAnswer):
-            let normalized = Self.normalized(completedAnswer)
+            let normalized = Self.normalized(
+                completedAnswer,
+                question: question
+            )
             answer = normalized
             text = normalized.directAnswer
             error = nil
@@ -139,7 +142,17 @@ nonisolated struct GraphChatAssistantMessageState: Hashable, Sendable {
             error = nil
         case .failure(let failure):
             answer = nil
-            error = failure
+            let language = GraphChatResponseLanguageSelector()
+                .language(for: question)
+            let localizer = GraphChatResponseLocalizer(
+                language: language
+            )
+            error = GraphChatError(
+                code: failure.code,
+                message: localizer.userFacingFailure(failure.code),
+                recoverySuggestion: localizer
+                    .userFacingRecoverySuggestion(failure.code)
+            )
             if failure.code == .modelUnavailable || failure.code == .unavailable {
                 phase = .availabilityError
             } else if failure.code == .cancelled {
@@ -171,10 +184,34 @@ nonisolated struct GraphChatAssistantMessageState: Hashable, Sendable {
         }
     }
 
-    private static func normalized(_ answer: GraphChatAnswer) -> GraphChatAnswer {
-        GraphChatAnswer(
+    private static func normalized(
+        _ answer: GraphChatAnswer,
+        question: String
+    ) -> GraphChatAnswer {
+        let language = answer.presentationContext?.language
+            ?? GraphChatResponseLanguageSelector().language(for: question)
+        let localizer = GraphChatResponseLocalizer(language: language)
+        let boundedDirectAnswer = bounded(answer.directAnswer)
+        let directAnswer: String
+        if boundedDirectAnswer.isEmpty {
+            switch answer.state {
+            case .answer:
+                directAnswer = localizer.answerUnavailable()
+            case .noResults:
+                directAnswer = localizer.noResults()
+            case .unsupported(let capability):
+                directAnswer = localizer.unsupported(capability)
+            case .clarification:
+                directAnswer = localizer.clarificationQuestion(
+                    reason: .ambiguous
+                )
+            }
+        } else {
+            directAnswer = boundedDirectAnswer
+        }
+        return GraphChatAnswer(
             state: answer.state,
-            directAnswer: bounded(answer.directAnswer),
+            directAnswer: directAnswer,
             sections: answer.sections.prefix(maximumSections).map { section in
                 GraphChatAnswerSection(
                     id: section.id,

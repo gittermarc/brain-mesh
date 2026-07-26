@@ -128,7 +128,10 @@ actor GraphChatOrchestrator {
                 )
             )
         } catch {
-            throw mapError(error)
+            throw mapError(
+                error,
+                language: responseLanguage
+            )
         }
     }
 
@@ -204,7 +207,14 @@ actor GraphChatOrchestrator {
             }
         } catch {
             await streamController.start()
-            await streamController.fail(mapError(error))
+            await streamController.fail(
+                mapError(
+                    error,
+                    language: responseLanguageSelector.language(
+                        for: question
+                    )
+                )
+            )
             await streamController.finish()
         }
 
@@ -399,7 +409,14 @@ actor GraphChatOrchestrator {
             await streamController.cancel()
         } catch {
             outcome = .failed
-            await streamController.fail(mapError(error))
+            await streamController.fail(
+                mapError(
+                    error,
+                    language: responseLanguageSelector.language(
+                        for: question
+                    )
+                )
+            )
         }
 
         finishRequest(
@@ -647,7 +664,13 @@ actor GraphChatOrchestrator {
         )
     }
 
-    private func mapError(_ error: Error) -> GraphChatError {
-        errorMapper.map(error)
+    private func mapError(
+        _ error: Error,
+        language: GraphChatResponseLanguage
+    ) -> GraphChatError {
+        errorMapper.mapForPresentation(
+            error,
+            language: language
+        )
     }
 }

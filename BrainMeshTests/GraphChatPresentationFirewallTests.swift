@@ -156,10 +156,10 @@ struct GraphChatPresentationFirewallTests {
             "E1 is active."
         )
 
-        #expect(first == "E")
+        #expect(first == nil)
         #expect(second == "Projekte")
         #expect(third == "Projekte is active.")
-        #expect([first, second, third].contains("E1") == false)
+        #expect([first, second, third].compactMap { $0 }.contains("E1") == false)
     }
 
     @Test
@@ -331,7 +331,7 @@ struct GraphChatPresentationFirewallTests {
             }
             return text
         }
-        #expect(partials == ["E", "Projekte is active."])
+        #expect(partials == ["Projekte is active."])
         #expect(partials.contains(where: { $0.contains("E1") }) == false)
 
         var messageState = GraphChatAssistantMessageState(
@@ -466,7 +466,7 @@ struct GraphChatPresentationFirewallTests {
             error.message
                 == GraphChatResponseLocalizer(
                     language: .english
-                ).unsafePresentation()
+                ).userFacingFailure(.toolFailure)
         )
         #expect(error.message.contains("E99") == false)
         #expect(error.message.contains(technicalID) == false)

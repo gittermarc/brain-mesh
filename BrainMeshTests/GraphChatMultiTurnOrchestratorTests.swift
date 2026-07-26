@@ -550,6 +550,9 @@ extension GraphChatMultiTurnOrchestratorTests {
                 repository: repository
             )
         )
+        let evidenceValidator = GraphEvidenceSourceValidator(
+            repository: repository
+        )
         let orchestrator = GraphChatOrchestrator(
             provider: provider,
             schemaProvider: schemaService,
@@ -560,6 +563,11 @@ extension GraphChatMultiTurnOrchestratorTests {
             ),
             referenceResolver: resolver,
             responseLanguageSelector: GraphChatResponseLanguageSelector(fallback: .german),
+            artifactRevalidator: GraphChatLiveAnswerArtifactRevalidator(
+                evidenceValidator: evidenceValidator,
+                sourceRepository: repository
+            ),
+            evidenceValidator: evidenceValidator,
             referenceDate: { referenceDate },
             calendar: calendar,
             timeZone: timeZone

@@ -347,6 +347,7 @@ actor GraphChatPresentationStreamFirewall {
     private let language: GraphChatResponseLanguage
     private let firewall: GraphChatPresentationFirewall
     private var encounteredUnsafeContent = false
+    private var lastPublishedText: String?
 
     init(
         registry: GraphChatPresentationRegistry,
@@ -359,18 +360,67 @@ actor GraphChatPresentationStreamFirewall {
         self.firewall = firewall
     }
 
-    func presentCumulativeText(_ text: String) async -> String {
+    func presentCumulativeText(_ text: String) async -> String? {
         guard encounteredUnsafeContent == false else {
-            return fallback
+            return publishIfChanged(fallback)
         }
         let snapshot = await registry.snapshot()
         switch firewall.present(text, using: snapshot) {
         case .safe(let safeText):
-            return safeText
+            guard Self.hasIncompleteTechnicalSuffix(text) == false else {
+                return nil
+            }
+            return publishIfChanged(safeText)
         case .unsafe:
             encounteredUnsafeContent = true
-            return fallback
+            return publishIfChanged(fallback)
         }
+    }
+
+    private func publishIfChanged(_ text: String) -> String? {
+        guard text.isEmpty == false,
+              text != lastPublishedText else {
+            return nil
+        }
+        lastPublishedText = text
+        return text
+    }
+
+    private static func hasIncompleteTechnicalSuffix(
+        _ text: String
+    ) -> Bool {
+        let token = String(
+            text.reversed().prefix { character in
+                character.isLetter
+                    || character.isNumber
+                    || character == "_"
+            }.reversed()
+        ).uppercased()
+        guard token.isEmpty == false else {
+            return false
+        }
+        if token == "E" || token == "F" || token == "N" {
+            return true
+        }
+        if token.count < "CURRENT".count,
+           "CURRENT".hasPrefix(token) {
+            return true
+        }
+        if token == "CURRENT_" {
+            return true
+        }
+        if token.count < "LAST_COMPARISON".count,
+           "LAST_COMPARISON".hasPrefix(token) {
+            return true
+        }
+        if token == "LAST_COMPARISON_" {
+            return true
+        }
+        let conversationPrefixes: Set<String> = [
+            "C", "CR", "CR_", "CI", "CI_", "CG", "CG_",
+            "CN", "CN_", "CE", "CE_", "CF", "CF_", "CC", "CC_",
+        ]
+        return conversationPrefixes.contains(token)
     }
 
     private var fallback: String {

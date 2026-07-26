@@ -220,6 +220,94 @@ nonisolated struct GraphChatResponseLocalizer: Sendable {
         }
     }
 
+    func answerUnavailable() -> String {
+        switch language {
+        case .german:
+            return
+                "Aus den verfügbaren validierten Daten konnte keine verlässliche Antwort erstellt werden. Bitte formuliere die Frage enger."
+        case .english:
+            return
+                "A reliable answer could not be created from the available validated data. Please narrow the question."
+        }
+    }
+
+    func userFacingFailure(_ code: GraphChatErrorCode) -> String {
+        switch (language, code) {
+        case (.german, .invalidRequest):
+            return "Die Anfrage konnte nicht sicher validiert werden."
+        case (.english, .invalidRequest):
+            return "The request could not be validated safely."
+        case (.german, .schemaUnavailable):
+            return "Das Schema des aktiven Graphen ist derzeit nicht verfügbar."
+        case (.english, .schemaUnavailable):
+            return "The active graph schema is currently unavailable."
+        case (.german, .invalidQueryPlan):
+            return "Die Anfrage konnte nicht in eine gültige Graph-Abfrage übersetzt werden."
+        case (.english, .invalidQueryPlan):
+            return "The request could not be translated into a valid graph query."
+        case (.german, .cancelled):
+            return "Die Graph-Chat-Anfrage wurde abgebrochen."
+        case (.english, .cancelled):
+            return "The graph chat request was cancelled."
+        case (.german, .unavailable):
+            return "Der Graph-Chat ist für diese Anfrage derzeit nicht verfügbar."
+        case (.english, .unavailable):
+            return "Graph Chat is currently unavailable for this request."
+        case (.german, .modelUnavailable):
+            return "Das lokale Foundation Model ist derzeit nicht verfügbar."
+        case (.english, .modelUnavailable):
+            return "The local Foundation Model is currently unavailable."
+        case (.german, .toolFailure):
+            return "Die Graph-Daten konnten für diese Anfrage nicht sicher gelesen werden."
+        case (.english, .toolFailure):
+            return "The graph data could not be read safely for this request."
+        case (.german, .toolBudgetExceeded):
+            return "Das sichere Tool-Budget für diese Anfrage wurde erreicht."
+        case (.english, .toolBudgetExceeded):
+            return "The safe tool budget for this request was reached."
+        case (.german, .contextWindowExceeded):
+            return "Der lokale Graph-Kontext war für diese Anfrage zu groß."
+        case (.english, .contextWindowExceeded):
+            return "The local graph context was too large for this request."
+        case (.german, .concurrentRequest):
+            return "Eine neuere Graph-Chat-Anfrage hat diese Anfrage ersetzt."
+        case (.english, .concurrentRequest):
+            return "A newer graph chat request replaced this request."
+        case (.german, .unexpected):
+            return "Die Graph-Chat-Anfrage konnte nicht abgeschlossen werden."
+        case (.english, .unexpected):
+            return "The graph chat request could not be completed."
+        }
+    }
+
+    func userFacingRecoverySuggestion(
+        _ code: GraphChatErrorCode
+    ) -> String? {
+        switch (language, code) {
+        case (.german, .contextWindowExceeded):
+            return "Starte einen neuen Chat oder wähle einen kleineren Chat-Scope."
+        case (.english, .contextWindowExceeded):
+            return "Start a new chat or choose a smaller chat scope."
+        case (.german, .toolBudgetExceeded):
+            return "Stelle eine engere Frage mit weniger Teilaspekten."
+        case (.english, .toolBudgetExceeded):
+            return "Ask a narrower question with fewer parts."
+        case (.german, .invalidQueryPlan):
+            return "Formuliere die Frage fachlich eindeutiger und versuche es erneut."
+        case (.english, .invalidQueryPlan):
+            return "Make the question more specific and try again."
+        case (.german, .schemaUnavailable), (.german, .toolFailure),
+            (.german, .unexpected):
+            return "Versuche es erneut."
+        case (.english, .schemaUnavailable), (.english, .toolFailure),
+            (.english, .unexpected):
+            return "Try again."
+        case (_, .invalidRequest), (_, .cancelled), (_, .unavailable),
+            (_, .modelUnavailable), (_, .concurrentRequest):
+            return nil
+        }
+    }
+
     func providerInstruction() -> String {
         switch language {
         case .german:
