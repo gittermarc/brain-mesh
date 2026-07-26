@@ -12,63 +12,29 @@ nonisolated enum GraphChatConcurrentRequestPolicy: String, CaseIterable, Hashabl
 }
 
 actor GraphChatOrchestrator {
-    private struct ArtifactSessionResources {
-        let key: GraphChatOrchestrationScopeKey
-        let sessionID: GraphChatAnswerArtifactSessionID
-        let registry: GraphChatAnswerArtifactRegistry
-    }
-
-    private struct SessionResources {
-        let key: GraphChatOrchestrationScopeKey
-        let sessionID: GraphChatModelSessionID
-        let schemaContext: GraphSchemaContext
-        let budget: GraphChatToolBudget
-        let evidenceRegistry: GraphChatEvidenceRegistry
-        let artifactRegistry: GraphChatAnswerArtifactRegistry
-        let artifactSessionID: GraphChatAnswerArtifactSessionID
-        let artifactTransactionID: GraphChatAnswerArtifactTransactionID
-        let conversationBaseState: GraphChatConversationState
-        let conversationContext: GraphChatConversationContextSnapshot
-        let responseLanguage: GraphChatResponseLanguage
-        let conversationTransaction: GraphChatConversationStateTransaction
-        let toolRunner: any GraphChatModelToolRunning
-    }
-
-    private struct GenerationResult {
-        let answer: GraphChatAnswer
-        let resources: SessionResources
-    }
-
     private struct ActiveGeneration {
         let requestID: UUID
         let task: Task<Void, Never>
-        var sessionID: GraphChatModelSessionID?
-        var evidenceRegistry: GraphChatEvidenceRegistry?
-        var artifactRegistry: GraphChatAnswerArtifactRegistry?
-        var artifactTransactionID: GraphChatAnswerArtifactTransactionID?
+        var resources: GraphChatProviderSessionResources?
     }
 
-    private let provider: any GraphChatModelProvider
-    private let schemaProvider: any GraphSchemaSnapshotProviding
-    private let toolRunnerFactory: any GraphChatModelToolRunnerFactory
-    private let toolBudgetPolicy: GraphChatToolBudgetPolicy
     private let concurrentRequestPolicy: GraphChatConcurrentRequestPolicy
     private let conversationStateReducer: GraphChatConversationStateReducer
     private let conversationContextBuilder: GraphChatConversationContextBuilder
     private let referenceResolver: GraphChatConversationReferenceResolver
     private let requestPreflight: GraphChatRequestPreflight
     private let responseLanguageSelector: GraphChatResponseLanguageSelector
-    private let initialContextProfilePlanner: GraphChatInitialContextProfilePlanner
     private let missingContextPolicy: GraphChatReferenceMissingContextDeferPolicy
     private let localAnswerBuilder: GraphChatLocalAnswerBuilder
     private let artifactRevalidator: any GraphChatAnswerArtifactRevalidating
     private let evidenceValidator: any GraphEvidenceValidating
+    private let sessionFactory: GraphChatProviderSessionFactory
+    private let contextRetry: GraphChatProviderContextRetry
+    private let errorMapper: GraphChatProviderErrorMapper
     private let referenceDate: @Sendable () -> Date
-    private let calendar: Calendar
-    private let timeZone: TimeZone
 
-    private var preparedSession: SessionResources?
-    private var artifactSession: ArtifactSessionResources?
+    private var preparedSession: GraphChatProviderSessionResources?
+    private var artifactSession: GraphChatArtifactSessionResources?
     private var activeGeneration: ActiveGeneration?
     private var conversationState: GraphChatConversationState?
     private var pendingResetReason: GraphChatConversationResetReason = .newConversation
@@ -92,10 +58,6 @@ actor GraphChatOrchestrator {
         calendar: Calendar = Calendar(identifier: .gregorian),
         timeZone: TimeZone = .current
     ) {
-        self.provider = provider
-        self.schemaProvider = schemaProvider
-        self.toolRunnerFactory = toolRunnerFactory
-        self.toolBudgetPolicy = toolBudgetPolicy
         self.concurrentRequestPolicy = concurrentRequestPolicy
         let stateReducer = GraphChatConversationStateReducer(
             policy: conversationStatePolicy
@@ -105,6 +67,25 @@ actor GraphChatOrchestrator {
         )
         let missingContextPolicy = GraphChatReferenceMissingContextDeferPolicy()
         let localAnswerBuilder = GraphChatLocalAnswerBuilder()
+        let requestBuilder = GraphChatProviderRequestBuilder()
+        let errorMapper = GraphChatProviderErrorMapper()
+        let sessionFactory = GraphChatProviderSessionFactory(
+            provider: provider,
+            schemaProvider: schemaProvider,
+            toolRunnerFactory: toolRunnerFactory,
+            standardToolBudgetPolicy: toolBudgetPolicy,
+            conversationStateReducer: stateReducer,
+            referenceResolver: referenceResolver,
+            requestBuilder: requestBuilder,
+            errorMapper: errorMapper,
+            referenceDate: referenceDate,
+            calendar: calendar,
+            timeZone: timeZone
+        )
+        let providerExecutor = GraphChatProviderExecutor(
+            provider: provider,
+            sessionFactory: sessionFactory
+        )
         self.conversationStateReducer = stateReducer
         self.conversationContextBuilder = contextBuilder
         self.referenceResolver = referenceResolver
@@ -117,14 +98,18 @@ actor GraphChatOrchestrator {
             localAnswerBuilder: localAnswerBuilder
         )
         self.responseLanguageSelector = responseLanguageSelector
-        self.initialContextProfilePlanner = GraphChatInitialContextProfilePlanner()
         self.missingContextPolicy = missingContextPolicy
         self.localAnswerBuilder = localAnswerBuilder
         self.artifactRevalidator = artifactRevalidator
         self.evidenceValidator = evidenceValidator
+        self.sessionFactory = sessionFactory
+        self.contextRetry = GraphChatProviderContextRetry(
+            sessionFactory: sessionFactory,
+            requestBuilder: requestBuilder,
+            executor: providerExecutor
+        )
+        self.errorMapper = errorMapper
         self.referenceDate = referenceDate
-        self.calendar = calendar
-        self.timeZone = timeZone
     }
 
     func prepare(
@@ -159,18 +144,9 @@ actor GraphChatOrchestrator {
             responseLanguage: preparationLanguage
         )
         do {
-            try await provider.prewarm(
-                sessionID: resources.sessionID,
-                promptPrefix: preparationLanguage == .german
-                    ? "Es folgt eine read-only Frage zum aktiven Graphen."
-                    : "A read-only question about the active graph will follow."
-            )
+            try await sessionFactory.prewarm(resources)
             preparedSession = resources
         } catch {
-            await resources.artifactRegistry.rollback(
-                transactionID: resources.artifactTransactionID
-            )
-            await provider.discardSession(sessionID: resources.sessionID)
             throw mapError(error)
         }
     }
@@ -219,10 +195,7 @@ actor GraphChatOrchestrator {
             activeGeneration = ActiveGeneration(
                 requestID: requestID,
                 task: task,
-                sessionID: nil,
-                evidenceRegistry: nil,
-                artifactRegistry: nil,
-                artifactTransactionID: nil
+                resources: nil
             )
             pair.continuation.onTermination = { @Sendable [weak self] _ in
                 Task {
@@ -242,18 +215,11 @@ actor GraphChatOrchestrator {
         guard let activeGeneration else {
             return
         }
-        let evidenceRegistry = activeGeneration.evidenceRegistry
-        let artifactRegistry = activeGeneration.artifactRegistry
-        let artifactTransactionID = activeGeneration.artifactTransactionID
         activeGeneration.task.cancel()
-        if let sessionID = activeGeneration.sessionID {
-            await provider.cancelGeneration(sessionID: sessionID)
+        if let resources = activeGeneration.resources {
+            await sessionFactory.requestCancellation(resources)
         }
         await activeGeneration.task.value
-        await evidenceRegistry?.removeAll()
-        if let artifactRegistry, let artifactTransactionID {
-            await artifactRegistry.rollback(transactionID: artifactTransactionID)
-        }
     }
 
     func discardSession() async {
@@ -265,11 +231,10 @@ actor GraphChatOrchestrator {
     ) async {
         await cancelCurrentGeneration()
         if let preparedSession {
-            await preparedSession.evidenceRegistry.removeAll()
-            await preparedSession.artifactRegistry.rollback(
-                transactionID: preparedSession.artifactTransactionID
+            await sessionFactory.cleanupFailedAttempt(
+                preparedSession,
+                requestProviderCancellation: false
             )
-            await provider.discardSession(sessionID: preparedSession.sessionID)
             self.preparedSession = nil
         }
         if let artifactSession {
@@ -388,11 +353,10 @@ actor GraphChatOrchestrator {
 
         await cancelCurrentGeneration()
         if let preparedSession {
-            await preparedSession.evidenceRegistry.removeAll()
-            await preparedSession.artifactRegistry.rollback(
-                transactionID: preparedSession.artifactTransactionID
+            await sessionFactory.cleanupFailedAttempt(
+                preparedSession,
+                requestProviderCancellation: false
             )
-            await provider.discardSession(sessionID: preparedSession.sessionID)
             self.preparedSession = nil
         }
         if let artifactSession {
@@ -427,10 +391,7 @@ actor GraphChatOrchestrator {
         continuation: GraphChatEventStream.Continuation
     ) async {
         continuation.yield(.started(requestID: requestID))
-        var artifactCommitContext: (
-            registry: GraphChatAnswerArtifactRegistry,
-            transactionID: GraphChatAnswerArtifactTransactionID
-        )?
+        var completedResourcesForCleanup: GraphChatProviderSessionResources?
         defer {
             continuation.finish()
             clearActiveGeneration(requestID: requestID)
@@ -464,25 +425,41 @@ actor GraphChatOrchestrator {
                 conversationContext: plan.conversationContext,
                 responseLanguage: plan.responseLanguage
             )
-            artifactCommitContext = (
-                registry: initialResources.artifactRegistry,
-                transactionID: initialResources.artifactTransactionID
-            )
-            setActiveResources(initialResources, requestID: requestID)
-            let generation = try await generateWithSingleContextRetry(
-                resources: initialResources,
+            let execution = try await contextRetry.execute(
+                initialResources: initialResources,
                 question: plan.providerQuestion,
-                conversationContext: plan.conversationContext,
-                responseLanguage: plan.responseLanguage,
                 continuationOperation: plan.continuationOperation,
-                requestID: requestID,
-                continuation: continuation
+                onAttemptResources: { [weak self] resources in
+                    await self?.setActiveResources(
+                        resources,
+                        requestID: requestID
+                    )
+                },
+                onEvent: { event in
+                    switch event {
+                    case .toolActivity(let activity):
+                        continuation.yield(.toolActivity(activity))
+                    case .partialAnswer(let text):
+                        continuation.yield(.partialAnswer(text))
+                    }
+                }
             )
-            let completedResources = generation.resources
-            var answer = generation.answer
-            artifactCommitContext = (
-                registry: completedResources.artifactRegistry,
-                transactionID: completedResources.artifactTransactionID
+            let completedResources = execution.resources
+            completedResourcesForCleanup = completedResources
+            let validationContext =
+                execution.request.conversationContext
+                ?? completedResources.conversationContext
+            var answer = try await validatedAnswer(
+                from: execution.finalAnswer,
+                registry: completedResources.evidenceRegistry,
+                artifactRegistry: completedResources.artifactRegistry,
+                artifactSessionID: completedResources.artifactSessionID,
+                artifactTransactionID: completedResources.artifactTransactionID,
+                transaction: completedResources.conversationTransaction,
+                context: validationContext,
+                language: completedResources.responseLanguage,
+                continuationOperation: plan.continuationOperation,
+                requestQuestion: plan.providerQuestion
             )
             try Task.checkCancellation()
             let candidateState = try await completedResources.conversationTransaction.finalizedState(
@@ -499,180 +476,43 @@ actor GraphChatOrchestrator {
                 retaining: answer.artifactIDs
             )
             answer = answer.retainingArtifactIDs(Set(committedArtifactIDs))
-            artifactCommitContext = nil
             conversationState = candidateState
+            await sessionFactory.finishCommittedAttempt(completedResources)
+            completedResourcesForCleanup = nil
             continuation.yield(.completed(answer))
         } catch is CancellationError {
-            await rollbackArtifactContext(artifactCommitContext)
+            if let completedResourcesForCleanup {
+                await sessionFactory.cleanupFailedAttempt(
+                    completedResourcesForCleanup,
+                    requestProviderCancellation: false
+                )
+            }
             continuation.yield(.cancelled)
         } catch let error as GraphChatProviderError where error.code == .cancelled {
-            await rollbackArtifactContext(artifactCommitContext)
+            if let completedResourcesForCleanup {
+                await sessionFactory.cleanupFailedAttempt(
+                    completedResourcesForCleanup,
+                    requestProviderCancellation: false
+                )
+            }
             continuation.yield(.cancelled)
         } catch let error as GraphChatToolError where error.code == .cancelled {
-            await rollbackArtifactContext(artifactCommitContext)
+            if let completedResourcesForCleanup {
+                await sessionFactory.cleanupFailedAttempt(
+                    completedResourcesForCleanup,
+                    requestProviderCancellation: false
+                )
+            }
             continuation.yield(.cancelled)
         } catch {
-            await rollbackArtifactContext(artifactCommitContext)
+            if let completedResourcesForCleanup {
+                await sessionFactory.cleanupFailedAttempt(
+                    completedResourcesForCleanup,
+                    requestProviderCancellation: false
+                )
+            }
             continuation.yield(.failure(mapError(error)))
         }
-    }
-
-    private func generateWithSingleContextRetry(
-        resources initialResources: SessionResources,
-        question: String,
-        conversationContext: GraphChatConversationContextSnapshot,
-        responseLanguage: GraphChatResponseLanguage,
-        continuationOperation: GraphChatConversationContinuationOperation?,
-        requestID: UUID,
-        continuation: GraphChatEventStream.Continuation
-    ) async throws -> GenerationResult {
-        var resources = initialResources
-        var retryCount = 0
-        let standardSchema = schemaPrompt(
-            from: initialResources.schemaContext,
-            chatScope: initialResources.key.chatScope,
-            language: responseLanguage,
-            profile: .standard
-        )
-        let standardConversation = GraphChatConversationContextFormatter().format(
-            conversationContext,
-            language: responseLanguage,
-            maximumCharacters:
-                GraphChatModelContextProfile.standard.maximumConversationCharacters
-        )
-        let initialProfile = initialContextProfilePlanner.profile(
-            for: GraphChatInitialContextProfileInput(
-                schemaPrompt: standardSchema,
-                conversationContext: standardConversation,
-                question: question,
-                systemInstructions: systemInstructions(
-                    for: initialResources.key.chatScope,
-                    language: responseLanguage
-                )
-            )
-        )
-
-        while true {
-            do {
-                let profile: GraphChatModelContextProfile =
-                    retryCount == 0 ? initialProfile : .recovery
-                let context = providerContext(
-                    conversationContext,
-                    profile: profile
-                )
-                let answer = try await consumeProviderStream(
-                    resources: resources,
-                    question: question,
-                    conversationContext: context,
-                    responseLanguage: responseLanguage,
-                    continuationOperation: continuationOperation,
-                    contextProfile: profile,
-                    continuation: continuation
-                )
-                await resources.evidenceRegistry.removeAll()
-                await provider.discardSession(sessionID: resources.sessionID)
-                return GenerationResult(answer: answer, resources: resources)
-            } catch let error as GraphChatProviderError
-                where error.code == .contextWindowExceeded && retryCount == 0
-            {
-                await resources.evidenceRegistry.removeAll()
-                await resources.artifactRegistry.rollback(
-                    transactionID: resources.artifactTransactionID
-                )
-                await provider.discardSession(sessionID: resources.sessionID)
-                retryCount += 1
-                resources = try await replaceSession(in: resources)
-                setActiveResources(resources, requestID: requestID)
-            } catch {
-                if Task.isCancelled {
-                    await provider.cancelGeneration(sessionID: resources.sessionID)
-                }
-                await resources.evidenceRegistry.removeAll()
-                await resources.artifactRegistry.rollback(
-                    transactionID: resources.artifactTransactionID
-                )
-                await provider.discardSession(sessionID: resources.sessionID)
-                throw error
-            }
-        }
-    }
-
-    private func consumeProviderStream(
-        resources: SessionResources,
-        question: String,
-        conversationContext: GraphChatConversationContextSnapshot,
-        responseLanguage: GraphChatResponseLanguage,
-        continuationOperation: GraphChatConversationContinuationOperation?,
-        contextProfile: GraphChatModelContextProfile,
-        continuation: GraphChatEventStream.Continuation
-    ) async throws -> GraphChatAnswer {
-        let request = GraphChatModelRequest(
-            question: boundedQuestion(
-                question,
-                maximumLength: contextProfile.maximumQuestionCharacters,
-                language: responseLanguage
-            ),
-            schemaPrompt: schemaPrompt(
-                from: resources.schemaContext,
-                chatScope: resources.key.chatScope,
-                language: responseLanguage,
-                profile: contextProfile
-            ),
-            conversationContext: conversationContext,
-            responseLanguage: responseLanguage,
-            continuationOperation: continuationOperation,
-            contextProfile: contextProfile
-        )
-        let providerStream = try await provider.streamResponse(
-            sessionID: resources.sessionID,
-            request: request
-        )
-        var finalAnswer: GraphChatProviderFinalAnswer?
-
-        do {
-            for try await event in providerStream {
-                try Task.checkCancellation()
-                switch event {
-                case .toolActivity(let activity):
-                    continuation.yield(.toolActivity(activity))
-                case .partialAnswer(let partial):
-                    let text = partial.directAnswer.trimmingCharacters(
-                        in: .whitespacesAndNewlines
-                    )
-                    if text.isEmpty == false {
-                        continuation.yield(.partialAnswer(text))
-                    }
-                case .completed(let answer):
-                    finalAnswer = answer
-                }
-            }
-        } catch {
-            if Task.isCancelled {
-                await provider.cancelGeneration(sessionID: resources.sessionID)
-                throw CancellationError()
-            }
-            throw error
-        }
-
-        try Task.checkCancellation()
-        guard let finalAnswer else {
-            throw GraphChatProviderError(
-                code: .unexpected,
-                message: "Das Modell hat keine vollständige strukturierte Antwort geliefert."
-            )
-        }
-        return try await validatedAnswer(
-            from: finalAnswer,
-            registry: resources.evidenceRegistry,
-            artifactRegistry: resources.artifactRegistry,
-            artifactSessionID: resources.artifactSessionID,
-            artifactTransactionID: resources.artifactTransactionID,
-            transaction: resources.conversationTransaction,
-            context: conversationContext,
-            language: responseLanguage,
-            continuationOperation: continuationOperation,
-            requestQuestion: question
-        )
     }
 
     private func validatedAnswer(
@@ -982,148 +822,12 @@ actor GraphChatOrchestrator {
         continuation.yield(.completed(plan.answer))
     }
 
-    private func providerContext(
-        _ context: GraphChatConversationContextSnapshot,
-        profile: GraphChatModelContextProfile
-    ) -> GraphChatConversationContextSnapshot {
-        guard profile != .standard else {
-            return context
-        }
-
-        let resultLimit = profile == .compact ? 2 : 1
-        let itemLimit = profile == .compact ? 16 : 6
-        let groupLimit = profile == .compact ? 6 : 2
-        let supplementalAliasLimit = profile == .compact ? 16 : 4
-        let retainedResults = context.results.suffix(resultLimit).map { result in
-            GraphChatConversationContextResult(
-                id: result.id,
-                alias: result.alias,
-                kind: result.kind,
-                state: result.state,
-                entityAlias: result.entityAlias,
-                itemAliases: Array(result.itemAliases.prefix(itemLimit)),
-                groupAliases: Array(result.groupAliases.prefix(groupLimit)),
-                sourceReferenceCount: result.sourceReferenceCount,
-                appliedFilters: Array(result.appliedFilters.prefix(4)),
-                technicalDescription: bounded(result.technicalDescription, limit: 120)
-            )
-        }
-
-        var requiredAliases = Set<String>()
-        for result in retainedResults {
-            requiredAliases.insert(result.alias)
-            if let entityAlias = result.entityAlias {
-                requiredAliases.insert(entityAlias)
-            }
-            requiredAliases.formUnion(result.itemAliases)
-            requiredAliases.formUnion(result.groupAliases)
-        }
-        [
-            context.latestResultAlias,
-            context.lastEntityAlias,
-            context.lastFieldAlias,
-            context.lastGroupAlias,
-            context.lastNodeAlias,
-            context.lastComparisonAlias,
-            context.currentReferenceAlias,
-        ].compactMap { $0 }.forEach { requiredAliases.insert($0) }
-
-        let supplementalAliases = context.aliases.reversed().filter {
-            requiredAliases.contains($0.alias) == false
-        }.prefix(supplementalAliasLimit).map(\.alias)
-        requiredAliases.formUnion(supplementalAliases)
-
-        let aliases = context.aliases.compactMap { alias -> GraphChatConversationContextAlias? in
-            guard requiredAliases.contains(alias.alias) else {
-                return nil
-            }
-            return compactAlias(
-                alias,
-                itemLimit: itemLimit,
-                comparisonLimit: profile == .compact ? 6 : 2
-            )
-        }
-        let availableAliases = Set(aliases.map(\.alias))
-
-        return GraphChatConversationContextSnapshot(
-            conversationID: context.conversationID,
-            graphScope: context.graphScope,
-            chatScope: context.chatScope,
-            aliases: aliases,
-            results: retainedResults,
-            turns: profile == .compact ? Array(context.turns.suffix(1)) : [],
-            latestResultAlias: retainedAlias(context.latestResultAlias, in: availableAliases),
-            lastEntityAlias: retainedAlias(context.lastEntityAlias, in: availableAliases),
-            lastFieldAlias: retainedAlias(context.lastFieldAlias, in: availableAliases),
-            lastGroupAlias: retainedAlias(context.lastGroupAlias, in: availableAliases),
-            lastNodeAlias: retainedAlias(context.lastNodeAlias, in: availableAliases),
-            lastComparisonAlias: retainedAlias(
-                context.lastComparisonAlias,
-                in: availableAliases
-            ),
-            currentReferenceAlias: retainedAlias(
-                context.currentReferenceAlias,
-                in: availableAliases
-            ),
-            lastValidatedQuery: profile == .compact ? context.lastValidatedQuery : nil,
-            resultRevalidations: context.resultRevalidations.filter { revalidation in
-                retainedResults.contains { result in
-                    result.alias == revalidation.resultAlias
-                }
-            },
-            pendingClarificationID: context.pendingClarificationID
-        )
-    }
-
-    private func compactAlias(
-        _ alias: GraphChatConversationContextAlias,
-        itemLimit: Int,
-        comparisonLimit: Int
-    ) -> GraphChatConversationContextAlias {
-        let target: GraphChatConversationContextAliasTarget
-        switch alias.target {
-        case .resultSet(let id, let nodes, let entityID):
-            target = .resultSet(
-                id,
-                nodes: Array(nodes.prefix(itemLimit)),
-                entityID: entityID
-            )
-        case .group(let id, let nodes, let fieldID, let count):
-            target = .group(
-                id,
-                nodes: Array(nodes.prefix(itemLimit)),
-                fieldID: fieldID,
-                count: count
-            )
-        case .comparison(let references):
-            target = .comparison(Array(references.prefix(comparisonLimit)))
-        case .node, .entity, .field:
-            target = alias.target
-        }
-        return GraphChatConversationContextAlias(
-            alias: alias.alias,
-            label: bounded(alias.label, limit: 120),
-            target: target,
-            ordinal: alias.ordinal
-        )
-    }
-
-    private func retainedAlias(
-        _ alias: String?,
-        in availableAliases: Set<String>
-    ) -> String? {
-        guard let alias, availableAliases.contains(alias) else {
-            return nil
-        }
-        return alias
-    }
-
     private func takeOrCreateSessionResources(
         for key: GraphChatOrchestrationScopeKey,
         conversationBaseState: GraphChatConversationState,
         conversationContext: GraphChatConversationContextSnapshot,
         responseLanguage: GraphChatResponseLanguage
-    ) async throws -> SessionResources {
+    ) async throws -> GraphChatProviderSessionResources {
         if let preparedSession,
             preparedSession.key == key,
             preparedSession.conversationBaseState == conversationBaseState,
@@ -1134,11 +838,10 @@ actor GraphChatOrchestrator {
             return preparedSession
         }
         if let preparedSession {
-            await preparedSession.evidenceRegistry.removeAll()
-            await preparedSession.artifactRegistry.rollback(
-                transactionID: preparedSession.artifactTransactionID
+            await sessionFactory.cleanupFailedAttempt(
+                preparedSession,
+                requestProviderCancellation: false
             )
-            await provider.discardSession(sessionID: preparedSession.sessionID)
             self.preparedSession = nil
         }
         return try await makeSessionResources(
@@ -1154,180 +857,14 @@ actor GraphChatOrchestrator {
         conversationBaseState: GraphChatConversationState,
         conversationContext: GraphChatConversationContextSnapshot,
         responseLanguage: GraphChatResponseLanguage
-    ) async throws -> SessionResources {
-        let availability = await provider.availability()
-        guard availability.isAvailable else {
-            throw availabilityError(availability)
-        }
-
-        let schemaContext: GraphSchemaContext
-        do {
-            schemaContext = try await schemaProvider.makeSnapshot(
-                in: key.graphScope,
-                exampleFieldIDs: []
-            )
-        } catch is CancellationError {
-            throw CancellationError()
-        } catch {
-            if Task.isCancelled {
-                throw CancellationError()
-            }
-            throw GraphChatError(
-                code: .schemaUnavailable,
-                message: "Das Schema des aktiven Graphen konnte nicht geladen werden.",
-                recoverySuggestion: "Öffne den Graphen erneut und versuche es noch einmal."
-            )
-        }
-        guard schemaContext.graphScope == key.graphScope else {
-            throw GraphChatError(
-                code: .schemaUnavailable,
-                message: "Das geladene Schema gehört nicht zum aktiven Graphen."
-            )
-        }
-
-        let budget = GraphChatToolBudget(policy: toolBudgetPolicy)
-        let evidenceRegistry = GraphChatEvidenceRegistry(scope: key.chatScope)
+    ) async throws -> GraphChatProviderSessionResources {
         let artifactResources = await artifactSessionResources(for: key)
-        let artifactTransactionID = GraphChatAnswerArtifactTransactionID()
-        let conversationTransaction = GraphChatConversationStateTransaction(
-            baseState: conversationBaseState,
-            reducer: conversationStateReducer
-        )
-        let toolRunner = toolRunnerFactory.makeRunner(
-            scope: key.chatScope,
-            schemaContext: schemaContext,
-            budget: budget,
-            evidenceRegistry: evidenceRegistry,
-            artifactRegistry: artifactResources.registry,
-            artifactTransactionID: artifactTransactionID,
-            conversationTransaction: conversationTransaction,
+        return try await sessionFactory.makeInitialSession(
+            for: key,
+            artifactSession: artifactResources,
+            conversationBaseState: conversationBaseState,
             conversationContext: conversationContext,
-            referenceResolver: referenceResolver,
-            responseLanguage: responseLanguage,
-            referenceDate: referenceDate(),
-            calendar: calendar,
-            timeZone: timeZone
-        )
-        let registeredKinds = await toolRunner.registeredToolKinds()
-        guard registeredKinds == Set(GraphChatToolKind.allCases) else {
-            throw GraphChatError(
-                code: .invalidRequest,
-                message:
-                    "Für den Graph-Chat sind nicht exakt die kontrollierten read-only Tools registriert."
-            )
-        }
-
-        let configuration = GraphChatModelSessionConfiguration(
-            graphScope: key.graphScope,
-            chatScope: key.chatScope,
-            schemaContext: schemaContext,
-            instructions: systemInstructions(
-                for: key.chatScope,
-                language: responseLanguage
-            ),
-            toolRunner: toolRunner
-        )
-        do {
-            let sessionID = try await provider.createSession(configuration: configuration)
-            return SessionResources(
-                key: key,
-                sessionID: sessionID,
-                schemaContext: schemaContext,
-                budget: budget,
-                evidenceRegistry: evidenceRegistry,
-                artifactRegistry: artifactResources.registry,
-                artifactSessionID: artifactResources.sessionID,
-                artifactTransactionID: artifactTransactionID,
-                conversationBaseState: conversationBaseState,
-                conversationContext: conversationContext,
-                responseLanguage: responseLanguage,
-                conversationTransaction: conversationTransaction,
-                toolRunner: toolRunner
-            )
-        } catch {
-            await artifactResources.registry.rollback(
-                transactionID: artifactTransactionID
-            )
-            throw mapError(error)
-        }
-    }
-
-    private func replaceSession(
-        in resources: SessionResources
-    ) async throws -> SessionResources {
-        let budget = GraphChatToolBudget(policy: recoveryToolBudgetPolicy())
-        let evidenceRegistry = GraphChatEvidenceRegistry(scope: resources.key.chatScope)
-        let artifactTransactionID = GraphChatAnswerArtifactTransactionID()
-        let conversationTransaction = GraphChatConversationStateTransaction(
-            baseState: resources.conversationBaseState,
-            reducer: conversationStateReducer
-        )
-        let toolRunner = toolRunnerFactory.makeRunner(
-            scope: resources.key.chatScope,
-            schemaContext: resources.schemaContext,
-            budget: budget,
-            evidenceRegistry: evidenceRegistry,
-            artifactRegistry: resources.artifactRegistry,
-            artifactTransactionID: artifactTransactionID,
-            conversationTransaction: conversationTransaction,
-            conversationContext: resources.conversationContext,
-            referenceResolver: referenceResolver,
-            responseLanguage: resources.responseLanguage,
-            referenceDate: referenceDate(),
-            calendar: calendar,
-            timeZone: timeZone
-        )
-        let registeredKinds = await toolRunner.registeredToolKinds()
-        guard registeredKinds == Set(GraphChatToolKind.allCases) else {
-            throw GraphChatError(
-                code: .invalidRequest,
-                message:
-                    "Für den Context-Retry sind nicht exakt die kontrollierten read-only Tools registriert."
-            )
-        }
-        let configuration = GraphChatModelSessionConfiguration(
-            graphScope: resources.key.graphScope,
-            chatScope: resources.key.chatScope,
-            schemaContext: resources.schemaContext,
-            instructions: systemInstructions(
-                for: resources.key.chatScope,
-                language: resources.responseLanguage
-            ),
-            toolRunner: toolRunner
-        )
-        do {
-            let sessionID = try await provider.createSession(configuration: configuration)
-            return SessionResources(
-                key: resources.key,
-                sessionID: sessionID,
-                schemaContext: resources.schemaContext,
-                budget: budget,
-                evidenceRegistry: evidenceRegistry,
-                artifactRegistry: resources.artifactRegistry,
-                artifactSessionID: resources.artifactSessionID,
-                artifactTransactionID: artifactTransactionID,
-                conversationBaseState: resources.conversationBaseState,
-                conversationContext: resources.conversationContext,
-                responseLanguage: resources.responseLanguage,
-                conversationTransaction: conversationTransaction,
-                toolRunner: toolRunner
-            )
-        } catch {
-            await resources.artifactRegistry.rollback(
-                transactionID: artifactTransactionID
-            )
-            throw error
-        }
-    }
-
-    private func recoveryToolBudgetPolicy() -> GraphChatToolBudgetPolicy {
-        GraphChatToolBudgetPolicy(
-            maximumCalls: min(toolBudgetPolicy.maximumCalls, 3),
-            maximumResultCountPerTool: min(
-                toolBudgetPolicy.maximumResultCountPerTool,
-                12
-            ),
-            maximumEvidenceCount: min(toolBudgetPolicy.maximumEvidenceCount, 40)
+            responseLanguage: responseLanguage
         )
     }
 
@@ -1337,18 +874,11 @@ actor GraphChatOrchestrator {
         }
         switch concurrentRequestPolicy {
         case .cancelPrevious:
-            let evidenceRegistry = activeGeneration.evidenceRegistry
-            let artifactRegistry = activeGeneration.artifactRegistry
-            let artifactTransactionID = activeGeneration.artifactTransactionID
             activeGeneration.task.cancel()
-            if let sessionID = activeGeneration.sessionID {
-                await provider.cancelGeneration(sessionID: sessionID)
+            if let resources = activeGeneration.resources {
+                await sessionFactory.requestCancellation(resources)
             }
             await activeGeneration.task.value
-            await evidenceRegistry?.removeAll()
-            if let artifactRegistry, let artifactTransactionID {
-                await artifactRegistry.rollback(transactionID: artifactTransactionID)
-            }
         }
     }
 
@@ -1357,22 +887,19 @@ actor GraphChatOrchestrator {
             return
         }
         activeGeneration.task.cancel()
-        if let sessionID = activeGeneration.sessionID {
-            await provider.cancelGeneration(sessionID: sessionID)
+        if let resources = activeGeneration.resources {
+            await sessionFactory.requestCancellation(resources)
         }
     }
 
     private func setActiveResources(
-        _ resources: SessionResources,
+        _ resources: GraphChatProviderSessionResources,
         requestID: UUID
     ) {
         guard var activeGeneration, activeGeneration.requestID == requestID else {
             return
         }
-        activeGeneration.sessionID = resources.sessionID
-        activeGeneration.evidenceRegistry = resources.evidenceRegistry
-        activeGeneration.artifactRegistry = resources.artifactRegistry
-        activeGeneration.artifactTransactionID = resources.artifactTransactionID
+        activeGeneration.resources = resources
         self.activeGeneration = activeGeneration
     }
 
@@ -1396,17 +923,16 @@ actor GraphChatOrchestrator {
         else {
             return
         }
-        await preparedSession.evidenceRegistry.removeAll()
-        await preparedSession.artifactRegistry.rollback(
-            transactionID: preparedSession.artifactTransactionID
+        await sessionFactory.cleanupFailedAttempt(
+            preparedSession,
+            requestProviderCancellation: false
         )
-        await provider.discardSession(sessionID: preparedSession.sessionID)
         self.preparedSession = nil
     }
 
     private func artifactSessionResources(
         for key: GraphChatOrchestrationScopeKey
-    ) async -> ArtifactSessionResources {
+    ) async -> GraphChatArtifactSessionResources {
         if let artifactSession, artifactSession.key == key {
             return artifactSession
         }
@@ -1414,7 +940,7 @@ actor GraphChatOrchestrator {
             await artifactSession.registry.removeAll(reason: .scopeChanged)
         }
         let sessionID = GraphChatAnswerArtifactSessionID()
-        let resources = ArtifactSessionResources(
+        let resources = GraphChatArtifactSessionResources(
             key: key,
             sessionID: sessionID,
             registry: GraphChatAnswerArtifactRegistry(
@@ -1426,18 +952,6 @@ actor GraphChatOrchestrator {
         )
         artifactSession = resources
         return resources
-    }
-
-    private func rollbackArtifactContext(
-        _ context: (
-            registry: GraphChatAnswerArtifactRegistry,
-            transactionID: GraphChatAnswerArtifactTransactionID
-        )?
-    ) async {
-        guard let context else {
-            return
-        }
-        await context.registry.rollback(transactionID: context.transactionID)
     }
 
     private func artifactClearReason(
@@ -1487,125 +1001,6 @@ actor GraphChatOrchestrator {
         return initial
     }
 
-    private func schemaPrompt(
-        from context: GraphSchemaContext,
-        chatScope: GraphChatScope,
-        language: GraphChatResponseLanguage,
-        profile: GraphChatModelContextProfile
-    ) -> String {
-        var lines: [String]
-        switch language {
-        case .german:
-            lines = [
-                "Graph: \(context.snapshot.graphName)",
-                "Schema-Version: \(context.snapshot.version)",
-                "Scope: \(scopeDescription(chatScope.target, language: language))",
-            ]
-        case .english:
-            lines = [
-                "Graph: \(context.snapshot.graphName)",
-                "Schema version: \(context.snapshot.version)",
-                "Scope: \(scopeDescription(chatScope.target, language: language))",
-            ]
-        }
-
-        for entity in context.snapshot.entities {
-            lines.append("\(entity.alias.rawValue): \(entity.name)")
-            for field in entity.fields {
-                var details = "  \(field.alias.rawValue): \(field.name) [\(field.type.rawValue)]"
-                if profile != .recovery,
-                    let unit = field.unit,
-                    unit.isEmpty == false
-                {
-                    details += " unit=\(unit)"
-                }
-                if profile == .standard, field.choiceOptions.isEmpty == false {
-                    let choices = field.choiceOptions.prefix(6).joined(separator: ", ")
-                    details += " choices=\(choices)"
-                }
-                lines.append(details)
-            }
-        }
-        if context.snapshot.truncation.isTruncated {
-            switch language {
-            case .german:
-                lines.append("Schema begrenzt; nutze describeGraphSchema für Details.")
-            case .english:
-                lines.append("Schema is bounded; use describeGraphSchema for details.")
-            }
-        }
-        return bounded(
-            lines.joined(separator: "\n"),
-            limit: profile.maximumSchemaCharacters
-        )
-    }
-
-    private func scopeDescription(
-        _ target: GraphChatScopeTarget,
-        language: GraphChatResponseLanguage
-    ) -> String {
-        switch (language, target) {
-        case (.german, .graph):
-            return "gesamter Graph"
-        case (.english, .graph):
-            return "entire graph"
-        case (.german, .entity):
-            return "einzelne Entity"
-        case (.english, .entity):
-            return "single entity"
-        case (.german, .node):
-            return "einzelner Node"
-        case (.english, .node):
-            return "single node"
-        case (.german, .selection(let nodes)):
-            return "Auswahl aus \(nodes.count) Nodes"
-        case (.english, .selection(let nodes)):
-            return "selection of \(nodes.count) nodes"
-        }
-    }
-
-    private func systemInstructions(
-        for scope: GraphChatScope,
-        language: GraphChatResponseLanguage
-    ) -> String {
-        switch language {
-        case .german:
-            return """
-                \(GraphChatResponseLocalizer(language: language).providerInstruction())
-                Beantworte nur Fragen zum aktiven BrainMesh-Graphen und Scope mit den registrierten read-only Tools.
-                Graph-Fakten dürfen ausschließlich aus Tool-Ergebnissen dieser Anfrage stammen. Benenne fehlende oder mehrdeutige Daten; rate niemals.
-                Evidence- und Artifact-UUIDs dürfen nur unverändert aus Tool-Ergebnissen übernommen werden. Erfinde keine IDs oder strukturierten Werte.
-                Tabellen, Rankings, Gruppen, Kennzahlen und Ergebniszeilen gehören in Artifacts; erkläre sie knapp, ohne sämtliche Zeilen zu wiederholen.
-                Biete keine Schreib-, Änderungs-, Lösch-, Import-, Upload- oder sonstige Mutationsaktion an.
-                Attachments liefern nur Metadaten. Behaupte niemals, Datei-, Bild-, PDF- oder Binärinhalte gelesen zu haben.
-                Nutze ausschließlich Aliase aus Schema, vertrauenswürdigem Konversations-Snapshot oder Tool-Ergebnissen. Aliase sind opak und werden appseitig revalidiert.
-                Konversationsreferenzen sind Vorschläge. Nutze clarification nur bei echter Mehrdeutigkeit mit validierten Optionen. Fehlt lokaler Referenzkontext, behandle die aktuelle Frage normal statt eine Referenz zu unterstellen.
-                Nutze queryDetailValues.conversationReferenceAlias für Operationen über eine validierte frühere Ergebnismenge.
-                noResults ist nur nach einem entsprechenden gültigen Tool-Ergebnis erlaubt. unsupported gilt für Graph-Mutationen, Attachment-Inhalte, Multi-Hop-Pfade und Query-Plan-v2-Funktionen.
-                Antworte normalerweise in zwei bis vier klaren Sätzen: zuerst direkt, danach kurze Begründung oder Einschränkung. Setze hasInsufficientEvidence bei fehlender verlässlicher Tool-Evidence.
-                Nenne bei Begriffen wie wichtig, dringend, relevant oder offen die konkret verwendeten Filter. Folgefragen bleiben optional, read-only und im selben Scope.
-                Aktiver Scope: \(scopeDescription(scope.target, language: language)).
-                """
-        case .english:
-            return """
-                \(GraphChatResponseLocalizer(language: language).providerInstruction())
-                Answer only questions about the active BrainMesh graph and scope with the registered read-only tools.
-                Graph facts must come only from tool results in this request. State missing or ambiguous data and never guess.
-                Evidence and Artifact UUIDs may only be copied unchanged from tool results. Never invent IDs or structured values.
-                Tables, rankings, groups, metrics, and result rows belong in Artifacts; explain them briefly without repeating every row.
-                Never offer a write, edit, delete, import, upload, or other mutation action.
-                Attachments expose metadata only. Never claim to have read file, image, PDF, or binary contents.
-                Use only aliases from the schema, trusted conversation snapshot, or tool results. Aliases are opaque and revalidated by the app.
-                Conversation references are proposals. Use clarification only for genuine ambiguity with validated options. When local reference context is absent, handle the current question normally instead of assuming a reference.
-                Use queryDetailValues.conversationReferenceAlias for operations over a validated previous result set.
-                noResults is allowed only after a matching valid tool result. unsupported applies to graph mutations, attachment contents, multi-hop paths, and Query Plan v2 features.
-                Normally answer in two to four clear sentences: answer directly first, then add a brief reason or limitation. Mark hasInsufficientEvidence when reliable tool evidence is missing.
-                For terms such as important, urgent, relevant, or open, state the concrete applied filters. Follow-ups remain optional, read-only, and in the same scope.
-                Active scope: \(scopeDescription(scope.target, language: language)).
-                """
-        }
-    }
-
     private func validatedArtifactIDs(
         from rawValues: [String],
         artifactsByID: [GraphChatAnswerArtifactID: GraphChatAnswerArtifact]
@@ -1638,161 +1033,7 @@ actor GraphChatOrchestrator {
         }
     }
 
-    private func availabilityError(
-        _ availability: GraphChatModelAvailability
-    ) -> GraphChatError {
-        guard case .unavailable(let reason) = availability else {
-            return GraphChatError(
-                code: .modelUnavailable,
-                message: "Das lokale Foundation Model ist nicht verfügbar."
-            )
-        }
-        switch reason {
-        case .deviceNotEligible:
-            return GraphChatError(
-                code: .modelUnavailable,
-                message: "Dieses Gerät unterstützt das lokale Foundation Model nicht.",
-                recoverySuggestion:
-                    "Verwende ein Gerät, das Apple Intelligence und Foundation Models unterstützt."
-            )
-        case .appleIntelligenceNotEnabled:
-            return GraphChatError(
-                code: .modelUnavailable,
-                message: "Apple Intelligence ist deaktiviert.",
-                recoverySuggestion: "Aktiviere Apple Intelligence in den Systemeinstellungen."
-            )
-        case .modelNotReady:
-            return GraphChatError(
-                code: .modelUnavailable,
-                message: "Das lokale Modell ist noch nicht bereit.",
-                recoverySuggestion:
-                    "Warte, bis das Systemmodell vollständig geladen wurde, und versuche es erneut."
-            )
-        case .unknown:
-            return GraphChatError(
-                code: .modelUnavailable,
-                message: "Das lokale Foundation Model ist aus einem unbekannten Grund nicht verfügbar."
-            )
-        }
-    }
-
     private func mapError(_ error: Error) -> GraphChatError {
-        if let graphChatError = error as? GraphChatError {
-            return graphChatError
-        }
-        if error is CancellationError {
-            return GraphChatError(
-                code: .cancelled,
-                message: "Die Graph-Chat-Anfrage wurde abgebrochen."
-            )
-        }
-        if let providerError = error as? GraphChatProviderError {
-            switch providerError.code {
-            case .unavailable:
-                return GraphChatError(
-                    code: .modelUnavailable,
-                    message: providerError.message
-                )
-            case .invalidSession:
-                return GraphChatError(
-                    code: .invalidRequest,
-                    message: providerError.message
-                )
-            case .concurrentRequest:
-                return GraphChatError(
-                    code: .concurrentRequest,
-                    message: providerError.message
-                )
-            case .contextWindowExceeded:
-                return GraphChatError(
-                    code: .contextWindowExceeded,
-                    message: providerError.message,
-                    recoverySuggestion:
-                        "Der lokale Graph-Kontext war trotz automatischer Reduktion zu groß. Starte einen neuen Chat oder wähle einen kleineren Chat-Scope."
-                )
-            case .cancelled:
-                return GraphChatError(
-                    code: .cancelled,
-                    message: providerError.message
-                )
-            case .toolBudgetExceeded:
-                return GraphChatError(
-                    code: .toolBudgetExceeded,
-                    message: providerError.message,
-                    recoverySuggestion: "Stelle eine engere Frage mit weniger Teilaspekten."
-                )
-            case .toolFailure:
-                return GraphChatError(
-                    code: .toolFailure,
-                    message: providerError.message
-                )
-            case .unsupportedLanguage:
-                return GraphChatError(
-                    code: .unavailable,
-                    message: providerError.message,
-                    recoverySuggestion: "Formuliere die Frage in einer vom Gerät unterstützten Sprache."
-                )
-            case .safetyGuardrail:
-                return GraphChatError(
-                    code: .unavailable,
-                    message: providerError.message
-                )
-            case .unexpected:
-                return GraphChatError(
-                    code: .unexpected,
-                    message: providerError.message
-                )
-            }
-        }
-        if let toolError = error as? GraphChatToolError {
-            switch toolError.code {
-            case .cancelled:
-                return GraphChatError(code: .cancelled, message: toolError.message)
-            case .budgetExceeded:
-                return GraphChatError(
-                    code: .toolBudgetExceeded,
-                    message: toolError.message,
-                    recoverySuggestion: "Stelle eine engere Frage mit weniger Teilaspekten."
-                )
-            case .invalidInput, .graphScopeMismatch:
-                return GraphChatError(code: .invalidQueryPlan, message: toolError.message)
-            case .indexUnavailable, .sourceUnavailable, .unavailable:
-                return GraphChatError(code: .toolFailure, message: toolError.message)
-            }
-        }
-        return GraphChatError(
-            code: .unexpected,
-            message: "Die Graph-Chat-Anfrage konnte nicht abgeschlossen werden."
-        )
-    }
-
-    private func boundedQuestion(
-        _ value: String,
-        maximumLength: Int,
-        language: GraphChatResponseLanguage
-    ) -> String {
-        guard value.count > maximumLength else {
-            return value
-        }
-        let marker: String
-        switch language {
-        case .german:
-            marker = "\n[Frage appseitig gekürzt]\n"
-        case .english:
-            marker = "\n[Question shortened by the app]\n"
-        }
-        let availableLength = max(2, maximumLength - marker.count)
-        let prefixLength = max(1, availableLength * 2 / 3)
-        let suffixLength = max(1, availableLength - prefixLength)
-        return String(value.prefix(prefixLength))
-            + marker
-            + String(value.suffix(suffixLength))
-    }
-
-    private func bounded(_ value: String, limit: Int) -> String {
-        guard value.count > limit else {
-            return value
-        }
-        return String(value.prefix(limit))
+        errorMapper.map(error)
     }
 }

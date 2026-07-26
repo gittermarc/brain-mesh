@@ -78,4 +78,8 @@ actor GraphChatToolBudget {
     func snapshotForTesting() -> (calls: Int, evidence: Int) {
         (usedCalls, usedEvidence)
     }
+
+    func policyForTesting() -> GraphChatToolBudgetPolicy {
+        policy
+    }
 }

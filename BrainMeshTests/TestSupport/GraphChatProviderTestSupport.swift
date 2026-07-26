@@ -115,6 +115,7 @@ nonisolated struct EvidenceRegisteringFakeToolRunnerFactory: GraphChatModelToolR
     let responseTextByTool: [GraphChatToolKind: String]
     let artifactDraftsByTool: [GraphChatToolKind: [GraphChatAnswerArtifactDraft]]
     let registeredKinds: Set<GraphChatToolKind>
+    let registeredIdentifiers: Set<String>?
     let delayNanoseconds: UInt64
 
     init(
@@ -124,6 +125,7 @@ nonisolated struct EvidenceRegisteringFakeToolRunnerFactory: GraphChatModelToolR
         responseTextByTool: [GraphChatToolKind: String] = [:],
         artifactDraftsByTool: [GraphChatToolKind: [GraphChatAnswerArtifactDraft]] = [:],
         registeredKinds: Set<GraphChatToolKind> = Set(GraphChatToolKind.allCases),
+        registeredIdentifiers: Set<String>? = nil,
         delayNanoseconds: UInt64 = 0
     ) {
         self.recorder = recorder
@@ -132,6 +134,7 @@ nonisolated struct EvidenceRegisteringFakeToolRunnerFactory: GraphChatModelToolR
         self.responseTextByTool = responseTextByTool
         self.artifactDraftsByTool = artifactDraftsByTool
         self.registeredKinds = registeredKinds
+        self.registeredIdentifiers = registeredIdentifiers
         self.delayNanoseconds = delayNanoseconds
     }
 
@@ -163,6 +166,7 @@ nonisolated struct EvidenceRegisteringFakeToolRunnerFactory: GraphChatModelToolR
             responseTextByTool: responseTextByTool,
             artifactDraftsByTool: artifactDraftsByTool,
             registeredKinds: registeredKinds,
+            registeredIdentifiers: registeredIdentifiers,
             delayNanoseconds: delayNanoseconds
         )
     }
@@ -181,6 +185,7 @@ private actor EvidenceRegisteringFakeToolRunner: GraphChatModelToolRunning {
     private let responseTextByTool: [GraphChatToolKind: String]
     private let artifactDraftsByTool: [GraphChatToolKind: [GraphChatAnswerArtifactDraft]]
     private let toolKinds: Set<GraphChatToolKind>
+    private let toolIdentifiers: Set<String>?
     private let delayNanoseconds: UInt64
 
     init(
@@ -196,6 +201,7 @@ private actor EvidenceRegisteringFakeToolRunner: GraphChatModelToolRunning {
         responseTextByTool: [GraphChatToolKind: String],
         artifactDraftsByTool: [GraphChatToolKind: [GraphChatAnswerArtifactDraft]],
         registeredKinds: Set<GraphChatToolKind>,
+        registeredIdentifiers: Set<String>?,
         delayNanoseconds: UInt64
     ) {
         self.scope = scope
@@ -210,11 +216,16 @@ private actor EvidenceRegisteringFakeToolRunner: GraphChatModelToolRunning {
         self.responseTextByTool = responseTextByTool
         self.artifactDraftsByTool = artifactDraftsByTool
         self.toolKinds = registeredKinds
+        self.toolIdentifiers = registeredIdentifiers
         self.delayNanoseconds = delayNanoseconds
     }
 
     func registeredToolKinds() -> Set<GraphChatToolKind> {
         toolKinds
+    }
+
+    func registeredToolIdentifiers() -> Set<String> {
+        toolIdentifiers ?? Set(toolKinds.map(\.rawValue))
     }
 
     func run(
@@ -383,6 +394,82 @@ nonisolated enum GraphChatProviderTestSupport {
 }
 
 extension GraphChatProviderTestSupport {
+    static func makeProviderSessionFactory(
+        provider: any GraphChatModelProvider,
+        schemaProvider: any GraphSchemaSnapshotProviding,
+        toolRunnerFactory: any GraphChatModelToolRunnerFactory,
+        budgetPolicy: GraphChatToolBudgetPolicy = .default
+    ) -> GraphChatProviderSessionFactory {
+        GraphChatProviderSessionFactory(
+            provider: provider,
+            schemaProvider: schemaProvider,
+            toolRunnerFactory: toolRunnerFactory,
+            standardToolBudgetPolicy: budgetPolicy,
+            conversationStateReducer: GraphChatConversationStateReducer(),
+            referenceResolver: GraphChatConversationReferenceResolver(),
+            requestBuilder: GraphChatProviderRequestBuilder(),
+            errorMapper: GraphChatProviderErrorMapper(),
+            referenceDate: { Date(timeIntervalSince1970: 1_735_732_800) },
+            calendar: Calendar(identifier: .gregorian),
+            timeZone: TimeZone(identifier: "Europe/Berlin")!
+        )
+    }
+
+    static func makeProviderAttemptInput(
+        graphID: UUID = GraphChatTestSupport.graphID,
+        chatScope: GraphChatScope? = nil
+    ) -> (
+        key: GraphChatOrchestrationScopeKey,
+        artifactSession: GraphChatArtifactSessionResources,
+        baseState: GraphChatConversationState,
+        context: GraphChatConversationContextSnapshot
+    ) {
+        let graphScope = GraphScope(graphID: graphID)
+        let resolvedChatScope = chatScope ?? .entireGraph(graphScope)
+        let key = GraphChatOrchestrationScopeKey(
+            graphScope: graphScope,
+            chatScope: resolvedChatScope
+        )
+        let artifactSessionID = GraphChatAnswerArtifactSessionID()
+        let artifactSession = GraphChatArtifactSessionResources(
+            key: key,
+            sessionID: artifactSessionID,
+            registry: GraphChatAnswerArtifactRegistry(
+                graphScope: graphScope,
+                scope: resolvedChatScope,
+                sessionID: artifactSessionID
+            )
+        )
+        let baseState = GraphChatConversationState.initial(
+            graphScope: graphScope,
+            chatScope: resolvedChatScope,
+            resetReason: .newConversation
+        )
+        let context = GraphChatConversationContextBuilder().makeSnapshot(
+            from: baseState.snapshot
+        )
+        return (key, artifactSession, baseState, context)
+    }
+
+    static func makeInitialProviderResources(
+        sessionFactory: GraphChatProviderSessionFactory,
+        graphID: UUID = GraphChatTestSupport.graphID,
+        chatScope: GraphChatScope? = nil,
+        responseLanguage: GraphChatResponseLanguage = .english
+    ) async throws -> GraphChatProviderSessionResources {
+        let input = makeProviderAttemptInput(
+            graphID: graphID,
+            chatScope: chatScope
+        )
+        return try await sessionFactory.makeInitialSession(
+            for: input.key,
+            artifactSession: input.artifactSession,
+            conversationBaseState: input.baseState,
+            conversationContext: input.context,
+            responseLanguage: responseLanguage
+        )
+    }
+
     @MainActor
     static func makeRealRuntimeFactory(
         store: BrainMeshTestStore,

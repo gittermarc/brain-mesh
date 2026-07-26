@@ -149,9 +149,18 @@ nonisolated struct GraphChatModelToolOutputBudget: Hashable, Sendable {
 nonisolated protocol GraphChatModelToolRunning: Sendable {
     func registeredToolKinds() async -> Set<GraphChatToolKind>
 
+    func registeredToolIdentifiers() async -> Set<String>
+
     func run(
         _ request: GraphChatModelToolRequest
     ) async throws -> GraphChatModelToolResponse
+}
+
+extension GraphChatModelToolRunning {
+    func registeredToolIdentifiers() async -> Set<String> {
+        let kinds = await registeredToolKinds()
+        return Set(kinds.map(\.rawValue))
+    }
 }
 
 nonisolated protocol GraphChatModelToolRunnerFactory: Sendable {
