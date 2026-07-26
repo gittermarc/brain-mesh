@@ -290,7 +290,7 @@ nonisolated struct GraphChatConversationReferenceInterpreter: Sendable {
             return ordinal
         }
 
-        for token in questionTokens where token.allSatisfy { $0.isNumber } {
+        for token in questionTokens where token.allSatisfy({ $0.isNumber }) {
             if let value = Int(token), value > 0, value <= 100 {
                 return value
             }

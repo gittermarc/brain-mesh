@@ -354,7 +354,7 @@ final class GraphChatGenerationController {
             let terminalOutcome = GraphChatGenerationEventClassifier.outcome(
                 for: event
             )
-            if let terminalOutcome {
+            if terminalOutcome != nil {
                 markTerminalEventAccepted(operationID)
             }
             callbacks.eventDidArrive(
