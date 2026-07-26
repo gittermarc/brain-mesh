@@ -722,6 +722,33 @@ Maßnahmen:
 - Structured Concurrency bevorzugen; unstrukturierte Tasks in einem Registry-Typ besitzen.
 - Race-Tests für cancel/edit/regenerate/lock/graph-switch.
 
+### Graph Chat Presentation Trust Boundary
+
+Pfade:
+
+- `BrainMesh/GraphChat/Presentation/GraphChatPresentationRegistry.swift`
+- `BrainMesh/GraphChat/Presentation/GraphChatPresentationFirewall.swift`
+- `BrainMesh/GraphChat/Provider/GraphChatModelToolRuntime.swift`
+- `BrainMesh/GraphChat/Provider/GraphChatProviderExecutor.swift`
+- `BrainMesh/GraphChat/Orchestration/GraphChatAnswerFinalizer.swift`
+- `BrainMesh/GraphChat/UI/GraphChatMessageActions.swift`
+
+Vertrag:
+
+- Jede Provider-Session besitzt eine turn-gebundene `GraphChatPresentationRegistry`.
+- Initiale Einträge stammen aus dem validierten Schema- und Conversation-Kontext.
+- Der Tool-Runtime ergänzt ausschließlich validierte Node-, Evidence- und Artifact-Präsentationen.
+- Partials werden als kumulative Foundation-Models-Snapshots vollständig erneut geprüft; ein vollständiges internes Token wird nie an den UI-Stream weitergereicht.
+- Modellbeeinflusste Provider- und Tool-Fehlermeldungen passieren vor dem öffentlichen Error-State dieselbe Firewall.
+- Der Finalizer prüft direkte Antwort, Sections, Filter, Follow-ups und Clarifications gemeinsam. Ein unbekannter Alias, eine unbekannte Conversation-Referenz oder UUID erzeugt ein typisiertes unsicheres Ergebnis und eine lokalisierte deterministische Ersatzantwort.
+- `GraphChatAnswer` trägt den geprüften turn-bezogenen Presentation-Kontext bis zum Copy-Pfad. Copy verwendet dieselbe Firewall; der frühere separate UUID-Redactor existiert nicht mehr.
+- Die Xcode-Gruppen sind filesystem-synchronisiert; neue Dateien unter `BrainMesh/` und `BrainMeshTests/` werden automatisch den jeweiligen Targets zugeordnet.
+
+Bewusste Grenze:
+
+- Die Firewall löst `CURRENT` nicht fachlich neu auf. Sie präsentiert `CURRENT` nur, wenn der bestehende Conversation-Resolver bereits eine validierte Darstellung in den Turn-Kontext aufgenommen hat.
+- Prompt-Anweisungen bleiben unterstützend, sind aber nicht die Sicherheitsgrenze.
+
 ### Nicht gehaltene Utility Tasks
 
 Beispiel:
@@ -986,7 +1013,8 @@ Logging darf Fehlerklasse und Operation-ID enthalten, aber keine Nutzinhalte.
 
 - Generierte Antwort darf keine nicht belegten Node-Referenzen als Fakten präsentieren.
 - Toolbudget kann Teilantworten erzeugen.
-- Alias kann nach Delete/Rename stale sein.
+- Alias kann nach Delete/Rename stale sein; die turn-gebundene Registry verhindert Roh-Ausgabe, ersetzt aber keine fachliche Revalidierung.
+- Eine unbekannte technische Referenz führt bewusst zur vollständigen lokalisierten Ersatzantwort statt zu einer partiellen Ausgabe.
 - Lock/Background muss History, Artifacts und Provider Session vollständig invalidieren.
 - Indexunverfügbarkeit darf nicht als „keine Daten“ interpretiert werden.
 

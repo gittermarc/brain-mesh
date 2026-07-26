@@ -183,6 +183,17 @@ nonisolated struct GraphChatResponseLocalizer: Sendable {
         }
     }
 
+    func unsafePresentation() -> String {
+        switch language {
+        case .german:
+            return
+                "Diese Antwort konnte nicht sicher angezeigt werden, weil sie interne technische Bezeichner enthielt. Bitte stelle die Frage erneut."
+        case .english:
+            return
+                "This answer could not be displayed safely because it contained internal technical identifiers. Please ask the question again."
+        }
+    }
+
     func providerInstruction() -> String {
         switch language {
         case .german:

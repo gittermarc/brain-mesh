@@ -249,6 +249,11 @@ nonisolated struct GraphChatProviderSessionFactory: Sendable {
             policy: budgetPolicy(for: purpose)
         )
         let evidenceRegistry = GraphChatEvidenceRegistry(scope: key.chatScope)
+        let presentationRegistry = GraphChatPresentationRegistry(
+            schemaContext: schemaContext,
+            conversationContext: conversationContext,
+            language: responseLanguage
+        )
         let artifactTransactionID = GraphChatAnswerArtifactTransactionID()
         let conversationTransaction = GraphChatConversationStateTransaction(
             baseState: conversationBaseState,
@@ -260,6 +265,7 @@ nonisolated struct GraphChatProviderSessionFactory: Sendable {
             schemaContext: schemaContext,
             budget: toolBudget,
             evidenceRegistry: evidenceRegistry,
+            presentationRegistry: presentationRegistry,
             artifactRegistry: artifactSession.registry,
             artifactTransactionID: artifactTransactionID,
             conversationTransaction: conversationTransaction,
@@ -310,6 +316,7 @@ nonisolated struct GraphChatProviderSessionFactory: Sendable {
                 schemaContext: schemaContext,
                 toolBudget: toolBudget,
                 evidenceRegistry: evidenceRegistry,
+                presentationRegistry: presentationRegistry,
                 artifactRegistry: artifactSession.registry,
                 artifactSessionID: artifactSession.sessionID,
                 artifactTransactionID: artifactTransactionID,

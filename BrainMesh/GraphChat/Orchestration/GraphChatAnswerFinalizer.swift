@@ -7,7 +7,7 @@
 
 import Foundation
 
-nonisolated struct GraphChatProviderAnswerFinalizationInput: Hashable, Sendable {
+nonisolated struct GraphChatProviderAnswerFinalizationInput: Sendable {
     let requestID: UUID
     let completedAt: Date
     let providerAnswer: GraphChatProviderFinalAnswer
@@ -17,6 +17,7 @@ nonisolated struct GraphChatProviderAnswerFinalizationInput: Hashable, Sendable 
     let requestQuestion: String
     let expectedCommittedState: GraphChatConversationState
     let artifactContext: GraphChatArtifactCommitContext
+    let presentationRegistry: GraphChatPresentationRegistry
 }
 
 nonisolated struct GraphChatLocalAnswerFinalizationInput: Hashable, Sendable {
@@ -26,6 +27,7 @@ nonisolated struct GraphChatLocalAnswerFinalizationInput: Hashable, Sendable {
     let baseState: GraphChatConversationState
     let expectedCommittedState: GraphChatConversationState
     let pendingClarification: GraphChatPendingClarification?
+    let responseLanguage: GraphChatResponseLanguage
 }
 
 nonisolated struct GraphChatAnswerFinalizer: Sendable {
@@ -35,6 +37,7 @@ nonisolated struct GraphChatAnswerFinalizer: Sendable {
     private let localAnswerBuilder: GraphChatLocalAnswerBuilder
     private let evidenceValidator: any GraphEvidenceValidating
     private let commitCoordinator: GraphChatTurnCommitCoordinator
+    private let presentationFirewall: GraphChatPresentationFirewall
 
     init(
         conversationStateReducer: GraphChatConversationStateReducer =
@@ -48,7 +51,9 @@ nonisolated struct GraphChatAnswerFinalizer: Sendable {
         evidenceValidator: any GraphEvidenceValidating =
             GraphEvidenceSourceValidator.shared,
         commitCoordinator: GraphChatTurnCommitCoordinator =
-            GraphChatTurnCommitCoordinator()
+            GraphChatTurnCommitCoordinator(),
+        presentationFirewall: GraphChatPresentationFirewall =
+            GraphChatPresentationFirewall()
     ) {
         self.conversationStateReducer = conversationStateReducer
         self.referenceResolver = referenceResolver
@@ -56,6 +61,7 @@ nonisolated struct GraphChatAnswerFinalizer: Sendable {
         self.localAnswerBuilder = localAnswerBuilder
         self.evidenceValidator = evidenceValidator
         self.commitCoordinator = commitCoordinator
+        self.presentationFirewall = presentationFirewall
     }
 
     func finalizeProviderTurn(
@@ -112,10 +118,30 @@ nonisolated struct GraphChatAnswerFinalizer: Sendable {
                 )
             )
         }
-        let answer = try await validatedLocalAnswer(
+        let validatedAnswer = try await validatedLocalAnswer(
             input.answer,
             in: input.baseState.chatScope
         )
+        let registry = GraphChatValidatedPresentationRegistry(
+            language: input.responseLanguage
+        )
+        let presentationContext = GraphChatPresentationContext(
+            registry: registry,
+            language: input.responseLanguage
+        )
+        let answer: GraphChatAnswer
+        switch presentationFirewall.present(
+            validatedAnswer,
+            context: presentationContext
+        ) {
+        case .safe(let safeAnswer):
+            answer = safeAnswer
+        case .unsafe:
+            answer = presentationFirewall.replacementAnswer(
+                language: input.responseLanguage,
+                registry: registry
+            )
+        }
         return try await commitCoordinator.commit(
             GraphChatTurnCommitInput(
                 requestID: input.requestID,
@@ -131,6 +157,37 @@ nonisolated struct GraphChatAnswerFinalizer: Sendable {
     }
 
     private func validatedProviderAnswer(
+        _ input: GraphChatProviderAnswerFinalizationInput,
+        evidenceRegistry: GraphChatEvidenceRegistry,
+        artifactRegistry: any GraphChatAnswerArtifactFinalizationRegistry,
+        conversationTransaction: GraphChatConversationStateTransaction
+    ) async throws -> GraphChatAnswer {
+        let answer = try await rawValidatedProviderAnswer(
+            input,
+            evidenceRegistry: evidenceRegistry,
+            artifactRegistry: artifactRegistry,
+            conversationTransaction: conversationTransaction
+        )
+        let registry = await input.presentationRegistry.snapshot()
+        let presentationContext = GraphChatPresentationContext(
+            registry: registry,
+            language: input.responseLanguage
+        )
+        switch presentationFirewall.present(
+            answer,
+            context: presentationContext
+        ) {
+        case .safe(let safeAnswer):
+            return safeAnswer
+        case .unsafe:
+            return presentationFirewall.replacementAnswer(
+                language: input.responseLanguage,
+                registry: registry
+            )
+        }
+    }
+
+    private func rawValidatedProviderAnswer(
         _ input: GraphChatProviderAnswerFinalizationInput,
         evidenceRegistry: GraphChatEvidenceRegistry,
         artifactRegistry: any GraphChatAnswerArtifactFinalizationRegistry,
@@ -178,6 +235,9 @@ nonisolated struct GraphChatAnswerFinalizer: Sendable {
         let artifacts = registryArtifacts.filter {
             Set($0.allEvidenceIDs).isSubset(of: liveEvidenceIDs)
         }
+        await input.presentationRegistry.registerValidatedArtifacts(
+            artifacts
+        )
         let artifactsByID = Dictionary(
             uniqueKeysWithValues: artifacts.map { ($0.id, $0) }
         )
@@ -228,6 +288,9 @@ nonisolated struct GraphChatAnswerFinalizer: Sendable {
                 liveEvidenceByID[$0.id]
             }
         ).values
+        await input.presentationRegistry.registerValidatedEvidence(
+            finalEvidence
+        )
         let deterministicFilters = await evidenceRegistry.filtersForAnswer()
         let providerFilters = providerAnswer.appliedFilters.map { filter in
             GraphChatAppliedFilter(

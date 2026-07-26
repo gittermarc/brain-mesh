@@ -49,6 +49,25 @@ nonisolated struct GraphChatProviderExecutor: Sendable {
                     return finalAnswer
                 } catch {
                     guard Task.isCancelled else {
+                        if let providerError =
+                            error as? GraphChatProviderError {
+                            throw await presentationSafeError(
+                                providerError,
+                                resources: resources
+                            )
+                        }
+                        if let toolError = error as? GraphChatToolError {
+                            throw await presentationSafeError(
+                                toolError,
+                                resources: resources
+                            )
+                        }
+                        if let graphChatError = error as? GraphChatError {
+                            throw await presentationSafeError(
+                                graphChatError,
+                                resources: resources
+                            )
+                        }
                         throw error
                     }
                     await sessionFactory.requestCancellation(resources)
@@ -72,6 +91,10 @@ nonisolated struct GraphChatProviderExecutor: Sendable {
             sessionID: resources.sessionID,
             request: request
         )
+        let presentationFirewall = GraphChatPresentationStreamFirewall(
+            registry: resources.presentationRegistry,
+            language: resources.responseLanguage
+        )
         var finalAnswer: GraphChatProviderFinalAnswer?
 
         do {
@@ -81,10 +104,15 @@ nonisolated struct GraphChatProviderExecutor: Sendable {
                 case .toolActivity(let activity):
                     onEvent(.toolActivity(activity))
                 case .partialAnswer(let partial):
-                    let text = partial.directAnswer.trimmingCharacters(
+                    // Foundation Models exposes cumulative structured snapshots.
+                    // Rechecking the whole visible value prevents split aliases
+                    // such as "E" followed by "E1" from ever being published.
+                    let rawText = partial.directAnswer.trimmingCharacters(
                         in: .whitespacesAndNewlines
                     )
-                    if text.isEmpty == false {
+                    if rawText.isEmpty == false {
+                        let text = await presentationFirewall
+                            .presentCumulativeText(rawText)
                         onEvent(.partialAnswer(text))
                     }
                 case .completed(let answer):
@@ -114,5 +142,74 @@ nonisolated struct GraphChatProviderExecutor: Sendable {
         }
         await sessionFactory.completeProviderStream(resources)
         return finalAnswer
+    }
+
+    private func presentationSafeError(
+        _ error: GraphChatProviderError,
+        resources: GraphChatProviderSessionResources
+    ) async -> GraphChatProviderError {
+        GraphChatProviderError(
+            code: error.code,
+            message: await presentationSafeMessage(
+                error.message,
+                resources: resources
+            )
+        )
+    }
+
+    private func presentationSafeError(
+        _ error: GraphChatToolError,
+        resources: GraphChatProviderSessionResources
+    ) async -> GraphChatToolError {
+        GraphChatToolError(
+            code: error.code,
+            message: await presentationSafeMessage(
+                error.message,
+                resources: resources
+            )
+        )
+    }
+
+    private func presentationSafeError(
+        _ error: GraphChatError,
+        resources: GraphChatProviderSessionResources
+    ) async -> GraphChatError {
+        let registry = await resources.presentationRegistry.snapshot()
+        let firewall = GraphChatPresentationFirewall()
+        let fallback = GraphChatResponseLocalizer(
+            language: resources.responseLanguage
+        ).unsafePresentation()
+
+        func safeMessage(_ message: String) -> String {
+            switch firewall.present(message, using: registry) {
+            case .safe(let value):
+                return value
+            case .unsafe:
+                return fallback
+            }
+        }
+        return GraphChatError(
+            code: error.code,
+            message: safeMessage(error.message),
+            recoverySuggestion: error.recoverySuggestion.map(safeMessage)
+        )
+    }
+
+    private func presentationSafeMessage(
+        _ message: String,
+        resources: GraphChatProviderSessionResources
+    ) async -> String {
+        let registry = await resources.presentationRegistry.snapshot()
+        switch GraphChatPresentationFirewall().present(
+            message,
+            using: registry
+        ) {
+        case .safe(let value):
+            return value
+        case .unsafe:
+            return GraphChatResponseLocalizer(
+                language: resources.responseLanguage
+            ).unsafePresentation()
+        }
     }
 }

@@ -324,6 +324,7 @@ nonisolated struct FakeGraphChatModelToolRunnerFactory: GraphChatModelToolRunner
         schemaContext: GraphSchemaContext,
         budget: GraphChatToolBudget,
         evidenceRegistry: GraphChatEvidenceRegistry,
+        presentationRegistry: GraphChatPresentationRegistry,
         artifactRegistry: GraphChatAnswerArtifactRegistry,
         artifactTransactionID: GraphChatAnswerArtifactTransactionID,
         conversationTransaction: GraphChatConversationStateTransaction,

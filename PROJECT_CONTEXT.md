@@ -34,6 +34,7 @@ BrainMesh ist eine native SwiftUI-App für iPhone und iPad, in der Nutzer:innen 
 - **Mutation Batch**: Datenminimaler Event nach erfolgreichem Save; invalidiert Index und Caches.
 - **Search Index**: Pro App lokaler SQLite-/FTS-Index; aus SwiftData vollständig rekonstruierbar.
 - **Graph Chat**: On-Device-LLM-Flow mit sechs read-only Tools und graphgebundener Evidenz.
+- **Presentation Firewall**: Turn-gebundene Trust Boundary, die interne Chat-Aliase und technische IDs vor Streaming, finaler UI-Ausgabe und Copy deterministisch auf validierte Anzeigenamen abbildet oder durch eine lokalisierte Ersatzantwort ersetzt.
 - **Pro**: StoreKit-gesteuerte Berechtigung für kostenpflichtige Funktionen.
 
 ## Architecture Map
@@ -76,7 +77,7 @@ BrainMesh ist eine native SwiftUI-App für iPhone und iPad, in der Nutzer:innen 
 ### Services
 
 - `BrainMesh/GraphCanvas/GraphCanvasDataLoader/` lädt begrenzte Canvas-Snapshots.
-- `BrainMesh/GraphChat/` kapselt Provider, Tools, Query-Plan, Conversation und UI.
+- `BrainMesh/GraphChat/` kapselt Provider, Tools, Query-Plan, Conversation, turn-gebundene Presentation Registry/Firewall und UI.
 - `BrainMesh/Security/` kapselt Graph-Lock, Biometrie und Passwort.
 - `BrainMesh/Pro/` kapselt StoreKit-Entitlements.
 
@@ -87,6 +88,7 @@ BrainMesh ist eine native SwiftUI-App für iPhone und iPad, in der Nutzer:innen 
 - Suchindex → SwiftData nur für Rebuild/Reconciliation; nie als autoritative Quelle.
 - Lokale Medien-Caches → autoritative SwiftData-Binärdaten; Caches dürfen verworfen werden.
 - Graph Chat → read-only Tool Runtime → Search/Repositories; kein Chat-Tool schreibt Graphdaten.
+- Modelltext → `GraphChatPresentationFirewall` → Streaming-/Answer-State → UI/Copy; Registry-Einträge stammen ausschließlich aus validierten Schema-, Conversation-, Tool-, Evidence- und Artifact-Strukturen.
 
 ## Folder Map
 

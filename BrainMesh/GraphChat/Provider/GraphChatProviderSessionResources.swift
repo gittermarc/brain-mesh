@@ -19,6 +19,7 @@ nonisolated struct GraphChatProviderSessionResources: Sendable {
     let schemaContext: GraphSchemaContext
     let toolBudget: GraphChatToolBudget
     let evidenceRegistry: GraphChatEvidenceRegistry
+    let presentationRegistry: GraphChatPresentationRegistry
     let artifactRegistry: GraphChatAnswerArtifactRegistry
     let artifactSessionID: GraphChatAnswerArtifactSessionID
     let artifactTransactionID: GraphChatAnswerArtifactTransactionID

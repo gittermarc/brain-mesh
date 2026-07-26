@@ -141,7 +141,8 @@ nonisolated struct GraphChatRequestPipeline: Sendable {
                     answer: plan.answer,
                     baseState: plan.baseState,
                     expectedCommittedState: plan.expectedCommittedState,
-                    pendingClarification: plan.pendingClarification
+                    pendingClarification: plan.pendingClarification,
+                    responseLanguage: plan.responseLanguage
                 ),
                 currentCommittedState: input.turnStateSnapshot
             )
@@ -228,7 +229,9 @@ nonisolated struct GraphChatRequestPipeline: Sendable {
                             sessionID: execution.resources.artifactSessionID,
                             transactionID:
                                 execution.resources.artifactTransactionID
-                        )
+                        ),
+                        presentationRegistry:
+                            execution.resources.presentationRegistry
                     ),
                     evidenceRegistry: execution.resources.evidenceRegistry,
                     artifactRegistry: execution.resources.artifactRegistry,

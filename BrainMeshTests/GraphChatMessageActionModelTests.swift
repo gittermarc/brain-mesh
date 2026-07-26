@@ -35,7 +35,14 @@ struct GraphChatMessageActionModelTests {
                 )
             ],
             followUpSuggestions: [],
-            hasInsufficientEvidence: false
+            hasInsufficientEvidence: false,
+            presentationContext: GraphChatPresentationContext(
+                registry: GraphChatValidatedPresentationRegistry(
+                    evidence: [evidence],
+                    language: .german
+                ),
+                language: .german
+            )
         )
         let state = Self.completedState(answer: answer)
 

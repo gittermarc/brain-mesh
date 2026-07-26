@@ -169,6 +169,7 @@ nonisolated protocol GraphChatModelToolRunnerFactory: Sendable {
         schemaContext: GraphSchemaContext,
         budget: GraphChatToolBudget,
         evidenceRegistry: GraphChatEvidenceRegistry,
+        presentationRegistry: GraphChatPresentationRegistry,
         artifactRegistry: GraphChatAnswerArtifactRegistry,
         artifactTransactionID: GraphChatAnswerArtifactTransactionID,
         conversationTransaction: GraphChatConversationStateTransaction,

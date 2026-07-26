@@ -57,6 +57,7 @@ nonisolated struct GraphChatModelToolRuntimeFactory: GraphChatModelToolRunnerFac
         schemaContext: GraphSchemaContext,
         budget: GraphChatToolBudget,
         evidenceRegistry: GraphChatEvidenceRegistry,
+        presentationRegistry: GraphChatPresentationRegistry,
         artifactRegistry: GraphChatAnswerArtifactRegistry,
         artifactTransactionID: GraphChatAnswerArtifactTransactionID,
         conversationTransaction: GraphChatConversationStateTransaction,
@@ -72,6 +73,7 @@ nonisolated struct GraphChatModelToolRuntimeFactory: GraphChatModelToolRunnerFac
             schemaContext: schemaContext,
             budget: budget,
             evidenceRegistry: evidenceRegistry,
+            presentationRegistry: presentationRegistry,
             artifactRegistry: artifactRegistry,
             artifactTransactionID: artifactTransactionID,
             conversationTransaction: conversationTransaction,
@@ -104,6 +106,7 @@ actor GraphChatModelToolRuntime: GraphChatModelToolRunning {
     private let schemaContext: GraphSchemaContext
     private let context: GraphChatToolContext
     private let evidenceRegistry: GraphChatEvidenceRegistry
+    private let presentationRegistry: GraphChatPresentationRegistry
     private let artifactRegistry: GraphChatAnswerArtifactRegistry
     private let artifactTransactionID: GraphChatAnswerArtifactTransactionID
     private let conversationTransaction: GraphChatConversationStateTransaction
@@ -128,6 +131,7 @@ actor GraphChatModelToolRuntime: GraphChatModelToolRunning {
         schemaContext: GraphSchemaContext,
         budget: GraphChatToolBudget,
         evidenceRegistry: GraphChatEvidenceRegistry,
+        presentationRegistry: GraphChatPresentationRegistry,
         artifactRegistry: GraphChatAnswerArtifactRegistry,
         artifactTransactionID: GraphChatAnswerArtifactTransactionID,
         conversationTransaction: GraphChatConversationStateTransaction,
@@ -147,6 +151,7 @@ actor GraphChatModelToolRuntime: GraphChatModelToolRunning {
         self.schemaContext = schemaContext
         self.context = GraphChatToolContext(scope: scope, budget: budget)
         self.evidenceRegistry = evidenceRegistry
+        self.presentationRegistry = presentationRegistry
         self.artifactRegistry = artifactRegistry
         self.artifactTransactionID = artifactTransactionID
         self.conversationTransaction = conversationTransaction
@@ -294,6 +299,24 @@ actor GraphChatModelToolRuntime: GraphChatModelToolRunning {
             }
             return boundedCollection(lines, empty: "Keine Treffer im aktiven Scope.")
         } ?? "Keine Treffer im aktiven Scope."
+        if let output = result.payload {
+            for hit in output.hits {
+                guard let node = presentationNode(
+                    for: hit.sourceReference
+                ),
+                    let nodeAlias = aliasForReference(
+                        hit.sourceReference
+                    )
+                else {
+                    continue
+                }
+                await presentationRegistry.registerValidatedNode(
+                    alias: nodeAlias,
+                    node: node,
+                    displayName: hit.title
+                )
+            }
+        }
         return GraphChatModelToolResponse(
             tool: .searchGraph,
             state: result.state,
@@ -338,6 +361,15 @@ actor GraphChatModelToolRuntime: GraphChatModelToolRunning {
         let content = result.payload.map { output in
             formatQueryResult(output.result)
         } ?? "Keine validierten Detailwerte im aktiven Scope."
+        if let output = result.payload {
+            for row in output.result.rows {
+                await presentationRegistry.registerValidatedNode(
+                    alias: alias(for: row.node),
+                    node: row.node,
+                    displayName: row.label
+                )
+            }
+        }
         return GraphChatModelToolResponse(
             tool: .queryDetailValues,
             state: result.state,
@@ -376,6 +408,9 @@ actor GraphChatModelToolRuntime: GraphChatModelToolRunning {
             }
         )
         let content = result.payload.map(formatNode) ?? "Node nicht im aktiven Scope gefunden."
+        if let output = result.payload {
+            await registerNodePresentations(output)
+        }
         return GraphChatModelToolResponse(
             tool: .getNode,
             state: result.state,
@@ -415,6 +450,9 @@ actor GraphChatModelToolRuntime: GraphChatModelToolRunning {
             }
         )
         let content = result.payload.map(formatNeighbors) ?? "Keine direkten Nachbarn im aktiven Scope."
+        if let output = result.payload {
+            await registerNodePresentations(output)
+        }
         return GraphChatModelToolResponse(
             tool: .getNeighbors,
             state: result.state,
@@ -452,6 +490,15 @@ actor GraphChatModelToolRuntime: GraphChatModelToolRunning {
             } ?? []
         )
         let content = result.payload.map(formatStats) ?? "Keine validierte Graph-Statistik verfügbar."
+        if let output = result.payload {
+            for hub in output.hubs {
+                await presentationRegistry.registerValidatedNode(
+                    alias: alias(for: hub.node),
+                    node: hub.node,
+                    displayName: hub.label
+                )
+            }
+        }
         return GraphChatModelToolResponse(
             tool: .graphStats,
             state: result.state,
@@ -463,6 +510,7 @@ actor GraphChatModelToolRuntime: GraphChatModelToolRunning {
 
     private func register(_ evidence: [GraphEvidence]) async throws {
         try await evidenceRegistry.register(evidence)
+        await presentationRegistry.registerValidatedEvidence(evidence)
     }
 
     private func stageArtifact(
@@ -487,6 +535,10 @@ actor GraphChatModelToolRuntime: GraphChatModelToolRunning {
                     evidenceRegistry: evidenceRegistry
                 )
                 artifactIDs.append(artifactID)
+                await presentationRegistry.registerValidatedArtifact(
+                    id: artifactID,
+                    title: draft.title
+                )
             } catch is CancellationError {
                 throw CancellationError()
             } catch {
@@ -816,6 +868,73 @@ actor GraphChatModelToolRuntime: GraphChatModelToolRunning {
             return alias(for: NodeRefKey(kind: .attribute, id: reference.sourceID))
         case .graph, .detailField, .detailValue, .link, .attachment:
             return nil
+        }
+    }
+
+    private func presentationNode(
+        for reference: GraphSourceReference
+    ) -> NodeRefKey? {
+        if let node = reference.node?.nodeKey {
+            return node
+        }
+        if let owner = reference.owner?.nodeKey {
+            return owner
+        }
+        switch reference.sourceKind {
+        case .entity:
+            return NodeRefKey(
+                kind: .entity,
+                id: reference.sourceID
+            )
+        case .attribute:
+            return NodeRefKey(
+                kind: .attribute,
+                id: reference.sourceID
+            )
+        case .graph, .detailField, .detailValue, .link, .attachment:
+            return nil
+        }
+    }
+
+    private func registerNodePresentations(
+        _ output: GetNodeOutput
+    ) async {
+        await presentationRegistry.registerValidatedNode(
+            alias: alias(for: output.node),
+            node: output.node,
+            displayName: output.label
+        )
+        for link in output.links {
+            let otherNode =
+                link.direction == .outgoing
+                ? link.target
+                : link.source
+            let otherLabel =
+                link.direction == .outgoing
+                ? link.targetLabel
+                : link.sourceLabel
+            await presentationRegistry.registerValidatedNode(
+                alias: alias(for: otherNode),
+                node: otherNode,
+                displayName: otherLabel
+            )
+        }
+    }
+
+    private func registerNodePresentations(
+        _ output: GetNeighborsOutput
+    ) async {
+        await presentationRegistry.registerValidatedNode(
+            alias: alias(for: output.center.nodeKey),
+            node: output.center.nodeKey,
+            displayName: output.center.label
+        )
+        for connection in output.connections {
+            await presentationRegistry.registerValidatedNode(
+                alias: alias(for: connection.neighbor),
+                node: connection.neighbor,
+                displayName: connection.neighborLabel
+            )
         }
     }
 

@@ -153,26 +153,40 @@ nonisolated enum GraphChatCopyContentBuilder {
         sourcePolicy: GraphChatCopySourcePolicy = .compactValidatedCount
     ) -> GraphChatCopyPayload? {
         guard state.isTerminal,
-              let answer = state.answer else {
+              let sourceAnswer = state.answer else {
             return nil
         }
 
-        let internalIdentifierTokens = internalIdentifierTokens(in: answer)
+        let presentationContext =
+            sourceAnswer.presentationContext
+            ?? GraphChatPresentationContext(
+                registry: .empty,
+                language: .german
+            )
+        let answer: GraphChatAnswer
+        switch GraphChatPresentationFirewall().present(
+            sourceAnswer,
+            context: presentationContext
+        ) {
+        case .safe(let safeAnswer):
+            answer = safeAnswer
+        case .unsafe:
+            return nil
+        }
+
         var blocks: [String] = []
         appendDistinct(
-            redacted(answer.directAnswer, tokens: internalIdentifierTokens),
+            answer.directAnswer,
             to: &blocks
         )
 
         for section in answer.sections {
-            let text = normalized(
-                redacted(section.text, tokens: internalIdentifierTokens)
-            )
+            let text = normalized(section.text)
             guard text.isEmpty == false else {
                 continue
             }
             if let title = section.title.map({ value in
-                normalized(redacted(value, tokens: internalIdentifierTokens))
+                normalized(value)
             }), title.isEmpty == false {
                 appendDistinct("\(title)\n\(text)", to: &blocks)
             } else {
@@ -183,9 +197,7 @@ nonisolated enum GraphChatCopyContentBuilder {
         if case .clarification(let clarification) = answer.state,
            clarification.options.isEmpty == false {
             let optionLines = clarification.options.compactMap { option -> String? in
-                let title = normalized(
-                    redacted(option.title, tokens: internalIdentifierTokens)
-                )
+                let title = normalized(option.title)
                 return title.isEmpty ? nil : "• \(title)"
             }
             if optionLines.isEmpty == false {
@@ -198,14 +210,10 @@ nonisolated enum GraphChatCopyContentBuilder {
 
         if answer.appliedFilters.isEmpty == false {
             let filterLines = answer.appliedFilters.compactMap { filter -> String? in
-                let fieldName = normalized(
-                    redacted(filter.fieldName, tokens: internalIdentifierTokens)
-                )
-                let operation = normalized(
-                    redacted(filter.operationDescription, tokens: internalIdentifierTokens)
-                )
+                let fieldName = normalized(filter.fieldName)
+                let operation = normalized(filter.operationDescription)
                 let value = filter.valueDescription.map { rawValue in
-                    normalized(redacted(rawValue, tokens: internalIdentifierTokens))
+                    normalized(rawValue)
                 }
                 guard fieldName.isEmpty == false,
                       operation.isEmpty == false else {
@@ -243,53 +251,6 @@ nonisolated enum GraphChatCopyContentBuilder {
             text: String(combined.prefix(maximumCopyLength)),
             includesCompactSourceMetadata: includesSourceMetadata
         )
-    }
-
-    private static func internalIdentifierTokens(
-        in answer: GraphChatAnswer
-    ) -> Set<String> {
-        var tokens = Set(answer.sections.flatMap { section in
-            section.evidenceIDs.map { $0.rawValue.uuidString }
-        })
-        for evidence in answer.evidence {
-            tokens.insert(evidence.id.rawValue.uuidString)
-            tokens.insert(evidence.sourceReference.graphID.uuidString)
-            tokens.insert(evidence.sourceReference.sourceID.uuidString)
-            if let nodeID = evidence.sourceReference.node?.id {
-                tokens.insert(nodeID.uuidString)
-            }
-            if let ownerID = evidence.sourceReference.owner?.id {
-                tokens.insert(ownerID.uuidString)
-            }
-            if let fieldID = evidence.sourceReference.fieldID {
-                tokens.insert(fieldID.uuidString)
-            }
-            if let linkID = evidence.sourceReference.linkID {
-                tokens.insert(linkID.uuidString)
-            }
-            if let attachmentID = evidence.sourceReference.attachmentID {
-                tokens.insert(attachmentID.uuidString)
-            }
-            for fieldValue in evidence.fieldValues {
-                if let fieldID = fieldValue.fieldID {
-                    tokens.insert(fieldID.uuidString)
-                }
-            }
-        }
-        return tokens
-    }
-
-    private static func redacted(
-        _ value: String,
-        tokens: Set<String>
-    ) -> String {
-        tokens.reduce(value) { partialResult, token in
-            partialResult.replacingOccurrences(
-                of: token,
-                with: "Graphquelle",
-                options: .caseInsensitive
-            )
-        }
     }
 
     private static func appendDistinct(

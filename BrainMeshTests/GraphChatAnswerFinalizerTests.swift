@@ -551,12 +551,15 @@ struct GraphChatAnswerFinalizerTests {
                 answer: answer,
                 baseState: fixture.baseState,
                 expectedCommittedState: fixture.baseState,
-                pendingClarification: pending
+                pendingClarification: pending,
+                responseLanguage: .english
             ),
             currentCommittedState: fixture.baseState
         )
 
-        #expect(turn.answer == answer)
+        #expect(turn.answer.state == answer.state)
+        #expect(turn.answer.directAnswer == answer.directAnswer)
+        #expect(turn.answer.presentationContext?.language == .english)
         #expect(turn.completion.source == .local)
         #expect(turn.conversationState.pendingClarification == pending)
         #expect(turn.conversationState.turnContexts.last?.id == fixture.requestID)
@@ -566,6 +569,7 @@ struct GraphChatAnswerFinalizerTests {
 private struct AnswerFinalizerFixture {
     struct Resources {
         let evidenceRegistry: GraphChatEvidenceRegistry
+        let presentationRegistry: GraphChatPresentationRegistry
         let artifactRegistry: GraphChatAnswerArtifactRegistry
         let conversationTransaction: GraphChatConversationStateTransaction
         let artifactContext: GraphChatArtifactCommitContext
@@ -617,10 +621,17 @@ private struct AnswerFinalizerFixture {
         let resolvedContext = context ?? makeContext(state: state)
         let evidenceRegistry = GraphChatEvidenceRegistry(scope: chatScope)
         try await evidenceRegistry.register(evidence)
+        let presentationRegistry = GraphChatPresentationRegistry(
+            schemaContext: makeEmptySchemaContext(),
+            conversationContext: resolvedContext,
+            language: .english
+        )
+        await presentationRegistry.registerValidatedEvidence(evidence)
         let sessionID = GraphChatAnswerArtifactSessionID(rawValue: UUID())
         let transactionID = GraphChatAnswerArtifactTransactionID(rawValue: UUID())
         return Resources(
             evidenceRegistry: evidenceRegistry,
+            presentationRegistry: presentationRegistry,
             artifactRegistry: GraphChatAnswerArtifactRegistry(
                 graphScope: graphScope,
                 scope: chatScope,
@@ -658,7 +669,8 @@ private struct AnswerFinalizerFixture {
                 continuationOperation: nil,
                 requestQuestion: "Continue the trusted operation",
                 expectedCommittedState: baseState,
-                artifactContext: artifactContext ?? resources.artifactContext
+                artifactContext: artifactContext ?? resources.artifactContext,
+                presentationRegistry: resources.presentationRegistry
             ),
             evidenceRegistry: resources.evidenceRegistry,
             artifactRegistry: resources.artifactRegistry,
@@ -739,6 +751,33 @@ private struct AnswerFinalizerFixture {
             lastValidatedQuery: nil,
             resultRevalidations: [],
             pendingClarificationID: nil
+        )
+    }
+
+    func makeEmptySchemaContext() -> GraphSchemaContext {
+        GraphSchemaContext(
+            graphScope: graphScope,
+            snapshot: GraphSchemaSnapshot(
+                graphName: "Test",
+                entities: [],
+                truncation: GraphSchemaTruncation(
+                    sourceEntityCount: 0,
+                    includedEntityCount: 0,
+                    sourceFieldCount: 0,
+                    includedFieldCount: 0,
+                    sourceChoiceOptionCount: 0,
+                    includedChoiceOptionCount: 0,
+                    sourceExampleValueCount: 0,
+                    includedExampleValueCount: 0,
+                    stringsWereTruncated: false
+                )
+            ),
+            aliases: GraphSchemaAliasMap(
+                graphScope: graphScope,
+                entitiesByAlias: [:],
+                fieldsByAlias: [:],
+                nodeEntityIDs: [:]
+            )
         )
     }
 

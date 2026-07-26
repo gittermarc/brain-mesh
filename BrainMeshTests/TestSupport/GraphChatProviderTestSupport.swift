@@ -143,6 +143,7 @@ nonisolated struct EvidenceRegisteringFakeToolRunnerFactory: GraphChatModelToolR
         schemaContext: GraphSchemaContext,
         budget: GraphChatToolBudget,
         evidenceRegistry: GraphChatEvidenceRegistry,
+        presentationRegistry: GraphChatPresentationRegistry,
         artifactRegistry: GraphChatAnswerArtifactRegistry,
         artifactTransactionID: GraphChatAnswerArtifactTransactionID,
         conversationTransaction: GraphChatConversationStateTransaction,
@@ -157,6 +158,7 @@ nonisolated struct EvidenceRegisteringFakeToolRunnerFactory: GraphChatModelToolR
             scope: scope,
             budget: budget,
             evidenceRegistry: evidenceRegistry,
+            presentationRegistry: presentationRegistry,
             artifactRegistry: artifactRegistry,
             artifactTransactionID: artifactTransactionID,
             conversationTransaction: conversationTransaction,
@@ -176,6 +178,7 @@ private actor EvidenceRegisteringFakeToolRunner: GraphChatModelToolRunning {
     private let scope: GraphChatScope
     private let budget: GraphChatToolBudget
     private let evidenceRegistry: GraphChatEvidenceRegistry
+    private let presentationRegistry: GraphChatPresentationRegistry
     private let artifactRegistry: GraphChatAnswerArtifactRegistry
     private let artifactTransactionID: GraphChatAnswerArtifactTransactionID
     private let conversationTransaction: GraphChatConversationStateTransaction
@@ -192,6 +195,7 @@ private actor EvidenceRegisteringFakeToolRunner: GraphChatModelToolRunning {
         scope: GraphChatScope,
         budget: GraphChatToolBudget,
         evidenceRegistry: GraphChatEvidenceRegistry,
+        presentationRegistry: GraphChatPresentationRegistry,
         artifactRegistry: GraphChatAnswerArtifactRegistry,
         artifactTransactionID: GraphChatAnswerArtifactTransactionID,
         conversationTransaction: GraphChatConversationStateTransaction,
@@ -207,6 +211,7 @@ private actor EvidenceRegisteringFakeToolRunner: GraphChatModelToolRunning {
         self.scope = scope
         self.budget = budget
         self.evidenceRegistry = evidenceRegistry
+        self.presentationRegistry = presentationRegistry
         self.artifactRegistry = artifactRegistry
         self.artifactTransactionID = artifactTransactionID
         self.conversationTransaction = conversationTransaction
@@ -264,6 +269,7 @@ private actor EvidenceRegisteringFakeToolRunner: GraphChatModelToolRunning {
             )
         }
         try await evidenceRegistry.register(evidence)
+        await presentationRegistry.registerValidatedEvidence(evidence)
         try await budget.consumeEvidence(evidence.count)
         try await conversationTransaction.apply(
             GraphChatConversationTrustedEvent(
@@ -279,12 +285,15 @@ private actor EvidenceRegisteringFakeToolRunner: GraphChatModelToolRunning {
         var artifactIDs: [GraphChatAnswerArtifactID] = []
         for draft in artifactDraftsByTool[request.kind, default: []] {
             try Task.checkCancellation()
-            artifactIDs.append(
-                try await artifactRegistry.stage(
-                    draft,
-                    transactionID: artifactTransactionID,
-                    evidenceRegistry: evidenceRegistry
-                )
+            let artifactID = try await artifactRegistry.stage(
+                draft,
+                transactionID: artifactTransactionID,
+                evidenceRegistry: evidenceRegistry
+            )
+            artifactIDs.append(artifactID)
+            await presentationRegistry.registerValidatedArtifact(
+                id: artifactID,
+                title: draft.title
             )
         }
         return GraphChatModelToolResponse(
