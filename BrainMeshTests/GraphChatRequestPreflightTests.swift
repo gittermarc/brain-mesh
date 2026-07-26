@@ -264,6 +264,12 @@ struct GraphChatRequestPreflightTests {
 
         #expect(plan.currentReference?.kind == .resultSet)
         #expect(plan.currentReference?.nodes == fixture.nodes)
+        #expect(plan.currentResolvedScope?.entityID == fixture.entityID)
+        #expect(plan.currentResolvedScope?.nodes == fixture.nodes)
+        #expect(
+            plan.currentResolvedScope?.conversationID
+                == fixture.state.conversationID
+        )
         #expect(plan.continuationOperation == .filterReferenceSet)
         #expect(plan.conversationContext.currentReferenceAlias == "CURRENT")
     }
@@ -430,6 +436,106 @@ struct GraphChatRequestPreflightTests {
         #expect(plan.answer.evidence.isEmpty)
         #expect(plan.pendingClarification == nil)
     }
+
+    @Test
+    func mixedCurrentCreatesGermanEntityClarificationWithoutAProviderPlan() async throws {
+        let fixture = MixedFixture(fallbackLanguage: .english)
+        let result = try await fixture.preflight.evaluate(
+            input(
+                question: "Welche davon sind weiterhin offen?",
+                graphScope: fixture.graphScope,
+                chatScope: fixture.chatScope,
+                state: fixture.state
+            )
+        )
+        let plan = try localPlan(from: result)
+
+        guard case .clarification(let clarification) = plan.answer.state else {
+            Issue.record("Expected a mixed-entity clarification.")
+            return
+        }
+        #expect(
+            clarification.question
+                == "Meinst du Projekte (3) oder Personen (2)?"
+        )
+        #expect(
+            clarification.options.map(\.title)
+                == ["Projekte (3)", "Personen (2)"]
+        )
+        #expect(plan.pendingClarification?.options.count == 2)
+        if case .provider = result {
+            Issue.record("Mixed CURRENT must not create a provider plan.")
+        }
+    }
+
+    @Test
+    func mixedCurrentCreatesEnglishEntityClarification() async throws {
+        let fixture = MixedFixture(fallbackLanguage: .german)
+        let result = try await fixture.preflight.evaluate(
+            input(
+                question: "Which of those are still open?",
+                graphScope: fixture.graphScope,
+                chatScope: fixture.chatScope,
+                state: fixture.state
+            )
+        )
+        let plan = try localPlan(from: result)
+
+        guard case .clarification(let clarification) = plan.answer.state else {
+            Issue.record("Expected a mixed-entity clarification.")
+            return
+        }
+        #expect(
+            clarification.question
+                == "Do you mean Projekte (3) or Personen (2)?"
+        )
+    }
+
+    @Test
+    func mixedCurrentClarificationIsStoredAndResolvesTheSelectedEntity() async throws {
+        let fixture = MixedFixture(fallbackLanguage: .german)
+        let firstResult = try await fixture.preflight.evaluate(
+            input(
+                question: "Welche davon sind weiterhin offen?",
+                graphScope: fixture.graphScope,
+                chatScope: fixture.chatScope,
+                state: fixture.state
+            )
+        )
+        let local = try localPlan(from: firstResult)
+        let pending = try #require(local.pendingClarification)
+        let committed = try GraphChatConversationStateReducer().reduce(
+            fixture.state,
+            event: GraphChatConversationTrustedEvent(
+                graphScope: fixture.graphScope,
+                chatScope: fixture.chatScope,
+                payload: .clarificationRequested(pending)
+            )
+        ).state
+        #expect(committed.pendingClarification == pending)
+
+        let selected = try #require(pending.options.first)
+        let continuation = try await fixture.preflight.evaluate(
+            input(
+                question: selected.id,
+                graphScope: fixture.graphScope,
+                chatScope: fixture.chatScope,
+                state: committed
+            )
+        )
+        let provider = try providerPlan(from: continuation)
+
+        #expect(provider.requestBaseState.pendingClarification == nil)
+        #expect(
+            provider.currentResolvedScope?.entityID
+                == fixture.projectsEntityID
+        )
+        #expect(
+            provider.currentResolvedScope?.nodes
+                == fixture.projectNodes
+        )
+        #expect(provider.conversationContext.currentReferenceAlias == "CURRENT")
+    }
 }
 
 extension GraphChatRequestPreflightTests {
@@ -557,6 +663,200 @@ extension GraphChatRequestPreflightTests {
             in graphScope: GraphScope
         ) async throws -> GraphChatRevalidatedConversationEntity? {
             nil
+        }
+
+        func field(
+            _ fieldID: UUID,
+            in graphScope: GraphScope
+        ) async throws -> GraphChatRevalidatedConversationField? {
+            nil
+        }
+
+        func queryResult(
+            for plan: ValidatedGraphQueryPlan
+        ) async throws -> GraphChatRevalidatedConversationQuery? {
+            nil
+        }
+    }
+
+    fileprivate struct MixedFixture {
+        let graphScope: GraphScope
+        let chatScope: GraphChatScope
+        let projectsEntityID: UUID
+        let peopleEntityID: UUID
+        let projectNodes: [NodeRefKey]
+        let peopleNodes: [NodeRefKey]
+        let state: GraphChatConversationState
+        let preflight: GraphChatRequestPreflight
+
+        init(
+            fallbackLanguage: GraphChatResponseLanguage
+        ) {
+            let graphScope = GraphScope(
+                graphID: UUID(
+                    uuidString: "A9000000-0000-0000-0000-000000000001"
+                )!
+            )
+            let chatScope = GraphChatScope.entireGraph(graphScope)
+            let projectsEntityID = UUID(
+                uuidString: "A9100000-0000-0000-0000-000000000001"
+            )!
+            let peopleEntityID = UUID(
+                uuidString: "A9100000-0000-0000-0000-000000000002"
+            )!
+            let projectNodes = (1...3).map { index in
+                NodeRefKey(
+                    kind: .attribute,
+                    id: UUID(
+                        uuidString: String(
+                            format: "A9200000-0000-0000-0000-%012d",
+                            index
+                        )
+                    )!
+                )
+            }
+            let peopleNodes = (1...2).map { index in
+                NodeRefKey(
+                    kind: .attribute,
+                    id: UUID(
+                        uuidString: String(
+                            format: "A9300000-0000-0000-0000-%012d",
+                            index
+                        )
+                    )!
+                )
+            }
+            let nodes = projectNodes + peopleNodes
+            var state = GraphChatConversationState.initial(
+                graphScope: graphScope,
+                chatScope: chatScope,
+                conversationID: UUID(
+                    uuidString: "A9400000-0000-0000-0000-000000000001"
+                )!
+            )
+            state.entityReferences = [
+                GraphChatConversationEntityReference(
+                    entityID: projectsEntityID,
+                    name: "Projekte",
+                    alias: GraphEntityAlias("E1")
+                ),
+                GraphChatConversationEntityReference(
+                    entityID: peopleEntityID,
+                    name: "Personen",
+                    alias: GraphEntityAlias("E2")
+                ),
+            ]
+            state.nodeReferences =
+                projectNodes.enumerated().map { index, node in
+                    GraphChatConversationNodeReference(
+                        node: node,
+                        label: "Projekt \(index + 1)",
+                        ownerEntityID: projectsEntityID,
+                        evidenceIDs: []
+                    )
+                }
+                + peopleNodes.enumerated().map { index, node in
+                    GraphChatConversationNodeReference(
+                        node: node,
+                        label: "Person \(index + 1)",
+                        ownerEntityID: peopleEntityID,
+                        evidenceIDs: []
+                    )
+                }
+            state.resultContexts = [
+                GraphChatConversationResultContext(
+                    id: UUID(
+                        uuidString: "A9500000-0000-0000-0000-000000000001"
+                    )!,
+                    kind: .search,
+                    state: .success,
+                    entityID: nil,
+                    references: nodes.enumerated().map { index, node in
+                        GraphChatConversationResultReference(
+                            ordinal: index + 1,
+                            reference: .node(node),
+                            label:
+                                index < projectNodes.count
+                                ? "Projekt \(index + 1)"
+                                : "Person \(index - projectNodes.count + 1)",
+                            evidenceIDs: []
+                        )
+                    },
+                    groupReferences: [],
+                    evidenceIDs: [],
+                    appliedFilters: [],
+                    technicalDescription: "Gemischte validierte Treffer"
+                )
+            ]
+
+            var revalidatedNodes:
+                [NodeRefKey: GraphChatRevalidatedConversationNode] = [:]
+            for (index, node) in projectNodes.enumerated() {
+                revalidatedNodes[node] = GraphChatRevalidatedConversationNode(
+                    node: node,
+                    label: "Projekt \(index + 1)",
+                    ownerEntityID: projectsEntityID
+                )
+            }
+            for (index, node) in peopleNodes.enumerated() {
+                revalidatedNodes[node] = GraphChatRevalidatedConversationNode(
+                    node: node,
+                    label: "Person \(index + 1)",
+                    ownerEntityID: peopleEntityID
+                )
+            }
+            let resolver = GraphChatConversationReferenceResolver(
+                revalidator: MixedReferenceRevalidator(
+                    nodes: revalidatedNodes,
+                    entities: [
+                        projectsEntityID:
+                            GraphChatRevalidatedConversationEntity(
+                                entityID: projectsEntityID,
+                                label: "Projekte"
+                            ),
+                        peopleEntityID:
+                            GraphChatRevalidatedConversationEntity(
+                                entityID: peopleEntityID,
+                                label: "Personen"
+                            ),
+                    ]
+                )
+            )
+
+            self.graphScope = graphScope
+            self.chatScope = chatScope
+            self.projectsEntityID = projectsEntityID
+            self.peopleEntityID = peopleEntityID
+            self.projectNodes = projectNodes
+            self.peopleNodes = peopleNodes
+            self.state = state
+            self.preflight = GraphChatRequestPreflight(
+                referenceResolver: resolver,
+                responseLanguageSelector: GraphChatResponseLanguageSelector(
+                    fallback: fallbackLanguage
+                )
+            )
+        }
+    }
+
+    fileprivate struct MixedReferenceRevalidator:
+        GraphChatConversationReferenceRevalidating
+    {
+        let nodes: [NodeRefKey: GraphChatRevalidatedConversationNode]
+        let entities: [UUID: GraphChatRevalidatedConversationEntity]
+
+        func node(
+            _ node: NodeRefKey,
+            in graphScope: GraphScope
+        ) async throws -> GraphChatRevalidatedConversationNode? {
+            nodes[node]
+        }
+
+        func entity(
+            _ entityID: UUID,
+            in graphScope: GraphScope
+        ) async throws -> GraphChatRevalidatedConversationEntity? {
+            entities[entityID]
         }
 
         func field(

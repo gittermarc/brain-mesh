@@ -115,6 +115,10 @@ nonisolated struct GraphChatResponseLocalizer: Sendable {
             return "Welche der folgenden Optionen meinst du?"
         case (.english, .ambiguous):
             return "Which of these options do you mean?"
+        case (.german, .mixedEntities):
+            return "Welche der fachlich getrennten Ergebnismengen meinst du?"
+        case (.english, .mixedEntities):
+            return "Which of the distinct entity result sets do you mean?"
         case (.german, .ordinalOutOfBounds):
             return "Diese Position gibt es in der letzten stabilen Ergebnisreihenfolge nicht. Welche Option meinst du?"
         case (.english, .ordinalOutOfBounds):
@@ -144,6 +148,28 @@ nonisolated struct GraphChatResponseLocalizer: Sendable {
             return "Die letzte Ergebnismenge ist leer."
         case (.english, .emptyResults):
             return "The last result set is empty."
+        }
+    }
+
+    func mixedEntityClarification(optionTitles: [String]) -> String {
+        let titles = Array(optionTitles.prefix(8))
+        guard titles.isEmpty == false else {
+            return clarificationQuestion(reason: .mixedEntities)
+        }
+        let joined: String
+        if titles.count == 1 {
+            joined = titles[0]
+        } else {
+            let separator = language == .german ? " oder " : " or "
+            joined = titles.dropLast().joined(separator: ", ")
+                + separator
+                + titles.last!
+        }
+        switch language {
+        case .german:
+            return "Meinst du \(joined)?"
+        case .english:
+            return "Do you mean \(joined)?"
         }
     }
 

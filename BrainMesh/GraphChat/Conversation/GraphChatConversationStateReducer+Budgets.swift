@@ -77,6 +77,33 @@ nonisolated extension GraphChatConversationStateReducer {
                 switch option.proposal {
                 case .alias:
                     return true
+                case .validatedScope(let resolvedScope):
+                    guard
+                        resolvedScope.graphScope == state.graphScope,
+                        resolvedScope.chatScope == state.chatScope,
+                        resolvedScope.conversationID == state.conversationID
+                    else {
+                        return false
+                    }
+                    if let sourceResultID =
+                        resolvedScope.revision.sourceResultID
+                    {
+                        guard
+                            let result = state.resultContexts.first(where: {
+                                $0.id == sourceResultID
+                            }),
+                            result.references.count
+                                == resolvedScope.revision
+                                    .sourceReferenceCount
+                        else {
+                            return false
+                        }
+                    }
+                    return resolvedScope.nodes.allSatisfy { node in
+                        known.contains(
+                            GraphChatConversationReference.node(node).stableKey
+                        )
+                    }
                 case .latestResults, .latestResultsSubset, .ordinal, .lastEntity, .lastField, .lastGroup,
                     .lastNode, .lastCompared:
                     return known.isEmpty == false

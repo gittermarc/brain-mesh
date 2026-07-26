@@ -102,6 +102,11 @@ nonisolated struct GraphChatModelToolRuntimeFactory: GraphChatModelToolRunnerFac
 }
 
 actor GraphChatModelToolRuntime: GraphChatModelToolRunning {
+    private struct ResolvedQueryTarget: Sendable {
+        let entity: GraphSchemaEntityResolution
+        let scope: GraphChatScope
+    }
+
     private let scope: GraphChatScope
     private let schemaContext: GraphSchemaContext
     private let context: GraphChatToolContext
@@ -563,10 +568,6 @@ actor GraphChatModelToolRuntime: GraphChatModelToolRunning {
     private func makeQueryPlan(
         _ request: GraphChatModelQueryRequest
     ) async throws -> GraphQueryPlan {
-        let entityAlias = GraphEntityAlias(normalizedAlias(request.entityAlias))
-        guard let entity = schemaContext.aliases.entity(for: entityAlias) else {
-            throw invalidInput("Unbekannter Entity-Alias: \(request.entityAlias)")
-        }
         guard (1...QueryDetailValuesTool.maximumResultCount).contains(request.limit) else {
             throw GraphChatToolError(
                 code: .budgetExceeded,
@@ -574,6 +575,7 @@ actor GraphChatModelToolRuntime: GraphChatModelToolRunning {
             )
         }
 
+        let target = try await resolvedQueryTarget(for: request)
         let filters = try request.filters.map(makeFilter)
         let sorting = try makeSorting(request)
         let projection = try makeProjection(request.projectionFieldAliases)
@@ -581,18 +583,90 @@ actor GraphChatModelToolRuntime: GraphChatModelToolRunning {
             name: request.aggregation,
             fieldAlias: request.aggregationFieldAlias
         )
-        let queryScope = try await resolvedQueryScope(
-            alias: request.conversationReferenceAlias,
-            expectedEntityID: entity.entityID
-        )
         return GraphQueryPlan(
-            entityAlias: entityAlias,
-            scope: queryScope,
+            entityAlias: target.entity.alias,
+            scope: target.scope,
             filters: filters,
             sorting: sorting,
             projection: projection,
             aggregation: aggregation,
             limit: request.limit
+        )
+    }
+
+    private func resolvedQueryTarget(
+        for request: GraphChatModelQueryRequest
+    ) async throws -> ResolvedQueryTarget {
+        guard
+            let rawReferenceAlias = request.conversationReferenceAlias?
+                .trimmingCharacters(in: .whitespacesAndNewlines),
+            rawReferenceAlias.isEmpty == false
+        else {
+            let entityAlias = GraphEntityAlias(
+                normalizedAlias(request.entityAlias)
+            )
+            guard
+                let entity = schemaContext.aliases.entity(for: entityAlias)
+            else {
+                throw invalidInput(
+                    "Die angefragte Entity ist im aktuellen Schema nicht verfügbar."
+                )
+            }
+            return ResolvedQueryTarget(
+                entity: entity,
+                scope: scope
+            )
+        }
+
+        let referenceAlias = normalizedAlias(rawReferenceAlias)
+        let resolution: GraphChatResolvedConversationScopeResolution
+        if let currentAlias = conversationContext.currentReferenceAlias,
+            normalizedAlias(currentAlias) == referenceAlias,
+            let currentScope = conversationContext.currentResolvedScope
+        {
+            resolution = try await referenceResolver.resolveScope(
+                .validatedScope(currentScope),
+                in: conversationContext,
+                expectedGraphScope: scope.graphScope,
+                expectedChatScope: scope
+            )
+        } else {
+            resolution = try await referenceResolver.resolveScope(
+                .alias(referenceAlias),
+                in: conversationContext,
+                expectedGraphScope: scope.graphScope,
+                expectedChatScope: scope
+            )
+        }
+
+        guard case .resolved(let resolvedScope) = resolution else {
+            switch resolution {
+            case .clarification(let clarification)
+            where clarification.issue == .mixedEntities:
+                throw invalidInput(
+                    "Die referenzierte Ergebnismenge umfasst mehrere Entities und muss zuerst fachlich geklärt werden."
+                )
+            case .resolved:
+                preconditionFailure("Unreachable resolved scope branch.")
+            case .clarification, .noResults, .rejected:
+                throw invalidInput(
+                    "Die Conversation-Referenz ist für diese Query nicht mehr gültig."
+                )
+            }
+        }
+        guard
+            let entity = schemaContext.aliases.entitiesByAlias.values
+                .filter({ $0.entityID == resolvedScope.entityID })
+                .sorted(by: { $0.alias.rawValue < $1.alias.rawValue })
+                .first
+        else {
+            throw invalidInput(
+                "Die validierte Entity der Conversation-Referenz ist im aktuellen Schema nicht verfügbar."
+            )
+        }
+        return ResolvedQueryTarget(
+            entity: entity,
+            scope: try queryScope(for: resolvedScope)
         )
     }
 
@@ -814,41 +888,37 @@ actor GraphChatModelToolRuntime: GraphChatModelToolRunning {
         return node
     }
 
-    private func resolvedQueryScope(
-        alias rawAlias: String?,
-        expectedEntityID: UUID
-    ) async throws -> GraphChatScope {
-        guard let rawAlias, rawAlias.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false else {
-            return scope
-        }
-        let resolution = try await referenceResolver.resolve(
-            .alias(normalizedAlias(rawAlias)),
-            in: conversationContext,
-            expectedGraphScope: scope.graphScope,
-            expectedChatScope: scope,
-            expectedEntityID: expectedEntityID
-        )
-        guard case .resolved(let reference) = resolution else {
-            throw invalidInput("Der Conversation-Alias \(rawAlias) ist für diese Query nicht gültig.")
-        }
+    private func queryScope(
+        for resolvedScope: GraphChatResolvedConversationScope
+    ) throws -> GraphChatScope {
+        let reference = resolvedScope.reference
         switch reference.kind {
         case .entity:
-            guard let entityID = reference.entityID else {
-                throw invalidInput("Der Conversation-Alias enthält keine gültige Entity.")
-            }
-            return .entity(entityID, in: scope.graphScope)
+            return .entity(
+                resolvedScope.entityID,
+                in: resolvedScope.graphScope
+            )
         case .node:
             guard let node = reference.singleNode else {
-                throw invalidInput("Der Conversation-Alias enthält keinen einzelnen Node.")
+                throw invalidInput(
+                    "Die validierte Conversation-Referenz enthält keinen einzelnen Node."
+                )
             }
-            return .node(node, in: scope.graphScope)
+            return .node(node, in: resolvedScope.graphScope)
         case .resultSet, .resultSubset, .group, .comparison:
-            guard reference.nodes.isEmpty == false else {
-                throw invalidInput("Die referenzierte Ergebnismenge ist leer.")
+            guard resolvedScope.nodes.isEmpty == false else {
+                throw invalidInput(
+                    "Die validierte Conversation-Ergebnismenge ist leer."
+                )
             }
-            return try .selection(reference.nodes, in: scope.graphScope)
+            return try .selection(
+                resolvedScope.nodes,
+                in: resolvedScope.graphScope
+            )
         case .field:
-            throw invalidInput("Ein Feld-Alias kann nicht als Query-Ergebnismenge verwendet werden.")
+            throw invalidInput(
+                "Eine Feldreferenz kann nicht als Query-Ergebnismenge verwendet werden."
+            )
         }
     }
 

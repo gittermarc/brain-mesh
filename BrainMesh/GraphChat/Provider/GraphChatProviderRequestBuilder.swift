@@ -171,6 +171,13 @@ nonisolated struct GraphChatProviderRequestBuilder: Hashable, Sendable {
                 context.currentReferenceAlias,
                 in: availableAliases
             ),
+            currentResolvedScope:
+                retainedAlias(
+                    context.currentReferenceAlias,
+                    in: availableAliases
+                ) == nil
+                ? nil
+                : context.currentResolvedScope,
             lastValidatedQuery: profile == .compact
                 ? context.lastValidatedQuery
                 : nil,

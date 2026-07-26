@@ -34,6 +34,7 @@ BrainMesh ist eine native SwiftUI-App für iPhone und iPad, in der Nutzer:innen 
 - **Mutation Batch**: Datenminimaler Event nach erfolgreichem Save; invalidiert Index und Caches.
 - **Search Index**: Pro App lokaler SQLite-/FTS-Index; aus SwiftData vollständig rekonstruierbar.
 - **Graph Chat**: On-Device-LLM-Flow mit sechs read-only Tools und graphgebundener Evidenz.
+- **Typed Conversation Scope**: Appseitig revalidierte, an Graph, Chat-Scope und Conversation gebundene Auflösung von `CURRENT` und gleichwertigen Conversation-Referenzen; enthält eine konkrete Entity sowie die zulässigen Nodes und wird vor der Query-Ausführung erneut geprüft.
 - **Presentation Firewall**: Turn-gebundene Trust Boundary, die interne Chat-Aliase und technische IDs vor Streaming, finaler UI-Ausgabe und Copy deterministisch auf validierte Anzeigenamen abbildet oder durch eine lokalisierte Ersatzantwort ersetzt.
 - **Pro**: StoreKit-gesteuerte Berechtigung für kostenpflichtige Funktionen.
 
@@ -88,6 +89,7 @@ BrainMesh ist eine native SwiftUI-App für iPhone und iPad, in der Nutzer:innen 
 - Suchindex → SwiftData nur für Rebuild/Reconciliation; nie als autoritative Quelle.
 - Lokale Medien-Caches → autoritative SwiftData-Binärdaten; Caches dürfen verworfen werden.
 - Graph Chat → read-only Tool Runtime → Search/Repositories; kein Chat-Tool schreibt Graphdaten.
+- Modell-Tool-Call → typisierte Conversation-Scope-Auflösung → Query-Plan-Validierung; ein Modell-Entity-Alias ist bei einer homogenen revalidierten Conversation-Referenz nur ein untrusted Hint.
 - Modelltext → `GraphChatPresentationFirewall` → Streaming-/Answer-State → UI/Copy; Registry-Einträge stammen ausschließlich aus validierten Schema-, Conversation-, Tool-, Evidence- und Artifact-Strukturen.
 
 ## Folder Map
@@ -393,6 +395,7 @@ Pfad: `BrainMesh/Attachments/MetaAttachment.swift`
 - Keine SwiftData-Fetches, Sorts oder synchrone Disk-I/O in SwiftUI-`body`.
 - Keine persistenten Modelobjekte über Actor-Grenzen reichen.
 - IDs nicht graphübergreifend ohne Scope auflösen.
+- `CURRENT` oder andere Conversation-Aliase nicht als String bis in Query-Plan oder Repository weiterreichen; zuerst in einen `GraphChatResolvedConversationScope` überführen.
 - `imagePath`/`localPath` nicht als autoritative Daten behandeln.
 - Keine unbegrenzten UI-Listen oder graphweiten Snapshots ohne bewusstes Limit einführen.
 - CloudKit-Accountstatus nicht als Sync-Health interpretieren.

@@ -9,6 +9,7 @@ import Foundation
 
 nonisolated enum GraphChatConversationReferenceProposal: Hashable, Sendable {
     case alias(String)
+    case validatedScope(GraphChatResolvedConversationScope)
     case latestResults
     case latestResultsSubset(offset: Int, limit: Int)
     case ordinal(Int)
@@ -82,6 +83,7 @@ nonisolated struct GraphChatPendingClarification: Hashable, Sendable, Identifiab
 nonisolated enum GraphChatConversationReferenceIssue: String, CaseIterable, Hashable, Sendable {
     case missingContext
     case ambiguous
+    case mixedEntities
     case ordinalOutOfBounds
     case deletedReference
     case graphMismatch
@@ -103,6 +105,12 @@ nonisolated enum GraphChatResolvedConversationReferenceKind: String, CaseIterabl
     case comparison
 }
 
+nonisolated struct GraphChatResolvedConversationEntityGroup: Hashable, Sendable {
+    let entityID: UUID
+    let label: String
+    let nodes: [NodeRefKey]
+}
+
 nonisolated struct GraphChatResolvedConversationReference: Hashable, Sendable {
     let kind: GraphChatResolvedConversationReferenceKind
     let alias: String
@@ -111,10 +119,69 @@ nonisolated struct GraphChatResolvedConversationReference: Hashable, Sendable {
     let fieldID: UUID?
     let groupID: String?
     let label: String
+    let entityGroups: [GraphChatResolvedConversationEntityGroup]
+
+    init(
+        kind: GraphChatResolvedConversationReferenceKind,
+        alias: String,
+        nodes: [NodeRefKey],
+        entityID: UUID?,
+        fieldID: UUID?,
+        groupID: String?,
+        label: String,
+        entityGroups: [GraphChatResolvedConversationEntityGroup] = []
+    ) {
+        self.kind = kind
+        self.alias = alias
+        self.nodes = nodes
+        self.entityID = entityID
+        self.fieldID = fieldID
+        self.groupID = groupID
+        self.label = label
+        self.entityGroups = entityGroups
+    }
 
     var singleNode: NodeRefKey? {
         nodes.count == 1 ? nodes[0] : nil
     }
+}
+
+nonisolated enum GraphChatResolvedConversationScopeOrigin: String, CaseIterable, Hashable,
+    Sendable
+{
+    case conversationAlias
+    case latestResults
+    case latestResultsSubset
+    case ordinal
+    case lastEntity
+    case lastField
+    case lastGroup
+    case lastNode
+    case lastCompared
+    case clarificationSelection
+}
+
+nonisolated struct GraphChatResolvedConversationScopeRevision: Hashable, Sendable {
+    let sourceAlias: String?
+    let sourceResultID: UUID?
+    let sourceTurnID: UUID?
+    let sourceTurnCompletedAt: Date?
+    let sourceReferenceCount: Int
+    let validatedQueryPlan: ValidatedGraphQueryPlan?
+}
+
+/// App-owned, value-only query scope created from a freshly revalidated
+/// conversation reference. Model-provided aliases and IDs never populate this
+/// type directly.
+nonisolated struct GraphChatResolvedConversationScope: Hashable, Sendable {
+    let graphScope: GraphScope
+    let chatScope: GraphChatScope
+    let conversationID: UUID
+    let entityID: UUID
+    let nodes: [NodeRefKey]
+    let origin: GraphChatResolvedConversationScopeOrigin
+    let revision: GraphChatResolvedConversationScopeRevision
+    let reference: GraphChatResolvedConversationReference
 }
 
 nonisolated struct GraphChatConversationReferenceClarification: Hashable, Sendable {
@@ -127,6 +194,26 @@ nonisolated enum GraphChatConversationReferenceResolution: Hashable, Sendable {
     case clarification(GraphChatConversationReferenceClarification)
     case noResults(GraphChatConversationReferenceIssue)
     case rejected(GraphChatConversationReferenceIssue)
+}
+
+nonisolated enum GraphChatResolvedConversationScopeResolution: Hashable, Sendable {
+    case resolved(GraphChatResolvedConversationScope)
+    case clarification(GraphChatConversationReferenceClarification)
+    case noResults(GraphChatConversationReferenceIssue)
+    case rejected(GraphChatConversationReferenceIssue)
+
+    var referenceResolution: GraphChatConversationReferenceResolution {
+        switch self {
+        case .resolved(let scope):
+            return .resolved(scope.reference)
+        case .clarification(let clarification):
+            return .clarification(clarification)
+        case .noResults(let issue):
+            return .noResults(issue)
+        case .rejected(let issue):
+            return .rejected(issue)
+        }
+    }
 }
 
 nonisolated struct GraphChatConversationReferenceInterpretation: Hashable, Sendable {
@@ -355,10 +442,15 @@ nonisolated struct GraphChatConversationReferenceInterpreter: Sendable {
     private func proposalAlias(
         _ proposal: GraphChatConversationReferenceProposal
     ) -> String? {
-        guard case .alias(let alias) = proposal else {
+        switch proposal {
+        case .alias(let alias):
+            return alias
+        case .validatedScope:
+            return nil
+        case .latestResults, .latestResultsSubset, .ordinal, .lastEntity, .lastField,
+            .lastGroup, .lastNode, .lastCompared:
             return nil
         }
-        return alias
     }
 
     private func normalizedSelection(_ value: String) -> String {

@@ -89,7 +89,11 @@ struct GraphChatConversationReferenceResolverTests {
     @Test
     func referenceFromAnotherGraphIsRejected() async throws {
         let fixture = Fixture()
-        let otherGraph = GraphScope(graphID: UUID())
+        let otherGraph = GraphScope(
+            graphID: UUID(
+                uuidString: "FA000000-0000-0000-0000-000000000001"
+            )!
+        )
         let resolution = try await fixture.resolver.resolve(
             .latestResults,
             in: fixture.context,
@@ -108,6 +112,41 @@ struct GraphChatConversationReferenceResolverTests {
         let resolution = try await fixture.resolver.resolve(
             .ordinal(1),
             in: fixture.context,
+            expectedGraphScope: fixture.graphScope,
+            expectedChatScope: scope
+        )
+
+        #expect(resolution == .rejected(.scopeMismatch))
+    }
+
+    @Test
+    func resultReferenceCannotBroadenASelectionScope() async throws {
+        let fixture = Fixture(nodeCount: 3)
+        let scope = try GraphChatScope.selection(
+            Array(fixture.nodes.prefix(1)),
+            in: fixture.graphScope
+        )
+        let context = GraphChatConversationContextSnapshot(
+            conversationID: fixture.context.conversationID,
+            graphScope: fixture.context.graphScope,
+            chatScope: scope,
+            aliases: fixture.context.aliases,
+            results: fixture.context.results,
+            turns: fixture.context.turns,
+            latestResultAlias: fixture.context.latestResultAlias,
+            lastEntityAlias: fixture.context.lastEntityAlias,
+            lastFieldAlias: fixture.context.lastFieldAlias,
+            lastGroupAlias: fixture.context.lastGroupAlias,
+            lastNodeAlias: fixture.context.lastNodeAlias,
+            lastComparisonAlias: fixture.context.lastComparisonAlias,
+            currentReferenceAlias: fixture.context.currentReferenceAlias,
+            lastValidatedQuery: fixture.context.lastValidatedQuery,
+            resultRevalidations: fixture.context.resultRevalidations,
+            pendingClarificationID: fixture.context.pendingClarificationID
+        )
+        let resolution = try await fixture.resolver.resolveScope(
+            .latestResults,
+            in: context,
             expectedGraphScope: fixture.graphScope,
             expectedChatScope: scope
         )
@@ -176,7 +215,7 @@ struct GraphChatConversationReferenceResolverTests {
             return
         }
         #expect(reference.kind == .comparison)
-        #expect(reference.nodes == Array(fixture.nodes.prefix(2)))
+        #expect(reference.nodes == fixture.nodes)
     }
 
     @Test
@@ -195,6 +234,134 @@ struct GraphChatConversationReferenceResolverTests {
         }
         #expect(reference.kind == .resultSubset)
         #expect(reference.nodes == Array(fixture.nodes.prefix(3)))
+    }
+
+    @Test
+    func homogeneousResultsCreateATypedConversationScopeBoundToTheConversation() async throws {
+        let fixture = Fixture(nodeCount: 3)
+        let resolution = try await fixture.resolver.resolveScope(
+            .latestResults,
+            in: fixture.context,
+            expectedGraphScope: fixture.graphScope,
+            expectedChatScope: fixture.chatScope
+        )
+
+        guard case .resolved(let scope) = resolution else {
+            Issue.record("Expected a typed homogeneous conversation scope.")
+            return
+        }
+        #expect(scope.graphScope == fixture.graphScope)
+        #expect(scope.chatScope == fixture.chatScope)
+        #expect(scope.conversationID == fixture.context.conversationID)
+        #expect(scope.entityID == fixture.entityID)
+        #expect(scope.nodes == fixture.nodes)
+        #expect(scope.origin == .latestResults)
+        #expect(scope.revision.sourceResultID == fixture.context.results.last?.id)
+        #expect(scope.revision.sourceReferenceCount == fixture.nodes.count)
+    }
+
+    @Test
+    func oneNodeCurrentStillCreatesAConcreteEntityScope() async throws {
+        let fixture = Fixture(nodeCount: 1)
+        let resolution = try await fixture.resolver.resolveScope(
+            .latestResults,
+            in: fixture.context,
+            expectedGraphScope: fixture.graphScope,
+            expectedChatScope: fixture.chatScope
+        )
+
+        guard case .resolved(let scope) = resolution else {
+            Issue.record("Expected a typed one-node conversation scope.")
+            return
+        }
+        #expect(scope.entityID == fixture.entityID)
+        #expect(scope.nodes == fixture.nodes)
+    }
+
+    @Test
+    func multipleGroupsOfTheSameEntityResolveDeterministically() async throws {
+        let fixture = Fixture(hasGroupComparison: true)
+        let first = try await fixture.resolver.resolveScope(
+            .lastCompared,
+            in: fixture.context,
+            expectedGraphScope: fixture.graphScope,
+            expectedChatScope: fixture.chatScope
+        )
+        let second = try await fixture.resolver.resolveScope(
+            .lastCompared,
+            in: fixture.context,
+            expectedGraphScope: fixture.graphScope,
+            expectedChatScope: fixture.chatScope
+        )
+
+        guard case .resolved(let firstScope) = first,
+            case .resolved(let secondScope) = second
+        else {
+            Issue.record("Expected both same-entity group resolutions to succeed.")
+            return
+        }
+        #expect(firstScope.entityID == fixture.entityID)
+        #expect(firstScope.nodes == fixture.nodes)
+        #expect(firstScope == secondScope)
+    }
+
+    @Test
+    func typedScopeCannotBeReusedForAnotherGraph() async throws {
+        let fixture = Fixture()
+        let original = try await fixture.resolver.resolveScope(
+            .latestResults,
+            in: fixture.context,
+            expectedGraphScope: fixture.graphScope,
+            expectedChatScope: fixture.chatScope
+        )
+        guard case .resolved(let scope) = original else {
+            Issue.record("Expected the original scope to resolve.")
+            return
+        }
+        let otherGraph = GraphScope(
+            graphID: UUID(
+                uuidString: "FA000000-0000-0000-0000-000000000001"
+            )!
+        )
+        let resolution = try await fixture.resolver.resolveScope(
+            .validatedScope(scope),
+            in: fixture.context,
+            expectedGraphScope: otherGraph,
+            expectedChatScope: .entireGraph(otherGraph)
+        )
+
+        #expect(resolution == .rejected(.graphMismatch))
+    }
+
+    @Test
+    func typedScopeRevalidationRejectsNodesThatBecameStale() async throws {
+        let fixture = Fixture()
+        let original = try await fixture.resolver.resolveScope(
+            .latestResults,
+            in: fixture.context,
+            expectedGraphScope: fixture.graphScope,
+            expectedChatScope: fixture.chatScope
+        )
+        guard case .resolved(let scope) = original else {
+            Issue.record("Expected the original scope to resolve.")
+            return
+        }
+        let staleResolver = GraphChatConversationReferenceResolver(
+            revalidator: FakeReferenceRevalidator(
+                nodes: [:],
+                entities: [:],
+                fields: [:],
+                queryResult: nil
+            )
+        )
+        let resolution = try await staleResolver.resolveScope(
+            .validatedScope(scope),
+            in: fixture.context,
+            expectedGraphScope: fixture.graphScope,
+            expectedChatScope: fixture.chatScope
+        )
+
+        #expect(resolution == .rejected(.deletedReference))
     }
 
     @Test
@@ -219,6 +386,19 @@ struct GraphChatConversationReferenceResolverTests {
         let fixture = Fixture(queryRevalidation: .reordered)
         let resolution = try await fixture.resolver.resolve(
             .ordinal(1),
+            in: fixture.context,
+            expectedGraphScope: fixture.graphScope,
+            expectedChatScope: fixture.chatScope
+        )
+
+        #expect(resolution == .rejected(.staleResults))
+    }
+
+    @Test
+    func unavailableQueryRevalidationIsRejectedAsStale() async throws {
+        let fixture = Fixture(queryRevalidation: .unavailable)
+        let resolution = try await fixture.resolver.resolveScope(
+            .latestResults,
             in: fixture.context,
             expectedGraphScope: fixture.graphScope,
             expectedChatScope: fixture.chatScope
@@ -317,6 +497,7 @@ struct GraphChatConversationReferenceResolverTests {
 extension GraphChatConversationReferenceResolverTests {
     fileprivate enum QueryRevalidationMode {
         case none
+        case unavailable
         case same
         case reordered
     }
@@ -382,6 +563,19 @@ extension GraphChatConversationReferenceResolverTests {
                 evidenceIDs: [],
                 memberNodes: Array(nodes.prefix(2))
             )
+            let secondGroup = GraphChatConversationGroupReference(
+                id: "status:closed",
+                fieldID: fieldID,
+                fieldName: "Status",
+                valueDescription: "Closed",
+                count: max(0, nodes.count - 2),
+                evidenceIDs: [],
+                memberNodes: Array(nodes.dropFirst(2))
+            )
+            let groups =
+                hasGroupComparison
+                ? [group, secondGroup]
+                : [group]
             let resultID = UUID()
             state.resultContexts = [
                 GraphChatConversationResultContext(
@@ -397,16 +591,16 @@ extension GraphChatConversationReferenceResolverTests {
                             evidenceIDs: []
                         )
                     },
-                    groupReferences: [group],
+                    groupReferences: groups,
                     evidenceIDs: [],
                     appliedFilters: [],
                     technicalDescription: "Validated project query"
                 )
             ]
-            state.groupReferences = [group]
+            state.groupReferences = groups
             if hasGroupComparison {
                 state.lastComparison = GraphChatConversationComparisonContext(
-                    references: [.group(group.id)],
+                    references: groups.map { .group($0.id) },
                     technicalDescription: "Compared validated status groups"
                 )
             }
@@ -415,14 +609,17 @@ extension GraphChatConversationReferenceResolverTests {
                 plural: nodes.map(GraphChatConversationReference.node),
                 ordinal: nodes.map(GraphChatConversationReference.node),
                 group: .group(group.id),
-                compared: hasGroupComparison ? [.group(group.id)] : []
+                compared:
+                    hasGroupComparison
+                    ? groups.map { .group($0.id) }
+                    : []
             )
 
             let queryPlan: ValidatedGraphQueryPlan?
             switch queryRevalidation {
             case .none:
                 queryPlan = nil
-            case .same, .reordered:
+            case .unavailable, .same, .reordered:
                 queryPlan = ValidatedGraphQueryPlan(
                     version: 1,
                     graphScope: graphScope,
@@ -439,7 +636,7 @@ extension GraphChatConversationReferenceResolverTests {
 
             let currentQueryNodes: [NodeRefKey]?
             switch queryRevalidation {
-            case .none:
+            case .none, .unavailable:
                 currentQueryNodes = nil
             case .same:
                 currentQueryNodes = nodes

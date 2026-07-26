@@ -114,9 +114,48 @@ nonisolated struct GraphChatConversationContextSnapshot: Hashable, Sendable {
     let lastNodeAlias: String?
     let lastComparisonAlias: String?
     let currentReferenceAlias: String?
+    let currentResolvedScope: GraphChatResolvedConversationScope?
     let lastValidatedQuery: GraphChatConversationContextQuery?
     let resultRevalidations: [GraphChatConversationContextResultRevalidation]
     let pendingClarificationID: UUID?
+
+    init(
+        conversationID: UUID,
+        graphScope: GraphScope,
+        chatScope: GraphChatScope,
+        aliases: [GraphChatConversationContextAlias],
+        results: [GraphChatConversationContextResult],
+        turns: [GraphChatConversationContextTurn],
+        latestResultAlias: String?,
+        lastEntityAlias: String?,
+        lastFieldAlias: String?,
+        lastGroupAlias: String?,
+        lastNodeAlias: String?,
+        lastComparisonAlias: String?,
+        currentReferenceAlias: String?,
+        currentResolvedScope: GraphChatResolvedConversationScope? = nil,
+        lastValidatedQuery: GraphChatConversationContextQuery?,
+        resultRevalidations: [GraphChatConversationContextResultRevalidation],
+        pendingClarificationID: UUID?
+    ) {
+        self.conversationID = conversationID
+        self.graphScope = graphScope
+        self.chatScope = chatScope
+        self.aliases = aliases
+        self.results = results
+        self.turns = turns
+        self.latestResultAlias = latestResultAlias
+        self.lastEntityAlias = lastEntityAlias
+        self.lastFieldAlias = lastFieldAlias
+        self.lastGroupAlias = lastGroupAlias
+        self.lastNodeAlias = lastNodeAlias
+        self.lastComparisonAlias = lastComparisonAlias
+        self.currentReferenceAlias = currentReferenceAlias
+        self.currentResolvedScope = currentResolvedScope
+        self.lastValidatedQuery = lastValidatedQuery
+        self.resultRevalidations = resultRevalidations
+        self.pendingClarificationID = pendingClarificationID
+    }
 
     func alias(_ rawValue: String) -> GraphChatConversationContextAlias? {
         let normalized = rawValue.trimmingCharacters(in: .whitespacesAndNewlines).uppercased()
@@ -133,8 +172,17 @@ nonisolated struct GraphChatConversationContextBuilder: Sendable {
 
     func makeSnapshot(
         from state: GraphChatConversationStateSnapshot,
-        currentReference: GraphChatResolvedConversationReference? = nil
+        currentReference: GraphChatResolvedConversationReference? = nil,
+        currentResolvedScope: GraphChatResolvedConversationScope? = nil
     ) -> GraphChatConversationContextSnapshot {
+        if let currentResolvedScope {
+            precondition(currentResolvedScope.graphScope == state.graphScope)
+            precondition(currentResolvedScope.chatScope == state.chatScope)
+            precondition(
+                currentResolvedScope.conversationID
+                    == state.conversationID
+            )
+        }
         var aliases: [GraphChatConversationContextAlias] = []
         var usedAliases = Set<String>()
         var stableAliasByReference: [String: String] = [:]
@@ -308,14 +356,18 @@ nonisolated struct GraphChatConversationContextBuilder: Sendable {
         }
 
         let currentAlias: String?
-        if let currentReference,
-            let currentTarget = target(from: currentReference)
+        let resolvedCurrentReference =
+            currentResolvedScope?.reference
+            ?? currentReference
+        if let resolvedCurrentReference,
+            let currentTarget = target(from: resolvedCurrentReference)
         {
             currentAlias = appendAlias(
                 preferredAlias: "CURRENT",
                 prefix: "CURRENT",
-                stableKey: "current:\(currentReference.alias):\(currentReference.kind.rawValue)",
-                label: currentReference.label,
+                stableKey:
+                    "current:\(resolvedCurrentReference.alias):\(resolvedCurrentReference.kind.rawValue)",
+                label: resolvedCurrentReference.label,
                 target: currentTarget
             )
         } else {
@@ -403,6 +455,7 @@ nonisolated struct GraphChatConversationContextBuilder: Sendable {
             lastNodeAlias: lastNodeAlias,
             lastComparisonAlias: comparisonAlias,
             currentReferenceAlias: currentAlias,
+            currentResolvedScope: currentResolvedScope,
             lastValidatedQuery: lastValidatedQuery,
             resultRevalidations: resultRevalidations,
             pendingClarificationID: state.pendingClarification?.id

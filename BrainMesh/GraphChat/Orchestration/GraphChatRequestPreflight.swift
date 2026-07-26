@@ -40,6 +40,7 @@ nonisolated struct GraphChatProviderTurnPlan: Hashable, Sendable {
     let expectedCommittedState: GraphChatConversationState
     let conversationContext: GraphChatConversationContextSnapshot
     let currentReference: GraphChatResolvedConversationReference?
+    let currentResolvedScope: GraphChatResolvedConversationScope?
     let continuationOperation: GraphChatConversationContinuationOperation?
 }
 
@@ -195,7 +196,12 @@ nonisolated struct GraphChatLocalAnswerBuilder: Hashable, Sendable {
 
         case .clarification(let clarification):
             let options = Array(clarification.options.prefix(8))
-            let question = localizer.clarificationQuestion(reason: clarification.issue)
+            let question =
+                clarification.issue == .mixedEntities
+                ? localizer.mixedEntityClarification(
+                    optionTitles: options.map(\.title)
+                )
+                : localizer.clarificationQuestion(reason: clarification.issue)
             let pending = makePendingClarification(
                 id: clarificationID,
                 options: options,
@@ -342,6 +348,7 @@ nonisolated struct GraphChatRequestPreflight: Sendable {
 
         var requestBaseState = input.conversationState
         var currentReference: GraphChatResolvedConversationReference?
+        var currentResolvedScope: GraphChatResolvedConversationScope?
         var continuationOperation: GraphChatConversationContinuationOperation?
         var providerQuestion = normalizedQuestion
         var context = conversationContextBuilder.makeSnapshot(
@@ -393,16 +400,16 @@ nonisolated struct GraphChatRequestPreflight: Sendable {
                 )
             }
 
-            let resolution = try await referenceResolver.resolve(
+            let resolution = try await referenceResolver.resolveScope(
                 selectedOption.proposal,
                 in: context,
                 expectedGraphScope: key.graphScope,
                 expectedChatScope: key.chatScope
             )
             requestBaseState = try clearedClarification(in: requestBaseState)
-            guard case .resolved(let resolved) = resolution else {
+            guard case .resolved(let resolvedScope) = resolution else {
                 let local = localAnswerBuilder.referenceResolution(
-                    resolution,
+                    resolution.referenceResolution,
                     language: language,
                     operation: pending.continuationOperation,
                     state: requestBaseState,
@@ -423,27 +430,30 @@ nonisolated struct GraphChatRequestPreflight: Sendable {
                     )
                 )
             }
-            currentReference = resolved
+            currentResolvedScope = resolvedScope
+            currentReference = resolvedScope.reference
             continuationOperation = pending.continuationOperation
             providerQuestion = pending.continuationQuestion
         } else if let interpretation = referenceInterpreter.interpretation(
             for: normalizedQuestion
         ) {
-            let resolution = try await referenceResolver.resolve(
+            let resolution = try await referenceResolver.resolveScope(
                 interpretation.proposal,
                 in: context,
                 expectedGraphScope: key.graphScope,
                 expectedChatScope: key.chatScope
             )
             switch resolution {
-            case .resolved(let resolved):
-                currentReference = resolved
+            case .resolved(let resolvedScope):
+                currentResolvedScope = resolvedScope
+                currentReference = resolvedScope.reference
                 continuationOperation = interpretation.operation
 
             case .clarification, .noResults, .rejected:
-                if missingContextPolicy.shouldDeferToProvider(resolution) == false {
+                let referenceResolution = resolution.referenceResolution
+                if missingContextPolicy.shouldDeferToProvider(referenceResolution) == false {
                     let local = localAnswerBuilder.referenceResolution(
-                        resolution,
+                        referenceResolution,
                         language: language,
                         operation: interpretation.operation,
                         state: requestBaseState,
@@ -469,7 +479,8 @@ nonisolated struct GraphChatRequestPreflight: Sendable {
 
         context = conversationContextBuilder.makeSnapshot(
             from: requestBaseState.snapshot,
-            currentReference: currentReference
+            currentReference: currentReference,
+            currentResolvedScope: currentResolvedScope
         )
         return .provider(
             GraphChatProviderTurnPlan(
@@ -481,6 +492,7 @@ nonisolated struct GraphChatRequestPreflight: Sendable {
                 expectedCommittedState: expectedCommittedState,
                 conversationContext: context,
                 currentReference: currentReference,
+                currentResolvedScope: currentResolvedScope,
                 continuationOperation: continuationOperation
             )
         )

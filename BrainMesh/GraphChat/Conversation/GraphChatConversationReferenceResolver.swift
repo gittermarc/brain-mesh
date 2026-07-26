@@ -191,6 +191,43 @@ nonisolated struct GraphChatConversationReferenceResolver: Sendable {
         self.revalidator = revalidator
     }
 
+    func resolveScope(
+        _ proposal: GraphChatConversationReferenceProposal,
+        in context: GraphChatConversationContextSnapshot,
+        expectedGraphScope: GraphScope,
+        expectedChatScope: GraphChatScope
+    ) async throws -> GraphChatResolvedConversationScopeResolution {
+        if case .validatedScope(let storedScope) = proposal {
+            return try await revalidate(
+                storedScope,
+                in: context,
+                expectedGraphScope: expectedGraphScope,
+                expectedChatScope: expectedChatScope
+            )
+        }
+
+        let resolution = try await resolve(
+            proposal,
+            in: context,
+            expectedGraphScope: expectedGraphScope,
+            expectedChatScope: expectedChatScope
+        )
+        switch resolution {
+        case .resolved(let reference):
+            return resolvedScopeResolution(
+                for: reference,
+                proposal: proposal,
+                in: context
+            )
+        case .clarification(let clarification):
+            return .clarification(clarification)
+        case .noResults(let issue):
+            return .noResults(issue)
+        case .rejected(let issue):
+            return .rejected(issue)
+        }
+    }
+
     func resolve(
         _ proposal: GraphChatConversationReferenceProposal,
         in context: GraphChatConversationContextSnapshot,
@@ -223,6 +260,14 @@ nonisolated struct GraphChatConversationReferenceResolver: Sendable {
                 expectedChatScope: expectedChatScope,
                 expectedEntityID: expectedEntityID
             )
+        case .validatedScope(let storedScope):
+            let resolution = try await revalidate(
+                storedScope,
+                in: context,
+                expectedGraphScope: expectedGraphScope,
+                expectedChatScope: expectedChatScope
+            )
+            return resolution.referenceResolution
         case .latestResults:
             guard let alias = context.latestResultAlias,
                 let value = context.alias(alias)
@@ -367,6 +412,250 @@ nonisolated struct GraphChatConversationReferenceResolver: Sendable {
                 expectedChatScope: expectedChatScope,
                 expectedEntityID: expectedEntityID
             )
+        }
+    }
+
+    private func resolvedScopeResolution(
+        for reference: GraphChatResolvedConversationReference,
+        proposal: GraphChatConversationReferenceProposal,
+        in context: GraphChatConversationContextSnapshot
+    ) -> GraphChatResolvedConversationScopeResolution {
+        if reference.entityGroups.count > 1 {
+            let options = reference.entityGroups.map { group in
+                let groupedReference = GraphChatResolvedConversationReference(
+                    kind: reference.kind,
+                    alias: reference.alias,
+                    nodes: group.nodes,
+                    entityID: group.entityID,
+                    fieldID: reference.fieldID,
+                    groupID: reference.groupID,
+                    label: group.label,
+                    entityGroups: [group]
+                )
+                let scope = makeResolvedScope(
+                    reference: groupedReference,
+                    proposal: proposal,
+                    origin: .clarificationSelection,
+                    in: context
+                )
+                let title = "\(group.label) (\(group.nodes.count))"
+                return GraphChatPendingClarificationOption(
+                    id: title,
+                    title: title,
+                    proposal: .validatedScope(scope)
+                )
+            }
+            return .clarification(
+                GraphChatConversationReferenceClarification(
+                    issue: .mixedEntities,
+                    options: options
+                )
+            )
+        }
+
+        guard reference.entityID != nil else {
+            return .rejected(.entityMismatch)
+        }
+        return .resolved(
+            makeResolvedScope(
+                reference: reference,
+                proposal: proposal,
+                origin: origin(for: proposal),
+                in: context
+            )
+        )
+    }
+
+    private func makeResolvedScope(
+        reference: GraphChatResolvedConversationReference,
+        proposal: GraphChatConversationReferenceProposal,
+        origin: GraphChatResolvedConversationScopeOrigin,
+        in context: GraphChatConversationContextSnapshot
+    ) -> GraphChatResolvedConversationScope {
+        guard let entityID = reference.entityID else {
+            preconditionFailure(
+                "A resolved conversation scope requires a concrete entity."
+            )
+        }
+        let resolvedSourceAlias = sourceAlias(
+            for: proposal,
+            reference: reference,
+            in: context
+        )
+        let sourceResult = resolvedSourceAlias.flatMap { alias in
+            context.results.first { result in
+                result.alias == alias
+                    || result.itemAliases.contains(alias)
+                    || result.groupAliases.contains(alias)
+            }
+        }
+        let resultAlias = sourceResult?.alias
+        let sourceTurn = resultAlias.flatMap { alias in
+            context.turns.last { $0.resultAliases.contains(alias) }
+        }
+        let revalidation = resultAlias.flatMap { alias in
+            context.resultRevalidations.first { $0.resultAlias == alias }
+        }
+        return GraphChatResolvedConversationScope(
+            graphScope: context.graphScope,
+            chatScope: context.chatScope,
+            conversationID: context.conversationID,
+            entityID: entityID,
+            nodes: reference.nodes,
+            origin: origin,
+            revision: GraphChatResolvedConversationScopeRevision(
+                sourceAlias: resultAlias ?? resolvedSourceAlias,
+                sourceResultID: sourceResult?.id,
+                sourceTurnID: sourceTurn?.id,
+                sourceTurnCompletedAt: sourceTurn?.completedAt,
+                sourceReferenceCount:
+                    sourceResult?.sourceReferenceCount
+                    ?? reference.nodes.count,
+                validatedQueryPlan: revalidation?.plan
+            ),
+            reference: reference
+        )
+    }
+
+    private func revalidate(
+        _ storedScope: GraphChatResolvedConversationScope,
+        in context: GraphChatConversationContextSnapshot,
+        expectedGraphScope: GraphScope,
+        expectedChatScope: GraphChatScope
+    ) async throws -> GraphChatResolvedConversationScopeResolution {
+        guard context.graphScope == expectedGraphScope,
+            expectedChatScope.graphScope == expectedGraphScope,
+            storedScope.graphScope == expectedGraphScope
+        else {
+            return .rejected(.graphMismatch)
+        }
+        guard context.chatScope == expectedChatScope,
+            storedScope.chatScope == expectedChatScope
+        else {
+            return .rejected(.scopeMismatch)
+        }
+        guard storedScope.conversationID == context.conversationID else {
+            return .rejected(.staleResults)
+        }
+
+        if let sourceResultID = storedScope.revision.sourceResultID {
+            guard
+                let result = context.results.first(where: {
+                    $0.id == sourceResultID
+                }),
+                result.sourceReferenceCount
+                    == storedScope.revision.sourceReferenceCount
+            else {
+                return .rejected(.staleResults)
+            }
+            if let sourceAlias = storedScope.revision.sourceAlias {
+                guard result.alias == sourceAlias else {
+                    return .rejected(.staleResults)
+                }
+            }
+            if let sourceTurnID = storedScope.revision.sourceTurnID {
+                guard
+                    let turn = context.turns.first(where: {
+                        $0.id == sourceTurnID
+                    }),
+                    let sourceTurnCompletedAt =
+                        storedScope.revision.sourceTurnCompletedAt,
+                    turn.resultAliases.contains(result.alias),
+                    sourceTurnCompletedAt == turn.completedAt
+                else {
+                    return .rejected(.staleResults)
+                }
+            }
+            if let plan = storedScope.revision.validatedQueryPlan {
+                guard
+                    let revalidation = context.resultRevalidations.first(where: {
+                        $0.resultAlias == result.alias
+                    }),
+                    revalidation.plan == plan,
+                    let alias = context.alias(result.alias)
+                else {
+                    return .rejected(.staleResults)
+                }
+                if let issue = try await staleIssue(for: alias, in: context) {
+                    return .rejected(issue)
+                }
+            }
+        }
+
+        guard storedScope.nodes.isEmpty == false else {
+            return .rejected(.emptyResults)
+        }
+        let resolution = try await resolveNodes(
+            storedScope.nodes,
+            alias: storedScope.reference.alias,
+            label: storedScope.reference.label,
+            kind: storedScope.reference.kind,
+            entityID: storedScope.entityID,
+            fieldID: storedScope.reference.fieldID,
+            groupID: storedScope.reference.groupID,
+            expectedChatScope: expectedChatScope,
+            expectedEntityID: storedScope.entityID
+        )
+        guard case .resolved(let reference) = resolution,
+            reference.entityID == storedScope.entityID
+        else {
+            return resolution.scopeResolutionFallback
+        }
+        return .resolved(
+            GraphChatResolvedConversationScope(
+                graphScope: storedScope.graphScope,
+                chatScope: storedScope.chatScope,
+                conversationID: storedScope.conversationID,
+                entityID: storedScope.entityID,
+                nodes: reference.nodes,
+                origin: storedScope.origin,
+                revision: storedScope.revision,
+                reference: reference
+            )
+        )
+    }
+
+    private func sourceAlias(
+        for proposal: GraphChatConversationReferenceProposal,
+        reference: GraphChatResolvedConversationReference,
+        in context: GraphChatConversationContextSnapshot
+    ) -> String? {
+        switch proposal {
+        case .alias(let alias):
+            return context.alias(alias)?.alias
+        case .validatedScope(let scope):
+            return scope.revision.sourceAlias
+        case .latestResults, .latestResultsSubset, .ordinal:
+            return context.latestResultAlias
+        case .lastEntity, .lastField, .lastGroup, .lastNode, .lastCompared:
+            return reference.alias
+        }
+    }
+
+    private func origin(
+        for proposal: GraphChatConversationReferenceProposal
+    ) -> GraphChatResolvedConversationScopeOrigin {
+        switch proposal {
+        case .alias:
+            return .conversationAlias
+        case .validatedScope:
+            return .clarificationSelection
+        case .latestResults:
+            return .latestResults
+        case .latestResultsSubset:
+            return .latestResultsSubset
+        case .ordinal:
+            return .ordinal
+        case .lastEntity:
+            return .lastEntity
+        case .lastField:
+            return .lastField
+        case .lastGroup:
+            return .lastGroup
+        case .lastNode:
+            return .lastNode
+        case .lastCompared:
+            return .lastCompared
         }
     }
 
@@ -551,9 +840,16 @@ nonisolated struct GraphChatConversationReferenceResolver: Sendable {
         guard
             let revalidation = context.resultRevalidations.first(where: {
                 $0.contains(alias: alias.alias)
-            }), let current = try await revalidator.queryResult(for: revalidation.plan)
+            })
         else {
             return nil
+        }
+        guard
+            let current = try await revalidator.queryResult(
+                for: revalidation.plan
+            )
+        else {
+            return .staleResults
         }
 
         if case .group(let groupID, let storedNodes, _, let expectedCount) = alias.target {
@@ -680,19 +976,65 @@ nonisolated struct GraphChatConversationReferenceResolver: Sendable {
             revalidated.append(current)
         }
 
-        let inferredEntities = Set(
-            revalidated.compactMap { item in
-                item.node.kind == .entity ? item.node.id : item.ownerEntityID
-            })
+        var orderedEntityIDs: [UUID] = []
+        var nodesByEntityID: [UUID: [NodeRefKey]] = [:]
+        for item in revalidated {
+            guard
+                let ownerEntityID =
+                    item.node.kind == .entity
+                    ? item.node.id
+                    : item.ownerEntityID
+            else {
+                return .rejected(.staleResults)
+            }
+            if nodesByEntityID[ownerEntityID] == nil {
+                orderedEntityIDs.append(ownerEntityID)
+                nodesByEntityID[ownerEntityID] = []
+            }
+            nodesByEntityID[ownerEntityID, default: []].append(item.node)
+        }
+
+        var entityGroups: [GraphChatResolvedConversationEntityGroup] = []
+        if orderedEntityIDs.count > 1 {
+            entityGroups.reserveCapacity(orderedEntityIDs.count)
+            for ownerEntityID in orderedEntityIDs {
+                try Task.checkCancellation()
+                guard
+                    let entity = try await revalidator.entity(
+                        ownerEntityID,
+                        in: expectedChatScope.graphScope
+                    )
+                else {
+                    return .rejected(.deletedReference)
+                }
+                entityGroups.append(
+                    GraphChatResolvedConversationEntityGroup(
+                        entityID: ownerEntityID,
+                        label: entity.label,
+                        nodes: nodesByEntityID[ownerEntityID, default: []]
+                    )
+                )
+            }
+        }
+        let inferredEntityID =
+            orderedEntityIDs.count == 1
+            ? orderedEntityIDs[0]
+            : nil
+        if let entityID, let inferredEntityID,
+            entityID != inferredEntityID
+        {
+            return .rejected(.staleResults)
+        }
         return .resolved(
             GraphChatResolvedConversationReference(
                 kind: kind,
                 alias: alias,
                 nodes: revalidated.map(\.node),
-                entityID: entityID ?? (inferredEntities.count == 1 ? inferredEntities.first : nil),
+                entityID: inferredEntityID,
                 fieldID: fieldID,
                 groupID: groupID,
-                label: label
+                label: label,
+                entityGroups: entityGroups
             )
         )
     }
@@ -773,5 +1115,20 @@ nonisolated struct GraphChatConversationReferenceResolver: Sendable {
             title: alias.label,
             proposal: .alias(alias.alias)
         )
+    }
+}
+
+private nonisolated extension GraphChatConversationReferenceResolution {
+    var scopeResolutionFallback: GraphChatResolvedConversationScopeResolution {
+        switch self {
+        case .resolved:
+            return .rejected(.entityMismatch)
+        case .clarification(let clarification):
+            return .clarification(clarification)
+        case .noResults(let issue):
+            return .noResults(issue)
+        case .rejected(let issue):
+            return .rejected(issue)
+        }
     }
 }

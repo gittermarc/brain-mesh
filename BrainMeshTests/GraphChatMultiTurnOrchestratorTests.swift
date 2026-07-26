@@ -176,6 +176,24 @@ struct GraphChatMultiTurnOrchestratorTests {
 
     @MainActor
     @Test
+    func currentQueryDerivesEntityInsteadOfTrustingAWrongModelAlias() async throws {
+        try await verifyTypedCurrentQuery(
+            modelEntityAlias: "E999",
+            expectedAnswer: "Die validierte Auswahl wurde erneut abgefragt."
+        )
+    }
+
+    @MainActor
+    @Test
+    func currentQueryDoesNotRequireAModelEntityAlias() async throws {
+        try await verifyTypedCurrentQuery(
+            modelEntityAlias: "",
+            expectedAnswer: "Die Auswahl funktioniert ohne Modell-Entity-Alias."
+        )
+    }
+
+    @MainActor
+    @Test
     func graphLockDiscardsAPendingClarificationBeforeTheNextTurn() async throws {
         let setup = try await makeProjectSetup(
             continuationScript: Self.answerScript("Neuer Turn nach Entsperrung")
@@ -474,6 +492,114 @@ extension GraphChatMultiTurnOrchestratorTests {
                     )
                 )
             ]
+        )
+    }
+
+    @MainActor
+    fileprivate func verifyTypedCurrentQuery(
+        modelEntityAlias: String,
+        expectedAnswer: String
+    ) async throws {
+        let currentQuery = GraphChatModelQueryRequest(
+            entityAlias: modelEntityAlias,
+            conversationReferenceAlias: "CURRENT",
+            filters: [],
+            sortFieldAlias: nil,
+            sortDirection: nil,
+            projectionFieldAliases: [],
+            aggregation: nil,
+            aggregationFieldAlias: nil,
+            limit: 20
+        )
+        let setup = try await makeProjectSetup(
+            continuationScript: FakeGraphChatProviderScript(
+                steps: [
+                    .toolRequest(.queryDetailValues(currentQuery)),
+                    .event(
+                        .completed(
+                            GraphChatProviderTestSupport.makeFinalAnswer(
+                                directAnswer: expectedAnswer
+                            )
+                        )
+                    ),
+                ]
+            )
+        )
+
+        _ = await GraphChatProviderTestSupport.collect(
+            await setup.orchestrator.streamAnswer(
+                question: "Zeige alle Projektaufgaben nach Deadline.",
+                graphScope: setup.graphScope,
+                chatScope: setup.chatScope
+            )
+        )
+        let events = await GraphChatProviderTestSupport.collect(
+            await setup.orchestrator.streamAnswer(
+                question: "Welche davon sind weiterhin offen?",
+                graphScope: setup.graphScope,
+                chatScope: setup.chatScope
+            )
+        )
+        let answer = try #require(completedAnswer(in: events))
+
+        #expect(answer.state == .answer)
+        #expect(answer.directAnswer == expectedAnswer)
+        let providerSnapshot = await setup.provider.snapshot()
+        #expect(providerSnapshot.streamedRequests.count == 2)
+
+        let state = try #require(
+            await setup.orchestrator.conversationStateSnapshot()
+        )
+        let plan = try #require(state.lastValidatedQueryPlan)
+        #expect(plan.entityID == setup.fixture.entity.id)
+        guard case .selection(let nodes) = plan.scope else {
+            Issue.record("Expected the validated CURRENT selection scope.")
+            return
+        }
+        #expect(
+            Set(nodes)
+                == Set(
+                    setup.fixture.tasksByName.values.map {
+                        NodeRefKey(kind: .attribute, id: $0.id)
+                    }
+                )
+        )
+
+        let visibleText = events.compactMap { event -> String? in
+            switch event {
+            case .partialAnswer(let text):
+                return text
+            case .completed(let completed):
+                return completed.directAnswer
+            case .started, .toolActivity, .cancelled, .failure:
+                return nil
+            }
+        }.joined(separator: "\n")
+        let forbiddenTokens = [
+            "CURRENT",
+            "E1",
+            "E999",
+            "N1",
+            "CR_",
+            setup.fixture.entity.id.uuidString,
+        ]
+        #expect(
+            forbiddenTokens.allSatisfy {
+                visibleText.contains($0) == false
+            }
+        )
+        #expect(
+            visibleText.range(
+                of: #"\b(?:E|N)\d+\b"#,
+                options: .regularExpression
+            ) == nil
+        )
+        #expect(
+            visibleText.range(
+                of:
+                    #"\b[0-9A-Fa-f]{8}-[0-9A-Fa-f]{4}-[1-5][0-9A-Fa-f]{3}-[89ABab][0-9A-Fa-f]{3}-[0-9A-Fa-f]{12}\b"#,
+                options: .regularExpression
+            ) == nil
         )
     }
 

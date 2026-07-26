@@ -746,7 +746,10 @@ Vertrag:
 
 Bewusste Grenze:
 
-- Die Firewall löst `CURRENT` nicht fachlich neu auf. Sie präsentiert `CURRENT` nur, wenn der bestehende Conversation-Resolver bereits eine validierte Darstellung in den Turn-Kontext aufgenommen hat.
+- Die Firewall löst `CURRENT` nicht fachlich neu auf. Sie präsentiert `CURRENT` nur, wenn der Conversation-Resolver bereits eine validierte Darstellung in den Turn-Kontext aufgenommen hat.
+- Für `queryDetailValues` wird ein decodierter Conversation-Alias vor der Query-Plan-Erzeugung zentral in einen `GraphChatResolvedConversationScope` überführt. Dieser Value-Type bindet Graph, Chat-Scope, Conversation, optionalen Quell-Turn, Result-Revision beziehungsweise validierten Query-Plan, konkrete Entity und revalidierte Nodes.
+- Bei homogenen Referenzen stammt die Query-Entity aus diesem App-Scope; der Modell-Entity-Alias bleibt ein untrusted Hint. Vor der eigentlichen Query werden Result-Gültigkeit, Nodes, Entity und aktiver Scope erneut validiert.
+- Gemischte Entity-Mengen werden im Preflight in eine typisierte, lokalisierte Pending Clarification mit Anzeigenamen und Mengen aufgeteilt. Erst die ausgewählte, erneut revalidierte Entity-Teilmenge darf als `CURRENT` in einen Provider-Turn gelangen.
 - Prompt-Anweisungen bleiben unterstützend, sind aber nicht die Sicherheitsgrenze.
 
 ### Nicht gehaltene Utility Tasks
