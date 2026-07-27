@@ -33,12 +33,14 @@ nonisolated struct GraphChatLocalAnswerFinalizationInput: Hashable, Sendable {
     let responseLanguage: GraphChatResponseLanguage
 }
 
-nonisolated struct GraphChatFoundationalAnswerFinalizationInput: Sendable {
+nonisolated struct GraphChatLocalIntentAnswerFinalizationInput:
+    Sendable
+{
     let requestID: UUID
     let completedAt: Date
     let requestQuestion: String
     let expectedCommittedState: GraphChatConversationState
-    let execution: GraphChatFoundationalIntentExecution
+    let execution: GraphChatLocalIntentPreparedExecution
 }
 
 nonisolated enum GraphChatAnswerFinalizationError:
@@ -193,8 +195,8 @@ nonisolated struct GraphChatAnswerFinalizer: Sendable {
         )
     }
 
-    func finalizeFoundationalTurn(
-        _ input: GraphChatFoundationalAnswerFinalizationInput,
+    func finalizeLocalIntentTurn(
+        _ input: GraphChatLocalIntentAnswerFinalizationInput,
         currentCommittedState: GraphChatConversationState
     ) async throws -> GraphChatFinalizedTurn {
         let execution = input.execution
@@ -217,7 +219,8 @@ nonisolated struct GraphChatAnswerFinalizer: Sendable {
                 hasInsufficientEvidence: false
             ),
             conversationContext: execution.conversationContext,
-            responseLanguage: execution.intent.responseLanguage,
+            responseLanguage:
+                execution.intent.responseLanguage,
             continuationOperation: nil,
             requestQuestion: input.requestQuestion,
             expectedCommittedState: input.expectedCommittedState,

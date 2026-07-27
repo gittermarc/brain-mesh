@@ -76,7 +76,8 @@ nonisolated struct GraphChatOrchestratorComposition: Sendable {
                 conversationStateReducer: stateReducer,
                 calendar: calendar,
                 timeZone: timeZone,
-                referenceDate: referenceDate
+                referenceDate: referenceDate,
+                observability: observability
             )
         let requestPreflight = GraphChatRequestPreflight(
             conversationStateReducer: stateReducer,

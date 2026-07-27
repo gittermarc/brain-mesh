@@ -1,6 +1,6 @@
 # BrainMesh – Project Context
 
-> Start Here für neue Entwickler:innen. Stand: FOUNDATIONAL-ACCURACY-3 mit autoritativen, appseitig gerenderten Single-Fact-Antworten.
+> Start Here für neue Entwickler:innen. Stand: INTENT-COMPILER-1 mit versionierter Typed-Intent-Domain und gemeinsamem providerfreiem Execution Kernel.
 
 ## TL;DR
 
@@ -40,6 +40,8 @@ BrainMesh ist eine native SwiftUI-App für iPhone und iPad, in der Nutzer:innen 
 - **Primary Result Ledger**: Request-lokale, value-only Erfassung validierter erfolgreicher Tool-Ergebnisse. Eine deterministische App-Policy wählt das autoritative primäre Ergebnis und übergibt dessen Evidence und Artifacts unabhängig von Modell-IDs an den Finalizer.
 - **Deterministic Answer Fallback**: Lokalisierte, begrenzte Mindestantwort, die ausschließlich aus dem nach Live-Revalidierung verbliebenen primären Tool-Ergebnis gerendert wird. Sie ersetzt nur leeren, technischen, widersprüchlichen oder presentation-unsicheren Modelltext und behält dessen Evidence beziehungsweise Result-Artefakt.
 - **Foundational Intent Compiler**: Schemaorientierte, providerfreie Trust Boundary für exakt erkannte Fragen nach einem Detailfeld eines eindeutigen Attributes sowie nach der vollständigen Attributliste einer eindeutigen Entity. App-Daten bestimmen Entity, Feld, Node-Scope, Query-Plan und Limit; nicht erkannte Formulierungen laufen unverändert über die Provider-Pipeline.
+- **Typed-Intent-Domain**: Versionierter, value-only, `Hashable` und `Sendable` Vertrag für appseitig aufgelöste Absichten. Er unterscheidet Find Nodes, Entity Collection, Count/Group, Node Details, Narrow Result Set, Compare Nodes und Inspect Graph State und bindet Intent, Scope, Sprache, Request, Conversation, Turn, Resolution-Qualität, Kardinalität, Limits sowie validierte Identitäten.
+- **Local Intent Execution Kernel**: Providerfreier Lifecycle für bereits appseitig kompilierte lokale Actions. Der Kernel revalidiert Bindings, Scope, Schemaidentitäten und Query-Plan, besitzt genau eine Conversation-, Evidence-, Presentation-, Artifact- und Ledger-Transaktion und führt Finalisierung, äußeren Turn-Commit, Rollback und Cleanup über einen gemeinsamen Pfad.
 - **Authoritative Fact**: Nicht persistierter, value-only und `Sendable` Single-Fact-Vertrag aus genau einem revalidierten primären Query-Ergebnis, einem typisierten Table-Artifact und passender Live-Evidence. Er bindet Graph, Chat-Scope, Request/Turn, Artifact-Session und -Transaktion sowie Node, Entity, Feld, Typ, Wert und Einheit. Für kompilierte Single-Field-Turns rendert die App daraus den vollständigen sichtbaren Antworttext; Provider-Text ist keine Fachwertquelle.
 - **Pro**: StoreKit-gesteuerte Berechtigung für kostenpflichtige Funktionen.
 
@@ -95,6 +97,7 @@ BrainMesh ist eine native SwiftUI-App für iPhone und iPad, in der Nutzer:innen 
 - Lokale Medien-Caches → autoritative SwiftData-Binärdaten; Caches dürfen verworfen werden.
 - Graph Chat → read-only Tool Runtime → Search/Repositories; kein Chat-Tool schreibt Graphdaten.
 - Validiertes Request-Preflight → vollständiger appseitiger `GraphSchemaContext` → Foundational Intent Compiler. Eindeutige Intents oder fachliche Clarifications werden vor Provider-Session und modellbestimmtem Tool-Call lokal behandelt; `.notRecognized` fällt auf die bestehende Provider-Pipeline zurück.
+- Erfolgreicher Foundational Fast Path → verlustfreier `GraphChatFoundationalIntentAdapter` → versionierter `GraphChatTypedIntent` plus bereits kompilierte `GraphChatLocalIntentAction` → gemeinsamer `GraphChatLocalIntentExecutionKernel`. Der Compiler bleibt auf exakt zwei Erkennungsfälle begrenzt; der Kernel interpretiert weder freie Sprache noch wählt er Tools oder Query-Semantik.
 - Foundational Single-Field → exakt ein graph-/chat-gescopter Attribute-Node, Node Identity plus exakt ein validiertes Feld, appseitiges Limit `1`, erneute Query-Plan-/Scope-Validierung und Ausführung über die bestehende Query Engine. Der Erfolg wird als typisierte einzeilige Table-Artefaktprojektion transportiert. Ein Suchtreffer allein ist nie Detailwert-Autorität.
 - Foundational Entity Collection → unveränderter autorisierter Entity-/Node-/Selection-Scope, Node-Identity-Projektion, stabile Namenssortierung und `GraphQueryPlanLimits.maximumResultLimit`. „Alle“ bedeutet alle autorisierten Ergebnisse bis zu diesem gemeinsamen Sicherheitslimit; Truncation bleibt im Result-Artefakt und in der lokalisierten Mindestantwort sichtbar.
 - Mehrdeutiger Foundational Intent → bestehende graph-/session-/turngebundene Pending Clarification mit ausschließlich fachlichen Anzeigenamen. Die Auswahl setzt dieselbe Originalfrage fort und wird gegen Schema, Scope und Quell-Turn erneut validiert.
@@ -309,7 +312,7 @@ Duplicate-Resolution:
 ### Sonstiger lokaler Zustand
 
 - Aktiver Graph, Appearance, Display, Recents, Onboarding, Importoptionen und Canvas-Presets liegen in UserDefaults.
-- Graph-Chat-History und Chat-Artefakte sind sessiongebunden/in-memory; das Primary-Result-Ledger lebt nur für den aktuellen Request und wird bei Failure, Cancellation oder Commit bereinigt.
+- Graph-Chat-History und Chat-Artefakte sind sessiongebunden/in-memory; das Primary-Result-Ledger lebt nur für den aktuellen Request. Provider- und lokale Typed-Intent-Pfade bereinigen Evidence, Presentation und Ledger nach Failure, Cancellation oder erfolgreichem Commit; lokale Artifact-Transaktionen werden bei Fehler zurückgerollt und bereits committed wirkende Session-Artefakte nach einem äußeren Commit-Fehler entfernt.
 - `.bmgraph` exportiert Struktur als JSON, ohne Attachments.
 - `.bmbackup` exportiert Struktur und Attachments mit Manifest und SHA-256-Prüfsummen.
 - Import nutzt Checkpoint-Saves; Fehlerbereinigung entfernt partielle Graphdaten und Cachedateien.
@@ -434,6 +437,7 @@ Duplicate-Resolution:
 - Migrationen idempotent und mit Store-Fixtures testen.
 - Detailfeld- und Detailwert-Zuordnungen vor jeder Mutation mit der zentralen Integrity-Policy prüfen.
 - Single-Fact-Antworten ausschließlich aus dem revalidierten Primary Result, einem typisierten Result-Artefakt und wertgleicher Detail-Value-Evidence erzeugen.
+- Neue lokale Intent-Familien zuerst als validierten Typed-Intent- und Local-Action-Vertrag modellieren; freie Semantik darf nicht in den Execution Kernel wandern.
 
 ### Don’t
 

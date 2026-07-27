@@ -98,11 +98,44 @@ nonisolated enum GraphChatAuthoritativeFactMetric:
     case rejectedRevalidation
 }
 
+nonisolated enum GraphChatLocalIntentLifecycleEvent:
+    String,
+    CaseIterable,
+    Hashable,
+    Sendable
+{
+    case foundationalAdapted
+    case executionStarted
+    case executionCommitted
+    case executionRolledBack
+    case revalidationRejected
+    case cancelledBeforeCommit
+}
+
+nonisolated enum GraphChatLocalIntentRevalidationRejection:
+    String,
+    CaseIterable,
+    Hashable,
+    Sendable
+{
+    case binding
+    case scope
+    case schemaIdentity
+    case compiledAction
+}
+
+nonisolated struct GraphChatLocalIntentMetric: Hashable, Sendable {
+    let event: GraphChatLocalIntentLifecycleEvent
+    let kind: GraphChatTypedIntentKind
+    let rejection: GraphChatLocalIntentRevalidationRejection?
+}
+
 nonisolated enum GraphChatObservabilityEvent: Hashable, Sendable {
     case request(GraphChatRequestMetric)
     case availability(GraphChatAvailabilityMetricState)
     case toolRepair(GraphChatToolRepairMetric)
     case authoritativeFact(GraphChatAuthoritativeFactMetric)
+    case localIntent(GraphChatLocalIntentMetric)
 }
 
 nonisolated protocol GraphChatObservabilityRecording: Sendable {
@@ -135,6 +168,11 @@ actor GraphChatTechnicalObservabilityRecorder: GraphChatObservabilityRecording {
         case .authoritativeFact(let metric):
             BMLog.chat.info(
                 "Authoritative fact outcome=\(metric.rawValue, privacy: .public)"
+            )
+        case .localIntent(let metric):
+            let rejection = metric.rejection?.rawValue ?? "none"
+            BMLog.chat.info(
+                "Local intent event=\(metric.event.rawValue, privacy: .public) kind=\(metric.kind.rawValue, privacy: .public) rejection=\(rejection, privacy: .public)"
             )
         }
     }

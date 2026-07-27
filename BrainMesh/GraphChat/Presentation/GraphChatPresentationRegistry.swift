@@ -89,6 +89,7 @@ nonisolated struct GraphChatPresentationContext: Hashable, Sendable {
 }
 
 actor GraphChatPresentationRegistry {
+    private let language: GraphChatResponseLanguage
     private var builder: GraphChatValidatedPresentationRegistryBuilder
 
     init(
@@ -96,6 +97,7 @@ actor GraphChatPresentationRegistry {
         conversationContext: GraphChatConversationContextSnapshot,
         language: GraphChatResponseLanguage
     ) {
+        self.language = language
         var builder = GraphChatValidatedPresentationRegistryBuilder(
             language: language
         )
@@ -135,6 +137,12 @@ actor GraphChatPresentationRegistry {
 
     func snapshot() -> GraphChatValidatedPresentationRegistry {
         builder.snapshot()
+    }
+
+    func removeAll() {
+        builder = GraphChatValidatedPresentationRegistryBuilder(
+            language: language
+        )
     }
 }
 

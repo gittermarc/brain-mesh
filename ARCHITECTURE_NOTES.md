@@ -15,6 +15,7 @@ BrainMesh besitzt bereits mehrere wichtige Schutzlinien:
 - Importfehler werden mit persistenter Cleanup-Logik behandelt.
 - Graph Chat ist read-only, graphgescoped und evidenzgebunden.
 - Exakt erkannte Single-Node-Field-Fragen werden providerfrei ausgeführt und als autoritativer typisierter Single Fact vollständig appseitig gerendert.
+- Der Foundational Fast Path ist über einen verlustfreien Adapter von einer allgemeinen versionierten Typed-Intent-Domain getrennt; beide vorhandenen Foundational Actions laufen durch denselben lokalen Execution Kernel.
 
 Die höchsten Architektur-Risiken liegen trotzdem an drei Systemgrenzen:
 
@@ -799,6 +800,40 @@ Limit-Policy:
 - `GraphChatResultWindow` transportiert `totalCount`, `returnedCount`, Limitquelle und Truncation. Das Result-Artefakt übernimmt diese Metadaten; der deterministische deutsche oder englische Fallback nennt eine erreichte Begrenzung sichtbar.
 - Collection-Artefakte vermeiden innerhalb des bestehenden Artifact-Bytebudgets redundante globale Evidence-Bindings und behalten pro Zeile einen sicheren Navigation Target. Das vollständige revalidierte Evidence-Set bleibt im Primary Result und finalen Answer gebunden.
 
+### Graph Chat Typed-Intent- und Local-Execution-Trust-Boundary
+
+Pfade:
+
+- `BrainMesh/GraphChat/TypedIntent/GraphChatTypedIntent.swift`
+- `BrainMesh/GraphChat/TypedIntent/GraphChatLocalIntentAction.swift`
+- `BrainMesh/GraphChat/TypedIntent/GraphChatLocalIntentExecutionKernel.swift`
+- `BrainMesh/GraphChat/TypedIntent/GraphChatLocalIntentQueryExecutionSupport.swift`
+- `BrainMesh/GraphChat/Foundational/GraphChatFoundationalIntentAdapter.swift`
+- `BrainMesh/GraphChat/Foundational/GraphChatFoundationalIntentExecutor.swift`
+- `BrainMesh/GraphChat/Orchestration/GraphChatRequestPipeline.swift`
+
+Domainvertrag:
+
+- `GraphChatTypedIntent` ist versioniert, value-only, `Hashable` und `Sendable`; SwiftData-Modelle, Provider-Sessions und Modelltext sind ausgeschlossen.
+- Die Payload unterscheidet typseitig Find Nodes, Entity Collection, Count/Group, Node Details, Narrow Result Set, Compare Nodes und Inspect Graph State. In diesem Stand besitzt nur der explizite Foundational Adapter ausführbare Local Actions.
+- Gemeinsame Bindings enthalten Graph-, Chat- und Query-Scope, Sprache, Request, Conversation, aktuellen Turn, optionalen Quell-Turn und Clarification, Resolution Source/Origin/Quality, erwartete Kardinalität, Fact-Erwartung, Ergebnis-/Sicherheitslimits sowie validierte Entity-, Field- und Node-Identitäten.
+- Der Adapter bildet `singleNodeFieldValue` verlustfrei auf `.nodeDetails` mit `.authoritativeSingleField` und `entityAttributeCollection` auf `.entityCollection` ab. Er erzeugt zugleich die feste lokale Query Action; eine zweite Spracherkennung existiert nicht.
+
+Execution-Kernel:
+
+- `GraphChatLocalIntentExecutionKernel` akzeptiert ausschließlich einen bereits appseitig kompilierten `GraphChatTypedIntentAdaptation`-Vertrag. Er trifft keine freie Tool-, Query- oder Semantikentscheidung.
+- Vor jedem Repositoryzugriff werden Request, Conversation, Turn, Graph, Chat-Scope, Artifact-Session, Quell-Turn, Schemaidentitäten, Query-Plan und Scope-Autorisierung erneut geprüft.
+- Pro lokaler Ausführung existieren genau eine Conversation-State-Transaktion, Evidence Registry, Presentation Registry, Artifact-Transaktion und ein Primary-Result-Ledger. `GraphChatFoundationalIntentExecutor` besitzt keinen zweiten Lifecycle mehr und delegiert nach der Adaption vollständig an den Kernel.
+- Der Kernel führt Query, Result-Normalisierung, Trusted Event, Artifact-Staging, Ledger-Bindung, Finalisierung und den äußeren atomaren Turn-Commit über einen Pfad aus. Er liefert genau einen finalisierten Turn oder wirft genau einen Fehler an den bestehenden Stream-Controller.
+- Fehler und Cancellation entfernen Evidence, Presentation, Ledger-Einträge und gestagte Artifacts und setzen die Conversation-Transaktion auf ihren Base-State zurück. Scheitert der äußere Commit nach erfolgreichem Artifact-Commit, entfernt der Kernel die bereits committed wirkenden Session-Artefakte.
+- Erfolgreicher Commit behält ausschließlich die finalen Session-Artefakte; temporäre Evidence-, Presentation-, Ledger-, Staging- und Conversation-Transaktionszustände werden anschließend bereinigt.
+- Single Field behält Node Identity plus exakt ein Feld, Limit `1`, denselben Authoritative-Fact-Extractor und vollständig appseitiges Rendering. Collections behalten das vollständige `GraphChatResultWindow`, Truncation und das bestehende Result-Artefakt.
+- Nicht erkannte Fragen erreichen unverändert die Provider-Pipeline; lokale Execution erzeugt weder Provider-Session noch Stream, modellbestimmten Tool Call oder Modelltext.
+
+Bewusste Grenze:
+
+- Die übrigen Typed-Intent-Familien definieren in diesem PR nur den allgemeinen Domänenvertrag. Es existieren dafür weder semantische Interpretation noch neue lokale Actions, Query-Fähigkeiten oder sichtbare UI-Interpretationen.
+
 ### Graph Chat Authoritative Fact Trust Boundary
 
 Pfade:
@@ -1242,6 +1277,7 @@ Pfad: `BrainMesh/Observability/BMObservability.swift`
   - Authoritative Fact erkannt/gerendert;
   - Modelltext ersetzt beziehungsweise Search-only-Behauptung blockiert;
   - Fact wegen fehlendem Wert, Mehrdeutigkeit, Integrity-Konflikt oder Revalidation verworfen.
+- Lokale Typed-Intent-Observability protokolliert ausschließlich Intent-Art und Lifecycle-Outcome: Foundational-Adaption, Start, Commit, Rollback, Revalidation-Ablehnung und Cancellation vor Commit. Fragen, Anzeigenamen, Werte, Aliasse, IDs und Antworttexte sind ausgeschlossen.
 - Authoritative-Fact-Metriken enthalten ausschließlich die technische Outcome-Kategorie. Fragen, Antworten, Namen, Fachwerte, Aliasse und IDs werden nicht protokolliert.
 - Settings zeigt Storage-Modus, iCloud-Accountstatus und Cachegrößen.
 
@@ -1344,6 +1380,7 @@ Die realistischen Obergrenzen sind **UNKNOWN U7** und müssen produktseitig fest
 - Graph Canvas Physics/Derived State.
 - Graph Chat Provider, Query, Conversation, Tools und UI-Controller.
 - Foundational Intent Compiler, Authoritative-Fact-Extraktion/-Rendering, Finalizer-Ersatzpfade, UI-/Copy-Vertrag und gebündelte Foundational-Accuracy-Akzeptanzszenarien.
+- Typed-Intent-Domainverträge, verlustfreie Foundational-Adaption, Kernel-Cleanup bei Artifact-Staging- und äußerem Commit-Fehler sowie End-to-End-Parität für Geburtstagsfrage und vollständige Reisenliste.
 
 ### Ergänzungen
 

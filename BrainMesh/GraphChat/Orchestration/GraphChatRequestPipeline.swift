@@ -180,88 +180,66 @@ nonisolated struct GraphChatRequestPipeline: Sendable {
                 let artifactSession = try await foundationalArtifactSession(
                     plan.scopeKey
                 )
-                var execution:
-                    GraphChatFoundationalIntentExecution?
-                do {
-                    let completedExecution =
-                        try await foundationalExecutor.execute(
-                            intent: intent,
-                            schemaContext: schemaContext,
-                            providerPlan: plan,
-                            requestID: input.requestID,
-                            artifactSession: artifactSession,
-                            onActivity: { activity in
-                                onProviderEvent(
-                                    .toolActivity(activity)
-                                )
-                            }
-                        )
-                    execution = completedExecution
-                    try await validateCurrentRequest()
-                    await record(
-                        input.requestID,
-                        stage: .answerFinalization,
-                        phase: .started,
-                        usesProvider: false
-                    )
-                    let finalizedTurn =
-                        try await finalizer.finalizeFoundationalTurn(
-                            GraphChatFoundationalAnswerFinalizationInput(
+                let finalizedTurn =
+                    try await foundationalExecutor.execute(
+                        intent: intent,
+                        schemaContext: schemaContext,
+                        providerPlan: plan,
+                        requestID: input.requestID,
+                        artifactSession: artifactSession,
+                        onActivity: { activity in
+                            onProviderEvent(
+                                .toolActivity(activity)
+                            )
+                        },
+                        validateCurrentRequest:
+                            validateCurrentRequest,
+                        finalize: { execution in
+                            await self.record(
+                                input.requestID,
+                                stage: .answerFinalization,
+                                phase: .started,
+                                usesProvider: false
+                            )
+                            let turn =
+                                try await self.finalizer
+                                    .finalizeLocalIntentTurn(
+                                        GraphChatLocalIntentAnswerFinalizationInput(
+                                            requestID:
+                                                input.requestID,
+                                            completedAt:
+                                                self.referenceDate(),
+                                            requestQuestion:
+                                                plan.providerQuestion,
+                                            expectedCommittedState:
+                                                plan.expectedCommittedState,
+                                            execution: execution
+                                        ),
+                                        currentCommittedState:
+                                            input.turnStateSnapshot
+                                    )
+                            await self.record(
+                                input.requestID,
+                                stage: .answerFinalization,
+                                phase: .completed,
+                                usesProvider: false
+                            )
+                            return turn
+                        },
+                        commit: { turn in
+                            try await self.commit(
+                                turn,
                                 requestID: input.requestID,
-                                completedAt: referenceDate(),
-                                requestQuestion:
-                                    plan.providerQuestion,
-                                expectedCommittedState:
-                                    plan.expectedCommittedState,
-                                execution: completedExecution
-                            ),
-                            currentCommittedState:
-                                input.turnStateSnapshot
-                        )
-                    await record(
-                        input.requestID,
-                        stage: .answerFinalization,
-                        phase: .completed,
-                        usesProvider: false
-                    )
-                    do {
-                        try await commit(
-                            finalizedTurn,
-                            requestID: input.requestID,
-                            usesProvider: false,
-                            commitFinalizedTurn:
-                                commitFinalizedTurn
-                        )
-                    } catch {
-                        await completedExecution.artifactRegistry
-                            .removeCommittedArtifacts(
-                                finalizedTurn.committedArtifactIDs,
-                                sessionID:
-                                    completedExecution
-                                        .artifactContext.sessionID
+                                usesProvider: false,
+                                commitFinalizedTurn:
+                                    commitFinalizedTurn
                             )
-                        throw error
-                    }
-                    await foundationalExecutor
-                        .finishCommittedExecution(
-                            completedExecution,
-                            requestID: input.requestID
-                        )
-                    execution = nil
-                    return GraphChatRequestPipelineCompletion(
-                        finalizedTurn: finalizedTurn,
-                        usedProvider: false
+                        }
                     )
-                } catch {
-                    if let execution {
-                        await foundationalExecutor
-                            .cleanupFailedExecution(
-                                execution,
-                                requestID: input.requestID
-                            )
-                    }
-                    throw error
-                }
+                return GraphChatRequestPipelineCompletion(
+                    finalizedTurn: finalizedTurn,
+                    usedProvider: false
+                )
 
             case .providerFallback:
                 break

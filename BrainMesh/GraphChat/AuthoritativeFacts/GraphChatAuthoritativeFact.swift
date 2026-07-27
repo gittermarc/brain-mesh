@@ -122,29 +122,35 @@ nonisolated struct GraphChatAuthoritativeFactExpectation:
     }
 
     init?(
-        intent: GraphChatFoundationalIntent,
+        intent: GraphChatTypedIntent,
         result: GraphChatQueryResult,
         timeZone: TimeZone
     ) {
-        guard intent.kind == .singleNodeFieldValue,
-              let node = intent.node,
-              let field = intent.field else {
+        guard intent.factExpectation
+                == .authoritativeSingleField,
+              case .nodeDetails(let details) =
+                intent.payload,
+              details.fields.count == 1,
+              let field = details.fields.first else {
             return nil
         }
+        let node = details.node
         let key = DetailValueAuthorityKey(
-            graphID: intent.graphScope.graphID,
+            graphID: intent.scope.graphScope.graphID,
             attributeID: node.node.id,
             fieldID: field.id
         )
-        self.graphScope = intent.graphScope
-        self.chatScope = intent.chatScope
+        self.graphScope = intent.scope.graphScope
+        self.chatScope = intent.scope.chatScope
         self.requestID = intent.binding.requestID
-        self.turnID = intent.binding.requestID
-        self.conversationID = intent.binding.conversationID
+        self.turnID = intent.binding.turnID
+        self.conversationID =
+            intent.binding.conversationID
         self.node = node.node
         self.nodeDisplayName = node.displayName
-        self.entityID = intent.entity.id
-        self.entityDisplayName = intent.entity.displayName
+        self.entityID = details.entity.id
+        self.entityDisplayName =
+            details.entity.displayName
         self.fieldID = field.id
         self.fieldDisplayName = field.displayName
         self.fieldType = field.type

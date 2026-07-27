@@ -1,0 +1,444 @@
+//
+//  GraphChatTypedIntent.swift
+//  BrainMesh
+//
+//  Versioned, value-only intent contracts resolved by the app.
+//
+
+import Foundation
+
+nonisolated enum GraphChatTypedIntentDomainVersion:
+    Int,
+    CaseIterable,
+    Hashable,
+    Sendable
+{
+    case v1 = 1
+}
+
+nonisolated enum GraphChatTypedIntentKind:
+    String,
+    CaseIterable,
+    Hashable,
+    Sendable
+{
+    case findNodes
+    case entityCollection
+    case countOrGroup
+    case nodeDetails
+    case narrowResultSet
+    case compareNodes
+    case inspectGraphState
+}
+
+nonisolated enum GraphChatTypedIntentResolutionSource:
+    String,
+    CaseIterable,
+    Hashable,
+    Sendable
+{
+    case foundationalFastPath
+    case appSemanticResolution
+    case conversationContinuation
+}
+
+nonisolated enum GraphChatTypedIntentResolutionOrigin:
+    String,
+    CaseIterable,
+    Hashable,
+    Sendable
+{
+    case schemaDisplayName
+    case localizedFieldSynonym
+    case clarificationSelection
+    case conversationReference
+    case appRule
+}
+
+nonisolated enum GraphChatTypedIntentResolutionQuality:
+    String,
+    CaseIterable,
+    Hashable,
+    Sendable
+{
+    case exact
+    case constrainedSynonym
+    case revalidatedClarification
+    case revalidatedConversationReference
+}
+
+nonisolated enum GraphChatTypedIntentExpectedCardinality:
+    String,
+    CaseIterable,
+    Hashable,
+    Sendable
+{
+    case zeroOrOne
+    case exactlyOne
+    case zeroOrMore
+    case twoOrMore
+}
+
+nonisolated enum GraphChatTypedIntentFactExpectation:
+    String,
+    CaseIterable,
+    Hashable,
+    Sendable
+{
+    case none
+    case authoritativeSingleField
+}
+
+nonisolated struct GraphChatTypedIntentBinding: Hashable, Sendable {
+    let requestID: UUID
+    let conversationID: UUID
+    let turnID: UUID
+    let sourceTurnID: UUID?
+    let clarificationID: UUID?
+}
+
+nonisolated struct GraphChatTypedIntentScope: Hashable, Sendable {
+    let graphScope: GraphScope
+    let chatScope: GraphChatScope
+    let queryScope: GraphChatScope
+}
+
+nonisolated struct GraphChatTypedIntentResolution: Hashable, Sendable {
+    let source: GraphChatTypedIntentResolutionSource
+    let origin: GraphChatTypedIntentResolutionOrigin
+    let quality: GraphChatTypedIntentResolutionQuality
+}
+
+nonisolated struct GraphChatTypedIntentLimits: Hashable, Sendable {
+    let resultLimit: Int
+    let maximumResultLimit: Int
+    let maximumEvidenceCount: Int
+    let maximumArtifactCount: Int
+}
+
+nonisolated struct GraphChatTypedEntityIdentity: Hashable, Sendable {
+    let id: UUID
+    let alias: GraphEntityAlias
+    let displayName: String
+}
+
+nonisolated struct GraphChatTypedFieldIdentity: Hashable, Sendable {
+    let id: UUID
+    let alias: GraphFieldAlias
+    let displayName: String
+    let ownerEntityID: UUID
+    let type: DetailFieldType
+    let unit: String?
+}
+
+nonisolated struct GraphChatTypedNodeIdentity: Hashable, Sendable {
+    let node: NodeRefKey
+    let displayName: String
+    let ownerEntityID: UUID
+}
+
+nonisolated struct GraphChatTypedFindNodesIntent: Hashable, Sendable {
+    let entity: GraphChatTypedEntityIdentity?
+    let fields: [GraphChatTypedFieldIdentity]
+    let nodeScope: [GraphChatTypedNodeIdentity]
+}
+
+nonisolated struct GraphChatTypedEntityCollectionIntent:
+    Hashable,
+    Sendable
+{
+    let entity: GraphChatTypedEntityIdentity
+    let projectedFields: [GraphChatTypedFieldIdentity]
+}
+
+nonisolated enum GraphChatTypedCountOrGroupOperation:
+    Hashable,
+    Sendable
+{
+    case count
+    case group(field: GraphChatTypedFieldIdentity)
+}
+
+nonisolated struct GraphChatTypedCountOrGroupIntent: Hashable, Sendable {
+    let entity: GraphChatTypedEntityIdentity
+    let operation: GraphChatTypedCountOrGroupOperation
+}
+
+nonisolated struct GraphChatTypedNodeDetailsIntent: Hashable, Sendable {
+    let entity: GraphChatTypedEntityIdentity
+    let node: GraphChatTypedNodeIdentity
+    let fields: [GraphChatTypedFieldIdentity]
+}
+
+nonisolated struct GraphChatTypedNarrowResultSetIntent:
+    Hashable,
+    Sendable
+{
+    let sourceResultContextID: UUID
+    let entity: GraphChatTypedEntityIdentity
+    let nodes: [GraphChatTypedNodeIdentity]
+    let fields: [GraphChatTypedFieldIdentity]
+}
+
+nonisolated struct GraphChatTypedCompareNodesIntent: Hashable, Sendable {
+    let entities: [GraphChatTypedEntityIdentity]
+    let nodes: [GraphChatTypedNodeIdentity]
+    let fields: [GraphChatTypedFieldIdentity]
+}
+
+nonisolated struct GraphChatTypedInspectGraphStateIntent:
+    Hashable,
+    Sendable
+{
+    let entity: GraphChatTypedEntityIdentity?
+}
+
+nonisolated enum GraphChatTypedIntentPayload: Hashable, Sendable {
+    case findNodes(GraphChatTypedFindNodesIntent)
+    case entityCollection(GraphChatTypedEntityCollectionIntent)
+    case countOrGroup(GraphChatTypedCountOrGroupIntent)
+    case nodeDetails(GraphChatTypedNodeDetailsIntent)
+    case narrowResultSet(GraphChatTypedNarrowResultSetIntent)
+    case compareNodes(GraphChatTypedCompareNodesIntent)
+    case inspectGraphState(GraphChatTypedInspectGraphStateIntent)
+
+    var kind: GraphChatTypedIntentKind {
+        switch self {
+        case .findNodes:
+            return .findNodes
+        case .entityCollection:
+            return .entityCollection
+        case .countOrGroup:
+            return .countOrGroup
+        case .nodeDetails:
+            return .nodeDetails
+        case .narrowResultSet:
+            return .narrowResultSet
+        case .compareNodes:
+            return .compareNodes
+        case .inspectGraphState:
+            return .inspectGraphState
+        }
+    }
+
+    var entities: [GraphChatTypedEntityIdentity] {
+        switch self {
+        case .findNodes(let value):
+            return value.entity.map { [$0] } ?? []
+        case .entityCollection(let value):
+            return [value.entity]
+        case .countOrGroup(let value):
+            return [value.entity]
+        case .nodeDetails(let value):
+            return [value.entity]
+        case .narrowResultSet(let value):
+            return [value.entity]
+        case .compareNodes(let value):
+            return value.entities
+        case .inspectGraphState(let value):
+            return value.entity.map { [$0] } ?? []
+        }
+    }
+
+    var fields: [GraphChatTypedFieldIdentity] {
+        switch self {
+        case .findNodes(let value):
+            return value.fields
+        case .entityCollection(let value):
+            return value.projectedFields
+        case .countOrGroup(let value):
+            if case .group(let field) = value.operation {
+                return [field]
+            }
+            return []
+        case .nodeDetails(let value):
+            return value.fields
+        case .narrowResultSet(let value):
+            return value.fields
+        case .compareNodes(let value):
+            return value.fields
+        case .inspectGraphState:
+            return []
+        }
+    }
+
+    var nodes: [GraphChatTypedNodeIdentity] {
+        switch self {
+        case .findNodes(let value):
+            return value.nodeScope
+        case .entityCollection, .countOrGroup, .inspectGraphState:
+            return []
+        case .nodeDetails(let value):
+            return [value.node]
+        case .narrowResultSet(let value):
+            return value.nodes
+        case .compareNodes(let value):
+            return value.nodes
+        }
+    }
+}
+
+nonisolated enum GraphChatTypedIntentValidationError:
+    Error,
+    LocalizedError,
+    Hashable,
+    Sendable
+{
+    case unsupportedDomainVersion
+    case graphScopeMismatch
+    case invalidLimits
+    case invalidEntityBinding
+    case invalidFieldBinding
+    case invalidNodeBinding
+    case invalidCardinality
+    case invalidFactExpectation
+
+    var errorDescription: String? {
+        switch self {
+        case .unsupportedDomainVersion:
+            return "Die Typed-Intent-Domainversion wird nicht unterstützt."
+        case .graphScopeMismatch:
+            return "Der Typed Intent enthält widersprüchliche Graph-Scopes."
+        case .invalidLimits:
+            return "Der Typed Intent enthält ungültige Ergebnis- oder Sicherheitslimits."
+        case .invalidEntityBinding:
+            return "Der Typed Intent enthält keine eindeutige Entity-Bindung."
+        case .invalidFieldBinding:
+            return "Ein Feld des Typed Intent gehört nicht zur validierten Entity."
+        case .invalidNodeBinding:
+            return "Ein Node des Typed Intent gehört nicht zu einer validierten Entity."
+        case .invalidCardinality:
+            return "Die erwartete Kardinalität passt nicht zur Intent-Art."
+        case .invalidFactExpectation:
+            return "Die Fact-Erwartung passt nicht zum Typed Intent."
+        }
+    }
+}
+
+nonisolated struct GraphChatTypedIntent: Hashable, Sendable {
+    let version: GraphChatTypedIntentDomainVersion
+    let scope: GraphChatTypedIntentScope
+    let responseLanguage: GraphChatResponseLanguage
+    let binding: GraphChatTypedIntentBinding
+    let resolution: GraphChatTypedIntentResolution
+    let expectedCardinality: GraphChatTypedIntentExpectedCardinality
+    let factExpectation: GraphChatTypedIntentFactExpectation
+    let limits: GraphChatTypedIntentLimits
+    let payload: GraphChatTypedIntentPayload
+
+    var kind: GraphChatTypedIntentKind {
+        payload.kind
+    }
+
+    init(
+        version: GraphChatTypedIntentDomainVersion,
+        scope: GraphChatTypedIntentScope,
+        responseLanguage: GraphChatResponseLanguage,
+        binding: GraphChatTypedIntentBinding,
+        resolution: GraphChatTypedIntentResolution,
+        expectedCardinality: GraphChatTypedIntentExpectedCardinality,
+        factExpectation: GraphChatTypedIntentFactExpectation,
+        limits: GraphChatTypedIntentLimits,
+        payload: GraphChatTypedIntentPayload
+    ) throws {
+        guard version == .v1 else {
+            throw GraphChatTypedIntentValidationError
+                .unsupportedDomainVersion
+        }
+        guard scope.graphScope == scope.chatScope.graphScope,
+              scope.graphScope == scope.queryScope.graphScope else {
+            throw GraphChatTypedIntentValidationError.graphScopeMismatch
+        }
+        guard limits.resultLimit > 0,
+              limits.maximumResultLimit > 0,
+              limits.resultLimit <= limits.maximumResultLimit,
+              limits.maximumEvidenceCount > 0,
+              limits.maximumArtifactCount > 0 else {
+            throw GraphChatTypedIntentValidationError.invalidLimits
+        }
+        try Self.validateIdentities(in: payload)
+        try Self.validateSemantics(
+            payload: payload,
+            expectedCardinality: expectedCardinality,
+            factExpectation: factExpectation
+        )
+
+        self.version = version
+        self.scope = scope
+        self.responseLanguage = responseLanguage
+        self.binding = binding
+        self.resolution = resolution
+        self.expectedCardinality = expectedCardinality
+        self.factExpectation = factExpectation
+        self.limits = limits
+        self.payload = payload
+    }
+
+    private static func validateIdentities(
+        in payload: GraphChatTypedIntentPayload
+    ) throws {
+        let entities = payload.entities
+        let entityIDs = Set(entities.map(\.id))
+        guard entityIDs.count == entities.count else {
+            throw GraphChatTypedIntentValidationError
+                .invalidEntityBinding
+        }
+        let fields = payload.fields
+        guard Set(fields.map(\.id)).count == fields.count,
+              fields.allSatisfy({
+            entityIDs.contains($0.ownerEntityID)
+        }) else {
+            throw GraphChatTypedIntentValidationError
+                .invalidFieldBinding
+        }
+        let nodes = payload.nodes
+        guard Set(nodes.map(\.node)).count == nodes.count,
+              nodes.allSatisfy({
+            entityIDs.contains($0.ownerEntityID)
+        }) else {
+            throw GraphChatTypedIntentValidationError
+                .invalidNodeBinding
+        }
+
+        switch payload {
+        case .nodeDetails(let value):
+            guard value.fields.isEmpty == false else {
+                throw GraphChatTypedIntentValidationError
+                    .invalidFieldBinding
+            }
+        case .narrowResultSet(let value):
+            guard value.nodes.isEmpty == false else {
+                throw GraphChatTypedIntentValidationError
+                    .invalidNodeBinding
+            }
+        case .compareNodes(let value):
+            guard value.nodes.count >= 2 else {
+                throw GraphChatTypedIntentValidationError
+                    .invalidNodeBinding
+            }
+        case .findNodes, .entityCollection, .countOrGroup,
+            .inspectGraphState:
+            break
+        }
+    }
+
+    private static func validateSemantics(
+        payload: GraphChatTypedIntentPayload,
+        expectedCardinality: GraphChatTypedIntentExpectedCardinality,
+        factExpectation: GraphChatTypedIntentFactExpectation
+    ) throws {
+        if factExpectation == .authoritativeSingleField {
+            guard case .nodeDetails(let details) = payload,
+                  details.fields.count == 1,
+                  expectedCardinality == .zeroOrOne else {
+                throw GraphChatTypedIntentValidationError
+                    .invalidFactExpectation
+            }
+        }
+        if case .compareNodes = payload,
+           expectedCardinality != .twoOrMore {
+            throw GraphChatTypedIntentValidationError
+                .invalidCardinality
+        }
+    }
+}

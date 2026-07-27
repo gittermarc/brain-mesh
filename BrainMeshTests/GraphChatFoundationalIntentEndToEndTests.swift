@@ -7,7 +7,9 @@ import Testing
 struct GraphChatFoundationalIntentEndToEndTests {
     @MainActor
     @Test
-    func birthdayValueComesFromSwiftDataWithoutAProviderCall() async throws {
+    func birthdayParityIsUnchangedThroughTypedIntentKernel()
+        async throws
+    {
         let store = try BrainMeshTestContainer.makeInMemoryStore()
         let fixtures = BrainMeshFixtureBuilder(context: store.context)
         let graph = fixtures.makeGraph(name: "Kontakte")
@@ -101,6 +103,8 @@ struct GraphChatFoundationalIntentEndToEndTests {
             await runtime.orchestrator.conversationStateSnapshot()
         )
         let providerSnapshot = await runtime.provider.snapshot()
+        let localLifecycle =
+            await runtime.observability.lifecycleEvents()
         let toolActivities: [GraphChatToolKind] = events.compactMap {
             event in
             if case .toolActivity(let activity) = event {
@@ -157,6 +161,13 @@ struct GraphChatFoundationalIntentEndToEndTests {
         )
         #expect(providerSnapshot.createdSessions.isEmpty)
         #expect(providerSnapshot.streamedSessions.isEmpty)
+        #expect(
+            localLifecycle == [
+                .foundationalAdapted,
+                .executionStarted,
+                .executionCommitted,
+            ]
+        )
         #expect(terminalEventCount(events) == 1)
         #expect(toolActivities == expectedToolActivities)
         #expect(
@@ -185,7 +196,7 @@ struct GraphChatFoundationalIntentEndToEndTests {
 
     @MainActor
     @Test
-    func allTripsReachTheResultWindowAndArtifactWithoutAProviderCall()
+    func completeTripsParityIsUnchangedThroughTypedIntentKernel()
         async throws
     {
         let store = try BrainMeshTestContainer.makeInMemoryStore()
@@ -243,6 +254,8 @@ struct GraphChatFoundationalIntentEndToEndTests {
             validatedPlan
         )
         let providerSnapshot = await runtime.provider.snapshot()
+        let localLifecycle =
+            await runtime.observability.lifecycleEvents()
         let expectedNames = fixture.tripsByName.keys.sorted {
             let left = BMSearch.fold($0)
             let right = BMSearch.fold($1)
@@ -318,6 +331,13 @@ struct GraphChatFoundationalIntentEndToEndTests {
         )
         #expect(providerSnapshot.createdSessions.isEmpty)
         #expect(providerSnapshot.streamedSessions.isEmpty)
+        #expect(
+            localLifecycle == [
+                .foundationalAdapted,
+                .executionStarted,
+                .executionCommitted,
+            ]
+        )
         #expect(terminalEventCount(events) == 1)
         #expect(
             fixture.tripsByName.values.allSatisfy {
@@ -770,6 +790,8 @@ struct GraphChatFoundationalIntentEndToEndTests {
         let schemaService = GraphSchemaService(repository: repository)
         let provider = FakeGraphChatModelProvider()
         let blocker = BlockingFoundationalQueryExecutor()
+        let observability =
+            FoundationalKernelObservabilityRecorder()
         let timeZone = try #require(
             TimeZone(identifier: "Europe/Berlin")
         )
@@ -785,6 +807,7 @@ struct GraphChatFoundationalIntentEndToEndTests {
                     sourceRepository: repository
                 ),
             evidenceValidator: evidenceValidator,
+            observability: observability,
             calendar: Calendar(identifier: .gregorian),
             timeZone: timeZone
         )
@@ -801,6 +824,8 @@ struct GraphChatFoundationalIntentEndToEndTests {
         await orchestrator.cancelCurrentGeneration()
         let events = await collector.value
         let state = await orchestrator.conversationStateSnapshot()
+        let localLifecycle =
+            await observability.lifecycleEvents()
 
         #expect(events.last == .cancelled)
         #expect(terminalEventCount(events) == 1)
@@ -814,6 +839,14 @@ struct GraphChatFoundationalIntentEndToEndTests {
         #expect(state?.resultContexts.isEmpty != false)
         #expect(state?.lastValidatedQueryPlan == nil)
         #expect(await provider.snapshot().createdSessions.isEmpty)
+        #expect(
+            localLifecycle == [
+                .foundationalAdapted,
+                .executionStarted,
+                .cancelledBeforeCommit,
+                .executionRolledBack,
+            ]
+        )
     }
 
     @MainActor
@@ -858,6 +891,8 @@ struct GraphChatFoundationalIntentEndToEndTests {
         )
         let answer = try completedAnswer(events)
         let providerSnapshot = await runtime.provider.snapshot()
+        let localLifecycle =
+            await runtime.observability.lifecycleEvents()
 
         #expect(
             answer.directAnswer
@@ -865,6 +900,7 @@ struct GraphChatFoundationalIntentEndToEndTests {
         )
         #expect(providerSnapshot.createdSessions.count == 1)
         #expect(providerSnapshot.streamedSessions.count == 1)
+        #expect(localLifecycle.isEmpty)
         #expect(terminalEventCount(events) == 1)
     }
 
@@ -924,6 +960,8 @@ struct GraphChatFoundationalIntentEndToEndTests {
         let provider: FakeGraphChatModelProvider
         let repository: GraphReadRepository
         let queryEngine: GraphChatQueryEngine
+        let observability:
+            FoundationalKernelObservabilityRecorder
     }
 
     @MainActor
@@ -946,6 +984,8 @@ struct GraphChatFoundationalIntentEndToEndTests {
             evidenceValidator: evidenceValidator
         )
         let provider = FakeGraphChatModelProvider()
+        let observability =
+            FoundationalKernelObservabilityRecorder()
         let orchestrator = GraphChatOrchestrator(
             provider: provider,
             schemaProvider: schemaService,
@@ -961,6 +1001,7 @@ struct GraphChatFoundationalIntentEndToEndTests {
                     sourceRepository: repository
                 ),
             evidenceValidator: evidenceValidator,
+            observability: observability,
             referenceDate: {
                 Date(timeIntervalSince1970: 1_768_413_600)
             },
@@ -971,7 +1012,8 @@ struct GraphChatFoundationalIntentEndToEndTests {
             orchestrator: orchestrator,
             provider: provider,
             repository: repository,
-            queryEngine: queryEngine
+            queryEngine: queryEngine,
+            observability: observability
         )
     }
 
@@ -1003,6 +1045,27 @@ struct GraphChatFoundationalIntentEndToEndTests {
         _ attribute: MetaAttribute
     ) -> NodeRefKey {
         NodeRefKey(kind: .attribute, id: attribute.id)
+    }
+}
+
+private actor FoundationalKernelObservabilityRecorder:
+    GraphChatObservabilityRecording
+{
+    private var events: [GraphChatObservabilityEvent] = []
+
+    func record(_ event: GraphChatObservabilityEvent) {
+        events.append(event)
+    }
+
+    func lifecycleEvents()
+        -> [GraphChatLocalIntentLifecycleEvent]
+    {
+        events.compactMap { event in
+            guard case .localIntent(let metric) = event else {
+                return nil
+            }
+            return metric.event
+        }
     }
 }
 
