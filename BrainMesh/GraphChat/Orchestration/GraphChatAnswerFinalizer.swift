@@ -31,6 +31,14 @@ nonisolated struct GraphChatLocalAnswerFinalizationInput: Hashable, Sendable {
     let responseLanguage: GraphChatResponseLanguage
 }
 
+nonisolated struct GraphChatFoundationalAnswerFinalizationInput: Sendable {
+    let requestID: UUID
+    let completedAt: Date
+    let requestQuestion: String
+    let expectedCommittedState: GraphChatConversationState
+    let execution: GraphChatFoundationalIntentExecution
+}
+
 nonisolated enum GraphChatAnswerFinalizationError:
     Error,
     Hashable,
@@ -162,6 +170,70 @@ nonisolated struct GraphChatAnswerFinalizer: Sendable {
             ),
             conversationTransaction: transaction,
             currentCommittedState: currentCommittedState
+        )
+    }
+
+    func finalizeFoundationalTurn(
+        _ input: GraphChatFoundationalAnswerFinalizationInput,
+        currentCommittedState: GraphChatConversationState
+    ) async throws -> GraphChatFinalizedTurn {
+        let execution = input.execution
+        let providerInput = GraphChatProviderAnswerFinalizationInput(
+            requestID: input.requestID,
+            completedAt: input.completedAt,
+            providerAnswer: GraphChatProviderFinalAnswer(
+                responseState: .answer,
+                directAnswer: "",
+                sections: [],
+                evidenceIDValues: execution.primaryResult.evidenceIDs.map {
+                    $0.rawValue.uuidString
+                },
+                artifactIDValues:
+                    execution.primaryResult.artifactIDs.map {
+                        $0.rawValue.uuidString
+                    },
+                appliedFilters: [],
+                followUpSuggestions: [],
+                hasInsufficientEvidence: false
+            ),
+            conversationContext: execution.conversationContext,
+            responseLanguage: execution.intent.responseLanguage,
+            continuationOperation: nil,
+            requestQuestion: input.requestQuestion,
+            expectedCommittedState: input.expectedCommittedState,
+            primaryResult: execution.primaryResult,
+            artifactContext: execution.artifactContext,
+            presentationRegistry: execution.presentationRegistry
+        )
+        let answer: GraphChatAnswer
+        do {
+            answer = try await validatedProviderAnswer(
+                providerInput,
+                evidenceRegistry: execution.evidenceRegistry,
+                artifactRegistry: execution.artifactRegistry,
+                conversationTransaction:
+                    execution.conversationTransaction
+            )
+        } catch {
+            await commitCoordinator.rollback(
+                execution.artifactContext,
+                artifactRegistry: execution.artifactRegistry
+            )
+            throw error
+        }
+        return try await commitCoordinator.commit(
+            GraphChatTurnCommitInput(
+                requestID: input.requestID,
+                completedAt: input.completedAt,
+                source: .local,
+                answer: answer,
+                expectedCommittedState:
+                    input.expectedCommittedState,
+                artifactContext: execution.artifactContext
+            ),
+            conversationTransaction: execution.conversationTransaction,
+            currentCommittedState: currentCommittedState,
+            artifactRegistry: execution.artifactRegistry
         )
     }
 

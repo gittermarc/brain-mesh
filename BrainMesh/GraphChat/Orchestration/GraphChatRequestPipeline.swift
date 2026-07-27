@@ -9,6 +9,7 @@ import Foundation
 
 nonisolated enum GraphChatRequestPipelineStage: String, CaseIterable, Hashable, Sendable {
     case preflight
+    case foundationalIntent
     case sessionResources
     case providerExecution
     case answerFinalization
@@ -60,6 +61,9 @@ nonisolated struct GraphChatRequestPipeline: Sendable {
     typealias SessionResourcesProvider = @Sendable (
         GraphChatProviderTurnPlan
     ) async throws -> GraphChatProviderSessionResources
+    typealias FoundationalArtifactSessionProvider = @Sendable (
+        GraphChatOrchestrationScopeKey
+    ) async throws -> GraphChatArtifactSessionResources
     typealias AttemptResourcesHandler = @Sendable (
         GraphChatProviderSessionResources
     ) async -> Void
@@ -72,6 +76,9 @@ nonisolated struct GraphChatRequestPipeline: Sendable {
     ) -> Void
 
     private let preflight: GraphChatRequestPreflight
+    private let foundationalCoordinator:
+        GraphChatFoundationalIntentCoordinator
+    private let foundationalExecutor: GraphChatFoundationalIntentExecutor
     private let contextRetry: GraphChatProviderContextRetry
     private let finalizer: GraphChatAnswerFinalizer
     private let sessionFactory: GraphChatProviderSessionFactory
@@ -80,6 +87,8 @@ nonisolated struct GraphChatRequestPipeline: Sendable {
 
     init(
         preflight: GraphChatRequestPreflight,
+        foundationalCoordinator: GraphChatFoundationalIntentCoordinator,
+        foundationalExecutor: GraphChatFoundationalIntentExecutor,
         contextRetry: GraphChatProviderContextRetry,
         finalizer: GraphChatAnswerFinalizer,
         sessionFactory: GraphChatProviderSessionFactory,
@@ -87,6 +96,8 @@ nonisolated struct GraphChatRequestPipeline: Sendable {
         observer: GraphChatRequestPipelineObserver = .disabled
     ) {
         self.preflight = preflight
+        self.foundationalCoordinator = foundationalCoordinator
+        self.foundationalExecutor = foundationalExecutor
         self.contextRetry = contextRetry
         self.finalizer = finalizer
         self.sessionFactory = sessionFactory
@@ -97,6 +108,8 @@ nonisolated struct GraphChatRequestPipeline: Sendable {
     func execute(
         _ input: GraphChatRequestPipelineInput,
         sessionResources: @escaping SessionResourcesProvider,
+        foundationalArtifactSession:
+            @escaping FoundationalArtifactSessionProvider,
         onAttemptResources: @escaping AttemptResourcesHandler,
         validateCurrentRequest: @escaping CurrentRequestValidator,
         commitFinalizedTurn: @escaping TurnCommitHandler,
@@ -128,42 +141,132 @@ nonisolated struct GraphChatRequestPipeline: Sendable {
 
         switch preflightResult {
         case .local(let plan):
-            await record(
-                input.requestID,
-                stage: .answerFinalization,
-                phase: .started,
-                usesProvider: false
-            )
-            let finalizedTurn = try await finalizer.finalizeLocalTurn(
-                GraphChatLocalAnswerFinalizationInput(
-                    requestID: input.requestID,
-                    completedAt: referenceDate(),
-                    answer: plan.answer,
-                    baseState: plan.baseState,
-                    expectedCommittedState: plan.expectedCommittedState,
-                    pendingClarification: plan.pendingClarification,
-                    responseLanguage: plan.responseLanguage
-                ),
-                currentCommittedState: input.turnStateSnapshot
-            )
-            await record(
-                input.requestID,
-                stage: .answerFinalization,
-                phase: .completed,
-                usesProvider: false
-            )
-            try await commit(
-                finalizedTurn,
-                requestID: input.requestID,
-                usesProvider: false,
+            return try await finalizeLocalPlan(
+                plan,
+                input: input,
                 commitFinalizedTurn: commitFinalizedTurn
-            )
-            return GraphChatRequestPipelineCompletion(
-                finalizedTurn: finalizedTurn,
-                usedProvider: false
             )
 
         case .provider(let plan):
+            await record(
+                input.requestID,
+                stage: .foundationalIntent,
+                phase: .started,
+                usesProvider: false
+            )
+            let foundationalResolution =
+                try await foundationalCoordinator.resolve(
+                    providerPlan: plan,
+                    requestID: input.requestID,
+                    requestedAt: input.requestedAt
+                )
+            await record(
+                input.requestID,
+                stage: .foundationalIntent,
+                phase: .completed,
+                usesProvider: false
+            )
+            try await validateCurrentRequest()
+
+            switch foundationalResolution {
+            case .local(let localPlan):
+                return try await finalizeLocalPlan(
+                    localPlan,
+                    input: input,
+                    commitFinalizedTurn: commitFinalizedTurn
+                )
+
+            case .compiled(let intent, let schemaContext):
+                let artifactSession = try await foundationalArtifactSession(
+                    plan.scopeKey
+                )
+                var execution:
+                    GraphChatFoundationalIntentExecution?
+                do {
+                    let completedExecution =
+                        try await foundationalExecutor.execute(
+                            intent: intent,
+                            schemaContext: schemaContext,
+                            providerPlan: plan,
+                            requestID: input.requestID,
+                            artifactSession: artifactSession,
+                            onActivity: { activity in
+                                onProviderEvent(
+                                    .toolActivity(activity)
+                                )
+                            }
+                        )
+                    execution = completedExecution
+                    try await validateCurrentRequest()
+                    await record(
+                        input.requestID,
+                        stage: .answerFinalization,
+                        phase: .started,
+                        usesProvider: false
+                    )
+                    let finalizedTurn =
+                        try await finalizer.finalizeFoundationalTurn(
+                            GraphChatFoundationalAnswerFinalizationInput(
+                                requestID: input.requestID,
+                                completedAt: referenceDate(),
+                                requestQuestion:
+                                    plan.providerQuestion,
+                                expectedCommittedState:
+                                    plan.expectedCommittedState,
+                                execution: completedExecution
+                            ),
+                            currentCommittedState:
+                                input.turnStateSnapshot
+                        )
+                    await record(
+                        input.requestID,
+                        stage: .answerFinalization,
+                        phase: .completed,
+                        usesProvider: false
+                    )
+                    do {
+                        try await commit(
+                            finalizedTurn,
+                            requestID: input.requestID,
+                            usesProvider: false,
+                            commitFinalizedTurn:
+                                commitFinalizedTurn
+                        )
+                    } catch {
+                        await completedExecution.artifactRegistry
+                            .removeCommittedArtifacts(
+                                finalizedTurn.committedArtifactIDs,
+                                sessionID:
+                                    completedExecution
+                                        .artifactContext.sessionID
+                            )
+                        throw error
+                    }
+                    await foundationalExecutor
+                        .finishCommittedExecution(
+                            completedExecution,
+                            requestID: input.requestID
+                        )
+                    execution = nil
+                    return GraphChatRequestPipelineCompletion(
+                        finalizedTurn: finalizedTurn,
+                        usedProvider: false
+                    )
+                } catch {
+                    if let execution {
+                        await foundationalExecutor
+                            .cleanupFailedExecution(
+                                execution,
+                                requestID: input.requestID
+                            )
+                    }
+                    throw error
+                }
+
+            case .providerFallback:
+                break
+            }
+
             await record(
                 input.requestID,
                 stage: .sessionResources,
@@ -301,6 +404,47 @@ nonisolated struct GraphChatRequestPipeline: Sendable {
                 throw error
             }
         }
+    }
+
+    private func finalizeLocalPlan(
+        _ plan: GraphChatLocalTurnPlan,
+        input: GraphChatRequestPipelineInput,
+        commitFinalizedTurn: @escaping TurnCommitHandler
+    ) async throws -> GraphChatRequestPipelineCompletion {
+        await record(
+            input.requestID,
+            stage: .answerFinalization,
+            phase: .started,
+            usesProvider: false
+        )
+        let finalizedTurn = try await finalizer.finalizeLocalTurn(
+            GraphChatLocalAnswerFinalizationInput(
+                requestID: input.requestID,
+                completedAt: referenceDate(),
+                answer: plan.answer,
+                baseState: plan.baseState,
+                expectedCommittedState: plan.expectedCommittedState,
+                pendingClarification: plan.pendingClarification,
+                responseLanguage: plan.responseLanguage
+            ),
+            currentCommittedState: input.turnStateSnapshot
+        )
+        await record(
+            input.requestID,
+            stage: .answerFinalization,
+            phase: .completed,
+            usesProvider: false
+        )
+        try await commit(
+            finalizedTurn,
+            requestID: input.requestID,
+            usesProvider: false,
+            commitFinalizedTurn: commitFinalizedTurn
+        )
+        return GraphChatRequestPipelineCompletion(
+            finalizedTurn: finalizedTurn,
+            usedProvider: false
+        )
     }
 
     private func commit(

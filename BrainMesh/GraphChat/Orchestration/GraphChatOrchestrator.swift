@@ -31,6 +31,9 @@ actor GraphChatOrchestrator {
     init(
         provider: any GraphChatModelProvider,
         schemaProvider: any GraphSchemaSnapshotProviding = GraphSchemaService.shared,
+        foundationalQueryExecutor:
+            any GraphChatFoundationalQueryExecuting =
+                GraphChatQueryEngine.shared,
         toolRunnerFactory: any GraphChatModelToolRunnerFactory,
         toolBudgetPolicy: GraphChatToolBudgetPolicy = .default,
         concurrentRequestPolicy: GraphChatConcurrentRequestPolicy = .cancelPrevious,
@@ -55,6 +58,7 @@ actor GraphChatOrchestrator {
         let composition = GraphChatOrchestratorComposition(
             provider: provider,
             schemaProvider: schemaProvider,
+            foundationalQueryExecutor: foundationalQueryExecutor,
             toolRunnerFactory: toolRunnerFactory,
             toolBudgetPolicy: toolBudgetPolicy,
             conversationStatePolicy: conversationStatePolicy,
@@ -358,6 +362,14 @@ actor GraphChatOrchestrator {
                     return try await self.takeOrCreateSessionResources(
                         for: plan,
                         requestID: generation.requestID
+                    )
+                },
+                foundationalArtifactSession: { [weak self] key in
+                    guard let self else {
+                        throw CancellationError()
+                    }
+                    return await self.artifactSessionResources(
+                        for: key
                     )
                 },
                 onAttemptResources: { [weak self] attemptResources in

@@ -74,6 +74,9 @@ nonisolated extension GraphChatConversationStateReducer {
         if let clarification = state.pendingClarification {
             let known = knownReferenceKeys(in: state)
             let options = clarification.options.filter { option in
+                if clarification.decision == .foundationalIntent {
+                    return option.foundationalSelection != nil
+                }
                 switch option.proposal {
                 case .alias:
                     return true
@@ -227,7 +230,8 @@ nonisolated extension GraphChatConversationStateReducer {
             GraphChatPendingClarificationOption(
                 id: bounded(option.id, limit: 64),
                 title: boundedLabel(option.title),
-                proposal: option.proposal
+                proposal: option.proposal,
+                foundationalSelection: option.foundationalSelection
             )
         }
         return GraphChatPendingClarification(

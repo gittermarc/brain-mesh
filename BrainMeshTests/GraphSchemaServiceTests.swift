@@ -146,6 +146,41 @@ struct GraphSchemaServiceTests {
         })
         #expect(first.snapshot.graphName.count == 12)
         #expect(first.snapshot.truncation.isTruncated)
+        #expect(first.aliases.entitiesByAlias.count == 2)
+        #expect(first.aliases.fieldsByAlias.count == 3)
+        #expect(first.foundationalAliases.entitiesByAlias.count == 4)
+        #expect(first.foundationalAliases.fieldsByAlias.count == 16)
+        #expect(
+            first.foundationalAliases.nodesByKey.values.filter {
+                $0.node.kind == .attribute
+            }.count == 4
+        )
+        #expect(
+            Set(
+                first.foundationalAliases.nodesByKey.values.compactMap {
+                    $0.node.kind == .attribute
+                        ? $0.displayName
+                        : nil
+                }
+            ) == Set([
+                "Attribute 0",
+                "Attribute 1",
+                "Attribute 2",
+                "Attribute 3",
+            ])
+        )
+        #expect(
+            Set(
+                first.aliases.nodesByKey.values.compactMap {
+                    $0.node.kind == .attribute
+                        ? $0.displayName
+                        : nil
+                }
+            ) == Set([
+                "Entity 0 · Attribute 0",
+                "Entity 1 · Attribute 1",
+            ])
+        )
     }
 
     @Test

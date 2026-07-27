@@ -65,6 +65,7 @@ actor GraphSchemaService {
     ) throws -> GraphSchemaContext {
         let includedEntities = Array(source.entities.prefix(limits.maximumEntities))
         let includedEntityIDs = Set(includedEntities.map(\.id))
+        let sourceEntityIDs = Set(source.entities.map(\.id))
 
         var attributesByEntityID: [UUID: [GraphAttributeDTO]] = [:]
         attributesByEntityID.reserveCapacity(includedEntities.count)
@@ -72,7 +73,7 @@ actor GraphSchemaService {
             try checkCancellation(at: index)
             guard
                 let ownerEntityID = attribute.ownerEntityID,
-                includedEntityIDs.contains(ownerEntityID)
+                sourceEntityIDs.contains(ownerEntityID)
             else {
                 continue
             }
@@ -83,7 +84,7 @@ actor GraphSchemaService {
         definitionsByEntityID.reserveCapacity(includedEntities.count)
         for (index, definition) in source.detailFieldDefinitions.enumerated() {
             try checkCancellation(at: index)
-            guard includedEntityIDs.contains(definition.entityID) else {
+            guard sourceEntityIDs.contains(definition.entityID) else {
                 continue
             }
             definitionsByEntityID[definition.entityID, default: []].append(definition)
@@ -109,6 +110,10 @@ actor GraphSchemaService {
         nodeEntityIDs.reserveCapacity(
             includedEntities.count + attributesByEntityID.values.reduce(0) { $0 + $1.count }
         )
+        var nodesByKey: [NodeRefKey: GraphSchemaNodeResolution] = [:]
+        nodesByKey.reserveCapacity(
+            source.entities.count + source.attributes.count
+        )
 
         var nextFieldNumber = 1
         var includedFieldCount = 0
@@ -129,10 +134,20 @@ actor GraphSchemaService {
             )
             entityResolutions[entityAlias] = entityResolution
             nodeEntityIDs[entity.nodeKey] = entity.id
+            nodesByKey[entity.nodeKey] = GraphSchemaNodeResolution(
+                node: entity.nodeKey,
+                ownerEntityID: entity.id,
+                displayName: entity.name
+            )
 
             let entityAttributes = attributesByEntityID[entity.id] ?? []
             for attribute in entityAttributes {
                 nodeEntityIDs[attribute.nodeKey] = entity.id
+                nodesByKey[attribute.nodeKey] = GraphSchemaNodeResolution(
+                    node: attribute.nodeKey,
+                    ownerEntityID: entity.id,
+                    displayName: attribute.displayLabel
+                )
             }
 
             let sourceDefinitions = definitionsByEntityID[entity.id] ?? []
@@ -216,6 +231,72 @@ actor GraphSchemaService {
             )
         }
 
+        let promptAliasMap = GraphSchemaAliasMap(
+            graphScope: source.scope,
+            entitiesByAlias: entityResolutions,
+            fieldsByAlias: fieldResolutions,
+            nodeEntityIDs: nodeEntityIDs,
+            nodesByKey: nodesByKey
+        )
+
+        // The provider-facing alias map remains compact. A separate app-only
+        // map is complete so foundational compilation does not expand or
+        // otherwise change the existing provider contract.
+        var foundationalEntityResolutions = entityResolutions
+        var foundationalFieldResolutions = fieldResolutions
+        var foundationalNodeEntityIDs = nodeEntityIDs
+        var foundationalNodesByKey = nodesByKey
+        var resolvedFieldIDs = Set(
+            foundationalFieldResolutions.values.map(\.fieldID)
+        )
+        for (entityIndex, entity) in source.entities.enumerated() {
+            try checkCancellation(at: entityIndex)
+            let entityAlias = GraphEntityAlias("E\(entityIndex + 1)")
+            if foundationalEntityResolutions[entityAlias] == nil {
+                foundationalEntityResolutions[entityAlias] =
+                    GraphSchemaEntityResolution(
+                        alias: entityAlias,
+                        entityID: entity.id,
+                        name: entity.name
+                    )
+            }
+            foundationalNodeEntityIDs[entity.nodeKey] = entity.id
+            foundationalNodesByKey[entity.nodeKey] =
+                GraphSchemaNodeResolution(
+                    node: entity.nodeKey,
+                    ownerEntityID: entity.id,
+                    displayName: entity.name
+                )
+            for attribute in attributesByEntityID[entity.id] ?? [] {
+                foundationalNodeEntityIDs[attribute.nodeKey] = entity.id
+                foundationalNodesByKey[attribute.nodeKey] =
+                    GraphSchemaNodeResolution(
+                        node: attribute.nodeKey,
+                        ownerEntityID: entity.id,
+                        displayName: attribute.name
+                    )
+            }
+
+            for definition in definitionsByEntityID[entity.id] ?? [] {
+                guard resolvedFieldIDs.insert(definition.id).inserted else {
+                    continue
+                }
+                let fieldAlias = GraphFieldAlias("F\(nextFieldNumber)")
+                nextFieldNumber += 1
+                foundationalFieldResolutions[fieldAlias] =
+                    GraphSchemaFieldResolution(
+                        alias: fieldAlias,
+                        entityAlias: entityAlias,
+                        entityID: entity.id,
+                        fieldID: definition.id,
+                        name: definition.name,
+                        type: definition.type,
+                        unit: definition.unit,
+                        choiceOptions: definition.options
+                    )
+            }
+        }
+
         let sourceFieldCount = source.detailFieldDefinitions.filter {
             includedEntityIDs.contains($0.entityID)
         }.count
@@ -250,17 +331,19 @@ actor GraphSchemaService {
             entities: entities,
             truncation: finalTruncation
         )
-        let aliasMap = GraphSchemaAliasMap(
+        let foundationalAliasMap = GraphSchemaAliasMap(
             graphScope: source.scope,
-            entitiesByAlias: entityResolutions,
-            fieldsByAlias: fieldResolutions,
-            nodeEntityIDs: nodeEntityIDs
+            entitiesByAlias: foundationalEntityResolutions,
+            fieldsByAlias: foundationalFieldResolutions,
+            nodeEntityIDs: foundationalNodeEntityIDs,
+            nodesByKey: foundationalNodesByKey
         )
 
         return GraphSchemaContext(
             graphScope: source.scope,
             snapshot: snapshot,
-            aliases: aliasMap
+            aliases: promptAliasMap,
+            foundationalAliases: foundationalAliasMap
         )
     }
 

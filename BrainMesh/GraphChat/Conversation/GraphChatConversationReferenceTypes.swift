@@ -48,12 +48,26 @@ nonisolated enum GraphChatConversationContinuationOperation: String, CaseIterabl
 
 nonisolated enum GraphChatClarificationDecisionKind: String, CaseIterable, Hashable, Sendable {
     case conversationReference
+    case foundationalIntent
 }
 
 nonisolated struct GraphChatPendingClarificationOption: Hashable, Sendable, Identifiable {
     let id: String
     let title: String
     let proposal: GraphChatConversationReferenceProposal
+    let foundationalSelection: GraphChatFoundationalIntentSelection?
+
+    init(
+        id: String,
+        title: String,
+        proposal: GraphChatConversationReferenceProposal,
+        foundationalSelection: GraphChatFoundationalIntentSelection? = nil
+    ) {
+        self.id = id
+        self.title = title
+        self.proposal = proposal
+        self.foundationalSelection = foundationalSelection
+    }
 }
 
 nonisolated struct GraphChatPendingClarification: Hashable, Sendable, Identifiable {

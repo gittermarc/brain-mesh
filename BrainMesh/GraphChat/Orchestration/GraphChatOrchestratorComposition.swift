@@ -22,6 +22,8 @@ nonisolated struct GraphChatOrchestratorComposition: Sendable {
     init(
         provider: any GraphChatModelProvider,
         schemaProvider: any GraphSchemaSnapshotProviding,
+        foundationalQueryExecutor:
+            any GraphChatFoundationalQueryExecuting,
         toolRunnerFactory: any GraphChatModelToolRunnerFactory,
         toolBudgetPolicy: GraphChatToolBudgetPolicy,
         conversationStatePolicy: GraphChatConversationStatePolicy,
@@ -64,6 +66,18 @@ nonisolated struct GraphChatOrchestratorComposition: Sendable {
             provider: provider,
             sessionFactory: sessionFactory
         )
+        let foundationalCoordinator =
+            GraphChatFoundationalIntentCoordinator(
+                schemaProvider: schemaProvider
+            )
+        let foundationalExecutor =
+            GraphChatFoundationalIntentExecutor(
+                queryExecutor: foundationalQueryExecutor,
+                conversationStateReducer: stateReducer,
+                calendar: calendar,
+                timeZone: timeZone,
+                referenceDate: referenceDate
+            )
         let requestPreflight = GraphChatRequestPreflight(
             conversationStateReducer: stateReducer,
             conversationContextBuilder: contextBuilder,
@@ -93,6 +107,8 @@ nonisolated struct GraphChatOrchestratorComposition: Sendable {
         self.sessionFactory = sessionFactory
         self.requestPipeline = GraphChatRequestPipeline(
             preflight: requestPreflight,
+            foundationalCoordinator: foundationalCoordinator,
+            foundationalExecutor: foundationalExecutor,
             contextRetry: contextRetry,
             finalizer: answerFinalizer,
             sessionFactory: sessionFactory,

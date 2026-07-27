@@ -759,6 +759,45 @@ Maßnahmen:
 - Structured Concurrency bevorzugen; unstrukturierte Tasks in einem Registry-Typ besitzen.
 - Race-Tests für cancel/edit/regenerate/lock/graph-switch.
 
+### Graph Chat Foundational Intent Compiler
+
+Pfade:
+
+- `BrainMesh/GraphChat/Foundational/GraphChatFoundationalIntent.swift`
+- `BrainMesh/GraphChat/Foundational/GraphChatFoundationalIntentCompiler.swift`
+- `BrainMesh/GraphChat/Foundational/GraphChatFoundationalIntentCoordinator.swift`
+- `BrainMesh/GraphChat/Foundational/GraphChatFoundationalIntentExecutor.swift`
+- `BrainMesh/GraphChat/Orchestration/GraphChatRequestPipeline.swift`
+- `BrainMesh/GraphChat/Orchestration/GraphChatAnswerFinalizer.swift`
+
+Trust Boundary:
+
+- Der Compiler läuft nach `GraphChatRequestPreflight`, also erst nach Validierung von aktivem Graph und Chat-Scope, und erhält einen vollständigen appseitigen `GraphSchemaContext`.
+- `GraphSchemaContext.foundationalAliases` hält dafür den vollständigen graph-gescopten App-Katalog getrennt von der weiterhin begrenzten providerseitigen Alias-/Prompt-Sicht. Nicht erkannte Fragen verändern dadurch weder akzeptierte Provider-Aliase noch den bestehenden Promptvertrag.
+- Er läuft vor Provider-Session-Erzeugung, freier Provider-Generierung und modellbestimmter Tool-Auswahl. `.compiled` und `.clarification` bleiben vollständig lokal; ausschließlich `.notRecognized` fällt auf die bestehende Provider-Pipeline zurück. Scope-, Schema- oder Clarification-Integritätsverletzungen sind harte Ablehnungen.
+- Entity-, Feld- und Node-Identitäten stammen ausschließlich aus graph-gescopten Schema-/Repository-Daten. Provider-Aliase oder modellgenerierte IDs sind keine Eingabe des Compilers.
+
+Unterstützte Intents:
+
+- `singleNodeFieldValue`: sichere deutsche oder englische Fragehülle, exakt enthaltener Attribute-Anzeigename und exakt enthaltenes Feld-Displaylabel derselben Entity. Als einzige begrenzte sprachabhängige Synonymfamilie gelten Geburtstag/Geburtsdatum beziehungsweise birthday/birth date/date of birth, sofern ein entsprechendes kanonisches Schemafeld existiert.
+- `entityAttributeCollection`: sichere deutsche oder englische Listenhülle und exakt enthaltenes Entity-Displaylabel. Nach Entfernen des Displaylabels dürfen nur die ausdrücklich unterstützten Hüllenwörter verbleiben; Filter, Aggregationen, freie Semantik und analytische Zusätze werden nicht kompiliert.
+- Der Single-Field-Plan projiziert Node Identity und exakt das validierte Feld, bindet den Scope auf genau den validierten Node und setzt `limit = 1`.
+- Der Collection-Plan projiziert Node Identity, verwendet keine erfundenen Filter, sortiert stabil nach Node-Anzeigename mit dem bestehenden deterministischen Tie-Breaker und setzt das Limit auf `GraphQueryPlanLimits.maximumResultLimit`.
+
+Ausführung und Fortsetzung:
+
+- Jeder kompilierte Plan durchläuft erneut `GraphQueryPlanValidator`, `GraphChatScopeAuthorization`, `GraphChatQueryEngine`, die zentrale Detaildaten-Authority, Evidence-Registrierung, Artifact-Staging, Primary-Result-Ledger, Live-Revalidation, Presentation Firewall, deterministischen Fallback und atomaren Conversation-/Artifact-Commit.
+- Der lokale Pfad hängt nicht von der Readiness des Search-Indexes ab und verwendet `SearchGraph` auch bei einem Single-Field-Intent nicht als Wertquelle. Nicht erkannte Fragen behalten die vorhandene Provider-, Search- und Repository-Fallback-Architektur.
+- Ein Single-Field-Erfolg verlangt den tatsächlich transportierten, typisierten Feldwert. Fehlender oder aufgrund eines Detaildaten-Integritätskonflikts nicht autoritativer Wert wird zu einem typisierten No-Results-Pfad; ein `SearchGraph`-Treffer kann diesen Pfad nicht abschließen.
+- Mehrdeutige Entities, Nodes oder Felder verwenden die bestehende `GraphChatPendingClarification`. Kandidatenauswahlen bleiben intern graph-, chat-, conversation-, request- und turngebunden, werden vor der Fortsetzung erneut validiert und lösen bis zur Auswahl keine Query aus.
+- Lokal kompilierte Resultsets werden über denselben Conversation Reducer gespeichert und sind damit für die bestehende typisierte `CURRENT`-Auflösung verfügbar. Cancellation vor Commit verwirft Evidence, Ledger und gestagte Artifacts; der Stream behält genau ein Terminal Event.
+
+Limit-Policy:
+
+- `GraphQueryPlanLimits.maximumResultLimit` ist die einzige Quelle für vollständige Foundational Collections. „Alle“ bleibt auf den autorisierten Chat-Scope und dieses Sicherheitslimit begrenzt.
+- `GraphChatResultWindow` transportiert `totalCount`, `returnedCount`, Limitquelle und Truncation. Das Result-Artefakt übernimmt diese Metadaten; der deterministische deutsche oder englische Fallback nennt eine erreichte Begrenzung sichtbar.
+- Collection-Artefakte vermeiden innerhalb des bestehenden Artifact-Bytebudgets redundante globale Evidence-Bindings und behalten pro Zeile einen sicheren Navigation Target. Das vollständige revalidierte Evidence-Set bleibt im Primary Result und finalen Answer gebunden.
+
 ### Graph Chat Presentation Trust Boundary
 
 Pfade:

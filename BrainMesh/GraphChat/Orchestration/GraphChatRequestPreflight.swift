@@ -42,6 +42,7 @@ nonisolated struct GraphChatProviderTurnPlan: Hashable, Sendable {
     let currentReference: GraphChatResolvedConversationReference?
     let currentResolvedScope: GraphChatResolvedConversationScope?
     let continuationOperation: GraphChatConversationContinuationOperation?
+    let foundationalContinuation: GraphChatFoundationalIntentContinuation?
 }
 
 nonisolated enum GraphChatRequestPreflightResult: Hashable, Sendable {
@@ -400,6 +401,56 @@ nonisolated struct GraphChatRequestPreflight: Sendable {
                 )
             }
 
+            if pending.decision == .foundationalIntent {
+                let continuationLanguage =
+                    responseLanguageSelector.language(
+                        for: pending.continuationQuestion
+                    )
+                guard let selection = selectedOption.foundationalSelection else {
+                    return .local(
+                        localPlan(
+                            key: key,
+                            normalizedQuestion: normalizedQuestion,
+                            language: language,
+                            answer: localAnswerBuilder.staleClarification(
+                                language: continuationLanguage,
+                                clarificationID: input.requestID
+                            ),
+                            baseState: try clearedClarification(
+                                in: requestBaseState
+                            ),
+                            expectedCommittedState: expectedCommittedState
+                        )
+                    )
+                }
+                requestBaseState = try clearedClarification(
+                    in: requestBaseState
+                )
+                context = conversationContextBuilder.makeSnapshot(
+                    from: requestBaseState.snapshot
+                )
+                return .provider(
+                    GraphChatProviderTurnPlan(
+                        scopeKey: key,
+                        normalizedQuestion: normalizedQuestion,
+                        providerQuestion: pending.continuationQuestion,
+                        responseLanguage: continuationLanguage,
+                        requestBaseState: requestBaseState,
+                        expectedCommittedState: expectedCommittedState,
+                        conversationContext: context,
+                        currentReference: nil,
+                        currentResolvedScope: nil,
+                        continuationOperation: nil,
+                        foundationalContinuation:
+                            GraphChatFoundationalIntentContinuation(
+                                selection: selection,
+                                sourceTurnID: pending.sourceTurnID,
+                                clarificationID: pending.id
+                            )
+                    )
+                )
+            }
+
             let resolution = try await referenceResolver.resolveScope(
                 selectedOption.proposal,
                 in: context,
@@ -493,7 +544,8 @@ nonisolated struct GraphChatRequestPreflight: Sendable {
                 conversationContext: context,
                 currentReference: currentReference,
                 currentResolvedScope: currentResolvedScope,
-                continuationOperation: continuationOperation
+                continuationOperation: continuationOperation,
+                foundationalContinuation: nil
             )
         )
     }

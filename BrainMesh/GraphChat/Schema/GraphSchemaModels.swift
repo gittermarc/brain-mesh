@@ -127,14 +127,39 @@ nonisolated struct GraphSchemaFieldResolution: Hashable, Sendable {
     let choiceOptions: [String]
 }
 
+nonisolated struct GraphSchemaNodeResolution: Hashable, Sendable {
+    let node: NodeRefKey
+    let ownerEntityID: UUID
+    let displayName: String
+}
+
 nonisolated struct GraphSchemaAliasMap: Sendable {
     let graphScope: GraphScope
     let entitiesByAlias: [GraphEntityAlias: GraphSchemaEntityResolution]
     let fieldsByAlias: [GraphFieldAlias: GraphSchemaFieldResolution]
     let nodeEntityIDs: [NodeRefKey: UUID]
+    let nodesByKey: [NodeRefKey: GraphSchemaNodeResolution]
+
+    init(
+        graphScope: GraphScope,
+        entitiesByAlias: [GraphEntityAlias: GraphSchemaEntityResolution],
+        fieldsByAlias: [GraphFieldAlias: GraphSchemaFieldResolution],
+        nodeEntityIDs: [NodeRefKey: UUID],
+        nodesByKey: [NodeRefKey: GraphSchemaNodeResolution] = [:]
+    ) {
+        self.graphScope = graphScope
+        self.entitiesByAlias = entitiesByAlias
+        self.fieldsByAlias = fieldsByAlias
+        self.nodeEntityIDs = nodeEntityIDs
+        self.nodesByKey = nodesByKey
+    }
 
     func entity(for alias: GraphEntityAlias) -> GraphSchemaEntityResolution? {
         entitiesByAlias[alias]
+    }
+
+    func entity(id: UUID) -> GraphSchemaEntityResolution? {
+        entitiesByAlias.values.first { $0.entityID == id }
     }
 
     func field(for alias: GraphFieldAlias) -> GraphSchemaFieldResolution? {
@@ -142,7 +167,7 @@ nonisolated struct GraphSchemaAliasMap: Sendable {
     }
 
     func owningEntityID(for node: NodeRefKey) -> UUID? {
-        nodeEntityIDs[node]
+        nodesByKey[node]?.ownerEntityID ?? nodeEntityIDs[node]
     }
 
     func contains(entityID: UUID) -> Bool {
@@ -154,6 +179,19 @@ nonisolated struct GraphSchemaContext: Sendable {
     let graphScope: GraphScope
     let snapshot: GraphSchemaSnapshot
     let aliases: GraphSchemaAliasMap
+    let foundationalAliases: GraphSchemaAliasMap
+
+    init(
+        graphScope: GraphScope,
+        snapshot: GraphSchemaSnapshot,
+        aliases: GraphSchemaAliasMap,
+        foundationalAliases: GraphSchemaAliasMap? = nil
+    ) {
+        self.graphScope = graphScope
+        self.snapshot = snapshot
+        self.aliases = aliases
+        self.foundationalAliases = foundationalAliases ?? aliases
+    }
 }
 
 nonisolated struct GraphSchemaLimits: Hashable, Sendable {

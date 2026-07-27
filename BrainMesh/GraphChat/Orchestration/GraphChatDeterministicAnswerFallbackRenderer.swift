@@ -67,6 +67,7 @@ nonisolated struct GraphChatDeterministicAnswerFallbackRenderer: Sendable {
             return resultListSummary(
                 payload,
                 subject: artifact.querySummary?.entityLabel,
+                queryLimit: artifact.querySummary?.limit,
                 language: language
             )
 
@@ -76,6 +77,7 @@ nonisolated struct GraphChatDeterministicAnswerFallbackRenderer: Sendable {
                 subject: artifact.querySummary?.entityLabel,
                 title: artifact.title,
                 isQueryResult: artifact.querySummary != nil,
+                queryLimit: artifact.querySummary?.limit,
                 language: language
             )
 
@@ -133,6 +135,7 @@ nonisolated struct GraphChatDeterministicAnswerFallbackRenderer: Sendable {
     private func resultListSummary(
         _ payload: GraphChatAnswerArtifactResultListPayload,
         subject: String?,
+        queryLimit: Int?,
         language: GraphChatResponseLanguage
     ) -> String {
         let total = payload.resultMetadata.totalCount
@@ -142,13 +145,23 @@ nonisolated struct GraphChatDeterministicAnswerFallbackRenderer: Sendable {
             subject: subject,
             language: language
         )
-        let names = payload.rows.prefix(maximumExamples).map {
-            cleaned($0.primaryText)
+        let names = payload.rows.prefix(maximumExamples).map { row in
+            let primary = cleaned(row.primaryText)
+            guard let secondary = row.secondaryText.map(cleaned),
+                  secondary.isEmpty == false else {
+                return primary
+            }
+            return "\(primary) (\(secondary))"
         }.filter { $0.isEmpty == false }
         return countSentence
             + examplesSentence(
                 names,
                 total: total,
+                language: language
+            )
+            + truncationSentence(
+                payload.resultMetadata,
+                queryLimit: queryLimit,
                 language: language
             )
     }
@@ -158,6 +171,7 @@ nonisolated struct GraphChatDeterministicAnswerFallbackRenderer: Sendable {
         subject: String?,
         title: String,
         isQueryResult: Bool,
+        queryLimit: Int?,
         language: GraphChatResponseLanguage
     ) -> String {
         if isQueryResult {
@@ -174,6 +188,10 @@ nonisolated struct GraphChatDeterministicAnswerFallbackRenderer: Sendable {
             ) + examplesSentence(
                 names,
                 total: total,
+                language: language
+            ) + truncationSentence(
+                payload.resultMetadata,
+                queryLimit: queryLimit,
                 language: language
             )
         }
@@ -403,6 +421,44 @@ nonisolated struct GraphChatDeterministicAnswerFallbackRenderer: Sendable {
                 return " The result is \(values)."
             }
             return " The first results are \(values)."
+        }
+    }
+
+    private func truncationSentence(
+        _ metadata: GraphChatAnswerArtifactResultMetadata,
+        queryLimit: Int?,
+        language: GraphChatResponseLanguage
+    ) -> String {
+        guard metadata.truncation.isTruncated else {
+            return ""
+        }
+        let onlySourceLimited =
+            Set(metadata.truncation.reasons) == [.sourceLimited]
+        if onlySourceLimited {
+            switch language {
+            case .german:
+                return " Nicht alle Einträge konnten gegen die aktuelle Datenquelle revalidiert werden."
+            case .english:
+                return " Not every item could be revalidated against the current data source."
+            }
+        }
+        guard metadata.truncation.reasons.contains(.queryLimit),
+              queryLimit == GraphQueryPlanLimits.maximumResultLimit else {
+            return ""
+        }
+        switch language {
+        case .german:
+            if let omitted = metadata.truncation.omittedCount,
+               omitted > 0 {
+                return " Die Ausgabe ist auf das Sicherheitslimit begrenzt; \(omitted) weitere Einträge sind nicht enthalten."
+            }
+            return " Die Ausgabe ist auf das zulässige Sicherheitslimit begrenzt."
+        case .english:
+            if let omitted = metadata.truncation.omittedCount,
+               omitted > 0 {
+                return " The output is capped at the safety limit; \(omitted) additional items are not included."
+            }
+            return " The output is capped at the allowed safety limit."
         }
     }
 

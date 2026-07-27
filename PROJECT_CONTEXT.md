@@ -1,6 +1,6 @@
 # BrainMesh – Project Context
 
-> Start Here für neue Entwickler:innen. Stand: Quality Rescue 5 mit deterministischer Answer-Fallback-Architektur.
+> Start Here für neue Entwickler:innen. Stand: FOUNDATIONAL-ACCURACY-2 mit eng begrenztem, appseitigem Foundational Intent Compiler.
 
 ## TL;DR
 
@@ -39,6 +39,7 @@ BrainMesh ist eine native SwiftUI-App für iPhone und iPad, in der Nutzer:innen 
 - **Bounded Tool Repair**: Request-gebundene, explizit klassifizierte Korrektur eines semantisch ungültigen Modell-Tool-Calls. Der Provider erhält nur validierte Schema-/Scope-Hinweise und genau einen vollständigen Retry; Sicherheits-, Scope-, Repository-, Cancellation- und Budgetfehler bleiben harte Abbrüche.
 - **Primary Result Ledger**: Request-lokale, value-only Erfassung validierter erfolgreicher Tool-Ergebnisse. Eine deterministische App-Policy wählt das autoritative primäre Ergebnis und übergibt dessen Evidence und Artifacts unabhängig von Modell-IDs an den Finalizer.
 - **Deterministic Answer Fallback**: Lokalisierte, begrenzte Mindestantwort, die ausschließlich aus dem nach Live-Revalidierung verbliebenen primären Tool-Ergebnis gerendert wird. Sie ersetzt nur leeren, technischen, widersprüchlichen oder presentation-unsicheren Modelltext und behält dessen Evidence beziehungsweise Result-Artefakt.
+- **Foundational Intent Compiler**: Schemaorientierte, providerfreie Trust Boundary für exakt erkannte Fragen nach einem Detailfeld eines eindeutigen Attributes sowie nach der vollständigen Attributliste einer eindeutigen Entity. App-Daten bestimmen Entity, Feld, Node-Scope, Query-Plan und Limit; nicht erkannte Formulierungen laufen unverändert über die Provider-Pipeline.
 - **Pro**: StoreKit-gesteuerte Berechtigung für kostenpflichtige Funktionen.
 
 ## Architecture Map
@@ -92,6 +93,10 @@ BrainMesh ist eine native SwiftUI-App für iPhone und iPad, in der Nutzer:innen 
 - Suchindex → SwiftData nur für Rebuild/Reconciliation; nie als autoritative Quelle.
 - Lokale Medien-Caches → autoritative SwiftData-Binärdaten; Caches dürfen verworfen werden.
 - Graph Chat → read-only Tool Runtime → Search/Repositories; kein Chat-Tool schreibt Graphdaten.
+- Validiertes Request-Preflight → vollständiger appseitiger `GraphSchemaContext` → Foundational Intent Compiler. Eindeutige Intents oder fachliche Clarifications werden vor Provider-Session und modellbestimmtem Tool-Call lokal behandelt; `.notRecognized` fällt auf die bestehende Provider-Pipeline zurück.
+- Foundational Single-Field → exakt ein graph-/chat-gescopter Attribute-Node, Node Identity plus exakt ein validiertes Feld, appseitiges Limit `1`, erneute Query-Plan-/Scope-Validierung und Ausführung über die bestehende Query Engine. Ein Suchtreffer allein ist nie Detailwert-Autorität.
+- Foundational Entity Collection → unveränderter autorisierter Entity-/Node-/Selection-Scope, Node-Identity-Projektion, stabile Namenssortierung und `GraphQueryPlanLimits.maximumResultLimit`. „Alle“ bedeutet alle autorisierten Ergebnisse bis zu diesem gemeinsamen Sicherheitslimit; Truncation bleibt im Result-Artefakt und in der lokalisierten Mindestantwort sichtbar.
+- Mehrdeutiger Foundational Intent → bestehende graph-/session-/turngebundene Pending Clarification mit ausschließlich fachlichen Anzeigenamen. Die Auswahl setzt dieselbe Originalfrage fort und wird gegen Schema, Scope und Quell-Turn erneut validiert.
 - Modell-Tool-Call → typisierte Conversation-Scope-Auflösung → Query-Plan-Validierung; ein Modell-Entity-Alias ist bei einer homogenen revalidierten Conversation-Referenz nur ein untrusted Hint.
 - Semantisch repair-fähiger Tool-Call → strukturiertes validiertes Repair-Ergebnis → höchstens ein vollständiger erneuter Tool-Call → unveränderte Validatoren und Tool-Budgets.
 - Erfolgreicher Tool-Call → request-/graph-/session-/turn-/transaktionsgebundenes Execution Ledger → deterministische Primary-Result-Auswahl → erneute Evidence-/Artifact-Revalidierung im Finalizer.
