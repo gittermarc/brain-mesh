@@ -827,6 +827,512 @@ struct GraphChatAnswerFinalizerTests {
     }
 
     @Test
+    func authoritativeDateReplacesWrongModelFactAndGeneratedSections()
+        async throws
+    {
+        let fixture = AnswerFinalizerFixture()
+        let expectation = fixture.factExpectation(
+            fieldName: "Birth date",
+            fieldType: .date
+        )
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = try #require(
+            TimeZone(identifier: "Europe/Berlin")
+        )
+        let storedDate = try #require(
+            calendar.date(
+                from: DateComponents(
+                    calendar: calendar,
+                    timeZone: calendar.timeZone,
+                    year: 1985,
+                    month: 10,
+                    day: 27
+                )
+            )
+        )
+        let evidence = fixture.makeFactEvidence(
+            expectation: expectation,
+            value: .date(storedDate)
+        )
+        let resources = try await fixture.makeResources(
+            evidence: [evidence]
+        )
+        let artifactID =
+            try await fixture.stageAuthoritativeFactArtifact(
+                in: resources,
+                expectation: expectation,
+                value: .date(storedDate),
+                evidenceID: evidence.id
+            )
+        let primary = try await fixture.makePrimaryResult(
+            in: resources,
+            evidence: [evidence],
+            artifactIDs: [artifactID]
+        )
+
+        let turn = try await fixture.finalize(
+            fixture.providerAnswer(
+                directAnswer:
+                    "Project Atlas was born on 11/02/1999.",
+                sections: [
+                    GraphChatProviderAnswerSection(
+                        title: "Model claim",
+                        text: "The date is 11/02/1999.",
+                        evidenceIDValues: [],
+                        artifactIDValues: []
+                    )
+                ],
+                followUps: [
+                    GraphChatProviderFollowUpSuggestion(
+                        title: "Wrong date",
+                        prompt: "Use 11/02/1999"
+                    )
+                ]
+            ),
+            resources: resources,
+            primaryResult: primary,
+            authoritativeFactExpectation: expectation
+        )
+
+        #expect(
+            turn.answer.directAnswer
+                == "Birth date of Project Atlas: 10/27/1985."
+        )
+        #expect(
+            turn.answer.directAnswer.contains("11/02/1999")
+                == false
+        )
+        #expect(turn.answer.sections.isEmpty)
+        #expect(turn.answer.followUpSuggestions.isEmpty)
+        #expect(turn.answer.evidenceIDs == [evidence.id])
+        #expect(turn.answer.artifactIDs == [artifactID])
+    }
+
+    @Test
+    func ownerQualifiedArtifactNodeNameRendersTheValidatedShortName()
+        async throws
+    {
+        let fixture = AnswerFinalizerFixture()
+        let expectation = fixture.factExpectation(
+            fieldName: "Status",
+            fieldType: .singleLineText
+        )
+        let evidence = fixture.makeFactEvidence(
+            expectation: expectation,
+            value: .text("Open")
+        )
+        let resources = try await fixture.makeResources(
+            evidence: [evidence]
+        )
+        let artifactID =
+            try await fixture.stageAuthoritativeFactArtifact(
+                in: resources,
+                expectation: expectation,
+                value: .text("Open"),
+                evidenceID: evidence.id,
+                artifactNodeDisplayName:
+                    "Projects · Project Atlas"
+            )
+        let primary = try await fixture.makePrimaryResult(
+            in: resources,
+            evidence: [evidence],
+            artifactIDs: [artifactID]
+        )
+
+        let turn = try await fixture.finalize(
+            fixture.providerAnswer(
+                directAnswer: "Status is Closed."
+            ),
+            resources: resources,
+            primaryResult: primary,
+            authoritativeFactExpectation: expectation
+        )
+
+        #expect(
+            turn.answer.directAnswer
+                == "Status of Project Atlas: Open."
+        )
+        #expect(
+            turn.answer.directAnswer.contains("Projects ·") == false
+        )
+    }
+
+    @Test
+    func authoritativeNumberChoiceAndBooleanAlwaysReplaceModelClaims()
+        async throws
+    {
+        struct Case {
+            let expectation: GraphChatAuthoritativeFactExpectation
+            let artifactValue: GraphChatAnswerArtifactValue
+            let evidenceValue: GraphEvidenceValue
+            let modelText: String
+            let expectedText: String
+        }
+
+        let fixture = AnswerFinalizerFixture()
+        let cases = [
+            Case(
+                expectation: fixture.factExpectation(
+                    fieldName: "Budget",
+                    fieldType: .numberInt,
+                    unit: "€"
+                ),
+                artifactValue: .integer(125_000),
+                evidenceValue: .integer(125_000),
+                modelText: "Budget is 999 €.",
+                expectedText:
+                    "Budget of Project Atlas: 125,000 €."
+            ),
+            Case(
+                expectation: fixture.factExpectation(
+                    fieldName: "Status",
+                    fieldType: .singleChoice
+                ),
+                artifactValue: .choice(
+                    GraphChatAnswerArtifactChoiceValue(
+                        value: "OPEN",
+                        label: "Open"
+                    )
+                ),
+                evidenceValue: .choice("OPEN"),
+                modelText: "Status is Closed.",
+                expectedText:
+                    "Status of Project Atlas: Open."
+            ),
+            Case(
+                expectation: fixture.factExpectation(
+                    fieldName: "Active",
+                    fieldType: .toggle
+                ),
+                artifactValue: .boolean(true),
+                evidenceValue: .boolean(true),
+                modelText: "Project Atlas is not active.",
+                expectedText:
+                    "Active of Project Atlas: Yes."
+            ),
+        ]
+
+        for value in cases {
+            let evidence = fixture.makeFactEvidence(
+                expectation: value.expectation,
+                value: value.evidenceValue
+            )
+            let resources = try await fixture.makeResources(
+                evidence: [evidence]
+            )
+            let artifactID =
+                try await fixture.stageAuthoritativeFactArtifact(
+                    in: resources,
+                    expectation: value.expectation,
+                    value: value.artifactValue,
+                    evidenceID: evidence.id
+                )
+            let primary = try await fixture.makePrimaryResult(
+                in: resources,
+                evidence: [evidence],
+                artifactIDs: [artifactID]
+            )
+
+            let turn = try await fixture.finalize(
+                fixture.providerAnswer(
+                    directAnswer: value.modelText
+                ),
+                resources: resources,
+                primaryResult: primary,
+                authoritativeFactExpectation:
+                    value.expectation
+            )
+
+            #expect(
+                turn.answer.directAnswer == value.expectedText
+            )
+            #expect(
+                turn.answer.directAnswer
+                    .contains(value.modelText) == false
+            )
+        }
+    }
+
+    @Test
+    func emptyTechnicalAndCorrectModelTextCannotAlterAuthoritativeFact()
+        async throws
+    {
+        let fixture = AnswerFinalizerFixture()
+        let expectation = fixture.factExpectation(
+            fieldName: "Status",
+            fieldType: .singleLineText
+        )
+        let modelTexts = [
+            "",
+            "QueryDetailValuesTool: F1",
+            "Status of Project Atlas: Open.",
+        ]
+
+        for modelText in modelTexts {
+            let evidence = fixture.makeFactEvidence(
+                expectation: expectation,
+                value: .text("Open")
+            )
+            let resources = try await fixture.makeResources(
+                evidence: [evidence]
+            )
+            let artifactID =
+                try await fixture.stageAuthoritativeFactArtifact(
+                    in: resources,
+                    expectation: expectation,
+                    value: .text("Open"),
+                    evidenceID: evidence.id
+                )
+            let primary = try await fixture.makePrimaryResult(
+                in: resources,
+                evidence: [evidence],
+                artifactIDs: [artifactID]
+            )
+
+            let turn = try await fixture.finalize(
+                fixture.providerAnswer(
+                    directAnswer: modelText
+                ),
+                resources: resources,
+                primaryResult: primary,
+                authoritativeFactExpectation:
+                    expectation
+            )
+
+            #expect(
+                turn.answer.directAnswer
+                    == "Status of Project Atlas: Open."
+            )
+        }
+    }
+
+    @Test
+    func searchOnlyResultCannotSupportAConcreteSingleFieldClaim()
+        async throws
+    {
+        let fixture = AnswerFinalizerFixture()
+        let expectation = fixture.factExpectation(
+            fieldName: "Birth date",
+            fieldType: .date
+        )
+        let searchEvidence = fixture.makeEvidence(70)
+        let resources = try await fixture.makeResources(
+            evidence: [searchEvidence]
+        )
+        let primary = try await fixture.makePrimaryResult(
+            in: resources,
+            tool: .searchGraph,
+            evidence: [searchEvidence]
+        )
+
+        let turn = try await fixture.finalize(
+            fixture.providerAnswer(
+                directAnswer:
+                    "Birth date of Project Atlas: 11/02/1999."
+            ),
+            resources: resources,
+            primaryResult: primary,
+            authoritativeFactExpectation: expectation
+        )
+
+        #expect(turn.answer.state == .noResults)
+        #expect(
+            turn.answer.directAnswer
+                == GraphChatResponseLocalizer(
+                    language: .english
+                ).authoritativeFactUnavailable()
+        )
+        #expect(
+            turn.answer.directAnswer.contains("11/02/1999")
+                == false
+        )
+        #expect(turn.answer.evidence == [searchEvidence])
+    }
+
+    @Test
+    func integrityConflictAndAmbiguityNeverReduceToASingleFact()
+        async throws
+    {
+        let fixture = AnswerFinalizerFixture()
+        let expectations = [
+            fixture.factExpectation(
+                fieldName: "Status",
+                fieldType: .singleLineText,
+                hasIntegrityConflict: true
+            ),
+            fixture.factExpectation(
+                fieldName: "Status",
+                fieldType: .singleLineText,
+                hasAmbiguousCardinality: true
+            ),
+        ]
+
+        for expectation in expectations {
+            let evidence = fixture.makeFactEvidence(
+                expectation: expectation,
+                value: .text("Open")
+            )
+            let resources = try await fixture.makeResources(
+                evidence: [evidence]
+            )
+            let artifactID =
+                try await fixture.stageAuthoritativeFactArtifact(
+                    in: resources,
+                    expectation: expectation,
+                    value: .text("Open"),
+                    evidenceID: evidence.id
+                )
+            let primary = try await fixture.makePrimaryResult(
+                in: resources,
+                evidence: [evidence],
+                artifactIDs: [artifactID]
+            )
+
+            let turn = try await fixture.finalize(
+                fixture.providerAnswer(
+                    directAnswer:
+                        "Status of Project Atlas: Open."
+                ),
+                resources: resources,
+                primaryResult: primary,
+                authoritativeFactExpectation: expectation
+            )
+
+            #expect(turn.answer.state == .noResults)
+            #expect(
+                turn.answer.directAnswer
+                    == GraphChatResponseLocalizer(
+                        language: .english
+                    ).authoritativeFactUnavailable()
+            )
+        }
+    }
+
+    @Test
+    func missingValueMultipleNodesAndMultipleFieldsNeverCreateAFact()
+        async throws
+    {
+        enum InvalidShape: Equatable {
+            case missingValue
+            case multipleNodes
+            case multipleFields
+        }
+
+        let fixture = AnswerFinalizerFixture()
+        for shape in [
+            InvalidShape.missingValue,
+            .multipleNodes,
+            .multipleFields,
+        ] {
+            let expectation = fixture.factExpectation(
+                fieldName: "Status",
+                fieldType: .singleLineText
+            )
+            let evidence = fixture.makeFactEvidence(
+                expectation: expectation,
+                value: shape == .missingValue
+                    ? .missing
+                    : .text("Open")
+            )
+            let resources = try await fixture.makeResources(
+                evidence: [evidence]
+            )
+            let artifactID =
+                try await fixture.stageAuthoritativeFactArtifact(
+                    in: resources,
+                    expectation: expectation,
+                    value: shape == .missingValue
+                        ? .missing
+                        : .text("Open"),
+                    evidenceID: evidence.id,
+                    includeAdditionalField:
+                        shape == .multipleFields,
+                    includeAdditionalRow:
+                        shape == .multipleNodes
+                )
+            let primary = try await fixture.makePrimaryResult(
+                in: resources,
+                evidence: [evidence],
+                artifactIDs: [artifactID]
+            )
+
+            let turn = try await fixture.finalize(
+                fixture.providerAnswer(
+                    directAnswer:
+                        "Status of Project Atlas: Model value."
+                ),
+                resources: resources,
+                primaryResult: primary,
+                authoritativeFactExpectation: expectation
+            )
+
+            #expect(turn.answer.state == .noResults)
+            #expect(
+                turn.answer.directAnswer
+                    == GraphChatResponseLocalizer(
+                        language: .english
+                    ).authoritativeFactUnavailable()
+            )
+            #expect(
+                turn.answer.directAnswer
+                    .contains("Model value") == false
+            )
+        }
+    }
+
+    @Test
+    func factFromAnotherTurnIsRejectedBeforeItsValueCanBeShown()
+        async throws
+    {
+        let fixture = AnswerFinalizerFixture()
+        let expectation = fixture.factExpectation(
+            fieldName: "Status",
+            fieldType: .singleLineText
+        )
+        let evidence = fixture.makeFactEvidence(
+            expectation: expectation,
+            value: .text("Open")
+        )
+        let resources = try await fixture.makeResources(
+            evidence: [evidence]
+        )
+        let artifactID =
+            try await fixture.stageAuthoritativeFactArtifact(
+                in: resources,
+                expectation: expectation,
+                value: .text("Open"),
+                evidenceID: evidence.id
+            )
+        let earlierTurnPrimary =
+            try await fixture.makePrimaryResult(
+                in: resources,
+                evidence: [evidence],
+                artifactIDs: [artifactID],
+                requestID: fixture.uuid(1_300)
+            )
+
+        let turn = try await fixture.finalize(
+            fixture.providerAnswer(
+                directAnswer:
+                    "Status of Project Atlas: Open."
+            ),
+            resources: resources,
+            primaryResult: earlierTurnPrimary,
+            authoritativeFactExpectation: expectation
+        )
+
+        #expect(turn.answer.state == .noResults)
+        #expect(
+            turn.answer.directAnswer
+                == GraphChatResponseLocalizer(
+                    language: .english
+                ).authoritativeFactUnavailable()
+        )
+        #expect(turn.answer.evidence.isEmpty)
+        #expect(turn.answer.artifactIDs.isEmpty)
+    }
+
+    @Test
     func unsafeClarificationRemainsATypedClarification() async throws {
         let fixture = AnswerFinalizerFixture()
         let context = fixture.makeContext()
@@ -1006,6 +1512,8 @@ private struct AnswerFinalizerFixture {
         context: GraphChatConversationContextSnapshot? = nil,
         language: GraphChatResponseLanguage = .english,
         primaryResult: GraphChatToolExecutionLedgerEntry? = nil,
+        authoritativeFactExpectation:
+            GraphChatAuthoritativeFactExpectation? = nil,
         answerFinalizer: GraphChatAnswerFinalizer? = nil
     ) async throws -> GraphChatFinalizedTurn {
         try await (answerFinalizer ?? finalizer).finalizeProviderTurn(
@@ -1019,6 +1527,8 @@ private struct AnswerFinalizerFixture {
                 requestQuestion: "Continue the trusted operation",
                 expectedCommittedState: baseState,
                 primaryResult: primaryResult,
+                authoritativeFactExpectation:
+                    authoritativeFactExpectation,
                 artifactContext: artifactContext ?? resources.artifactContext,
                 presentationRegistry: resources.presentationRegistry
             ),
@@ -1054,6 +1564,167 @@ private struct AnswerFinalizerFixture {
                 querySummary: querySummary
             ),
             transactionID: resources.artifactContext.transactionID,
+            evidenceRegistry: resources.evidenceRegistry
+        )
+    }
+
+    func stageAuthoritativeFactArtifact(
+        in resources: Resources,
+        expectation: GraphChatAuthoritativeFactExpectation,
+        value: GraphChatAnswerArtifactValue,
+        evidenceID: GraphEvidenceID,
+        includeAdditionalField: Bool = false,
+        includeAdditionalRow: Bool = false,
+        artifactNodeDisplayName: String? = nil
+    ) async throws -> GraphChatAnswerArtifactID {
+        let primaryColumnID = GraphChatAnswerArtifactItemID(
+            rawValue: uuid(1_100)
+        )
+        let fieldColumnID = GraphChatAnswerArtifactItemID(
+            rawValue: expectation.fieldID
+        )
+        let additionalFieldID = uuid(1_204)
+        let additionalColumnID = GraphChatAnswerArtifactItemID(
+            rawValue: additionalFieldID
+        )
+        let binding = GraphChatAnswerArtifactEvidenceBinding(
+            evidenceIDs: [evidenceID]
+        )
+        var columns = [
+            GraphChatAnswerArtifactTableColumn(
+                id: primaryColumnID,
+                key: "node",
+                title: "Name",
+                role: .primary,
+                unit: nil
+            ),
+            GraphChatAnswerArtifactTableColumn(
+                id: fieldColumnID,
+                key: expectation.fieldID.uuidString,
+                title: expectation.fieldDisplayName,
+                role: .other,
+                unit: expectation.unit
+            ),
+        ]
+        var cells = [
+            GraphChatAnswerArtifactTableCell(
+                columnID: primaryColumnID,
+                value: .text(
+                    artifactNodeDisplayName
+                        ?? expectation.nodeDisplayName
+                ),
+                evidence: binding
+            ),
+            GraphChatAnswerArtifactTableCell(
+                columnID: fieldColumnID,
+                value: value,
+                evidence: binding
+            ),
+        ]
+        var projection = [
+            GraphChatAnswerArtifactQueryFieldSummary(
+                fieldID: expectation.fieldID,
+                label: expectation.fieldDisplayName
+            )
+        ]
+        if includeAdditionalField {
+            columns.append(
+                GraphChatAnswerArtifactTableColumn(
+                    id: additionalColumnID,
+                    key: additionalFieldID.uuidString,
+                    title: "Additional field",
+                    role: .other,
+                    unit: nil
+                )
+            )
+            cells.append(
+                GraphChatAnswerArtifactTableCell(
+                    columnID: additionalColumnID,
+                    value: .text("Additional value"),
+                    evidence: binding
+                )
+            )
+            projection.append(
+                GraphChatAnswerArtifactQueryFieldSummary(
+                    fieldID: additionalFieldID,
+                    label: "Additional field"
+                )
+            )
+        }
+        var rows = [
+            GraphChatAnswerArtifactTableRow(
+                id: GraphChatAnswerArtifactItemID(
+                    rawValue: expectation.node.id
+                ),
+                cells: cells,
+                navigationTarget: .openNode(
+                    graphScope: expectation.graphScope,
+                    node: expectation.node
+                ),
+                evidence: binding
+            )
+        ]
+        if includeAdditionalRow {
+            let additionalNode = NodeRefKey(
+                kind: .attribute,
+                id: uuid(1_205)
+            )
+            rows.append(
+                GraphChatAnswerArtifactTableRow(
+                    id: GraphChatAnswerArtifactItemID(
+                        rawValue: additionalNode.id
+                    ),
+                    cells: cells,
+                    navigationTarget: .openNode(
+                        graphScope: expectation.graphScope,
+                        node: additionalNode
+                    ),
+                    evidence: binding
+                )
+            )
+        }
+        let payload = GraphChatAnswerArtifactTablePayload(
+            title: "Query results",
+            columns: columns,
+            rows: rows,
+            sorting: [],
+            resultMetadata:
+                GraphChatAnswerArtifactResultMetadata(
+                    resultCount: rows.count,
+                    returnedCount: rows.count
+                ),
+            evidence: binding
+        )
+        return try await resources.artifactRegistry.stage(
+            GraphChatAnswerArtifactDraft(
+                graphScope: expectation.graphScope,
+                title: "Query results",
+                payload: .table(payload),
+                evidence: binding,
+                navigationTargets: [
+                    .openNode(
+                        graphScope: expectation.graphScope,
+                        node: expectation.node
+                    )
+                ],
+                querySummary:
+                    GraphChatAnswerArtifactQuerySummary(
+                        language: .english,
+                        entityID: expectation.entityID,
+                        entityLabel:
+                            expectation.entityDisplayName,
+                        filters: [],
+                        grouping: nil,
+                        sorting: [],
+                        projection: projection,
+                        includesNodeIdentity: true,
+                        limit: 1,
+                        aggregation: nil,
+                        displayText: "Single field"
+                    )
+            ),
+            transactionID:
+                resources.artifactContext.transactionID,
             evidenceRegistry: resources.evidenceRegistry
         )
     }
@@ -1110,6 +1781,71 @@ private struct AnswerFinalizerFixture {
             ),
             summary: "Evidence \(index)",
             identitySuffix: String(index)
+        )
+    }
+
+    func makeFactEvidence(
+        expectation: GraphChatAuthoritativeFactExpectation,
+        value: GraphEvidenceValue
+    ) -> GraphEvidence {
+        GraphEvidence(
+            sourceReference: GraphSourceReference(
+                graphID: expectation.graphScope.graphID,
+                sourceKind: .detailValue,
+                sourceID: uuid(1_200),
+                node: GraphSourceNodeReference(
+                    kind: expectation.node.kind,
+                    id: expectation.node.id
+                ),
+                owner: GraphSourceNodeReference(
+                    kind: .entity,
+                    id: expectation.entityID
+                ),
+                fieldID: expectation.fieldID
+            ),
+            summary: "Authoritative fact",
+            fieldValues: [
+                GraphEvidenceFieldValue(
+                    fieldID: expectation.fieldID,
+                    fieldName:
+                        expectation.fieldDisplayName,
+                    value: value,
+                    unit: expectation.unit
+                )
+            ],
+            navigationTitle: expectation.nodeDisplayName,
+            identitySuffix: "authoritative-fact"
+        )
+    }
+
+    func factExpectation(
+        fieldName: String,
+        fieldType: DetailFieldType,
+        unit: String? = nil,
+        hasIntegrityConflict: Bool = false,
+        hasAmbiguousCardinality: Bool = false
+    ) -> GraphChatAuthoritativeFactExpectation {
+        GraphChatAuthoritativeFactExpectation(
+            graphScope: graphScope,
+            chatScope: chatScope,
+            requestID: requestID,
+            turnID: requestID,
+            conversationID: baseState.conversationID,
+            node: NodeRefKey(
+                kind: .attribute,
+                id: uuid(1_201)
+            ),
+            nodeDisplayName: "Project Atlas",
+            entityID: uuid(1_202),
+            entityDisplayName: "Projects",
+            fieldID: uuid(1_203),
+            fieldDisplayName: fieldName,
+            fieldType: fieldType,
+            unit: unit,
+            dateTimeZoneIdentifier: "Europe/Berlin",
+            hasIntegrityConflict: hasIntegrityConflict,
+            hasAmbiguousCardinality:
+                hasAmbiguousCardinality
         )
     }
 

@@ -14,6 +14,23 @@ nonisolated struct GraphChatQuerySourceSnapshot: Sendable {
     let attributes: [GraphAttributeDTO]
     let fields: [GraphDetailFieldDefinitionDTO]
     let values: [GraphDetailValueDTO]
+    let integrityConflictedValueKeys: Set<DetailValueAuthorityKey>
+
+    init(
+        graphScope: GraphScope,
+        entity: GraphEntityDTO,
+        attributes: [GraphAttributeDTO],
+        fields: [GraphDetailFieldDefinitionDTO],
+        values: [GraphDetailValueDTO],
+        integrityConflictedValueKeys: Set<DetailValueAuthorityKey> = []
+    ) {
+        self.graphScope = graphScope
+        self.entity = entity
+        self.attributes = attributes
+        self.fields = fields
+        self.values = values
+        self.integrityConflictedValueKeys = integrityConflictedValueKeys
+    }
 }
 
 nonisolated protocol GraphChatQueryReading: Sendable {
@@ -94,7 +111,7 @@ extension GraphReadRepository: GraphChatQueryReading {
                 in: scope
             )
         )
-        let values = try fetchDetailValues(
+        let authority = try fetchDetailValueAuthority(
             in: scope,
             context: context,
             models: valueModels,
@@ -108,7 +125,8 @@ extension GraphReadRepository: GraphChatQueryReading {
             entity: entity,
             attributes: attributes,
             fields: fields,
-            values: values.sorted(by: GraphReadRepository.detailValueSort)
+            values: authority.values,
+            integrityConflictedValueKeys: authority.conflictedKeys
         )
     }
 }

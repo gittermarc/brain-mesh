@@ -37,6 +37,7 @@ actor GraphEvidenceSourceValidator: GraphEvidenceValidating {
         let attachmentID: UUID?
         let relatedNodes: Set<NodeRefKey>
         let ownerEntityIDs: Set<UUID>
+        let authoritativeFieldValue: GraphEvidenceFieldValue?
     }
 
     private let repository: any GraphEvidenceSourceReading
@@ -73,6 +74,12 @@ actor GraphEvidenceSourceValidator: GraphEvidenceValidating {
             ) else {
                 continue
             }
+            guard evidenceContentIsConsistent(
+                item,
+                resolved: resolved
+            ) else {
+                continue
+            }
             guard scopeAllows(resolved, scope: scope) else {
                 continue
             }
@@ -101,7 +108,8 @@ actor GraphEvidenceSourceValidator: GraphEvidenceValidating {
                 fieldID: nil,
                 attachmentID: nil,
                 relatedNodes: [],
-                ownerEntityIDs: []
+                ownerEntityIDs: [],
+                authoritativeFieldValue: nil
             )
 
         case .entity:
@@ -117,7 +125,8 @@ actor GraphEvidenceSourceValidator: GraphEvidenceValidating {
                 fieldID: nil,
                 attachmentID: nil,
                 relatedNodes: [entity.nodeKey],
-                ownerEntityIDs: [entity.id]
+                ownerEntityIDs: [entity.id],
+                authoritativeFieldValue: nil
             )
 
         case .attribute:
@@ -139,7 +148,8 @@ actor GraphEvidenceSourceValidator: GraphEvidenceValidating {
                 fieldID: nil,
                 attachmentID: nil,
                 relatedNodes: nodes,
-                ownerEntityIDs: owners
+                ownerEntityIDs: owners,
+                authoritativeFieldValue: nil
             )
 
         case .detailField:
@@ -156,7 +166,8 @@ actor GraphEvidenceSourceValidator: GraphEvidenceValidating {
                 fieldID: field.id,
                 attachmentID: nil,
                 relatedNodes: [NodeRefKey(kind: .entity, id: field.entityID)],
-                ownerEntityIDs: [field.entityID]
+                ownerEntityIDs: [field.entityID],
+                authoritativeFieldValue: nil
             )
 
         case .detailValue:
@@ -183,7 +194,13 @@ actor GraphEvidenceSourceValidator: GraphEvidenceValidating {
                     attribute.nodeKey,
                     NodeRefKey(kind: .entity, id: ownerEntityID)
                 ],
-                ownerEntityIDs: [ownerEntityID]
+                ownerEntityIDs: [ownerEntityID],
+                authoritativeFieldValue: GraphEvidenceFieldValue(
+                    fieldID: field.id,
+                    fieldName: field.name,
+                    value: value.value.graphEvidenceValue,
+                    unit: field.unit
+                )
             )
 
         case .link:
@@ -201,7 +218,8 @@ actor GraphEvidenceSourceValidator: GraphEvidenceValidating {
                 fieldID: nil,
                 attachmentID: nil,
                 relatedNodes: nodes,
-                ownerEntityIDs: owners
+                ownerEntityIDs: owners,
+                authoritativeFieldValue: nil
             )
 
         case .attachment:
@@ -220,9 +238,27 @@ actor GraphEvidenceSourceValidator: GraphEvidenceValidating {
                 fieldID: nil,
                 attachmentID: attachment.id,
                 relatedNodes: [ownerNode],
-                ownerEntityIDs: owners
+                ownerEntityIDs: owners,
+                authoritativeFieldValue: nil
             )
         }
+    }
+
+    private func evidenceContentIsConsistent(
+        _ evidence: GraphEvidence,
+        resolved: ResolvedSource
+    ) -> Bool {
+        guard let authoritative = resolved.authoritativeFieldValue else {
+            return true
+        }
+        guard evidence.fieldValues.isEmpty == false else {
+            return true
+        }
+        let matchingValues = evidence.fieldValues.filter {
+            $0.fieldID == authoritative.fieldID
+        }
+        return matchingValues.count == 1
+            && matchingValues[0] == authoritative
     }
 
     private func referenceMetadataIsConsistent(

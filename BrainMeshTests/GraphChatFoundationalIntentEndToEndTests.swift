@@ -50,6 +50,29 @@ struct GraphChatFoundationalIntentEndToEndTests {
             calendar: calendar,
             timeZone: timeZone
         )
+        await runtime.provider.enqueue(
+            FakeGraphChatProviderScript(
+                steps: [
+                    .event(
+                        .partialAnswer(
+                            GraphChatProviderPartialAnswer(
+                                directAnswer:
+                                    "Geburtsdatum von Person X: 02.11.1999.",
+                                hasInsufficientEvidence: false
+                            )
+                        )
+                    ),
+                    .event(
+                        .completed(
+                            GraphChatProviderTestSupport.makeFinalAnswer(
+                                directAnswer:
+                                    "Geburtsdatum von Person X: 02.11.1999."
+                            )
+                        )
+                    ),
+                ]
+            )
+        )
         let graphScope = GraphScope(graphID: graph.id)
         let chatScope = GraphChatScope.entireGraph(graphScope)
         let events = await GraphChatProviderTestSupport.collect(
@@ -70,8 +93,8 @@ struct GraphChatFoundationalIntentEndToEndTests {
         let artifact = try #require(
             presentation.artifacts.first?.artifact
         )
-        guard case .resultList(let payload) = artifact.payload else {
-            Issue.record("Expected a result-list artifact")
+        guard case .table(let payload) = artifact.payload else {
+            Issue.record("Expected a typed table artifact")
             return
         }
         let state = try #require(
@@ -91,8 +114,14 @@ struct GraphChatFoundationalIntentEndToEndTests {
         ]
 
         #expect(answer.state == .answer)
-        #expect(answer.directAnswer.isEmpty == false)
-        #expect(answer.directAnswer.contains("1990"))
+        #expect(
+            answer.directAnswer
+                == "Geburtsdatum von Person X: 17.05.1990."
+        )
+        #expect(
+            answer.directAnswer.contains("02.11.1999")
+                == false
+        )
         #expect(answer.evidence.contains { evidence in
             evidence.fieldValues.contains {
                 $0.fieldID == birthday.id
@@ -101,10 +130,17 @@ struct GraphChatFoundationalIntentEndToEndTests {
         })
         #expect(answer.artifactIDs.count == 1)
         #expect(payload.rows.count == 1)
-        #expect(payload.rows[0].primaryText.contains("Person X"))
+        #expect(payload.columns.count == 2)
         #expect(
-            payload.rows[0].secondaryText?.contains("Geburtsdatum")
-                == true
+            payload.columns.contains {
+                $0.id.rawValue == birthday.id
+            }
+        )
+        #expect(
+            payload.rows[0].cells.contains {
+                $0.columnID.rawValue == birthday.id
+                    && $0.value == .date(storedBirthday)
+            }
         )
         #expect(payload.resultMetadata.totalCount == 1)
         #expect(payload.resultMetadata.returnedCount == 1)
@@ -129,6 +165,22 @@ struct GraphChatFoundationalIntentEndToEndTests {
         #expect(
             answer.directAnswer.contains(birthday.id.uuidString) == false
         )
+        var messageState = GraphChatAssistantMessageState(
+            question: "Wann hat Person X Geburtstag?"
+        )
+        for event in events {
+            messageState.apply(event)
+        }
+        let copy = try #require(
+            GraphChatCopyContentBuilder.payload(
+                for: messageState,
+                sourcePolicy: .none
+            )
+        )
+        #expect(messageState.phase == .final)
+        #expect(messageState.text == answer.directAnswer)
+        #expect(copy.text == answer.directAnswer)
+        #expect(copy.text.contains("02.11.1999") == false)
     }
 
     @MainActor

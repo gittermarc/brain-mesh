@@ -80,6 +80,7 @@ nonisolated struct GraphChatQueryResult: Hashable, Sendable {
     let appliedFilters: [GraphChatAppliedFilter]
     let evidence: [GraphEvidence]
     let resultWindow: GraphChatResultWindow
+    let integrityConflictedValueKeys: Set<DetailValueAuthorityKey>
 
     init(
         state: GraphChatResultState,
@@ -87,7 +88,8 @@ nonisolated struct GraphChatQueryResult: Hashable, Sendable {
         aggregation: GraphChatAggregationResult?,
         appliedFilters: [GraphChatAppliedFilter],
         evidence: [GraphEvidence],
-        resultWindow: GraphChatResultWindow? = nil
+        resultWindow: GraphChatResultWindow? = nil,
+        integrityConflictedValueKeys: Set<DetailValueAuthorityKey> = []
     ) {
         self.state = state
         self.rows = rows
@@ -97,6 +99,7 @@ nonisolated struct GraphChatQueryResult: Hashable, Sendable {
         self.resultWindow = resultWindow ?? GraphChatResultWindow.complete(
             totalCount: aggregation == nil ? rows.count : aggregation?.groups.count ?? 1
         )
+        self.integrityConflictedValueKeys = integrityConflictedValueKeys
     }
 }
 

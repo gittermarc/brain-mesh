@@ -55,6 +55,8 @@ nonisolated struct GraphChatFoundationalIntentExecution: Sendable {
     let artifactContext: GraphChatArtifactCommitContext
     let primaryResultLedger: GraphChatPrimaryResultLedger
     let primaryResult: GraphChatToolExecutionLedgerEntry
+    let authoritativeFactExpectation:
+        GraphChatAuthoritativeFactExpectation?
 }
 
 nonisolated struct GraphChatFoundationalIntentExecutor: Sendable {
@@ -147,6 +149,12 @@ nonisolated struct GraphChatFoundationalIntentExecutor: Sendable {
             )
             let rawResult = try await queryExecutor.execute(plan)
             try Task.checkCancellation()
+            let authoritativeFactExpectation =
+                GraphChatAuthoritativeFactExpectation(
+                    intent: intent,
+                    result: rawResult,
+                    timeZone: timeZone
+                )
             let result = normalizedResult(
                 rawResult,
                 for: intent
@@ -226,7 +234,9 @@ nonisolated struct GraphChatFoundationalIntentExecutor: Sendable {
                 artifactRegistry: artifactSession.registry,
                 artifactContext: artifactContext,
                 primaryResultLedger: ledger,
-                primaryResult: primaryResult
+                primaryResult: primaryResult,
+                authoritativeFactExpectation:
+                    authoritativeFactExpectation
             )
         } catch {
             await evidenceRegistry.removeAll()
@@ -343,7 +353,11 @@ nonisolated struct GraphChatFoundationalIntentExecutor: Sendable {
                 result.state == .success
                     && result.evidence.isEmpty
             ) {
-            return noResults(limit: intent.resultLimit)
+            return noResults(
+                limit: intent.resultLimit,
+                integrityConflictedValueKeys:
+                    result.integrityConflictedValueKeys
+            )
         }
         guard intent.kind == .singleNodeFieldValue,
               let fieldID = intent.field?.id else {
@@ -359,12 +373,20 @@ nonisolated struct GraphChatFoundationalIntentExecutor: Sendable {
               result.evidence.contains(
                 where: { $0.id == cell.evidenceID }
               ) else {
-            return noResults(limit: 1)
+            return noResults(
+                limit: 1,
+                integrityConflictedValueKeys:
+                    result.integrityConflictedValueKeys
+            )
         }
         return result
     }
 
-    private func noResults(limit: Int) -> GraphChatQueryResult {
+    private func noResults(
+        limit: Int,
+        integrityConflictedValueKeys:
+            Set<DetailValueAuthorityKey> = []
+    ) -> GraphChatQueryResult {
         GraphChatQueryResult(
             state: .noResults,
             rows: [],
@@ -377,7 +399,9 @@ nonisolated struct GraphChatFoundationalIntentExecutor: Sendable {
                 limit: limit,
                 limitReached: false,
                 limitSource: .query
-            )
+            ),
+            integrityConflictedValueKeys:
+                integrityConflictedValueKeys
         )
     }
 
@@ -394,18 +418,39 @@ nonisolated struct GraphChatFoundationalIntentExecutor: Sendable {
         guard result.state == .success else {
             return []
         }
-        guard let sourceDraft = GraphChatAnswerArtifactFactory.queryResult(
-            result,
-            plan: plan,
-            schemaContext: schemaContext,
-            language: language,
-            budget: GraphChatAnswerArtifactFactoryBudget(
-                maximumRows: GraphQueryPlanLimits.maximumResultLimit,
-                maximumColumns:
-                    GraphChatAnswerArtifactFactoryBudget.default
-                        .maximumColumns
+        let budget = GraphChatAnswerArtifactFactoryBudget(
+            maximumRows: GraphQueryPlanLimits.maximumResultLimit,
+            maximumColumns:
+                GraphChatAnswerArtifactFactoryBudget.default
+                    .maximumColumns
+        )
+        let sourceDraft: GraphChatAnswerArtifactDraft?
+        if plan.limit == 1,
+           plan.projection.count == 2,
+           plan.projection.first == .nodeIdentity {
+            let summary = GraphChatAnswerArtifactFactory.querySummary(
+                plan: plan,
+                schemaContext: schemaContext,
+                language: language
             )
-        ) else {
+            sourceDraft = GraphChatAnswerArtifactFactory.table(
+                result: result,
+                plan: plan,
+                schemaContext: schemaContext,
+                language: language,
+                budget: budget,
+                querySummary: summary
+            )
+        } else {
+            sourceDraft = GraphChatAnswerArtifactFactory.queryResult(
+                result,
+                plan: plan,
+                schemaContext: schemaContext,
+                language: language,
+                budget: budget
+            )
+        }
+        guard let sourceDraft else {
             throw GraphChatFoundationalIntentExecutionError
                 .artifactUnavailable
         }

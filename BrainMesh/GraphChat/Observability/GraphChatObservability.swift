@@ -82,10 +82,27 @@ nonisolated struct GraphChatToolRepairMetric: Hashable, Sendable {
     }
 }
 
+nonisolated enum GraphChatAuthoritativeFactMetric:
+    String,
+    CaseIterable,
+    Hashable,
+    Sendable
+{
+    case recognized
+    case rendered
+    case replacedModelText
+    case blockedSearchOnlyClaim
+    case rejectedMissingValue
+    case rejectedAmbiguousCardinality
+    case rejectedIntegrityConflict
+    case rejectedRevalidation
+}
+
 nonisolated enum GraphChatObservabilityEvent: Hashable, Sendable {
     case request(GraphChatRequestMetric)
     case availability(GraphChatAvailabilityMetricState)
     case toolRepair(GraphChatToolRepairMetric)
+    case authoritativeFact(GraphChatAuthoritativeFactMetric)
 }
 
 nonisolated protocol GraphChatObservabilityRecording: Sendable {
@@ -114,6 +131,10 @@ actor GraphChatTechnicalObservabilityRecorder: GraphChatObservabilityRecording {
                 metric.nonRepairableReason?.rawValue ?? "none"
             BMLog.chat.info(
                 "Tool repair outcome=\(metric.outcome.rawValue, privacy: .public) tool=\(metric.tool.rawValue, privacy: .public) reason=\(reason, privacy: .public) nonRepairableReason=\(nonRepairableReason, privacy: .public) contextRetryCount=\(metric.contextRetryCount)"
+            )
+        case .authoritativeFact(let metric):
+            BMLog.chat.info(
+                "Authoritative fact outcome=\(metric.rawValue, privacy: .public)"
             )
         }
     }

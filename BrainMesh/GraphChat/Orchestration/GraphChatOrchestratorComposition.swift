@@ -91,7 +91,8 @@ nonisolated struct GraphChatOrchestratorComposition: Sendable {
             referenceResolver: referenceResolver,
             missingContextPolicy: missingContextPolicy,
             localAnswerBuilder: localAnswerBuilder,
-            evidenceValidator: evidenceValidator
+            evidenceValidator: evidenceValidator,
+            observability: observability
         )
         let contextRetry = GraphChatProviderContextRetry(
             sessionFactory: sessionFactory,

@@ -17,6 +17,8 @@ nonisolated struct GraphChatProviderAnswerFinalizationInput: Sendable {
     let requestQuestion: String
     let expectedCommittedState: GraphChatConversationState
     let primaryResult: GraphChatToolExecutionLedgerEntry?
+    let authoritativeFactExpectation:
+        GraphChatAuthoritativeFactExpectation?
     let artifactContext: GraphChatArtifactCommitContext
     let presentationRegistry: GraphChatPresentationRegistry
 }
@@ -57,6 +59,11 @@ nonisolated struct GraphChatAnswerFinalizer: Sendable {
     private let presentationFirewall: GraphChatPresentationFirewall
     private let fallbackPolicy: GraphChatDeterministicAnswerFallbackPolicy
     private let fallbackRenderer: GraphChatDeterministicAnswerFallbackRenderer
+    private let authoritativeFactExtractor:
+        GraphChatAuthoritativeFactExtractor
+    private let authoritativeFactRenderer:
+        GraphChatAuthoritativeFactRenderer
+    private let observability: any GraphChatObservabilityRecording
 
     init(
         conversationStateReducer: GraphChatConversationStateReducer =
@@ -76,7 +83,15 @@ nonisolated struct GraphChatAnswerFinalizer: Sendable {
         fallbackPolicy: GraphChatDeterministicAnswerFallbackPolicy =
             GraphChatDeterministicAnswerFallbackPolicy(),
         fallbackRenderer: GraphChatDeterministicAnswerFallbackRenderer =
-            GraphChatDeterministicAnswerFallbackRenderer()
+            GraphChatDeterministicAnswerFallbackRenderer(),
+        authoritativeFactExtractor:
+            GraphChatAuthoritativeFactExtractor =
+                GraphChatAuthoritativeFactExtractor(),
+        authoritativeFactRenderer:
+            GraphChatAuthoritativeFactRenderer =
+                GraphChatAuthoritativeFactRenderer(),
+        observability: any GraphChatObservabilityRecording =
+            NoOpGraphChatObservabilityRecorder()
     ) {
         self.conversationStateReducer = conversationStateReducer
         self.referenceResolver = referenceResolver
@@ -87,6 +102,11 @@ nonisolated struct GraphChatAnswerFinalizer: Sendable {
         self.presentationFirewall = presentationFirewall
         self.fallbackPolicy = fallbackPolicy
         self.fallbackRenderer = fallbackRenderer
+        self.authoritativeFactExtractor =
+            authoritativeFactExtractor
+        self.authoritativeFactRenderer =
+            authoritativeFactRenderer
+        self.observability = observability
     }
 
     func finalizeProviderTurn(
@@ -202,6 +222,8 @@ nonisolated struct GraphChatAnswerFinalizer: Sendable {
             requestQuestion: input.requestQuestion,
             expectedCommittedState: input.expectedCommittedState,
             primaryResult: execution.primaryResult,
+            authoritativeFactExpectation:
+                execution.authoritativeFactExpectation,
             artifactContext: execution.artifactContext,
             presentationRegistry: execution.presentationRegistry
         )
@@ -262,11 +284,131 @@ nonisolated struct GraphChatAnswerFinalizer: Sendable {
             primaryResult: primaryResult,
             retaining: answer
         )
+        if let expectation = input.authoritativeFactExpectation {
+            return try await finalizedAuthoritativeFactPresentation(
+                replacing: answer,
+                expectation: expectation,
+                primaryResult: primaryResult,
+                source: source,
+                context: presentationContext
+            )
+        }
         return try finalizedPresentation(
             for: answer,
             source: source,
             context: presentationContext
         )
+    }
+
+    private func finalizedAuthoritativeFactPresentation(
+        replacing answer: GraphChatAnswer,
+        expectation: GraphChatAuthoritativeFactExpectation,
+        primaryResult: GraphChatToolExecutionLedgerEntry?,
+        source: GraphChatDeterministicAnswerFallbackSource?,
+        context: GraphChatPresentationContext
+    ) async throws -> GraphChatAnswer {
+        try Task.checkCancellation()
+        let resolution = authoritativeFactExtractor.resolve(
+            expectation: expectation,
+            primaryResult: primaryResult,
+            source: source
+        )
+        switch resolution {
+        case .fact(let fact):
+            await observability.record(
+                .authoritativeFact(.recognized)
+            )
+            let text = authoritativeFactRenderer.render(
+                fact,
+                language: context.language
+            )
+            let candidate = GraphChatAnswer(
+                state: .answer,
+                directAnswer: text,
+                sections: [],
+                evidence: answer.evidence,
+                artifactIDs: answer.artifactIDs,
+                appliedFilters: source?.appliedFilters ?? [],
+                followUpSuggestions: [],
+                hasInsufficientEvidence: false,
+                presentationContext: context
+            )
+            switch presentationFirewall.present(
+                candidate,
+                context: context
+            ) {
+            case .safe(let safeAnswer):
+                await observability.record(
+                    .authoritativeFact(.rendered)
+                )
+                if answer.directAnswer != safeAnswer.directAnswer
+                    || answer.sections.isEmpty == false
+                    || answer.followUpSuggestions.isEmpty == false {
+                    await observability.record(
+                        .authoritativeFact(.replacedModelText)
+                    )
+                }
+                return safeAnswer
+            case .unsafe:
+                await observability.record(
+                    .authoritativeFact(.rejectedRevalidation)
+                )
+                return insufficientFactAnswer(
+                    replacing: answer,
+                    source: source,
+                    context: context
+                )
+            }
+
+        case .rejected(let rejection):
+            await observability.record(
+                .authoritativeFact(
+                    observabilityMetric(for: rejection)
+                )
+            )
+            return insufficientFactAnswer(
+                replacing: answer,
+                source: source,
+                context: context
+            )
+        }
+    }
+
+    private func insufficientFactAnswer(
+        replacing answer: GraphChatAnswer,
+        source: GraphChatDeterministicAnswerFallbackSource?,
+        context: GraphChatPresentationContext
+    ) -> GraphChatAnswer {
+        GraphChatAnswer(
+            state: .noResults,
+            directAnswer: GraphChatResponseLocalizer(
+                language: context.language
+            ).authoritativeFactUnavailable(),
+            sections: [],
+            evidence: answer.evidence,
+            artifactIDs: answer.artifactIDs,
+            appliedFilters: source?.appliedFilters ?? [],
+            followUpSuggestions: [],
+            hasInsufficientEvidence: true,
+            presentationContext: context
+        )
+    }
+
+    private func observabilityMetric(
+        for rejection: GraphChatAuthoritativeFactRejection
+    ) -> GraphChatAuthoritativeFactMetric {
+        switch rejection {
+        case .missingValue:
+            return .rejectedMissingValue
+        case .ambiguousCardinality:
+            return .rejectedAmbiguousCardinality
+        case .integrityConflict:
+            return .rejectedIntegrityConflict
+        case .revalidationRejected:
+            return .rejectedRevalidation
+        case .searchOnlyResult:
+            return .blockedSearchOnlyClaim
+        }
     }
 
     private func finalizedPresentation(

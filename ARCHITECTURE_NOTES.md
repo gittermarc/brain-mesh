@@ -14,6 +14,7 @@ BrainMesh besitzt bereits mehrere wichtige Schutzlinien:
 - Detail-Medien und Connections besitzen fetch-limitierte Loader.
 - Importfehler werden mit persistenter Cleanup-Logik behandelt.
 - Graph Chat ist read-only, graphgescoped und evidenzgebunden.
+- Exakt erkannte Single-Node-Field-Fragen werden providerfrei ausgeführt und als autoritativer typisierter Single Fact vollständig appseitig gerendert.
 
 Die höchsten Architektur-Risiken liegen trotzdem an drei Systemgrenzen:
 
@@ -31,14 +32,14 @@ Die höchsten Architektur-Risiken liegen trotzdem an drei Systemgrenzen:
 
 ## 2. Analyseumfang und Größenprofil
 
-- Produktionscode: ca. 116.442 Swift-Zeilen.
-- Tests: ca. 56.874 Swift-Zeilen.
+- Produktionscode: ca. 126.843 Swift-Zeilen.
+- Tests: ca. 65.661 Swift-Zeilen.
 - Größte Produktionsbereiche:
-  - `BrainMesh/GraphChat/`: ca. 35.686 Zeilen in 126 Dateien;
-  - `BrainMesh/Mainscreen/`: ca. 23.006 Zeilen in 161 Dateien;
-  - `BrainMesh/GraphCanvas/`: ca. 11.177 Zeilen in 69 Dateien;
-  - `BrainMesh/Search/`: ca. 11.097 Zeilen in 32 Dateien;
-  - `BrainMesh/GraphTransfer/`: ca. 5.462 Zeilen in 45 Dateien;
+  - `BrainMesh/GraphChat/`: ca. 44.005 Zeilen in 139 Dateien;
+  - `BrainMesh/Mainscreen/`: ca. 23.393 Zeilen in 162 Dateien;
+  - `BrainMesh/GraphCanvas/`: ca. 11.207 Zeilen in 69 Dateien;
+  - `BrainMesh/Search/`: ca. 11.179 Zeilen in 32 Dateien;
+  - `BrainMesh/GraphTransfer/`: ca. 5.711 Zeilen in 45 Dateien;
   - `BrainMesh/Stats/`: ca. 5.492 Zeilen in 39 Dateien.
 - Die Analyse ist statisch. Ein Xcode-Build und Instruments-Profiling waren in der Analyseumgebung nicht verfügbar.
 - Reale P50/P95-Latenzen und produktive Datenmengen sind **UNKNOWN U7**.
@@ -786,7 +787,7 @@ Unterstützte Intents:
 
 Ausführung und Fortsetzung:
 
-- Jeder kompilierte Plan durchläuft erneut `GraphQueryPlanValidator`, `GraphChatScopeAuthorization`, `GraphChatQueryEngine`, die zentrale Detaildaten-Authority, Evidence-Registrierung, Artifact-Staging, Primary-Result-Ledger, Live-Revalidation, Presentation Firewall, deterministischen Fallback und atomaren Conversation-/Artifact-Commit.
+- Jeder kompilierte Plan durchläuft erneut `GraphQueryPlanValidator`, `GraphChatScopeAuthorization`, `GraphChatQueryEngine`, die zentrale Detaildaten-Authority, Evidence-Registrierung, Artifact-Staging, Primary-Result-Ledger, Live-Revalidation, Presentation Firewall und atomaren Conversation-/Artifact-Commit. Collections verwenden weiterhin den deterministischen Fallback; Single-Field-Erfolge verwenden den strengeren Authoritative-Fact-Renderer.
 - Der lokale Pfad hängt nicht von der Readiness des Search-Indexes ab und verwendet `SearchGraph` auch bei einem Single-Field-Intent nicht als Wertquelle. Nicht erkannte Fragen behalten die vorhandene Provider-, Search- und Repository-Fallback-Architektur.
 - Ein Single-Field-Erfolg verlangt den tatsächlich transportierten, typisierten Feldwert. Fehlender oder aufgrund eines Detaildaten-Integritätskonflikts nicht autoritativer Wert wird zu einem typisierten No-Results-Pfad; ein `SearchGraph`-Treffer kann diesen Pfad nicht abschließen.
 - Mehrdeutige Entities, Nodes oder Felder verwenden die bestehende `GraphChatPendingClarification`. Kandidatenauswahlen bleiben intern graph-, chat-, conversation-, request- und turngebunden, werden vor der Fortsetzung erneut validiert und lösen bis zur Auswahl keine Query aus.
@@ -797,6 +798,47 @@ Limit-Policy:
 - `GraphQueryPlanLimits.maximumResultLimit` ist die einzige Quelle für vollständige Foundational Collections. „Alle“ bleibt auf den autorisierten Chat-Scope und dieses Sicherheitslimit begrenzt.
 - `GraphChatResultWindow` transportiert `totalCount`, `returnedCount`, Limitquelle und Truncation. Das Result-Artefakt übernimmt diese Metadaten; der deterministische deutsche oder englische Fallback nennt eine erreichte Begrenzung sichtbar.
 - Collection-Artefakte vermeiden innerhalb des bestehenden Artifact-Bytebudgets redundante globale Evidence-Bindings und behalten pro Zeile einen sicheren Navigation Target. Das vollständige revalidierte Evidence-Set bleibt im Primary Result und finalen Answer gebunden.
+
+### Graph Chat Authoritative Fact Trust Boundary
+
+Pfade:
+
+- `BrainMesh/GraphChat/AuthoritativeFacts/GraphChatAuthoritativeFact.swift`
+- `BrainMesh/GraphChat/AuthoritativeFacts/GraphChatAuthoritativeFactExtractor.swift`
+- `BrainMesh/GraphChat/AuthoritativeFacts/GraphChatAuthoritativeFactRenderer.swift`
+- `BrainMesh/GraphChat/Foundational/GraphChatFoundationalIntentExecutor.swift`
+- `BrainMesh/GraphChat/Query/GraphChatQuerySource.swift`
+- `BrainMesh/GraphChat/Query/GraphChatQueryEngine.swift`
+- `BrainMesh/GraphChat/Evidence/GraphEvidenceValidator.swift`
+- `BrainMesh/GraphChat/Orchestration/GraphChatAnswerFinalizer.swift`
+
+Fact-Vertrag:
+
+- `GraphChatAuthoritativeFact` und seine Bindings sind ausschließlich value-only, `Hashable` und `Sendable`. Sie enthalten keine SwiftData-Modelle, Provider-Aliasse oder aus Modelltext extrahierte IDs.
+- Der Fact bindet Graph und Chat-Scope, Request/Turn, Artifact-Session und -Transaktion, den erwarteten Node samt Anzeigename, Entity und Feld samt Anzeigenamen, `DetailFieldType`, den typisierten `GraphChatAnswerArtifactValue`, eine optionale Einheit, Evidence-/Artifact-IDs und die Kardinalität `.exactlyOne`.
+- Die Erwartung entsteht ausschließlich für einen bereits kompilierten `singleNodeFieldValue`-Intent. Entity, Feld, Node und Namen stammen aus dem vollständigen appseitigen Schema-/Repository-Kontext.
+- Der Query-Read-Snapshot führt konfliktbehaftete `(graphID, attributeID, fieldID)`-Keys separat weiter. Widersprüchliche oder ungültige Duplicate-Gruppen liefern weiterhin keinen Wert, können im Finalizer aber ausdrücklich als Integrity-Konflikt statt als zufällige Leermenge abgelehnt werden.
+
+Extraktionsregeln:
+
+- Akzeptiert wird nur das aktuell revalidierte primäre `.query`-Ergebnis desselben Graphs, Chat-Scopes, Requests/Turns, derselben Artifact-Session und -Transaktion.
+- Das Query-Summary muss genau die erwartete Entity, Node Identity, genau ein projiziertes Feld, keine Filter, Gruppierung oder Aggregation und `limit = 1` beschreiben.
+- Das Result-Artefakt muss eine nicht abgeschnittene Table mit genau einer Zeile, genau einer Primary-Spalte und genau einer Feldspalte enthalten. Row-ID und Navigation Target müssen auf den erwarteten Node zeigen; der Wert darf nicht `.missing` sein und muss dem erwarteten `DetailFieldType` entsprechen.
+- Genau eine gebundene `.detailValue`-Evidence muss denselben Graph, Node, Entity-Owner, dasselbe Feld, dieselbe Einheit und denselben typisierten Wert belegen. `GraphEvidenceSourceValidator` vergleicht transportierte Detailwerte bei der Live-Revalidierung zusätzlich mit dem aktuellen Repository-Wert.
+- Mehrere Nodes, mehrere projizierte Felder, mehrere passende Evidence-Werte, fehlende Werte, Truncation, Binding-Mismatches, stale Artifacts oder ungelöste Integrity-Konflikte erzeugen keinen Fact.
+- `SearchGraph` darf weiterhin Trefferexistenz, sicheren Anzeigenamen und Navigation belegen. Ohne transportierten Feldwert kann Search niemals ein Datum, Text, Zahl, Boolean oder Choice für einen Single-Field-Intent begründen. Es gibt keine globale Regex-Sperre für Zahlen oder Datumsangaben in anderen Antwortarten.
+
+Rendering und Finalisierung:
+
+- Für einen erfolgreichen kompilierten Single-Field-Turn ersetzt der Finalizer den gesamten fachlichen Modelltext immer durch `GraphChatAuthoritativeFactRenderer`; die lokale Ausführung benötigt dafür keine Provider-Session. Modellgenerierte Sections und Follow-ups werden verworfen, Primary Evidence, Artifact-ID, Navigation, Query-/Conversation-State und `CURRENT`-Referenz bleiben erhalten.
+- Datum wird ohne Uhrzeit mit expliziter gregorianischer Calendar-, Locale- und TimeZone-Konfiguration ausgegeben. Integer und Decimal bleiben typgetreu; Decimal läuft nicht über einen zusätzlichen `Double`-Roundtrip. Boolean wird deutsch als `Ja/Nein`, englisch als `Yes/No` gerendert. Choice zeigt das fachliche Label, Text wird Unicode-normalisiert und nur strukturell bei Zeilenenden/Whitespace bereinigt.
+- Leerer, technischer, richtiger oder fachlich falscher Provider-Text kann den Fact nicht verändern. Schlägt die Fact-Revalidierung fehl, wird der Modellwert verworfen und ein typisierter lokalisierter Insufficient-Evidence-/No-Results-Pfad ausgeliefert.
+- Unmittelbar vor Extraktion und Rendering prüft der Finalizer Cancellation. Nur der finalisierte Answer erreicht den terminalen Message-State; UI und Copy lesen denselben `GraphChatAnswer`. Regenerate und Edit-and-Resend starten wieder denselben Orchestrator-/Finalizer-Pfad.
+
+Bewusste Grenze:
+
+- Diese Policy ist keine allgemeine semantische Wahrheitsprüfung. Listen, Gruppierungen, Vergleiche, Aggregationen und offene Erklärungen behalten die bestehende Primary-Result-, Fallback- und Presentation-Policy.
+- Der Foundational Intent Compiler wird in diesem Stand nicht um freie Statistik-, Vergleichs- oder beliebige sprachliche Feldfragen erweitert.
 
 ### Graph Chat Presentation Trust Boundary
 
@@ -1160,6 +1202,7 @@ Logging darf Fehlerklasse und Operation-ID enthalten, aber keine Nutzinhalte.
 - Eine unbekannte technische Referenz führt bewusst zur vollständigen lokalisierten Ersatzantwort statt zu einer partiellen Ausgabe.
 - Lock/Background muss History, Artifacts und Provider Session vollständig invalidieren.
 - Indexunverfügbarkeit darf nicht als „keine Daten“ interpretiert werden.
+- Die Authoritative-Fact-Policy schützt nur sicher kompilierte Single-Node-Field-Turns. Nicht erkannte freie Fachfragen und offene Erklärungen bleiben außerhalb einer allgemeinen semantischen Wahrheitsprüfung.
 
 ### Security
 
@@ -1195,7 +1238,11 @@ Pfad: `BrainMesh/Observability/BMObservability.swift`
   - Dauer;
   - Toolkategorien;
   - Evidence Count;
-  - Outcome/Error.
+  - Outcome/Error;
+  - Authoritative Fact erkannt/gerendert;
+  - Modelltext ersetzt beziehungsweise Search-only-Behauptung blockiert;
+  - Fact wegen fehlendem Wert, Mehrdeutigkeit, Integrity-Konflikt oder Revalidation verworfen.
+- Authoritative-Fact-Metriken enthalten ausschließlich die technische Outcome-Kategorie. Fragen, Antworten, Namen, Fachwerte, Aliasse und IDs werden nicht protokolliert.
 - Settings zeigt Storage-Modus, iCloud-Accountstatus und Cachegrößen.
 
 ### Fehlende Signale
@@ -1296,6 +1343,7 @@ Die realistischen Obergrenzen sind **UNKNOWN U7** und müssen produktseitig fest
 - Detaildaten-Authority mit In-Memory-`ModelContainer`, Bootstrap, UI-Formatierung, Repository, Graph Chat und Search-Reconciliation.
 - Graph Canvas Physics/Derived State.
 - Graph Chat Provider, Query, Conversation, Tools und UI-Controller.
+- Foundational Intent Compiler, Authoritative-Fact-Extraktion/-Rendering, Finalizer-Ersatzpfade, UI-/Copy-Vertrag und gebündelte Foundational-Accuracy-Akzeptanzszenarien.
 
 ### Ergänzungen
 
@@ -1309,6 +1357,7 @@ Die realistischen Obergrenzen sind **UNKNOWN U7** und müssen produktseitig fest
 - MainActor Frame-Budget mit XCTest Metrics/OSSignposter;
 - Cache-Backup-Exclusion-Test;
 - Graphwechsel während Chatstream und Physics-Publish.
+- Die vollständige iOS-26-Xcode-Suite einschließlich Swift-6-/Concurrency-Diagnostics muss in einer macOS-/Xcode-Umgebung laufen; die bereitgestellte Analyseumgebung besitzt weder `xcodebuild` noch `swiftc`.
 
 ### CI Guards
 

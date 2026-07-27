@@ -69,6 +69,14 @@ actor GraphChatQueryEngine {
             allowedBy: plan.scope,
             selectedEntityID: plan.entityID
         )
+        let scopedAttributeIDs = Set(scopedAttributes.map(\.id))
+        let integrityConflictedValueKeys = Set(
+            source.integrityConflictedValueKeys.filter {
+                $0.graphID == plan.graphScope.graphID
+                    && scopedAttributeIDs.contains($0.attributeID)
+                    && fieldIDs.contains($0.fieldID)
+            }
+        )
         var preparedRows: [GraphChatPreparedQueryRow] = []
         preparedRows.reserveCapacity(scopedAttributes.count)
 
@@ -99,7 +107,9 @@ actor GraphChatQueryEngine {
                 fieldMap: fieldMap,
                 appliedFilters: appliedFilters,
                 entity: source.entity,
-                sourceAttributes: source.attributes
+                sourceAttributes: source.attributes,
+                integrityConflictedValueKeys:
+                    integrityConflictedValueKeys
             )
         }
 
@@ -118,7 +128,9 @@ actor GraphChatQueryEngine {
                     limit: plan.limit,
                     limitReached: false,
                     limitSource: .query
-                )
+                ),
+                integrityConflictedValueKeys:
+                    integrityConflictedValueKeys
             )
         }
 
@@ -162,7 +174,9 @@ actor GraphChatQueryEngine {
                 limitReached: sortedRows.count > plan.limit || sourceLimited,
                 limitSources: (sortedRows.count > plan.limit ? [.query] : [])
                     + (sourceLimited ? [.source] : [])
-            )
+            ),
+            integrityConflictedValueKeys:
+                integrityConflictedValueKeys
         )
     }
 
@@ -173,7 +187,8 @@ actor GraphChatQueryEngine {
         fieldMap: [UUID: GraphDetailFieldDefinitionDTO],
         appliedFilters: [GraphChatAppliedFilter],
         entity: GraphEntityDTO,
-        sourceAttributes: [GraphAttributeDTO]
+        sourceAttributes: [GraphAttributeDTO],
+        integrityConflictedValueKeys: Set<DetailValueAuthorityKey>
     ) async throws -> GraphChatQueryResult {
         let build = try Self.makeAggregation(
             aggregation,
@@ -256,7 +271,9 @@ actor GraphChatQueryEngine {
                 limitReached: build.resultWindow.limitReached || groupSourceLimited,
                 limitSources: build.resultWindow.limitSources
                     + (groupSourceLimited ? [.source] : [])
-            )
+            ),
+            integrityConflictedValueKeys:
+                integrityConflictedValueKeys
         )
     }
 

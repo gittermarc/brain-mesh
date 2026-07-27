@@ -1,6 +1,6 @@
 # BrainMesh – Project Context
 
-> Start Here für neue Entwickler:innen. Stand: FOUNDATIONAL-ACCURACY-2 mit eng begrenztem, appseitigem Foundational Intent Compiler.
+> Start Here für neue Entwickler:innen. Stand: FOUNDATIONAL-ACCURACY-3 mit autoritativen, appseitig gerenderten Single-Fact-Antworten.
 
 ## TL;DR
 
@@ -40,6 +40,7 @@ BrainMesh ist eine native SwiftUI-App für iPhone und iPad, in der Nutzer:innen 
 - **Primary Result Ledger**: Request-lokale, value-only Erfassung validierter erfolgreicher Tool-Ergebnisse. Eine deterministische App-Policy wählt das autoritative primäre Ergebnis und übergibt dessen Evidence und Artifacts unabhängig von Modell-IDs an den Finalizer.
 - **Deterministic Answer Fallback**: Lokalisierte, begrenzte Mindestantwort, die ausschließlich aus dem nach Live-Revalidierung verbliebenen primären Tool-Ergebnis gerendert wird. Sie ersetzt nur leeren, technischen, widersprüchlichen oder presentation-unsicheren Modelltext und behält dessen Evidence beziehungsweise Result-Artefakt.
 - **Foundational Intent Compiler**: Schemaorientierte, providerfreie Trust Boundary für exakt erkannte Fragen nach einem Detailfeld eines eindeutigen Attributes sowie nach der vollständigen Attributliste einer eindeutigen Entity. App-Daten bestimmen Entity, Feld, Node-Scope, Query-Plan und Limit; nicht erkannte Formulierungen laufen unverändert über die Provider-Pipeline.
+- **Authoritative Fact**: Nicht persistierter, value-only und `Sendable` Single-Fact-Vertrag aus genau einem revalidierten primären Query-Ergebnis, einem typisierten Table-Artifact und passender Live-Evidence. Er bindet Graph, Chat-Scope, Request/Turn, Artifact-Session und -Transaktion sowie Node, Entity, Feld, Typ, Wert und Einheit. Für kompilierte Single-Field-Turns rendert die App daraus den vollständigen sichtbaren Antworttext; Provider-Text ist keine Fachwertquelle.
 - **Pro**: StoreKit-gesteuerte Berechtigung für kostenpflichtige Funktionen.
 
 ## Architecture Map
@@ -94,13 +95,14 @@ BrainMesh ist eine native SwiftUI-App für iPhone und iPad, in der Nutzer:innen 
 - Lokale Medien-Caches → autoritative SwiftData-Binärdaten; Caches dürfen verworfen werden.
 - Graph Chat → read-only Tool Runtime → Search/Repositories; kein Chat-Tool schreibt Graphdaten.
 - Validiertes Request-Preflight → vollständiger appseitiger `GraphSchemaContext` → Foundational Intent Compiler. Eindeutige Intents oder fachliche Clarifications werden vor Provider-Session und modellbestimmtem Tool-Call lokal behandelt; `.notRecognized` fällt auf die bestehende Provider-Pipeline zurück.
-- Foundational Single-Field → exakt ein graph-/chat-gescopter Attribute-Node, Node Identity plus exakt ein validiertes Feld, appseitiges Limit `1`, erneute Query-Plan-/Scope-Validierung und Ausführung über die bestehende Query Engine. Ein Suchtreffer allein ist nie Detailwert-Autorität.
+- Foundational Single-Field → exakt ein graph-/chat-gescopter Attribute-Node, Node Identity plus exakt ein validiertes Feld, appseitiges Limit `1`, erneute Query-Plan-/Scope-Validierung und Ausführung über die bestehende Query Engine. Der Erfolg wird als typisierte einzeilige Table-Artefaktprojektion transportiert. Ein Suchtreffer allein ist nie Detailwert-Autorität.
 - Foundational Entity Collection → unveränderter autorisierter Entity-/Node-/Selection-Scope, Node-Identity-Projektion, stabile Namenssortierung und `GraphQueryPlanLimits.maximumResultLimit`. „Alle“ bedeutet alle autorisierten Ergebnisse bis zu diesem gemeinsamen Sicherheitslimit; Truncation bleibt im Result-Artefakt und in der lokalisierten Mindestantwort sichtbar.
 - Mehrdeutiger Foundational Intent → bestehende graph-/session-/turngebundene Pending Clarification mit ausschließlich fachlichen Anzeigenamen. Die Auswahl setzt dieselbe Originalfrage fort und wird gegen Schema, Scope und Quell-Turn erneut validiert.
 - Modell-Tool-Call → typisierte Conversation-Scope-Auflösung → Query-Plan-Validierung; ein Modell-Entity-Alias ist bei einer homogenen revalidierten Conversation-Referenz nur ein untrusted Hint.
 - Semantisch repair-fähiger Tool-Call → strukturiertes validiertes Repair-Ergebnis → höchstens ein vollständiger erneuter Tool-Call → unveränderte Validatoren und Tool-Budgets.
 - Erfolgreicher Tool-Call → request-/graph-/session-/turn-/transaktionsgebundenes Execution Ledger → deterministische Primary-Result-Auswahl → erneute Evidence-/Artifact-Revalidierung im Finalizer.
-- Modelltext → `GraphChatPresentationFirewall` → Konsistenzprüfung gegen das revalidierte Primärergebnis → gegebenenfalls deterministischer Answer Fallback → typisierter Answer-State → UI/Copy.
+- Kompilierter Single-Field-Turn → eindeutige Cardinality-/Conflict-Prüfung → `GraphChatAuthoritativeFactExtractor` → lokalisierter `GraphChatAuthoritativeFactRenderer` → Presentation Firewall → typisierter Answer-State → identischer Text in UI und Copy. Provider-Sections und Follow-ups werden für diesen Turn verworfen.
+- Andere Modellantwort → `GraphChatPresentationFirewall` → Konsistenzprüfung gegen das revalidierte Primärergebnis → gegebenenfalls deterministischer Answer Fallback → typisierter Answer-State → UI/Copy.
 - Erfolgreiche normale `.answer` → nicht leerer presentation-sicherer Text plus mindestens validierte Evidence oder ein Result-Artefakt. Clarification, No Results, Unsupported und Failure bleiben eigene typisierte Zustände.
 - Öffentlicher Fehlercode → lokalisierter, codebasierter UI-Text; rohe Tool-, Resolver-, Provider-, Repository- und Validierungsdetails bleiben außerhalb von UI und Copy.
 
@@ -242,6 +244,7 @@ Duplicate-Resolution:
 - Gleich typisierte Werte werden nur für den Vergleich normalisiert: Text/Choice werden außen getrimmt und kanonisch Unicode-normalisiert, Zahlen, Datum und Bool anhand ihres exakten typisierten Werts verglichen. Der gespeicherte Keeper-Wert selbst wird nicht umgeschrieben.
 - Leere und nach dieser Regel identische Duplikate dürfen gelöscht werden.
 - Unterschiedliche gefüllte Werte sowie ungültige Typed-Storage-Records liefern keine Authority. Sie bleiben erhalten; UI zeigt einen neutralen Konfliktzustand, Repository, Chat und Search liefern daraus keinen Fakt.
+- Der Query-Source-Snapshot transportiert konfliktbehaftete Authority-Keys separat von den autoritativen Werten. So bleibt ein ungelöster Konflikt bis zur Single-Fact-Entscheidung sichtbar, obwohl kein willkürlich gewählter Wert in den Query-Zeilen erscheint.
 - Ein bewusster Save im Detail-Editor setzt den gewählten typisierten Wert und konsolidiert alle reparierbaren Records desselben Keys in derselben SwiftData-Transaktion auf einen Record. Ein Save-Fehler rollt die gesamte Konsolidierung zurück.
 - Es wird bewusst kein CloudKit-problematisches `@Attribute(.unique)` verwendet.
 
@@ -430,6 +433,7 @@ Duplicate-Resolution:
 - Medien-Cache als verwerfbar behandeln; autoritative Binärdaten im Modell erhalten.
 - Migrationen idempotent und mit Store-Fixtures testen.
 - Detailfeld- und Detailwert-Zuordnungen vor jeder Mutation mit der zentralen Integrity-Policy prüfen.
+- Single-Fact-Antworten ausschließlich aus dem revalidierten Primary Result, einem typisierten Result-Artefakt und wertgleicher Detail-Value-Evidence erzeugen.
 
 ### Don’t
 
@@ -438,6 +442,7 @@ Duplicate-Resolution:
 - Keine persistenten Modelobjekte über Actor-Grenzen reichen.
 - IDs nicht graphübergreifend ohne Scope auflösen.
 - Detailwerte nicht per `first(where:)` oder Fetch-Reihenfolge auswählen; Authority immer über den gemeinsamen `(graphID, attributeID, fieldID)`-Vertrag bestimmen.
+- Keine konkreten Detailwerte aus `SearchGraph`-Snippets, Provider-Text, Aliassen oder technischen IDs ableiten. Search belegt ohne transportierten Feldwert nur Trefferexistenz, Anzeigename und validierte Navigation.
 - `CURRENT` oder andere Conversation-Aliase nicht als String bis in Query-Plan oder Repository weiterreichen; zuerst in einen `GraphChatResolvedConversationScope` überführen.
 - `imagePath`/`localPath` nicht als autoritative Daten behandeln.
 - Keine unbegrenzten UI-Listen oder graphweiten Snapshots ohne bewusstes Limit einführen.

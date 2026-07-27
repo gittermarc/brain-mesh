@@ -102,7 +102,40 @@ struct GraphChatEvidenceTests {
                 owner: GraphSourceNodeReference(kind: .entity, id: entity.id),
                 fieldID: field.id
             ),
-            summary: "Status Offen"
+            summary: "Status Offen",
+            fieldValues: [
+                GraphEvidenceFieldValue(
+                    fieldID: field.id,
+                    fieldName: field.name,
+                    value: .choice("Offen"),
+                    unit: field.unit
+                )
+            ]
+        )
+        let staleValueClaim = GraphEvidence(
+            sourceReference: GraphSourceReference(
+                graphID: graph.id,
+                sourceKind: .detailValue,
+                sourceID: value.id,
+                node: GraphSourceNodeReference(
+                    kind: .attribute,
+                    id: attribute.id
+                ),
+                owner: GraphSourceNodeReference(
+                    kind: .entity,
+                    id: entity.id
+                ),
+                fieldID: field.id
+            ),
+            summary: "Status Fertig",
+            fieldValues: [
+                GraphEvidenceFieldValue(
+                    fieldID: field.id,
+                    fieldName: field.name,
+                    value: .choice("Fertig"),
+                    unit: field.unit
+                )
+            ]
         )
         let foreignGraph = GraphEvidence(
             sourceReference: GraphSourceReference(
@@ -146,7 +179,14 @@ struct GraphChatEvidenceTests {
         )
 
         let result = try await validator.validatedEvidence(
-            [valid, foreignGraph, missing, mismatchedField, detailValueWithForeignField],
+            [
+                valid,
+                staleValueClaim,
+                foreignGraph,
+                missing,
+                mismatchedField,
+                detailValueWithForeignField,
+            ],
             in: scope
         )
         #expect(result == [valid])

@@ -88,7 +88,12 @@ nonisolated enum GraphChatAnswerArtifactValue: Hashable, Sendable {
         case .integer(let value):
             self = .integer(value)
         case .decimal(let value):
-            self = .decimal(Decimal(value))
+            self = .decimal(
+                Decimal(
+                    string: String(value),
+                    locale: Locale(identifier: "en_US_POSIX")
+                ) ?? Decimal(value)
+            )
         case .date(let value):
             self = .date(value)
         case .boolean(let value):

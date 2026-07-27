@@ -8,6 +8,11 @@
 import Foundation
 import SwiftData
 
+nonisolated struct GraphDetailValueAuthoritySnapshot: Sendable {
+    let values: [GraphDetailValueDTO]
+    let conflictedKeys: Set<DetailValueAuthorityKey>
+}
+
 extension GraphReadRepository {
     func fetchEntities(
         in scope: GraphScope,
@@ -82,6 +87,22 @@ extension GraphReadRepository {
         prefetchedDefinitions: [GraphDetailFieldDefinitionDTO]? = nil,
         prefetchedAttributes: [GraphAttributeDTO]? = nil
     ) throws -> [GraphDetailValueDTO] {
+        try fetchDetailValueAuthority(
+            in: scope,
+            context: context,
+            models: prefetchedModels,
+            prefetchedDefinitions: prefetchedDefinitions,
+            prefetchedAttributes: prefetchedAttributes
+        ).values
+    }
+
+    func fetchDetailValueAuthority(
+        in scope: GraphScope,
+        context: ModelContext,
+        models prefetchedModels: [MetaDetailFieldValue]? = nil,
+        prefetchedDefinitions: [GraphDetailFieldDefinitionDTO]? = nil,
+        prefetchedAttributes: [GraphAttributeDTO]? = nil
+    ) throws -> GraphDetailValueAuthoritySnapshot {
         try checkCancellation()
         let models: [MetaDetailFieldValue]
         if let prefetchedModels {
@@ -162,6 +183,7 @@ extension GraphReadRepository {
         }
 
         var values: [GraphDetailValueDTO] = []
+        var conflictedKeys = Set<DetailValueAuthorityKey>()
         values.reserveCapacity(groupedModels.count)
         let orderedKeys = groupedModels.keys.sorted { lhs, rhs in
             if lhs.attributeID != rhs.attributeID {
@@ -183,8 +205,16 @@ extension GraphReadRepository {
                     DetailDataModelSnapshotMapper.value($0)
                 }
             )
-            guard case .authoritative(let recordID, let authoritativeValue, _) = resolution,
-                  let model = candidates.first(where: { $0.id == recordID }) else {
+            guard case .authoritative(
+                let recordID,
+                let authoritativeValue,
+                _
+            ) = resolution,
+                let model = candidates.first(where: { $0.id == recordID })
+            else {
+                if resolution.hasConflict {
+                    conflictedKeys.insert(key)
+                }
                 continue
             }
             values.append(
@@ -198,7 +228,10 @@ extension GraphReadRepository {
             )
         }
         try checkCancellation()
-        return values.sorted(by: Self.detailValueSort)
+        return GraphDetailValueAuthoritySnapshot(
+            values: values.sorted(by: Self.detailValueSort),
+            conflictedKeys: conflictedKeys
+        )
     }
 
     func fetchAttachmentMetadata(

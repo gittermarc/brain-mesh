@@ -182,6 +182,17 @@ nonisolated struct GraphChatResponseLocalizer: Sendable {
         }
     }
 
+    func authoritativeFactUnavailable() -> String {
+        switch language {
+        case .german:
+            return
+                "Für diesen Fachwert liegt kein eindeutig revalidiertes Detailergebnis vor."
+        case .english:
+            return
+                "There is no unambiguous revalidated detail result for this value."
+        }
+    }
+
     func unsupported(_ capability: GraphChatUnsupportedCapability) -> String {
         switch (language, capability) {
         case (.german, .graphMutation):

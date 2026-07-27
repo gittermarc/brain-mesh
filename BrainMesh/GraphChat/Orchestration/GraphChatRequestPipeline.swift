@@ -348,6 +348,7 @@ nonisolated struct GraphChatRequestPipeline: Sendable {
                         requestQuestion: plan.providerQuestion,
                         expectedCommittedState: plan.expectedCommittedState,
                         primaryResult: primaryResult,
+                        authoritativeFactExpectation: nil,
                         artifactContext: GraphChatArtifactCommitContext(
                             graphScope: execution.resources.key.graphScope,
                             chatScope: execution.resources.key.chatScope,
