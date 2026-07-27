@@ -127,14 +127,20 @@ nonisolated struct GraphChatLocalIntentSearchExecutionSupport:
                     ).inserted else {
                 return nil
             }
-            let title = hit.title
+            let sourceTitle = hit.title
                 .trimmingCharacters(
                     in:
                         .whitespacesAndNewlines
                 )
-            guard title.isEmpty == false else {
+            guard sourceTitle.isEmpty == false else {
                 return nil
             }
+            let title = visibleTitle(
+                for: hit,
+                sourceTitle: sourceTitle,
+                entityID: action.entityID,
+                aliases: schemaContext.aliases
+            )
             let evidence = GraphEvidence(
                 sourceReference:
                     hit.sourceReference,
@@ -402,5 +408,34 @@ nonisolated struct GraphChatLocalIntentSearchExecutionSupport:
             )
         }
         return nil
+    }
+
+    private func visibleTitle(
+        for hit: GraphChatSearchHit,
+        sourceTitle: String,
+        entityID: UUID?,
+        aliases: GraphSchemaAliasMap
+    ) -> String {
+        guard hit.kind == .attribute,
+              let entityID else {
+            return sourceTitle
+        }
+        let node = hit.sourceReference.node?.nodeKey
+            ?? NodeRefKey(
+                kind: .attribute,
+                id: hit.sourceReference.sourceID
+            )
+        guard node.kind == .attribute,
+              let resolution = aliases.nodesByKey[node],
+              resolution.ownerEntityID == entityID else {
+            return sourceTitle
+        }
+        let displayName = resolution.displayName
+            .trimmingCharacters(
+                in: .whitespacesAndNewlines
+            )
+        return displayName.isEmpty
+            ? sourceTitle
+            : displayName
     }
 }

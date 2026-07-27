@@ -137,43 +137,52 @@ nonisolated struct GraphChatLocalIntentQueryExecutionSupport:
     func normalizedResult(
         _ result: GraphChatQueryResult,
         contract: GraphChatLocalQueryResultContract,
+        intent: GraphChatTypedIntent,
+        schemaContext: GraphSchemaContext,
         limit: Int
     ) -> GraphChatQueryResult {
+        let normalized: GraphChatQueryResult
         if result.state == .noEvidence
             || (
                 result.state == .success
                     && result.evidence.isEmpty
             ) {
-            return noResults(
+            normalized = noResults(
                 limit: limit,
                 integrityConflictedValueKeys:
                     result.integrityConflictedValueKeys
             )
-        }
-        guard case .authoritativeSingleField(
+        } else if case .authoritativeSingleField(
             _,
             let field
-        ) = contract else {
-            return result
+        ) = contract {
+            guard result.state == .success,
+                  result.rows.count == 1,
+                  let cell = result.rows[0].cells.first(
+                    where: { $0.fieldID == field.id }
+                  ),
+                  cell.value != .missing,
+                  result.rows[0].evidenceIDs
+                    .contains(cell.evidenceID),
+                  result.evidence.contains(
+                    where: { $0.id == cell.evidenceID }
+                  ) else {
+                return noResults(
+                    limit: limit,
+                    integrityConflictedValueKeys:
+                        result.integrityConflictedValueKeys
+                )
+            }
+            normalized = result
+        } else {
+            normalized = result
         }
-        guard result.state == .success,
-              result.rows.count == 1,
-              let cell = result.rows[0].cells.first(
-                where: { $0.fieldID == field.id }
-              ),
-              cell.value != .missing,
-              result.rows[0].evidenceIDs
-                .contains(cell.evidenceID),
-              result.evidence.contains(
-                where: { $0.id == cell.evidenceID }
-              ) else {
-            return noResults(
-                limit: limit,
-                integrityConflictedValueKeys:
-                    result.integrityConflictedValueKeys
-            )
-        }
-        return result
+        return semanticPresentationResult(
+            normalized,
+            contract: contract,
+            intent: intent,
+            schemaContext: schemaContext
+        )
     }
 
     func stageArtifacts(
@@ -342,6 +351,62 @@ nonisolated struct GraphChatLocalIntentQueryExecutionSupport:
             ),
             integrityConflictedValueKeys:
                 integrityConflictedValueKeys
+        )
+    }
+
+    private func semanticPresentationResult(
+        _ result: GraphChatQueryResult,
+        contract: GraphChatLocalQueryResultContract,
+        intent: GraphChatTypedIntent,
+        schemaContext: GraphSchemaContext
+    ) -> GraphChatQueryResult {
+        guard case .entityCollection = contract,
+              intent.resolution.source
+                != .foundationalFastPath,
+              let entity =
+                intent.payload.entities.first,
+              result.rows.isEmpty == false else {
+            return result
+        }
+        let rows = result.rows.map { row in
+            let resolution =
+                schemaContext.aliases
+                    .nodesByKey[row.node]
+            let displayName = resolution
+                .flatMap { candidate -> String? in
+                    guard candidate.ownerEntityID
+                            == entity.id else {
+                        return nil
+                    }
+                    let normalized =
+                        candidate.displayName
+                            .trimmingCharacters(
+                                in:
+                                    .whitespacesAndNewlines
+                            )
+                    return normalized.isEmpty
+                        ? nil
+                        : normalized
+                }
+                ?? row.label
+            return GraphChatQueryResultRow(
+                node: row.node,
+                label: displayName,
+                cells: row.cells,
+                evidenceIDs: row.evidenceIDs
+            )
+        }
+        return GraphChatQueryResult(
+            state: result.state,
+            rows: rows,
+            aggregation: result.aggregation,
+            appliedFilters:
+                result.appliedFilters,
+            evidence: result.evidence,
+            resultWindow:
+                result.resultWindow,
+            integrityConflictedValueKeys:
+                result.integrityConflictedValueKeys
         )
     }
 

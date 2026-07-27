@@ -82,7 +82,8 @@ nonisolated extension GraphChatConversationStateReducer {
                         return false
                     }
                     if option.semanticSelection?.draft
-                        .conversationReference == .none {
+                        .conversationReference
+                        == GraphChatSemanticConversationReference.none {
                         return true
                     }
                 }

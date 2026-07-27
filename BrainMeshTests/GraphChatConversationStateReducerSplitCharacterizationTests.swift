@@ -347,6 +347,128 @@ struct GraphChatConversationStateReducerSplitCharacterizationTests {
     }
 
     @Test
+    func semanticClarificationWithoutPriorResultsSurvivesTurnCompletion() throws {
+        let graphScope = GraphScope(
+            graphID: GraphChatTestSupport.graphID
+        )
+        let chatScope =
+            GraphChatScope.entireGraph(graphScope)
+        let reducer =
+            GraphChatConversationStateReducer()
+        let requestID = UUID(
+            uuidString:
+                "84000000-0000-0000-0000-000000000011"
+        )!
+        let base =
+            GraphChatConversationState.initial(
+                graphScope: graphScope,
+                chatScope: chatScope,
+                conversationID:
+                    UUID(
+                        uuidString:
+                            "84000000-0000-0000-0000-000000000012"
+                    )!
+            )
+        let clarification =
+            GraphChatPendingClarification(
+                id: requestID,
+                decision: .semanticIntent,
+                options: [
+                    GraphChatPendingClarificationOption(
+                        id: "option-1",
+                        title: "Projekte · 1",
+                        proposal: .latestResults,
+                        semanticSelection:
+                            GraphChatSemanticIntentSelection(
+                                draft:
+                                    GraphChatUntrustedSemanticIntentDraft(
+                                        family:
+                                            .entityList,
+                                        entityTerm:
+                                            "Projekte",
+                                        conversationReference:
+                                            GraphChatSemanticConversationReference
+                                                .none,
+                                        responseLanguage:
+                                            .german
+                                    ),
+                                selectedEntityID:
+                                    GraphChatTestSupport
+                                        .projectEntityID
+                            )
+                    )
+                ],
+                sourceTurnID: requestID,
+                graphScope: graphScope,
+                chatScope: chatScope,
+                continuationOperation:
+                    .answerAboutReference,
+                continuationQuestion:
+                    "Welche Projekte meinst du?",
+                createdAt:
+                    Date(
+                        timeIntervalSince1970:
+                            1_700_000_000
+                    ),
+                expiresAt:
+                    Date(
+                        timeIntervalSince1970:
+                            1_700_000_300
+                    )
+            )
+
+        let requested = try reducer.reduce(
+            base,
+            event:
+                GraphChatConversationTrustedEvent(
+                    graphScope: graphScope,
+                    chatScope: chatScope,
+                    payload:
+                        .clarificationRequested(
+                            clarification
+                        )
+                )
+        ).state
+        let completed = try reducer.reduce(
+            requested,
+            event:
+                GraphChatConversationTrustedEvent(
+                    id: requestID,
+                    graphScope: graphScope,
+                    chatScope: chatScope,
+                    payload:
+                        .turnCompleted(
+                            GraphChatConversationTurnCompletion(
+                                requestID:
+                                    requestID,
+                                completedAt:
+                                    Date(
+                                        timeIntervalSince1970:
+                                            1_700_000_001
+                                    ),
+                                toolKinds: [],
+                                resultContextIDs: [],
+                                evidenceIDs: []
+                            )
+                        )
+                )
+        ).state
+
+        #expect(
+            requested.pendingClarification?
+                .decision == .semanticIntent
+        )
+        #expect(
+            completed.pendingClarification?
+                .decision == .semanticIntent
+        )
+        #expect(
+            completed.pendingClarification?
+                .options.count == 1
+        )
+    }
+
+    @Test
     func transactionFinalizationReferencesOnlyAppliedResultContextsAndProvidedEvidence() async throws {
         let graphScope = GraphScope(graphID: GraphChatTestSupport.graphID)
         let chatScope = GraphChatScope.entireGraph(graphScope)

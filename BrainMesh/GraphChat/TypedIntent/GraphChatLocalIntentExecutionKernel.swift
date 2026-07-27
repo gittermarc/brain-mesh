@@ -518,6 +518,9 @@ nonisolated struct GraphChatLocalIntentExecutionKernel: Sendable {
                     contract:
                         queryAction
                             .resultContract,
+                    intent: intent,
+                    schemaContext:
+                        schemaContext,
                     limit:
                         intent.limits
                             .resultLimit
