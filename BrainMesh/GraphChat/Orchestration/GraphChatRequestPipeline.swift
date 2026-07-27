@@ -10,6 +10,7 @@ import Foundation
 nonisolated enum GraphChatRequestPipelineStage: String, CaseIterable, Hashable, Sendable {
     case preflight
     case foundationalIntent
+    case semanticIntent
     case sessionResources
     case providerExecution
     case answerFinalization
@@ -79,30 +80,46 @@ nonisolated struct GraphChatRequestPipeline: Sendable {
     private let foundationalCoordinator:
         GraphChatFoundationalIntentCoordinator
     private let foundationalExecutor: GraphChatFoundationalIntentExecutor
+    private let semanticCoordinator:
+        GraphChatSemanticIntentCoordinator
+    private let semanticExecutor:
+        GraphChatSemanticIntentExecutor
     private let contextRetry: GraphChatProviderContextRetry
     private let finalizer: GraphChatAnswerFinalizer
     private let sessionFactory: GraphChatProviderSessionFactory
     private let referenceDate: @Sendable () -> Date
     private let observer: GraphChatRequestPipelineObserver
+    private let observability:
+        any GraphChatObservabilityRecording
 
     init(
         preflight: GraphChatRequestPreflight,
         foundationalCoordinator: GraphChatFoundationalIntentCoordinator,
         foundationalExecutor: GraphChatFoundationalIntentExecutor,
+        semanticCoordinator:
+            GraphChatSemanticIntentCoordinator,
+        semanticExecutor:
+            GraphChatSemanticIntentExecutor,
         contextRetry: GraphChatProviderContextRetry,
         finalizer: GraphChatAnswerFinalizer,
         sessionFactory: GraphChatProviderSessionFactory,
         referenceDate: @escaping @Sendable () -> Date,
-        observer: GraphChatRequestPipelineObserver = .disabled
+        observer: GraphChatRequestPipelineObserver = .disabled,
+        observability:
+            any GraphChatObservabilityRecording =
+                NoOpGraphChatObservabilityRecorder()
     ) {
         self.preflight = preflight
         self.foundationalCoordinator = foundationalCoordinator
         self.foundationalExecutor = foundationalExecutor
+        self.semanticCoordinator = semanticCoordinator
+        self.semanticExecutor = semanticExecutor
         self.contextRetry = contextRetry
         self.finalizer = finalizer
         self.sessionFactory = sessionFactory
         self.referenceDate = referenceDate
         self.observer = observer
+        self.observability = observability
     }
 
     func execute(
@@ -241,8 +258,133 @@ nonisolated struct GraphChatRequestPipeline: Sendable {
                     usedProvider: false
                 )
 
-            case .providerFallback:
-                break
+            case .providerFallback(let schemaContext):
+                await record(
+                    input.requestID,
+                    stage: .semanticIntent,
+                    phase: .started,
+                    usesProvider: false
+                )
+                let semanticResolution =
+                    try await semanticCoordinator
+                        .resolve(
+                            providerPlan: plan,
+                            schemaContext:
+                                schemaContext,
+                            requestID:
+                                input.requestID,
+                            requestedAt:
+                                input.requestedAt
+                        )
+                await record(
+                    input.requestID,
+                    stage: .semanticIntent,
+                    phase: .completed,
+                    usesProvider: false
+                )
+                try await validateCurrentRequest()
+
+                switch semanticResolution {
+                case .local(let localPlan):
+                    return try await finalizeLocalPlan(
+                        localPlan,
+                        input: input,
+                        commitFinalizedTurn:
+                            commitFinalizedTurn
+                    )
+
+                case .compiled(
+                    let adaptation,
+                    let executionSchemaContext
+                ):
+                    let artifactSession =
+                        try await foundationalArtifactSession(
+                            plan.scopeKey
+                        )
+                    let finalizedTurn =
+                        try await semanticExecutor
+                            .execute(
+                                adaptation:
+                                    adaptation,
+                                schemaContext:
+                                    executionSchemaContext,
+                                providerPlan: plan,
+                                requestID:
+                                    input.requestID,
+                                artifactSession:
+                                    artifactSession,
+                                onActivity: {
+                                    activity in
+                                    onProviderEvent(
+                                        .toolActivity(
+                                            activity
+                                        )
+                                    )
+                                },
+                                validateCurrentRequest:
+                                    validateCurrentRequest,
+                                finalize: {
+                                    execution in
+                                    await self.record(
+                                        input.requestID,
+                                        stage:
+                                            .answerFinalization,
+                                        phase: .started,
+                                        usesProvider:
+                                            false
+                                    )
+                                    let turn =
+                                        try await self
+                                            .finalizer
+                                            .finalizeLocalIntentTurn(
+                                                GraphChatLocalIntentAnswerFinalizationInput(
+                                                    requestID:
+                                                        input.requestID,
+                                                    completedAt:
+                                                        self.referenceDate(),
+                                                    requestQuestion:
+                                                        plan.providerQuestion,
+                                                    expectedCommittedState:
+                                                        plan.expectedCommittedState,
+                                                    execution:
+                                                        execution
+                                                ),
+                                                currentCommittedState:
+                                                    input.turnStateSnapshot
+                                            )
+                                    await self.record(
+                                        input.requestID,
+                                        stage:
+                                            .answerFinalization,
+                                        phase:
+                                            .completed,
+                                        usesProvider:
+                                            false
+                                    )
+                                    return turn
+                                },
+                                commit: { turn in
+                                    try await self
+                                        .commit(
+                                            turn,
+                                            requestID:
+                                                input.requestID,
+                                            usesProvider:
+                                                false,
+                                            commitFinalizedTurn:
+                                                commitFinalizedTurn
+                                        )
+                                }
+                            )
+                    return GraphChatRequestPipelineCompletion(
+                        finalizedTurn:
+                            finalizedTurn,
+                        usedProvider: false
+                    )
+
+                case .legacyProviderFallback:
+                    break
+                }
             }
 
             await record(
@@ -277,6 +419,17 @@ nonisolated struct GraphChatRequestPipeline: Sendable {
                     question: plan.providerQuestion,
                     continuationOperation: plan.continuationOperation,
                     onAttemptResources: { resources in
+                        await self.observability.record(
+                            .semanticIntent(
+                                GraphChatSemanticIntentMetric(
+                                    event:
+                                        .answerProviderStarted,
+                                    family: nil,
+                                    answerProviderCallCount:
+                                        1
+                                )
+                            )
+                        )
                         await self.record(
                             input.requestID,
                             stage: .providerExecution,

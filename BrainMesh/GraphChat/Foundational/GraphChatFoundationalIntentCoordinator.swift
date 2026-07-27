@@ -13,7 +13,9 @@ nonisolated enum GraphChatFoundationalIntentResolution: Sendable {
         intent: GraphChatFoundationalIntent,
         schemaContext: GraphSchemaContext
     )
-    case providerFallback
+    case providerFallback(
+        schemaContext: GraphSchemaContext
+    )
 }
 
 nonisolated struct GraphChatFoundationalIntentCoordinator: Sendable {
@@ -106,7 +108,9 @@ nonisolated struct GraphChatFoundationalIntentCoordinator: Sendable {
                 schemaContext: foundationalSchemaContext
             )
         case .notRecognized:
-            return .providerFallback
+            return .providerFallback(
+                schemaContext: schemaContext
+            )
         case .rejected(let rejection):
             throw GraphChatError(
                 code: .invalidRequest,

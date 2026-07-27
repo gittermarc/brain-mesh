@@ -385,21 +385,7 @@ actor FoundationModelsGraphChatProvider: GraphChatModelProvider {
     private var sessions: [GraphChatModelSessionID: SessionState] = [:]
 
     func availability() -> GraphChatModelAvailability {
-        switch SystemLanguageModel.default.availability {
-        case .available:
-            return .available
-        case .unavailable(let reason):
-            switch reason {
-            case .deviceNotEligible:
-                return .unavailable(.deviceNotEligible)
-            case .appleIntelligenceNotEnabled:
-                return .unavailable(.appleIntelligenceNotEnabled)
-            case .modelNotReady:
-                return .unavailable(.modelNotReady)
-            @unknown default:
-                return .unavailable(.unknown)
-            }
-        }
+        FoundationModelsGraphChatAvailability.current()
     }
 
     func createSession(
@@ -847,7 +833,7 @@ actor FoundationModelsGraphChatProvider: GraphChatModelProvider {
 
 actor FoundationModelsGraphChatProvider: GraphChatModelProvider {
     func availability() -> GraphChatModelAvailability {
-        .unavailable(.deviceNotEligible)
+        FoundationModelsGraphChatAvailability.current()
     }
 
     func createSession(

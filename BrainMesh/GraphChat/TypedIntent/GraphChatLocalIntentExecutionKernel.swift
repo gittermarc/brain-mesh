@@ -117,11 +117,15 @@ nonisolated struct GraphChatLocalIntentExecutionKernel: Sendable {
 
     private let queryExecutor:
         any GraphChatLocalIntentQueryExecuting
+    private let searchExecutor:
+        any GraphChatLocalIntentSearchExecuting
     private let conversationStateReducer:
         GraphChatConversationStateReducer
     private let timeZone: TimeZone
     private let querySupport:
         GraphChatLocalIntentQueryExecutionSupport
+    private let searchSupport:
+        GraphChatLocalIntentSearchExecutionSupport
     private let observability:
         any GraphChatObservabilityRecording
     private let observer:
@@ -130,6 +134,9 @@ nonisolated struct GraphChatLocalIntentExecutionKernel: Sendable {
     init(
         queryExecutor:
             any GraphChatLocalIntentQueryExecuting,
+        searchExecutor:
+            any GraphChatLocalIntentSearchExecuting =
+                SearchGraphTool(),
         conversationStateReducer:
             GraphChatConversationStateReducer,
         calendar: Calendar,
@@ -143,6 +150,7 @@ nonisolated struct GraphChatLocalIntentExecutionKernel: Sendable {
                 .disabled
     ) {
         self.queryExecutor = queryExecutor
+        self.searchExecutor = searchExecutor
         self.conversationStateReducer =
             conversationStateReducer
         self.timeZone = timeZone
@@ -152,6 +160,8 @@ nonisolated struct GraphChatLocalIntentExecutionKernel: Sendable {
                 timeZone: timeZone,
                 referenceDate: referenceDate
             )
+        self.searchSupport =
+            GraphChatLocalIntentSearchExecutionSupport()
         self.observability = observability
         self.observer = observer
     }
@@ -188,16 +198,39 @@ nonisolated struct GraphChatLocalIntentExecutionKernel: Sendable {
             throw error
         }
 
-        let plan: ValidatedGraphQueryPlan
+        let validatedAction: ValidatedAction
         do {
             try querySupport.revalidateIdentities(
                 intent: intent,
                 schemaContext: schemaContext
             )
-            plan = try querySupport.validatedPlan(
-                adaptation: adaptation,
-                schemaContext: schemaContext
-            )
+            switch adaptation.action {
+            case .queryDetailValues:
+                let action = try querySupport
+                    .queryAction(
+                        in: adaptation.action
+                    )
+                let plan = try querySupport
+                    .validatedPlan(
+                        adaptation: adaptation,
+                        schemaContext:
+                            schemaContext
+                    )
+                validatedAction = .query(
+                    plan: plan,
+                    action: action
+                )
+            case .searchGraph(let action):
+                try searchSupport.validate(
+                    intent: intent,
+                    action: action,
+                    schemaContext:
+                        schemaContext
+                )
+                validatedAction = .search(
+                    action
+                )
+            }
         } catch {
             await recordRevalidationRejection(
                 error,
@@ -242,81 +275,54 @@ nonisolated struct GraphChatLocalIntentExecutionKernel: Sendable {
             onActivity(
                 GraphChatToolActivity(
                     id: activityID,
-                    tool: .queryDetailValues,
+                    tool:
+                        validatedAction
+                            .toolKind,
                     state: .started
                 )
             )
-            let rawResult = try await queryExecutor.execute(plan)
-            try Task.checkCancellation()
-            guard rawResult.rows.count
-                    <= intent.limits.resultLimit,
-                  rawResult.evidence.count
-                    <= intent.limits.maximumEvidenceCount else {
-                throw GraphChatLocalIntentExecutionError
-                    .safetyLimitExceeded
-            }
-            let authoritativeFactExpectation =
-                GraphChatAuthoritativeFactExpectation(
-                    intent: intent,
-                    result: rawResult,
-                    timeZone: timeZone
-                )
-            let result = querySupport.normalizedResult(
-                rawResult,
-                contract: querySupport.queryAction(
-                    in: adaptation.action
-                ).resultContract,
-                limit: intent.limits.resultLimit
-            )
-            try await evidenceRegistry.register(
-                result.evidence
-            )
-            await presentationRegistry
-                .registerValidatedEvidence(result.evidence)
-            try await conversationTransaction.apply(
-                GraphChatConversationTrustedEvent(
-                    graphScope: intent.scope.graphScope,
-                    chatScope: intent.scope.chatScope,
-                    payload: .queryResolved(
-                        plan: plan,
-                        result: result,
-                        schemaContext: schemaContext
+            let actionExecution:
+                ActionExecution
+            do {
+                actionExecution =
+                    try await executeAction(
+                        validatedAction,
+                        intent: intent,
+                        schemaContext:
+                            schemaContext,
+                        evidenceRegistry:
+                            evidenceRegistry,
+                        presentationRegistry:
+                            presentationRegistry,
+                        artifactRegistry:
+                            artifactSession
+                                .registry,
+                        conversationTransaction:
+                            conversationTransaction,
+                        transactionID:
+                            transactionID
+                    )
+            } catch {
+                onActivity(
+                    GraphChatToolActivity(
+                        id: activityID,
+                        tool:
+                            validatedAction
+                                .toolKind,
+                        state: .finished
                     )
                 )
-            )
-
-            let artifactIDs =
-                try await querySupport.stageArtifacts(
-                for: result,
-                plan: plan,
-                action: querySupport.queryAction(
-                    in: adaptation.action
-                ),
-                schemaContext: schemaContext,
-                language: intent.responseLanguage,
-                registry: artifactSession.registry,
-                evidenceRegistry: evidenceRegistry,
-                presentationRegistry:
-                    presentationRegistry,
-                transactionID: transactionID
-            )
-            guard artifactIDs.count
+                throw error
+            }
+            guard actionExecution.artifactIDs.count
                     <= intent.limits.maximumArtifactCount else {
                 throw GraphChatLocalIntentExecutionError
                     .safetyLimitExceeded
             }
-            let response = GraphChatModelToolResponse(
-                tool: .queryDetailValues,
-                state: querySupport.toolState(
-                    for: result.state
-                ),
-                content: "local-foundational-result",
-                evidenceIDs: result.evidence.map(\.id),
-                artifactIDs: artifactIDs
-            )
             let artifacts = try await artifactSession.registry
                 .validatedArtifacts(
-                    for: artifactIDs.map {
+                    for: actionExecution
+                        .artifactIDs.map {
                         $0.rawValue.uuidString
                     },
                     graphScope: intent.scope.graphScope,
@@ -324,8 +330,10 @@ nonisolated struct GraphChatLocalIntentExecutionKernel: Sendable {
                     transactionID: transactionID
                 )
             try await ledger.record(
-                response: response,
-                evidence: result.evidence,
+                response:
+                    actionExecution.response,
+                evidence:
+                    actionExecution.evidence,
                 artifacts: artifacts,
                 transactionID: transactionID
             )
@@ -345,7 +353,9 @@ nonisolated struct GraphChatLocalIntentExecutionKernel: Sendable {
             onActivity(
                 GraphChatToolActivity(
                     id: activityID,
-                    tool: .queryDetailValues,
+                    tool:
+                        validatedAction
+                            .toolKind,
                     state: .finished
                 )
             )
@@ -367,7 +377,8 @@ nonisolated struct GraphChatLocalIntentExecutionKernel: Sendable {
                     primaryResultLedger: ledger,
                     primaryResult: primaryResult,
                     authoritativeFactExpectation:
-                        authoritativeFactExpectation
+                        actionExecution
+                            .authoritativeFactExpectation
                 )
             try await validateCurrentRequest()
             try Task.checkCancellation()
@@ -437,6 +448,264 @@ nonisolated struct GraphChatLocalIntentExecutionKernel: Sendable {
         }
     }
 
+    private enum ValidatedAction {
+        case query(
+            plan: ValidatedGraphQueryPlan,
+            action: GraphChatLocalQueryAction
+        )
+        case search(GraphChatLocalSearchAction)
+
+        var toolKind: GraphChatToolKind {
+            switch self {
+            case .query:
+                return .queryDetailValues
+            case .search:
+                return .searchGraph
+            }
+        }
+    }
+
+    private struct ActionExecution {
+        let response: GraphChatModelToolResponse
+        let evidence: [GraphEvidence]
+        let artifactIDs:
+            [GraphChatAnswerArtifactID]
+        let authoritativeFactExpectation:
+            GraphChatAuthoritativeFactExpectation?
+    }
+
+    private func executeAction(
+        _ action: ValidatedAction,
+        intent: GraphChatTypedIntent,
+        schemaContext: GraphSchemaContext,
+        evidenceRegistry:
+            GraphChatEvidenceRegistry,
+        presentationRegistry:
+            GraphChatPresentationRegistry,
+        artifactRegistry:
+            GraphChatAnswerArtifactRegistry,
+        conversationTransaction:
+            GraphChatConversationStateTransaction,
+        transactionID:
+            GraphChatAnswerArtifactTransactionID
+    ) async throws -> ActionExecution {
+        switch action {
+        case .query(let plan, let queryAction):
+            let rawResult =
+                try await queryExecutor
+                    .execute(plan)
+            try Task.checkCancellation()
+            guard
+                rawResult.rows.count
+                    <= intent.limits
+                        .resultLimit,
+                rawResult.evidence.count
+                    <= intent.limits
+                        .maximumEvidenceCount
+            else {
+                throw GraphChatLocalIntentExecutionError
+                    .safetyLimitExceeded
+            }
+            let expectation =
+                GraphChatAuthoritativeFactExpectation(
+                    intent: intent,
+                    result: rawResult,
+                    timeZone: timeZone
+                )
+            let result = querySupport
+                .normalizedResult(
+                    rawResult,
+                    contract:
+                        queryAction
+                            .resultContract,
+                    limit:
+                        intent.limits
+                            .resultLimit
+                )
+            try await evidenceRegistry.register(
+                result.evidence
+            )
+            await presentationRegistry
+                .registerValidatedEvidence(
+                    result.evidence
+                )
+            try await conversationTransaction
+                .apply(
+                    GraphChatConversationTrustedEvent(
+                        graphScope:
+                            intent.scope
+                                .graphScope,
+                        chatScope:
+                            intent.scope
+                                .chatScope,
+                        payload: .queryResolved(
+                            plan: plan,
+                            result: result,
+                            schemaContext:
+                                schemaContext
+                        )
+                    )
+                )
+            let artifactIDs =
+                try await querySupport
+                    .stageArtifacts(
+                        for: result,
+                        plan: plan,
+                        action: queryAction,
+                        schemaContext:
+                            schemaContext,
+                        language:
+                            intent
+                                .responseLanguage,
+                        registry:
+                            artifactRegistry,
+                        evidenceRegistry:
+                            evidenceRegistry,
+                        presentationRegistry:
+                            presentationRegistry,
+                        transactionID:
+                            transactionID
+                    )
+            return ActionExecution(
+                response:
+                    GraphChatModelToolResponse(
+                        tool:
+                            .queryDetailValues,
+                        state:
+                            querySupport
+                                .toolState(
+                                    for:
+                                        result
+                                            .state
+                                ),
+                        content:
+                            "local-intent-query-result",
+                        evidenceIDs:
+                            result.evidence
+                                .map(\.id),
+                        artifactIDs:
+                            artifactIDs
+                    ),
+                evidence: result.evidence,
+                artifactIDs: artifactIDs,
+                authoritativeFactExpectation:
+                    expectation
+            )
+
+        case .search(let searchAction):
+            let budget = GraphChatToolBudget(
+                policy:
+                    GraphChatToolBudgetPolicy(
+                        maximumCalls: 1,
+                        maximumResultCountPerTool:
+                            SearchGraphTool
+                                .maximumResultCount,
+                        maximumEvidenceCount:
+                            intent.limits
+                                .maximumEvidenceCount
+                    )
+            )
+            let rawResult =
+                try await searchExecutor
+                    .execute(
+                        SearchGraphInput(
+                            query:
+                                searchAction
+                                    .query,
+                            limit:
+                                searchAction
+                                    .limit
+                        ),
+                        context:
+                            GraphChatToolContext(
+                                scope:
+                                    searchAction
+                                        .scope,
+                                budget: budget
+                            )
+                    )
+            try Task.checkCancellation()
+            let result = searchSupport
+                .normalizedResult(
+                    rawResult,
+                    action: searchAction,
+                    schemaContext:
+                        schemaContext
+                )
+            guard
+                result.output.hits.count
+                    <= intent.limits
+                        .resultLimit,
+                result.evidence.count
+                    <= intent.limits
+                        .maximumEvidenceCount
+            else {
+                throw GraphChatLocalIntentExecutionError
+                    .safetyLimitExceeded
+            }
+            try await evidenceRegistry.register(
+                result.evidence
+            )
+            await presentationRegistry
+                .registerValidatedEvidence(
+                    result.evidence
+                )
+            try await conversationTransaction
+                .apply(
+                    GraphChatConversationTrustedEvent(
+                        graphScope:
+                            intent.scope
+                                .graphScope,
+                        chatScope:
+                            intent.scope
+                                .chatScope,
+                        payload:
+                            .searchResolved(
+                                output:
+                                    result.output,
+                                state:
+                                    result.state,
+                                evidence:
+                                    result.evidence
+                            )
+                    )
+                )
+            let artifactIDs =
+                try await searchSupport
+                    .stageArtifacts(
+                        for: result,
+                        action: searchAction,
+                        intent: intent,
+                        registry:
+                            artifactRegistry,
+                        evidenceRegistry:
+                            evidenceRegistry,
+                        presentationRegistry:
+                            presentationRegistry,
+                        transactionID:
+                            transactionID
+                    )
+            return ActionExecution(
+                response:
+                    GraphChatModelToolResponse(
+                        tool: .searchGraph,
+                        state: result.state,
+                        content:
+                            "local-semantic-search-result",
+                        evidenceIDs:
+                            result.evidence
+                                .map(\.id),
+                        artifactIDs:
+                            artifactIDs
+                    ),
+                evidence: result.evidence,
+                artifactIDs: artifactIDs,
+                authoritativeFactExpectation:
+                    nil
+            )
+        }
+    }
+
     private func validateBinding(
         intent: GraphChatTypedIntent,
         providerPlan: GraphChatProviderTurnPlan,
@@ -456,16 +725,32 @@ nonisolated struct GraphChatLocalIntentExecutionKernel: Sendable {
                 .turnContexts.contains(
                     where: { $0.id == sourceTurnID }
                 ),
-                  providerPlan.foundationalContinuation?
-                    .sourceTurnID == sourceTurnID else {
+                  (
+                    providerPlan
+                        .foundationalContinuation?
+                        .sourceTurnID
+                        == sourceTurnID
+                        || providerPlan
+                            .semanticContinuation?
+                            .sourceTurnID
+                            == sourceTurnID
+                  ) else {
                 throw GraphChatLocalIntentExecutionError
                     .invalidBinding
             }
         }
         if let clarificationID =
             intent.binding.clarificationID {
-            guard providerPlan.foundationalContinuation?
-                .clarificationID == clarificationID else {
+            guard
+                providerPlan
+                    .foundationalContinuation?
+                    .clarificationID
+                    == clarificationID
+                    || providerPlan
+                        .semanticContinuation?
+                        .clarificationID
+                        == clarificationID
+            else {
                 throw GraphChatLocalIntentExecutionError
                     .invalidBinding
             }
@@ -597,6 +882,12 @@ nonisolated struct GraphChatLocalIntentExecutionKernel: Sendable {
     }
 
     private func isCancellation(_ error: Error) -> Bool {
-        error is CancellationError || Task.isCancelled
+        if error is CancellationError
+            || Task.isCancelled
+        {
+            return true
+        }
+        return (error as? GraphChatToolError)?
+            .code == .cancelled
     }
 }

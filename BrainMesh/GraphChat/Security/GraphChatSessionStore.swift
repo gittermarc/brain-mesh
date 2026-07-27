@@ -58,6 +58,8 @@ final class GraphChatSessionStore: ObservableObject {
         let provider = FoundationModelsGraphChatProvider()
         let baseOrchestrator = GraphChatOrchestrator(
             provider: provider,
+            intentInterpreter:
+                FoundationModelsGraphChatIntentInterpreter(),
             schemaProvider: schemaProvider,
             toolRunnerFactory: GraphChatModelToolRuntimeFactory(
                 modelContainer: modelContainer

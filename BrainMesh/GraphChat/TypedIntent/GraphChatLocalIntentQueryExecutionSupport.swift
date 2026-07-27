@@ -81,7 +81,9 @@ nonisolated struct GraphChatLocalIntentQueryExecutionSupport:
         schemaContext: GraphSchemaContext
     ) throws -> ValidatedGraphQueryPlan {
         let intent = adaptation.intent
-        let action = queryAction(in: adaptation.action)
+        let action = try queryAction(
+            in: adaptation.action
+        )
         guard action.plan.scope
                 == intent.scope.queryScope,
               action.plan.limit
@@ -122,10 +124,13 @@ nonisolated struct GraphChatLocalIntentQueryExecutionSupport:
 
     func queryAction(
         in action: GraphChatLocalIntentAction
-    ) -> GraphChatLocalQueryAction {
+    ) throws -> GraphChatLocalQueryAction {
         switch action {
         case .queryDetailValues(let query):
             return query
+        case .searchGraph:
+            throw GraphChatLocalIntentExecutionError
+                .invalidCompiledAction
         }
     }
 
@@ -287,14 +292,29 @@ nonisolated struct GraphChatLocalIntentQueryExecutionSupport:
         case .entityCollection:
             guard intent.kind == .entityCollection,
                   intent.factExpectation == .none,
+                  intent.expectedCardinality
+                    == .zeroOrMore,
+                  intent.payload.fields.isEmpty,
+                  intent.limits.maximumResultLimit
+                    == GraphQueryPlanLimits
+                        .maximumResultLimit,
+                  intent.limits.maximumEvidenceCount
+                    == intent.limits.resultLimit,
+                  intent.limits.maximumArtifactCount
+                    == 1,
                   let entity =
                     intent.payload.entities.first,
                   plan.entityID == entity.id,
                   plan.filters.isEmpty,
                   plan.aggregation == nil,
                   plan.limit
-                    == GraphQueryPlanLimits
-                        .maximumResultLimit,
+                    == intent.limits.resultLimit,
+                  plan.sorting == [
+                    GraphValidatedQuerySort(
+                        key: .nodeName,
+                        direction: .ascending
+                    )
+                  ],
                   plan.projection == [.nodeIdentity] else {
                 throw GraphChatLocalIntentExecutionError
                     .invalidCompiledAction

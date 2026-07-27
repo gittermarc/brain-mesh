@@ -16,6 +16,7 @@ BrainMesh besitzt bereits mehrere wichtige Schutzlinien:
 - Graph Chat ist read-only, graphgescoped und evidenzgebunden.
 - Exakt erkannte Single-Node-Field-Fragen werden providerfrei ausgeführt und als autoritativer typisierter Single Fact vollständig appseitig gerendert.
 - Der Foundational Fast Path ist über einen verlustfreien Adapter von einer allgemeinen versionierten Typed-Intent-Domain getrennt; beide vorhandenen Foundational Actions laufen durch denselben lokalen Execution Kernel.
+- Freie Find-Nodes- und Entity-List-Formulierungen werden nach dem Foundational Fast Path durch einen toolfreien On-Device-Interpreter ausschließlich in einen begrenzten untrusted Semantic Draft klassifiziert. Identitäten, Scope, technische Action, Query, Limits, Evidence, Artifacts und sichtbare Antwort bleiben appseitig.
 
 Die höchsten Architektur-Risiken liegen trotzdem an drei Systemgrenzen:
 
@@ -776,7 +777,7 @@ Trust Boundary:
 
 - Der Compiler läuft nach `GraphChatRequestPreflight`, also erst nach Validierung von aktivem Graph und Chat-Scope, und erhält einen vollständigen appseitigen `GraphSchemaContext`.
 - `GraphSchemaContext.foundationalAliases` hält dafür den vollständigen graph-gescopten App-Katalog getrennt von der weiterhin begrenzten providerseitigen Alias-/Prompt-Sicht. Nicht erkannte Fragen verändern dadurch weder akzeptierte Provider-Aliase noch den bestehenden Promptvertrag.
-- Er läuft vor Provider-Session-Erzeugung, freier Provider-Generierung und modellbestimmter Tool-Auswahl. `.compiled` und `.clarification` bleiben vollständig lokal; ausschließlich `.notRecognized` fällt auf die bestehende Provider-Pipeline zurück. Scope-, Schema- oder Clarification-Integritätsverletzungen sind harte Ablehnungen.
+- Er läuft vor semantischer Interpretation, Provider-Session-Erzeugung, freier Provider-Generierung und modellbestimmter Tool-Auswahl. `.compiled` und `.clarification` bleiben vollständig lokal; ausschließlich `.notRecognized` erreicht den nachgelagerten Semantic Coordinator. Scope-, Schema- oder Clarification-Integritätsverletzungen sind harte Ablehnungen.
 - Entity-, Feld- und Node-Identitäten stammen ausschließlich aus graph-gescopten Schema-/Repository-Daten. Provider-Aliase oder modellgenerierte IDs sind keine Eingabe des Compilers.
 
 Unterstützte Intents:
@@ -789,7 +790,7 @@ Unterstützte Intents:
 Ausführung und Fortsetzung:
 
 - Jeder kompilierte Plan durchläuft erneut `GraphQueryPlanValidator`, `GraphChatScopeAuthorization`, `GraphChatQueryEngine`, die zentrale Detaildaten-Authority, Evidence-Registrierung, Artifact-Staging, Primary-Result-Ledger, Live-Revalidation, Presentation Firewall und atomaren Conversation-/Artifact-Commit. Collections verwenden weiterhin den deterministischen Fallback; Single-Field-Erfolge verwenden den strengeren Authoritative-Fact-Renderer.
-- Der lokale Pfad hängt nicht von der Readiness des Search-Indexes ab und verwendet `SearchGraph` auch bei einem Single-Field-Intent nicht als Wertquelle. Nicht erkannte Fragen behalten die vorhandene Provider-, Search- und Repository-Fallback-Architektur.
+- Der Foundational-Pfad hängt nicht von der Readiness des Search-Indexes ab und verwendet `SearchGraph` auch bei einem Single-Field-Intent nicht als Wertquelle. Nicht erkannte Fragen durchlaufen anschließend die begrenzte semantische Find-/List-Stufe; nur deren explizite Open-Ended-/Unrecognized-Fälle behalten die vorhandene Provider-, Search- und Repository-Fallback-Architektur.
 - Ein Single-Field-Erfolg verlangt den tatsächlich transportierten, typisierten Feldwert. Fehlender oder aufgrund eines Detaildaten-Integritätskonflikts nicht autoritativer Wert wird zu einem typisierten No-Results-Pfad; ein `SearchGraph`-Treffer kann diesen Pfad nicht abschließen.
 - Mehrdeutige Entities, Nodes oder Felder verwenden die bestehende `GraphChatPendingClarification`. Kandidatenauswahlen bleiben intern graph-, chat-, conversation-, request- und turngebunden, werden vor der Fortsetzung erneut validiert und lösen bis zur Auswahl keine Query aus.
 - Lokal kompilierte Resultsets werden über denselben Conversation Reducer gespeichert und sind damit für die bestehende typisierte `CURRENT`-Auflösung verfügbar. Cancellation vor Commit verwirft Evidence, Ledger und gestagte Artifacts; der Stream behält genau ein Terminal Event.
@@ -799,6 +800,53 @@ Limit-Policy:
 - `GraphQueryPlanLimits.maximumResultLimit` ist die einzige Quelle für vollständige Foundational Collections. „Alle“ bleibt auf den autorisierten Chat-Scope und dieses Sicherheitslimit begrenzt.
 - `GraphChatResultWindow` transportiert `totalCount`, `returnedCount`, Limitquelle und Truncation. Das Result-Artefakt übernimmt diese Metadaten; der deterministische deutsche oder englische Fallback nennt eine erreichte Begrenzung sichtbar.
 - Collection-Artefakte vermeiden innerhalb des bestehenden Artifact-Bytebudgets redundante globale Evidence-Bindings und behalten pro Zeile einen sicheren Navigation Target. Das vollständige revalidierte Evidence-Set bleibt im Primary Result und finalen Answer gebunden.
+
+### Graph Chat Semantic Intent Interpreter
+
+Pfade:
+
+- `BrainMesh/GraphChat/SemanticIntent/GraphChatIntentInterpreter.swift`
+- `BrainMesh/GraphChat/SemanticIntent/FoundationModelsGraphChatIntentInterpreter.swift`
+- `BrainMesh/GraphChat/SemanticIntent/FakeGraphChatIntentInterpreter.swift`
+- `BrainMesh/GraphChat/SemanticIntent/GraphChatIntentInterpreterRequestBuilder.swift`
+- `BrainMesh/GraphChat/SemanticIntent/GraphChatSemanticIntentCoordinator.swift`
+- `BrainMesh/GraphChat/SemanticIntent/GraphChatSemanticIntentResolver.swift`
+- `BrainMesh/GraphChat/SemanticIntent/GraphChatSemanticIntentExecutor.swift`
+- `BrainMesh/GraphChat/SemanticIntent/GraphChatSemanticIntentLimitPolicy.swift`
+- `BrainMesh/GraphChat/TypedIntent/GraphChatLocalIntentSearchExecutionSupport.swift`
+- `BrainMesh/GraphChat/Orchestration/GraphChatRequestPipeline.swift`
+
+Zweistufige Trust Boundary:
+
+- `GraphChatIntentInterpreting` ist vom freien `GraphChatModelProvider` getrennt. Seine Foundation-Models-Implementierung besitzt keine Tools und liefert keine Nutzerantwort, sondern ausschließlich einen value-only, `Sendable` und untrusted `GraphChatSemanticIntentDraft`.
+- Der Interpreter-Request enthält nur die normalisierte Frage, Antwortsprache, begrenzte nutzersichtbare Entity-/Feldanzeigenamen, appseitig erzeugte sichere Conversation-Beschreibungen und eine nutzersichtbare fachliche Scope-Beschreibung. UUIDs, interne Aliasse und der vollständige App-Katalog werden nicht übertragen.
+- Der Draft kann nur Intent-Familie, fachlichen Entity-/Node-Begriff, Suchbegriff, fachliche Ergebnisabsicht, eine revalidierbare Conversation-Auswahl und Antwortsprache ausdrücken. `GraphChatSemanticIntentDraftValidator` lehnt technische Identifikatoren und Aliasse, Tool-/Query-/Evidence-/Artifact-Sprache, überlange beziehungsweise zu viele Werte sowie unbekannte Feldkombinationen ab.
+- Der Draft ist niemals eine validierte Identität. `GraphChatSemanticIntentResolver` bindet Begriffe ausschließlich gegen den vollständigen appseitigen `GraphSchemaContext.foundationalAliases` und autorisiert die resultierenden Entity-, Node- und Selection-Scope-Bindings erneut. Mehrdeutige Entities erzeugen eine bestehende graph-/conversation-/turngebundene Pending Clarification; nicht sicher bindbare unterstützte Intents werden nicht geraten.
+- Erst nach erfolgreicher Auflösung legt die App die technische Action fest: `SearchGraphTool` für Find Nodes beziehungsweise einen validierten `GraphQueryPlan` für Entity List. Die App besitzt außerdem Sortierung, Tie-Breaker, Default-/Maximum-Limits, Evidence-Revalidierung, Artifact-Typ und Conversation-State-Commit.
+
+Pipeline- und Fallback-Reihenfolge:
+
+- `GraphChatRequestPreflight` läuft zuerst. Danach erhält der providerfreie Foundational Compiler den vollständigen Schema-Kontext. `.compiled` und `.clarification` werden sofort lokal abgeschlossen und rufen den semantischen Interpreter nicht auf.
+- Nur `.notRecognized` erreicht den Semantic Coordinator. Akzeptierte Find-/List-Drafts werden über den gemeinsamen `GraphChatLocalIntentExecutionKernel` lokal ausgeführt und mit Primary Result, Result-Artefakt, deterministischem Answer Fallback und Presentation Firewall gerendert; eine freie Answer-Provider-Session entsteht nicht.
+- Ausschließlich explizite Drafts der Familien `.unrecognized` oder `.openEnded` fallen auf die unveränderte Provider-Pipeline zurück. Validierungs-, Binding-, Scope-, Query- und Search-Fehler eines bereits erkannten unterstützten Intents sind harte Clarification-/Failure-Pfade und kein impliziter Provider-Fallback.
+- Cancellation wird unmittelbar weitergereicht. Vor dem atomaren äußeren Commit werden Conversation-, Evidence-, Presentation-, Artifact- und Ledger-Zustände vollständig zurückgerollt; jeder Stream behält genau ein terminales Event.
+
+Find Nodes:
+
+- Unterstützt werden freie Suchformulierungen wie „Finde Projekt Atlas“, „Suche Einträge zu New York“, „Find Project Atlas“ und „Show me entries about migration“.
+- Der Resolver unterscheidet nur die fachlichen Ziele beliebige Nodes, nur Entities, nur Attributes und Attributes einer eindeutig aufgelösten Entity. Revalidierte Suchtreffer werden anschließend graph-, entity-, node-, selection- und kind-gescopt; der Chat-Scope wird nie erweitert.
+- `GraphChatSemanticIntentLimitPolicy` bestimmt das technische Search-Limit zentral. Das Result-Artefakt enthält nur revalidierte Treffer. Vor Artifact-, Ledger- und Conversation-Bindung projiziert die lokale Search-Ausführung Evidence auf Source Reference, Anzeigename und Navigation; Subtitle-/Match-Snippets und Feldwerte werden verworfen. Search-Evidence darf damit niemals einen konkreten Detailfeldwert oder einen Search-Snippet als Fakt belegen.
+
+Entity List:
+
+- Freie Listenformulierungen werden gegen den vollständigen appseitigen Entity-Katalog aufgelöst. Der Plan projiziert immer Node Identity, erfindet keine Filter, sortiert stabil nach Anzeigename und verwendet den bestehenden UUID-Tie-Breaker der Query Engine.
+- Die zentrale Policy verwendet `GraphQueryPlanLimits.defaultResultLimit` für eine Standardliste. Die fachliche Angabe „alle“ wird auf `GraphQueryPlanLimits.maximumResultLimit` begrenzt. `GraphChatResultWindow`, `totalCount`, `returnedCount` und Truncation bleiben in Primary Result, Artifact und lokaler Antwort sichtbar.
+- Erfolgreiche Find- und List-Ergebnisse werden durch den bestehenden Conversation Reducer committed und stehen dadurch als typisierte `CURRENT`-Referenz für Folgeturns zur Verfügung.
+
+Observability:
+
+- Content-free Events unterscheiden Interpreter-Start, Draft akzeptiert/abgelehnt, Find/List kompiliert, Clarification erforderlich, Legacy-Provider-Fallback und Cancellation.
+- Request-Metriken zählen Interpreter- und Answer-Provider-Aufrufe getrennt. Fragen, Draftwerte, Anzeigenamen, Aliasse, IDs, Suchbegriffe und Antworttext werden nicht protokolliert.
 
 ### Graph Chat Typed-Intent- und Local-Execution-Trust-Boundary
 
@@ -815,9 +863,9 @@ Pfade:
 Domainvertrag:
 
 - `GraphChatTypedIntent` ist versioniert, value-only, `Hashable` und `Sendable`; SwiftData-Modelle, Provider-Sessions und Modelltext sind ausgeschlossen.
-- Die Payload unterscheidet typseitig Find Nodes, Entity Collection, Count/Group, Node Details, Narrow Result Set, Compare Nodes und Inspect Graph State. In diesem Stand besitzt nur der explizite Foundational Adapter ausführbare Local Actions.
+- Die Payload unterscheidet typseitig Find Nodes, Entity Collection, Count/Group, Node Details, Narrow Result Set, Compare Nodes und Inspect Graph State. Ausführbare Local Actions existieren in diesem Stand für die beiden Foundational-Fälle sowie für semantisch interpretierte Find-Nodes- und Entity-List-Intents.
 - Gemeinsame Bindings enthalten Graph-, Chat- und Query-Scope, Sprache, Request, Conversation, aktuellen Turn, optionalen Quell-Turn und Clarification, Resolution Source/Origin/Quality, erwartete Kardinalität, Fact-Erwartung, Ergebnis-/Sicherheitslimits sowie validierte Entity-, Field- und Node-Identitäten.
-- Der Adapter bildet `singleNodeFieldValue` verlustfrei auf `.nodeDetails` mit `.authoritativeSingleField` und `entityAttributeCollection` auf `.entityCollection` ab. Er erzeugt zugleich die feste lokale Query Action; eine zweite Spracherkennung existiert nicht.
+- Der Foundational Adapter bildet `singleNodeFieldValue` verlustfrei auf `.nodeDetails` mit `.authoritativeSingleField` und `entityAttributeCollection` auf `.entityCollection` ab. Der Semantic Resolver erzeugt nach separater Draft-Validierung und vollständiger appseitiger Bindung entweder `.findNodes` mit fester Search Action oder `.entityCollection` mit fester Query Action.
 
 Execution-Kernel:
 
@@ -828,11 +876,11 @@ Execution-Kernel:
 - Fehler und Cancellation entfernen Evidence, Presentation, Ledger-Einträge und gestagte Artifacts und setzen die Conversation-Transaktion auf ihren Base-State zurück. Scheitert der äußere Commit nach erfolgreichem Artifact-Commit, entfernt der Kernel die bereits committed wirkenden Session-Artefakte.
 - Erfolgreicher Commit behält ausschließlich die finalen Session-Artefakte; temporäre Evidence-, Presentation-, Ledger-, Staging- und Conversation-Transaktionszustände werden anschließend bereinigt.
 - Single Field behält Node Identity plus exakt ein Feld, Limit `1`, denselben Authoritative-Fact-Extractor und vollständig appseitiges Rendering. Collections behalten das vollständige `GraphChatResultWindow`, Truncation und das bestehende Result-Artefakt.
-- Nicht erkannte Fragen erreichen unverändert die Provider-Pipeline; lokale Execution erzeugt weder Provider-Session noch Stream, modellbestimmten Tool Call oder Modelltext.
+- Explizit semantisch `.unrecognized` beziehungsweise `.openEnded` klassifizierte Fragen erreichen unverändert die Provider-Pipeline; lokale Execution erzeugt weder Answer-Provider-Session noch modellbestimmten Tool Call oder Modelltext.
 
 Bewusste Grenze:
 
-- Die übrigen Typed-Intent-Familien definieren in diesem PR nur den allgemeinen Domänenvertrag. Es existieren dafür weder semantische Interpretation noch neue lokale Actions, Query-Fähigkeiten oder sichtbare UI-Interpretationen.
+- Count/Group, freie Detailfilter, Node Details jenseits des Foundational Single Facts, Narrow Result Set, Compare Nodes und Inspect Graph State bleiben reine Domänenverträge. Es existieren dafür weder semantische Interpretation noch neue lokale Actions, Query-Fähigkeiten oder sichtbare UI-Interpretationen.
 
 ### Graph Chat Authoritative Fact Trust Boundary
 
@@ -1278,6 +1326,7 @@ Pfad: `BrainMesh/Observability/BMObservability.swift`
   - Modelltext ersetzt beziehungsweise Search-only-Behauptung blockiert;
   - Fact wegen fehlendem Wert, Mehrdeutigkeit, Integrity-Konflikt oder Revalidation verworfen.
 - Lokale Typed-Intent-Observability protokolliert ausschließlich Intent-Art und Lifecycle-Outcome: Foundational-Adaption, Start, Commit, Rollback, Revalidation-Ablehnung und Cancellation vor Commit. Fragen, Anzeigenamen, Werte, Aliasse, IDs und Antworttexte sind ausgeschlossen.
+- Semantic-Intent-Observability protokolliert ausschließlich Interpreter-Start, Draft akzeptiert/abgelehnt, Find/List kompiliert, Clarification, Legacy-Provider-Fallback und Cancellation sowie getrennte Interpreter-/Answer-Provider-Aufrufzähler. Draftinhalt, Fragen, Suchbegriffe, Anzeigenamen, Aliasse, IDs und Antworttexte sind ausgeschlossen.
 - Authoritative-Fact-Metriken enthalten ausschließlich die technische Outcome-Kategorie. Fragen, Antworten, Namen, Fachwerte, Aliasse und IDs werden nicht protokolliert.
 - Settings zeigt Storage-Modus, iCloud-Accountstatus und Cachegrößen.
 
@@ -1381,6 +1430,8 @@ Die realistischen Obergrenzen sind **UNKNOWN U7** und müssen produktseitig fest
 - Graph Chat Provider, Query, Conversation, Tools und UI-Controller.
 - Foundational Intent Compiler, Authoritative-Fact-Extraktion/-Rendering, Finalizer-Ersatzpfade, UI-/Copy-Vertrag und gebündelte Foundational-Accuracy-Akzeptanzszenarien.
 - Typed-Intent-Domainverträge, verlustfreie Foundational-Adaption, Kernel-Cleanup bei Artifact-Staging- und äußerem Commit-Fehler sowie End-to-End-Parität für Geburtstagsfrage und vollständige Reisenliste.
+- Semantic-Draft-/Validator-/Resolver-Verträge, begrenzter nutzersichtbarer Interpreter-Kontext, technische-Identifier-Ablehnung, Scope-Erhalt, zentrale Find-/List-Limits, Search-Evidence-Grenze und content-free Observability.
+- In-Memory-End-to-End-Pfade für natürliche Node-Suche und freie Entity-Liste einschließlich Artifact, `CURRENT`, Truncation, Clarification, Cancellation, atomarem Rollback und Legacy-Provider-Fallback.
 
 ### Ergänzungen
 

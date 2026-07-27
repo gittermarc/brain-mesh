@@ -130,12 +130,58 @@ nonisolated struct GraphChatLocalIntentMetric: Hashable, Sendable {
     let rejection: GraphChatLocalIntentRevalidationRejection?
 }
 
+nonisolated enum GraphChatSemanticIntentLifecycleEvent:
+    String,
+    CaseIterable,
+    Hashable,
+    Sendable
+{
+    case interpreterStarted
+    case draftAccepted
+    case draftRejected
+    case findIntentCompiled
+    case listIntentCompiled
+    case clarificationRequired
+    case legacyProviderFallback
+    case answerProviderStarted
+    case cancellation
+}
+
+nonisolated struct GraphChatSemanticIntentMetric:
+    Hashable,
+    Sendable
+{
+    let event: GraphChatSemanticIntentLifecycleEvent
+    let family: GraphChatSemanticIntentFamily?
+    let interpreterCallCount: Int
+    let answerProviderCallCount: Int
+
+    init(
+        event: GraphChatSemanticIntentLifecycleEvent,
+        family: GraphChatSemanticIntentFamily?,
+        interpreterCallCount: Int = 0,
+        answerProviderCallCount: Int = 0
+    ) {
+        self.event = event
+        self.family = family
+        self.interpreterCallCount = max(
+            0,
+            interpreterCallCount
+        )
+        self.answerProviderCallCount = max(
+            0,
+            answerProviderCallCount
+        )
+    }
+}
+
 nonisolated enum GraphChatObservabilityEvent: Hashable, Sendable {
     case request(GraphChatRequestMetric)
     case availability(GraphChatAvailabilityMetricState)
     case toolRepair(GraphChatToolRepairMetric)
     case authoritativeFact(GraphChatAuthoritativeFactMetric)
     case localIntent(GraphChatLocalIntentMetric)
+    case semanticIntent(GraphChatSemanticIntentMetric)
 }
 
 nonisolated protocol GraphChatObservabilityRecording: Sendable {
@@ -173,6 +219,11 @@ actor GraphChatTechnicalObservabilityRecorder: GraphChatObservabilityRecording {
             let rejection = metric.rejection?.rawValue ?? "none"
             BMLog.chat.info(
                 "Local intent event=\(metric.event.rawValue, privacy: .public) kind=\(metric.kind.rawValue, privacy: .public) rejection=\(rejection, privacy: .public)"
+            )
+        case .semanticIntent(let metric):
+            let family = metric.family?.rawValue ?? "none"
+            BMLog.chat.info(
+                "Semantic intent event=\(metric.event.rawValue, privacy: .public) family=\(family, privacy: .public) interpreterCalls=\(metric.interpreterCallCount) answerProviderCalls=\(metric.answerProviderCallCount)"
             )
         }
     }

@@ -22,6 +22,19 @@ extension GraphChatQueryEngine:
     GraphChatLocalIntentQueryExecuting
 {}
 
+nonisolated protocol GraphChatLocalIntentSearchExecuting:
+    Sendable
+{
+    func execute(
+        _ input: SearchGraphInput,
+        context: GraphChatToolContext
+    ) async throws -> GraphChatToolResult<SearchGraphOutput>
+}
+
+extension SearchGraphTool:
+    GraphChatLocalIntentSearchExecuting
+{}
+
 nonisolated enum GraphChatLocalQueryResultContract:
     Hashable,
     Sendable
@@ -38,8 +51,32 @@ nonisolated struct GraphChatLocalQueryAction: Hashable, Sendable {
     let resultContract: GraphChatLocalQueryResultContract
 }
 
+nonisolated enum GraphChatLocalSearchTarget:
+    String,
+    CaseIterable,
+    Hashable,
+    Sendable
+{
+    case anyEntry
+    case entities
+    case attributes
+    case entityNodes
+}
+
+nonisolated struct GraphChatLocalSearchAction:
+    Hashable,
+    Sendable
+{
+    let query: String
+    let limit: Int
+    let scope: GraphChatScope
+    let target: GraphChatLocalSearchTarget
+    let entityID: UUID?
+}
+
 nonisolated enum GraphChatLocalIntentAction: Hashable, Sendable {
     case queryDetailValues(GraphChatLocalQueryAction)
+    case searchGraph(GraphChatLocalSearchAction)
 }
 
 nonisolated struct GraphChatTypedIntentAdaptation:

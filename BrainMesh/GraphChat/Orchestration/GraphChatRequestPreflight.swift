@@ -43,6 +43,45 @@ nonisolated struct GraphChatProviderTurnPlan: Hashable, Sendable {
     let currentResolvedScope: GraphChatResolvedConversationScope?
     let continuationOperation: GraphChatConversationContinuationOperation?
     let foundationalContinuation: GraphChatFoundationalIntentContinuation?
+    let semanticContinuation: GraphChatSemanticIntentContinuation?
+
+    init(
+        scopeKey: GraphChatOrchestrationScopeKey,
+        normalizedQuestion: String,
+        providerQuestion: String,
+        responseLanguage: GraphChatResponseLanguage,
+        requestBaseState: GraphChatConversationState,
+        expectedCommittedState: GraphChatConversationState,
+        conversationContext:
+            GraphChatConversationContextSnapshot,
+        currentReference:
+            GraphChatResolvedConversationReference?,
+        currentResolvedScope:
+            GraphChatResolvedConversationScope?,
+        continuationOperation:
+            GraphChatConversationContinuationOperation?,
+        foundationalContinuation:
+            GraphChatFoundationalIntentContinuation?,
+        semanticContinuation:
+            GraphChatSemanticIntentContinuation? = nil
+    ) {
+        self.scopeKey = scopeKey
+        self.normalizedQuestion = normalizedQuestion
+        self.providerQuestion = providerQuestion
+        self.responseLanguage = responseLanguage
+        self.requestBaseState = requestBaseState
+        self.expectedCommittedState =
+            expectedCommittedState
+        self.conversationContext = conversationContext
+        self.currentReference = currentReference
+        self.currentResolvedScope = currentResolvedScope
+        self.continuationOperation =
+            continuationOperation
+        self.foundationalContinuation =
+            foundationalContinuation
+        self.semanticContinuation =
+            semanticContinuation
+    }
 }
 
 nonisolated enum GraphChatRequestPreflightResult: Hashable, Sendable {
@@ -446,6 +485,216 @@ nonisolated struct GraphChatRequestPreflight: Sendable {
                                 selection: selection,
                                 sourceTurnID: pending.sourceTurnID,
                                 clarificationID: pending.id
+                            ),
+                        semanticContinuation: nil
+                    )
+                )
+            }
+
+            if pending.decision == .semanticIntent {
+                let continuationLanguage =
+                    responseLanguageSelector.language(
+                        for: pending.continuationQuestion
+                    )
+                guard
+                    let selection =
+                        selectedOption
+                            .semanticSelection
+                else {
+                    return .local(
+                        localPlan(
+                            key: key,
+                            normalizedQuestion:
+                                normalizedQuestion,
+                            language:
+                                continuationLanguage,
+                            answer:
+                                localAnswerBuilder
+                                    .staleClarification(
+                                        language:
+                                            continuationLanguage,
+                                        clarificationID:
+                                            input.requestID
+                                    ),
+                            baseState:
+                                try clearedClarification(
+                                    in: requestBaseState
+                                ),
+                            expectedCommittedState:
+                                expectedCommittedState
+                        )
+                    )
+                }
+                requestBaseState =
+                    try clearedClarification(
+                        in: requestBaseState
+                    )
+                context = conversationContextBuilder
+                    .makeSnapshot(
+                        from:
+                            requestBaseState
+                                .snapshot
+                    )
+
+                var semanticReference:
+                    GraphChatResolvedConversationReference? = nil
+                var semanticScope:
+                    GraphChatResolvedConversationScope? = nil
+                if selection.draft
+                    .conversationReference
+                    == .currentSelection
+                {
+                    let resolution =
+                        try await referenceResolver
+                            .resolveScope(
+                                selectedOption.proposal,
+                                in: context,
+                                expectedGraphScope:
+                                    key.graphScope,
+                                expectedChatScope:
+                                    key.chatScope
+                            )
+                    guard
+                        case .resolved(
+                            let resolvedScope
+                        ) = resolution
+                    else {
+                        let local =
+                            localAnswerBuilder
+                                .referenceResolution(
+                                    resolution
+                                        .referenceResolution,
+                                    language:
+                                        continuationLanguage,
+                                    operation:
+                                        pending
+                                            .continuationOperation,
+                                    state:
+                                        requestBaseState,
+                                    sourceTurnID:
+                                        pending.sourceTurnID,
+                                    continuationQuestion:
+                                        pending
+                                            .continuationQuestion,
+                                    clarificationID:
+                                        input.requestID,
+                                    referenceDate:
+                                        input.requestedAt
+                                )
+                        let semanticPending =
+                            local
+                                .pendingClarification
+                                .map { source in
+                                    GraphChatPendingClarification(
+                                        id:
+                                            source.id,
+                                        decision:
+                                            .semanticIntent,
+                                        options:
+                                            source.options.map {
+                                                GraphChatPendingClarificationOption(
+                                                    id:
+                                                        $0.id,
+                                                    title:
+                                                        $0.title,
+                                                    proposal:
+                                                        $0.proposal,
+                                                    foundationalSelection:
+                                                        nil,
+                                                    semanticSelection:
+                                                        selection
+                                                )
+                                            },
+                                        sourceTurnID:
+                                            source
+                                                .sourceTurnID,
+                                        graphScope:
+                                            source
+                                                .graphScope,
+                                        chatScope:
+                                            source
+                                                .chatScope,
+                                        continuationOperation:
+                                            source
+                                                .continuationOperation,
+                                        continuationQuestion:
+                                            source
+                                                .continuationQuestion,
+                                        createdAt:
+                                            source
+                                                .createdAt,
+                                        expiresAt:
+                                            source
+                                                .expiresAt
+                                    )
+                                }
+                        return .local(
+                            localPlan(
+                                key: key,
+                                normalizedQuestion:
+                                    normalizedQuestion,
+                                language:
+                                    continuationLanguage,
+                                answer:
+                                    local.answer,
+                                baseState:
+                                    requestBaseState,
+                                expectedCommittedState:
+                                    expectedCommittedState,
+                                pendingClarification:
+                                    semanticPending
+                            )
+                        )
+                    }
+                    semanticScope = resolvedScope
+                    semanticReference =
+                        resolvedScope.reference
+                    context =
+                        conversationContextBuilder
+                            .makeSnapshot(
+                                from:
+                                    requestBaseState
+                                        .snapshot,
+                                currentReference:
+                                    semanticReference,
+                                currentResolvedScope:
+                                    semanticScope
+                            )
+                }
+
+                return .provider(
+                    GraphChatProviderTurnPlan(
+                        scopeKey: key,
+                        normalizedQuestion:
+                            normalizedQuestion,
+                        providerQuestion:
+                            pending
+                                .continuationQuestion,
+                        responseLanguage:
+                            continuationLanguage,
+                        requestBaseState:
+                            requestBaseState,
+                        expectedCommittedState:
+                            expectedCommittedState,
+                        conversationContext:
+                            context,
+                        currentReference:
+                            semanticReference,
+                        currentResolvedScope:
+                            semanticScope,
+                        continuationOperation:
+                            nil,
+                        foundationalContinuation:
+                            nil,
+                        semanticContinuation:
+                            GraphChatSemanticIntentContinuation(
+                                selection:
+                                    selection,
+                                sourceTurnID:
+                                    pending
+                                        .sourceTurnID,
+                                clarificationID:
+                                    pending.id
                             )
                     )
                 )
@@ -545,7 +794,8 @@ nonisolated struct GraphChatRequestPreflight: Sendable {
                 currentReference: currentReference,
                 currentResolvedScope: currentResolvedScope,
                 continuationOperation: continuationOperation,
-                foundationalContinuation: nil
+                foundationalContinuation: nil,
+                semanticContinuation: nil
             )
         )
     }

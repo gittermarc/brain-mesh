@@ -30,10 +30,16 @@ actor GraphChatOrchestrator {
 
     init(
         provider: any GraphChatModelProvider,
+        intentInterpreter:
+            any GraphChatIntentInterpreting =
+                PassThroughGraphChatIntentInterpreter(),
         schemaProvider: any GraphSchemaSnapshotProviding = GraphSchemaService.shared,
         foundationalQueryExecutor:
             any GraphChatFoundationalQueryExecuting =
                 GraphChatQueryEngine.shared,
+        semanticSearchExecutor:
+            any GraphChatLocalIntentSearchExecuting =
+                SearchGraphTool(),
         toolRunnerFactory: any GraphChatModelToolRunnerFactory,
         toolBudgetPolicy: GraphChatToolBudgetPolicy = .default,
         concurrentRequestPolicy: GraphChatConcurrentRequestPolicy = .cancelPrevious,
@@ -57,8 +63,11 @@ actor GraphChatOrchestrator {
         self.concurrentRequestPolicy = concurrentRequestPolicy
         let composition = GraphChatOrchestratorComposition(
             provider: provider,
+            intentInterpreter: intentInterpreter,
             schemaProvider: schemaProvider,
             foundationalQueryExecutor: foundationalQueryExecutor,
+            semanticSearchExecutor:
+                semanticSearchExecutor,
             toolRunnerFactory: toolRunnerFactory,
             toolBudgetPolicy: toolBudgetPolicy,
             conversationStatePolicy: conversationStatePolicy,

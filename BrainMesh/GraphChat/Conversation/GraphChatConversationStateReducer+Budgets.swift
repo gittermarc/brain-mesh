@@ -77,6 +77,15 @@ nonisolated extension GraphChatConversationStateReducer {
                 if clarification.decision == .foundationalIntent {
                     return option.foundationalSelection != nil
                 }
+                if clarification.decision == .semanticIntent {
+                    guard option.semanticSelection != nil else {
+                        return false
+                    }
+                    if option.semanticSelection?.draft
+                        .conversationReference == .none {
+                        return true
+                    }
+                }
                 switch option.proposal {
                 case .alias:
                     return true
@@ -231,7 +240,8 @@ nonisolated extension GraphChatConversationStateReducer {
                 id: bounded(option.id, limit: 64),
                 title: boundedLabel(option.title),
                 proposal: option.proposal,
-                foundationalSelection: option.foundationalSelection
+                foundationalSelection: option.foundationalSelection,
+                semanticSelection: option.semanticSelection
             )
         }
         return GraphChatPendingClarification(

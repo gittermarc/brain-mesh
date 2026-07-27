@@ -34,6 +34,55 @@ nonisolated enum GraphChatScopeAuthorization {
         }
     }
 
+    static func allows(
+        scope: GraphChatScope,
+        within requestScope: GraphChatScope,
+        aliases: GraphSchemaAliasMap
+    ) -> Bool {
+        guard
+            scope.graphScope
+                == requestScope.graphScope,
+            aliases.graphScope
+                == requestScope.graphScope
+        else {
+            return false
+        }
+        switch scope.target {
+        case .graph:
+            if case .graph = requestScope.target {
+                return true
+            }
+            return false
+
+        case .entity(let entityID):
+            switch requestScope.target {
+            case .graph:
+                return true
+            case .entity(let allowedEntityID):
+                return entityID == allowedEntityID
+            case .node, .selection:
+                return false
+            }
+
+        case .node(let node):
+            return nodeIsAllowed(
+                node,
+                within: requestScope,
+                aliases: aliases
+            )
+
+        case .selection(let nodes):
+            return nodes.isEmpty == false
+                && nodes.allSatisfy {
+                    nodeIsAllowed(
+                        $0,
+                        within: requestScope,
+                        aliases: aliases
+                    )
+                }
+        }
+    }
+
     private static func planScopeDoesNotBroadenEntity(
         _ planScope: GraphResolvedQueryScope,
         entityID: UUID
@@ -67,6 +116,25 @@ nonisolated enum GraphChatScopeAuthorization {
             return allowedNodes.contains(node)
         case .selection(let nodes):
             return Set(nodes).isSubset(of: allowedNodes)
+        }
+    }
+
+    private static func nodeIsAllowed(
+        _ node: NodeRefKey,
+        within requestScope: GraphChatScope,
+        aliases: GraphSchemaAliasMap
+    ) -> Bool {
+        switch requestScope.target {
+        case .graph:
+            return aliases.owningEntityID(for: node)
+                != nil
+        case .entity(let entityID):
+            return aliases.owningEntityID(for: node)
+                == entityID
+        case .node(let allowedNode):
+            return node == allowedNode
+        case .selection(let allowedNodes):
+            return Set(allowedNodes).contains(node)
         }
     }
 }

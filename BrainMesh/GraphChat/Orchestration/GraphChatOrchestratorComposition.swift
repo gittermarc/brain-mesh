@@ -21,9 +21,13 @@ nonisolated struct GraphChatOrchestratorComposition: Sendable {
 
     init(
         provider: any GraphChatModelProvider,
+        intentInterpreter:
+            any GraphChatIntentInterpreting,
         schemaProvider: any GraphSchemaSnapshotProviding,
         foundationalQueryExecutor:
             any GraphChatFoundationalQueryExecuting,
+        semanticSearchExecutor:
+            any GraphChatLocalIntentSearchExecuting,
         toolRunnerFactory: any GraphChatModelToolRunnerFactory,
         toolBudgetPolicy: GraphChatToolBudgetPolicy,
         conversationStatePolicy: GraphChatConversationStatePolicy,
@@ -79,6 +83,28 @@ nonisolated struct GraphChatOrchestratorComposition: Sendable {
                 referenceDate: referenceDate,
                 observability: observability
             )
+        let semanticCoordinator =
+            GraphChatSemanticIntentCoordinator(
+                interpreter: intentInterpreter,
+                referenceResolver:
+                    referenceResolver,
+                localAnswerBuilder:
+                    localAnswerBuilder,
+                observability: observability
+            )
+        let semanticExecutor =
+            GraphChatSemanticIntentExecutor(
+                queryExecutor:
+                    foundationalQueryExecutor,
+                searchExecutor:
+                    semanticSearchExecutor,
+                conversationStateReducer:
+                    stateReducer,
+                calendar: calendar,
+                timeZone: timeZone,
+                referenceDate: referenceDate,
+                observability: observability
+            )
         let requestPreflight = GraphChatRequestPreflight(
             conversationStateReducer: stateReducer,
             conversationContextBuilder: contextBuilder,
@@ -111,11 +137,16 @@ nonisolated struct GraphChatOrchestratorComposition: Sendable {
             preflight: requestPreflight,
             foundationalCoordinator: foundationalCoordinator,
             foundationalExecutor: foundationalExecutor,
+            semanticCoordinator:
+                semanticCoordinator,
+            semanticExecutor:
+                semanticExecutor,
             contextRetry: contextRetry,
             finalizer: answerFinalizer,
             sessionFactory: sessionFactory,
             referenceDate: referenceDate,
-            observer: pipelineObserver
+            observer: pipelineObserver,
+            observability: observability
         )
         self.errorMapper = errorMapper
         self.presentationResolver = GraphChatAnswerPresentationResolver(
