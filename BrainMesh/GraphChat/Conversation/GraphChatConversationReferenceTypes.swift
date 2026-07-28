@@ -258,6 +258,14 @@ nonisolated struct GraphChatConversationReferenceInterpreter: Sendable {
                 operation: operation
             )
         }
+        if containsAny(
+            normalized, values: ["diese gruppe", "letzte gruppe", "this group", "last group"])
+        {
+            return GraphChatConversationReferenceInterpretation(
+                proposal: .lastGroup,
+                operation: operation
+            )
+        }
         if containsSetPronoun(normalized) {
             return GraphChatConversationReferenceInterpretation(
                 proposal: .latestResults,
@@ -285,14 +293,6 @@ nonisolated struct GraphChatConversationReferenceInterpreter: Sendable {
         if containsAny(normalized, values: ["letztes feld", "letzte feld", "last field"]) {
             return GraphChatConversationReferenceInterpretation(
                 proposal: .lastField,
-                operation: operation
-            )
-        }
-        if containsAny(
-            normalized, values: ["diese gruppe", "letzte gruppe", "this group", "last group"])
-        {
-            return GraphChatConversationReferenceInterpretation(
-                proposal: .lastGroup,
                 operation: operation
             )
         }

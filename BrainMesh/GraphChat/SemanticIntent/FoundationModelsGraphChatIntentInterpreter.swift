@@ -11,10 +11,31 @@ import Foundation
 import FoundationModels
 
 @Generable
+private nonisolated struct FoundationGraphChatGeneratedFilterDraft {
+    @Guide(
+        description:
+            "Exact user-visible field display name from the supplied schema."
+    )
+    var fieldTerm: String
+
+    @Guide(
+        description:
+            "Exactly one of unspecified, contains, equals, startsWith, isPresent, isMissing, lessThan, lessThanOrEqual, greaterThan, greaterThanOrEqual, between, before, after, inYear, inMonth, isOverdue, or oneOf."
+    )
+    var relation: String
+
+    @Guide(
+        description:
+            "Literal user values only. Use no values for isPresent, isMissing, and isOverdue; two for between; otherwise the explicitly requested values."
+    )
+    var values: [String]
+}
+
+@Generable
 private nonisolated struct FoundationGraphChatGeneratedIntentDraft {
     @Guide(
         description:
-            "Exactly one of findNodes, entityList, unrecognized, or openEnded."
+            "Exactly one of findNodes, entityList, filteredCollection, count, groupCount, refinement, unrecognized, or openEnded."
     )
     var family: String
 
@@ -54,6 +75,42 @@ private nonisolated struct FoundationGraphChatGeneratedIntentDraft {
             "Exactly one of none or currentSelection."
     )
     var conversationReference: String
+
+    @Guide(
+        description:
+            "Bounded semantic filters using only visible field names, domain relations, and literal user values."
+    )
+    var filters: [FoundationGraphChatGeneratedFilterDraft]
+
+    @Guide(
+        description:
+            "Exactly one of none, nodeName, or field."
+    )
+    var sortTarget: String
+
+    @Guide(
+        description:
+            "Exact visible field name when sortTarget is field; otherwise empty."
+    )
+    var sortFieldTerm: String
+
+    @Guide(
+        description:
+            "Exactly one of unspecified, ascending, or descending."
+    )
+    var sortDirection: String
+
+    @Guide(
+        description:
+            "Visible schema field names explicitly requested for display. Node identity is automatic; never include node name or IDs."
+    )
+    var projectionTerms: [String]
+
+    @Guide(
+        description:
+            "Exact visible field name for groupCount; otherwise empty."
+    )
+    var groupFieldTerm: String
 
     @Guide(
         description:
@@ -139,14 +196,21 @@ actor FoundationModelsGraphChatIntentInterpreter:
         You are a narrow semantic classifier. You have no tools and never answer the user.
         Return only the generated value. Describe user meaning, never technical execution.
         Never emit UUIDs, aliases, IDs, query plans, tool names, evidence, artifacts, repositories, navigation, limits chosen by the app, or prose answers.
-        Use findNodes for natural search requests and entityList for natural requests to list nodes of one entity.
+        Use findNodes for natural search requests and entityList for unfiltered collections of one entity.
+        Use filteredCollection for a new collection constrained by one or more field meanings.
+        Use count for a requested count and groupCount for counts grouped by one visible field.
+        Use refinement for filtering, sorting, or projecting the revalidated current result set.
         Use unrecognized when the meaning does not match those families.
         Use openEnded only when the user explicitly asks an open-ended graph question that needs the legacy answer flow.
         When an entity type is clear, place only its exact supplied display name in entityTerm; never an alias or ID.
+        Put only exact supplied field display names in filters, sortFieldTerm, projectionTerms, and groupFieldTerm.
+        Node identity is projected by the app; never place node name in projectionTerms.
+        Preserve user values literally. Describe only the semantic relation; the app chooses operators and parses typed values.
+        Use conversationReference=currentSelection only when the user refers to prior results, such as these, those, davon, or diese Gruppe.
         Keep searchTerm to the subject being searched for, without entity-category filler when it is safely separable.
         Use entityNodes only when the user asks for nodes belonging to one entity.
         Use standard, all, or first only to preserve the user's requested amount; the app chooses the technical limit.
-        Copy only short user-visible wording into entityTerm and searchTerm.
+        Copy only short user-visible wording into semantic string fields.
         Internal identities are unavailable and must never be invented.
         """
     }
@@ -199,6 +263,10 @@ actor FoundationModelsGraphChatIntentInterpreter:
                 GraphChatSemanticConversationReference(
                     rawValue: generated.conversationReference
                 ),
+            let sortDirection =
+                GraphChatSemanticSortDirection(
+                    rawValue: generated.sortDirection
+                ),
             let language = GraphChatResponseLanguage(
                 rawValue: generated.responseLanguage
             )
@@ -227,6 +295,56 @@ actor FoundationModelsGraphChatIntentInterpreter:
             throw invalidOutput()
         }
 
+        let filters = try generated.filters.map { source in
+            guard
+                let relation =
+                    GraphChatSemanticFilterRelation(
+                        rawValue: source.relation
+                    )
+            else {
+                throw invalidOutput()
+            }
+            return GraphChatSemanticFilterDraft(
+                fieldTerm: source.fieldTerm,
+                relation: relation,
+                values: source.values
+            )
+        }
+        let sorting: GraphChatSemanticSortDraft?
+        switch generated.sortTarget {
+        case "none":
+            guard generated.sortFieldTerm
+                    .trimmingCharacters(
+                        in: .whitespacesAndNewlines
+                    )
+                    .isEmpty,
+                  sortDirection == .unspecified else {
+                throw invalidOutput()
+            }
+            sorting = nil
+        case GraphChatSemanticSortTarget.nodeName.rawValue:
+            guard generated.sortFieldTerm
+                    .trimmingCharacters(
+                        in: .whitespacesAndNewlines
+                    )
+                    .isEmpty else {
+                throw invalidOutput()
+            }
+            sorting = GraphChatSemanticSortDraft(
+                target: .nodeName,
+                fieldTerm: nil,
+                direction: sortDirection
+            )
+        case GraphChatSemanticSortTarget.field.rawValue:
+            sorting = GraphChatSemanticSortDraft(
+                target: .field,
+                fieldTerm: generated.sortFieldTerm,
+                direction: sortDirection
+            )
+        default:
+            throw invalidOutput()
+        }
+
         guard language == request.responseLanguage else {
             throw invalidOutput()
         }
@@ -237,6 +355,12 @@ actor FoundationModelsGraphChatIntentInterpreter:
             findTarget: target,
             resultAmount: amount,
             conversationReference: reference,
+            filters: filters,
+            sorting: sorting,
+            projectionTerms:
+                generated.projectionTerms,
+            groupFieldTerm:
+                generated.groupFieldTerm,
             responseLanguage: language
         )
     }

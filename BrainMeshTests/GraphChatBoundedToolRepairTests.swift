@@ -300,7 +300,7 @@ struct GraphChatBoundedToolRepairTests {
         #expect(repair.allowedOperators.contains(.before))
         #expect(repair.allowedOperators.contains(.isOverdue))
         #expect(repair.allowedOperators.contains(.contains) == false)
-        #expect(repair.allowedOperators.contains(.equals) == false)
+        #expect(repair.allowedOperators.contains(.equals))
     }
 
     @MainActor

@@ -903,6 +903,680 @@ struct GraphChatSemanticIntentEndToEndTests {
 
     @MainActor
     @Test
+    func openProjectsSortedByDueDateThenRefineOnlyTheValidatedResultSet()
+        async throws
+    {
+        let store =
+            try BrainMeshTestContainer
+                .makeInMemoryStore()
+        let builder = BrainMeshFixtureBuilder(
+            context: store.context
+        )
+        let fixture =
+            makeQueryIntentFixture(builder)
+        try builder.save()
+        let interpreter =
+            FakeGraphChatIntentInterpreter(
+                steps: [
+                    .draft(
+                        GraphChatUntrustedSemanticIntentDraft(
+                            family:
+                                .filteredCollection,
+                            entityTerm:
+                                "Projekte",
+                            filters: [
+                                GraphChatSemanticFilterDraft(
+                                    fieldTerm:
+                                        "Status",
+                                    relation:
+                                        .equals,
+                                    values:
+                                        ["Offen"]
+                                )
+                            ],
+                            sorting:
+                                GraphChatSemanticSortDraft(
+                                    target:
+                                        .field,
+                                    fieldTerm:
+                                        "Fälligkeitsdatum",
+                                    direction:
+                                        .ascending
+                                ),
+                            responseLanguage:
+                                .german
+                        )
+                    ),
+                    .draft(
+                        GraphChatUntrustedSemanticIntentDraft(
+                            family:
+                                .refinement,
+                            conversationReference:
+                                .currentSelection,
+                            filters: [
+                                GraphChatSemanticFilterDraft(
+                                    fieldTerm:
+                                        "Fälligkeitsdatum",
+                                    relation:
+                                        .isOverdue,
+                                    values: []
+                                )
+                            ],
+                            responseLanguage:
+                                .german
+                        )
+                    ),
+                ]
+            )
+        let runtime = makeRuntime(
+            store: store,
+            graphID: fixture.graph.id,
+            interpreter: interpreter,
+            candidates: []
+        )
+        let graphScope = GraphScope(
+            graphID: fixture.graph.id
+        )
+        let chatScope =
+            GraphChatScope.entireGraph(
+                graphScope
+            )
+
+        let firstEvents =
+            await GraphChatProviderTestSupport
+                .collect(
+                    await runtime.orchestrator
+                        .streamAnswer(
+                            question:
+                                "Zeige offene Projekte, sortiert nach Fälligkeitsdatum.",
+                            graphScope:
+                                graphScope,
+                            chatScope:
+                                chatScope
+                        )
+                )
+        let firstAnswer =
+            try completedAnswer(firstEvents)
+        let firstArtifact =
+            try await resolvedArtifact(
+                answer: firstAnswer,
+                runtime: runtime,
+                graphScope: graphScope,
+                chatScope: chatScope
+            )
+        guard
+            case .resultList(let firstList) =
+                firstArtifact.payload
+        else {
+            Issue.record(
+                "Expected the sorted collection artifact."
+            )
+            return
+        }
+        let firstState = try #require(
+            await runtime.orchestrator
+                .conversationStateSnapshot()
+        )
+        let sourceNodes = Set<NodeRefKey>(
+            firstState.resultContexts
+                .last?
+                .references
+                .compactMap { reference -> NodeRefKey? in
+                    if case .node(let node) =
+                        reference.reference {
+                        return node
+                    }
+                    return nil
+                } ?? []
+        )
+
+        let secondEvents =
+            await GraphChatProviderTestSupport
+                .collect(
+                    await runtime.orchestrator
+                        .streamAnswer(
+                            question:
+                                "Welche davon sind überfällig?",
+                            graphScope:
+                                graphScope,
+                            chatScope:
+                                chatScope
+                        )
+                )
+        let secondAnswer =
+            try completedAnswer(secondEvents)
+        let secondArtifact =
+            try await resolvedArtifact(
+                answer: secondAnswer,
+                runtime: runtime,
+                graphScope: graphScope,
+                chatScope: chatScope
+            )
+        guard
+            case .resultList(let secondList) =
+                secondArtifact.payload
+        else {
+            Issue.record(
+                "Expected the refined collection artifact."
+            )
+            return
+        }
+        let state = try #require(
+            await runtime.orchestrator
+                .conversationStateSnapshot()
+        )
+        let plan = try #require(
+            state.lastValidatedQueryPlan
+        )
+        guard case .selection(let planNodes) =
+            plan.scope else {
+            Issue.record(
+                "Expected an exact source selection."
+            )
+            return
+        }
+        let returnedNodes = Set<NodeRefKey>(
+            state.resultContexts.last?
+                .references
+                .compactMap { reference -> NodeRefKey? in
+                    if case .node(let node) =
+                        reference.reference {
+                        return node
+                    }
+                    return nil
+                } ?? []
+        )
+        let provider =
+            await runtime.provider.snapshot()
+        let metrics =
+            await runtime.observability
+                .semanticMetrics()
+
+        #expect(
+            firstList.rows.map(\.primaryText)
+                == [
+                    "Apollo",
+                    "Carina",
+                    "Borealis",
+                ]
+        )
+        #expect(
+            secondList.rows.map(\.primaryText)
+                == ["Apollo", "Carina"]
+        )
+        #expect(Set(planNodes) == sourceNodes)
+        #expect(
+            returnedNodes.isSubset(
+                of: sourceNodes
+            )
+        )
+        #expect(
+            returnedNodes.contains(
+                fixture.closedOverdueNode
+            ) == false
+        )
+        #expect(
+            returnedNodes.contains(
+                fixture.foreignOverdueNode
+            ) == false
+        )
+        #expect(
+            plan.filters.map(\.operation)
+                == [.equals, .isOverdue]
+        )
+        #expect(
+            plan.sorting == [
+                GraphValidatedQuerySort(
+                    key: .field(
+                        fixture.dueField.id
+                    ),
+                    direction: .ascending
+                )
+            ]
+        )
+        #expect(
+            provider.createdSessions.isEmpty
+        )
+        #expect(
+            provider.streamedSessions.isEmpty
+        )
+        #expect(
+            metrics.map(\.event) == [
+                .interpreterStarted,
+                .draftAccepted,
+                .filteredCollectionCompiled,
+                .interpreterStarted,
+                .draftAccepted,
+                .refinementIntentCompiled,
+            ]
+        )
+        #expect(
+            metrics.reduce(0) {
+                $0 + $1.answerProviderCallCount
+            } == 0
+        )
+        #expect(terminalEventCount(firstEvents) == 1)
+        #expect(terminalEventCount(secondEvents) == 1)
+        #expect(
+            visibleText(firstEvents + secondEvents)
+                .contains(
+                    fixture.entity.id
+                        .uuidString
+                ) == false
+        )
+    }
+
+    @MainActor
+    @Test
+    func openProjectCountProducesMetricArtifactWithoutProvider()
+        async throws
+    {
+        let store =
+            try BrainMeshTestContainer
+                .makeInMemoryStore()
+        let builder = BrainMeshFixtureBuilder(
+            context: store.context
+        )
+        let fixture =
+            makeQueryIntentFixture(builder)
+        try builder.save()
+        let interpreter =
+            FakeGraphChatIntentInterpreter(
+                steps: [
+                    .draft(
+                        GraphChatUntrustedSemanticIntentDraft(
+                            family: .count,
+                            entityTerm:
+                                "Projekte",
+                            filters: [
+                                GraphChatSemanticFilterDraft(
+                                    fieldTerm:
+                                        "Status",
+                                    relation:
+                                        .equals,
+                                    values:
+                                        ["Offen"]
+                                )
+                            ],
+                            responseLanguage:
+                                .german
+                        )
+                    )
+                ]
+            )
+        let runtime = makeRuntime(
+            store: store,
+            graphID: fixture.graph.id,
+            interpreter: interpreter,
+            candidates: []
+        )
+        let graphScope = GraphScope(
+            graphID: fixture.graph.id
+        )
+        let chatScope =
+            GraphChatScope.entireGraph(
+                graphScope
+            )
+        let events =
+            await GraphChatProviderTestSupport
+                .collect(
+                    await runtime.orchestrator
+                        .streamAnswer(
+                            question:
+                                "Wie viele offene Projekte gibt es?",
+                            graphScope:
+                                graphScope,
+                            chatScope:
+                                chatScope
+                        )
+                )
+        let answer = try completedAnswer(events)
+        let artifact =
+            try await resolvedArtifact(
+                answer: answer,
+                runtime: runtime,
+                graphScope: graphScope,
+                chatScope: chatScope
+            )
+        guard case .metric(let metric) =
+            artifact.payload else {
+            Issue.record(
+                "Expected a metric artifact."
+            )
+            return
+        }
+        let state = try #require(
+            await runtime.orchestrator
+                .conversationStateSnapshot()
+        )
+        let provider =
+            await runtime.provider.snapshot()
+        let metrics =
+            await runtime.observability
+                .semanticMetrics()
+
+        #expect(metric.value == .integer(3))
+        #expect(
+            state.lastValidatedQueryPlan?
+                .aggregation == .count
+        )
+        #expect(
+            state.resultContexts.last?
+                .references.isEmpty == true
+        )
+        #expect(
+            provider.createdSessions.isEmpty
+        )
+        #expect(
+            provider.streamedSessions.isEmpty
+        )
+        #expect(
+            metrics.map(\.event) == [
+                .interpreterStarted,
+                .draftAccepted,
+                .countIntentCompiled,
+            ]
+        )
+        #expect(terminalEventCount(events) == 1)
+    }
+
+    @MainActor
+    @Test
+    func groupingCreatesGroupArtifactReferencesAndSafeGroupContinuation()
+        async throws
+    {
+        let store =
+            try BrainMeshTestContainer
+                .makeInMemoryStore()
+        let builder = BrainMeshFixtureBuilder(
+            context: store.context
+        )
+        let fixture =
+            makeQueryIntentFixture(builder)
+        try builder.save()
+        let interpreter =
+            FakeGraphChatIntentInterpreter(
+                steps: [
+                    .draft(
+                        GraphChatUntrustedSemanticIntentDraft(
+                            family:
+                                .groupCount,
+                            entityTerm:
+                                "Projekte",
+                            groupFieldTerm:
+                                "Status",
+                            responseLanguage:
+                                .german
+                        )
+                    ),
+                    .draft(
+                        GraphChatUntrustedSemanticIntentDraft(
+                            family:
+                                .refinement,
+                            conversationReference:
+                                .currentSelection,
+                            sorting:
+                                GraphChatSemanticSortDraft(
+                                    target:
+                                        .nodeName,
+                                    fieldTerm: nil,
+                                    direction:
+                                        .ascending
+                                ),
+                            responseLanguage:
+                                .german
+                        )
+                    ),
+                ]
+            )
+        let runtime = makeRuntime(
+            store: store,
+            graphID: fixture.graph.id,
+            interpreter: interpreter,
+            candidates: []
+        )
+        let graphScope = GraphScope(
+            graphID: fixture.graph.id
+        )
+        let chatScope =
+            GraphChatScope.entireGraph(
+                graphScope
+            )
+        let groupEvents =
+            await GraphChatProviderTestSupport
+                .collect(
+                    await runtime.orchestrator
+                        .streamAnswer(
+                            question:
+                                "Gruppiere Projekte nach Status.",
+                            graphScope:
+                                graphScope,
+                            chatScope:
+                                chatScope
+                        )
+                )
+        let groupAnswer =
+            try completedAnswer(groupEvents)
+        let artifact =
+            try await resolvedArtifact(
+                answer: groupAnswer,
+                runtime: runtime,
+                graphScope: graphScope,
+                chatScope: chatScope
+            )
+        guard case .grouping(let grouping) =
+            artifact.payload else {
+            Issue.record(
+                "Expected a grouping artifact."
+            )
+            return
+        }
+        let groupedState = try #require(
+            await runtime.orchestrator
+                .conversationStateSnapshot()
+        )
+        let openGroup = try #require(
+            groupedState.groupReferences.first {
+                $0.valueDescription == "Offen"
+            }
+        )
+
+        let continuationEvents =
+            await GraphChatProviderTestSupport
+                .collect(
+                    await runtime.orchestrator
+                        .streamAnswer(
+                            question:
+                                "Sortiere diese Gruppe nach Name.",
+                            graphScope:
+                                graphScope,
+                            chatScope:
+                                chatScope
+                        )
+                )
+        let continuationAnswer =
+            try completedAnswer(
+                continuationEvents
+            )
+        let continuationArtifact =
+            try await resolvedArtifact(
+                answer: continuationAnswer,
+                runtime: runtime,
+                graphScope: graphScope,
+                chatScope: chatScope
+            )
+        guard
+            case .resultList(
+                let continuationList
+            ) = continuationArtifact.payload
+        else {
+            Issue.record(
+                "Expected a group continuation list."
+            )
+            return
+        }
+        let finalState = try #require(
+            await runtime.orchestrator
+                .conversationStateSnapshot()
+        )
+        let plan = try #require(
+            finalState.lastValidatedQueryPlan
+        )
+        guard case .selection(let nodes) =
+            plan.scope else {
+            Issue.record(
+                "Expected an exact group-member selection."
+            )
+            return
+        }
+        let provider =
+            await runtime.provider.snapshot()
+
+        #expect(
+            grouping.groups.map(\.label)
+                == ["Fertig", "Offen"]
+        )
+        #expect(
+            grouping.groups.map(\.count)
+                == [1, 3]
+        )
+        #expect(
+            groupedState.groupReferences
+                .allSatisfy {
+                    $0.memberNodes.count
+                        == $0.count
+                }
+        )
+        #expect(Set(nodes) == Set(openGroup.memberNodes))
+        #expect(
+            continuationList.rows
+                .map(\.primaryText) == [
+                    "Apollo",
+                    "Borealis",
+                    "Carina",
+                ]
+        )
+        #expect(
+            provider.createdSessions.isEmpty
+        )
+        #expect(
+            provider.streamedSessions.isEmpty
+        )
+        #expect(terminalEventCount(groupEvents) == 1)
+        #expect(
+            terminalEventCount(
+                continuationEvents
+            ) == 1
+        )
+    }
+
+    @MainActor
+    @Test
+    func compiledQueryCancellationCommitsNothingAndEmitsOneTerminalEvent()
+        async throws
+    {
+        let store =
+            try BrainMeshTestContainer
+                .makeInMemoryStore()
+        let builder = BrainMeshFixtureBuilder(
+            context: store.context
+        )
+        let fixture =
+            makeQueryIntentFixture(builder)
+        try builder.save()
+        let interpreter =
+            FakeGraphChatIntentInterpreter(
+                steps: [
+                    .draft(
+                        GraphChatUntrustedSemanticIntentDraft(
+                            family:
+                                .filteredCollection,
+                            entityTerm:
+                                "Projekte",
+                            filters: [
+                                GraphChatSemanticFilterDraft(
+                                    fieldTerm:
+                                        "Status",
+                                    relation:
+                                        .equals,
+                                    values:
+                                        ["Offen"]
+                                )
+                            ],
+                            responseLanguage:
+                                .german
+                        )
+                    )
+                ]
+            )
+        let blocker =
+            SemanticBlockingQueryExecutor()
+        let runtime = makeRuntime(
+            store: store,
+            graphID: fixture.graph.id,
+            interpreter: interpreter,
+            candidates: [],
+            queryExecutorBase: blocker
+        )
+        let graphScope = GraphScope(
+            graphID: fixture.graph.id
+        )
+        let stream =
+            await runtime.orchestrator
+                .streamAnswer(
+                    question:
+                        "Zeige offene Projekte.",
+                    graphScope: graphScope,
+                    chatScope:
+                        .entireGraph(
+                            graphScope
+                        )
+                )
+        let collector = Task {
+            await GraphChatProviderTestSupport
+                .collect(stream)
+        }
+        await blocker.waitUntilStarted()
+        await runtime.orchestrator
+            .cancelCurrentGeneration()
+        let events = await collector.value
+        let state =
+            await runtime.orchestrator
+                .conversationStateSnapshot()
+        let localMetrics =
+            await runtime.observability
+                .localMetrics()
+
+        #expect(events.last == .cancelled)
+        #expect(terminalEventCount(events) == 1)
+        #expect(
+            state?.turnContexts.isEmpty
+                != false
+        )
+        #expect(
+            state?.resultContexts.isEmpty
+                != false
+        )
+        #expect(
+            state?.lastValidatedQueryPlan
+                == nil
+        )
+        #expect(
+            await runtime.provider.snapshot()
+                .createdSessions.isEmpty
+        )
+        #expect(
+            localMetrics.map(\.event)
+                == [
+                    .executionStarted,
+                    .cancelledBeforeCommit,
+                    .executionRolledBack,
+                ]
+        )
+    }
+
+    @MainActor
+    @Test
     func interpreterCancellationCommitsNothing()
         async throws
     {
@@ -1152,6 +1826,196 @@ struct GraphChatSemanticIntentEndToEndTests {
         )
     }
 
+    private struct QueryIntentFixture {
+        let graph: MetaGraph
+        let entity: MetaEntity
+        let dueField:
+            MetaDetailFieldDefinition
+        let closedOverdueNode: NodeRefKey
+        let foreignOverdueNode: NodeRefKey
+    }
+
+    @MainActor
+    private func makeQueryIntentFixture(
+        _ builder: BrainMeshFixtureBuilder
+    ) -> QueryIntentFixture {
+        let graph = builder.makeGraph(
+            name: "Portfolio"
+        )
+        let entity = builder.makeEntity(
+            name: "Projekte",
+            in: graph
+        )
+        let status = builder.makeDetailField(
+            owner: entity,
+            name: "Status",
+            type: .singleChoice,
+            sortIndex: 0,
+            options:
+                ["Offen", "Fertig"],
+            isPinned: true
+        )
+        let due = builder.makeDetailField(
+            owner: entity,
+            name: "Fälligkeitsdatum",
+            type: .date,
+            sortIndex: 1,
+            isPinned: true
+        )
+        let budget = builder.makeDetailField(
+            owner: entity,
+            name: "Budget",
+            type: .numberDouble,
+            sortIndex: 2,
+            unit: "EUR"
+        )
+        let important = builder.makeDetailField(
+            owner: entity,
+            name: "Wichtig",
+            type: .toggle,
+            sortIndex: 3
+        )
+        let timeZone = TimeZone(
+            identifier: "Europe/Berlin"
+        )!
+        var calendar = Calendar(
+            identifier: .gregorian
+        )
+        calendar.timeZone = timeZone
+        let dayStart = calendar.startOfDay(
+            for:
+                Date(
+                    timeIntervalSince1970:
+                        1_768_413_600
+                )
+        )
+        let rows: [(
+            name: String,
+            status: String,
+            dueOffset: Int,
+            budget: Double,
+            important: Bool
+        )] = [
+            ("Apollo", "Offen", -3, 1_000, true),
+            ("Carina", "Offen", -1, 750, true),
+            ("Borealis", "Offen", 2, 2_000, false),
+            ("Dormant", "Fertig", -4, 300, true),
+        ]
+        var attributes: [String: MetaAttribute] =
+            [:]
+        for row in rows {
+            let attribute =
+                builder.makeAttribute(
+                    name: row.name,
+                    owner: entity
+                )
+            attributes[row.name] = attribute
+            builder.makeDetailValue(
+                attribute: attribute,
+                field: status,
+                stringValue: row.status
+            )
+            builder.makeDetailValue(
+                attribute: attribute,
+                field: due,
+                dateValue:
+                    calendar.date(
+                        byAdding: .day,
+                        value: row.dueOffset,
+                        to: dayStart
+                    )!
+            )
+            builder.makeDetailValue(
+                attribute: attribute,
+                field: budget,
+                doubleValue: row.budget
+            )
+            builder.makeDetailValue(
+                attribute: attribute,
+                field: important,
+                boolValue: row.important
+            )
+        }
+
+        let foreignGraph = builder.makeGraph(
+            name: "Archiv"
+        )
+        let foreignEntity = builder.makeEntity(
+            name: "Projekte",
+            in: foreignGraph
+        )
+        let foreignStatus =
+            builder.makeDetailField(
+                owner: foreignEntity,
+                name: "Status",
+                type: .singleChoice,
+                sortIndex: 0,
+                options: ["Offen", "Fertig"]
+            )
+        let foreignDue = builder.makeDetailField(
+            owner: foreignEntity,
+            name: "Fälligkeitsdatum",
+            type: .date,
+            sortIndex: 1
+        )
+        let foreign = builder.makeAttribute(
+            name: "Fremdprojekt",
+            owner: foreignEntity
+        )
+        builder.makeDetailValue(
+            attribute: foreign,
+            field: foreignStatus,
+            stringValue: "Offen"
+        )
+        builder.makeDetailValue(
+            attribute: foreign,
+            field: foreignDue,
+            dateValue:
+                calendar.date(
+                    byAdding: .day,
+                    value: -10,
+                    to: dayStart
+                )!
+        )
+
+        return QueryIntentFixture(
+            graph: graph,
+            entity: entity,
+            dueField: due,
+            closedOverdueNode:
+                NodeRefKey(
+                    kind: .attribute,
+                    id: attributes["Dormant"]!.id
+                ),
+            foreignOverdueNode:
+                NodeRefKey(
+                    kind: .attribute,
+                    id: foreign.id
+                )
+        )
+    }
+
+    private func resolvedArtifact(
+        answer: GraphChatAnswer,
+        runtime: Runtime,
+        graphScope: GraphScope,
+        chatScope: GraphChatScope
+    ) async throws -> GraphChatAnswerArtifact {
+        let presentation =
+            await runtime.orchestrator
+                .resolveAnswerPresentation(
+                    artifactIDs:
+                        answer.artifactIDs,
+                    evidence: answer.evidence,
+                    graphScope: graphScope,
+                    chatScope: chatScope
+                )
+        return try #require(
+            presentation.artifacts.first?
+                .artifact
+        )
+    }
+
     private struct Runtime {
         let orchestrator: GraphChatOrchestrator
         let provider: FakeGraphChatModelProvider
@@ -1192,6 +2056,14 @@ struct GraphChatSemanticIntentEndToEndTests {
             repository: repository,
             evidenceValidator: validator
         )
+        let referenceResolver =
+            GraphChatConversationReferenceResolver(
+                revalidator:
+                    GraphChatRepositoryConversationReferenceRevalidator(
+                        repository: repository,
+                        queryEngine: queryEngine
+                    )
+            )
         let readiness =
             GraphSearchIndexReadinessResult(
                 graphID: graphID,
@@ -1242,6 +2114,8 @@ struct GraphChatSemanticIntentEndToEndTests {
                     searchExecutor,
                 toolRunnerFactory:
                     EvidenceRegisteringFakeToolRunnerFactory(),
+                referenceResolver:
+                    referenceResolver,
                 responseLanguageSelector:
                     GraphChatResponseLanguageSelector(
                         fallback: .german
@@ -1457,6 +2331,40 @@ private nonisolated struct SemanticFailingQueryExecutor:
     }
 }
 
+private actor SemanticBlockingQueryExecutor:
+    GraphChatLocalIntentQueryExecuting
+{
+    private var started = false
+    private var waiters:
+        [CheckedContinuation<Void, Never>] = []
+
+    func execute(
+        _ plan: ValidatedGraphQueryPlan
+    ) async throws -> GraphChatQueryResult {
+        _ = plan
+        started = true
+        let currentWaiters = waiters
+        waiters.removeAll()
+        for waiter in currentWaiters {
+            waiter.resume()
+        }
+        try await Task.sleep(
+            nanoseconds: UInt64.max
+        )
+        throw CancellationError()
+    }
+
+    func waitUntilStarted() async {
+        guard started == false else {
+            return
+        }
+        await withCheckedContinuation {
+            continuation in
+            waiters.append(continuation)
+        }
+    }
+}
+
 private actor SemanticIntentObservabilityRecorder:
     GraphChatObservabilityRecording
 {
@@ -1478,6 +2386,19 @@ private actor SemanticIntentObservabilityRecorder:
                     let metric
                 ) = $0
             else {
+                return nil
+            }
+            return metric
+        }
+    }
+
+    func localMetrics()
+        -> [GraphChatLocalIntentMetric]
+    {
+        events.compactMap {
+            guard case .localIntent(
+                let metric
+            ) = $0 else {
                 return nil
             }
             return metric

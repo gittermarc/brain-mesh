@@ -279,6 +279,195 @@ struct GraphChatConversationReferenceResolverTests {
     }
 
     @Test
+    func emptyCurrentRemainsNoResults() async throws {
+        let fixture = Fixture(nodeCount: 0)
+        let resolution =
+            try await fixture.resolver
+                .resolveScope(
+                    .latestResults,
+                    in: fixture.context,
+                    expectedGraphScope:
+                        fixture.graphScope,
+                    expectedChatScope:
+                        fixture.chatScope
+                )
+
+        #expect(
+            resolution
+                == .noResults(.emptyResults)
+        )
+    }
+
+    @Test
+    func mixedEntityCurrentRequiresExistingClarification()
+        async throws
+    {
+        let graphScope = GraphScope(
+            graphID: UUID()
+        )
+        let chatScope =
+            GraphChatScope.entireGraph(
+                graphScope
+            )
+        let firstEntityID = UUID()
+        let secondEntityID = UUID()
+        let firstNode = NodeRefKey(
+            kind: .attribute,
+            id: UUID()
+        )
+        let secondNode = NodeRefKey(
+            kind: .attribute,
+            id: UUID()
+        )
+        var state =
+            GraphChatConversationState.initial(
+                graphScope: graphScope,
+                chatScope: chatScope
+            )
+        state.entityReferences = [
+            GraphChatConversationEntityReference(
+                entityID: firstEntityID,
+                name: "Projects",
+                alias: nil
+            ),
+            GraphChatConversationEntityReference(
+                entityID: secondEntityID,
+                name: "People",
+                alias: nil
+            ),
+        ]
+        state.nodeReferences = [
+            GraphChatConversationNodeReference(
+                node: firstNode,
+                label: "Atlas",
+                ownerEntityID:
+                    firstEntityID,
+                evidenceIDs: []
+            ),
+            GraphChatConversationNodeReference(
+                node: secondNode,
+                label: "Ada",
+                ownerEntityID:
+                    secondEntityID,
+                evidenceIDs: []
+            ),
+        ]
+        let resultID = UUID()
+        state.resultContexts = [
+            GraphChatConversationResultContext(
+                id: resultID,
+                kind: .search,
+                state: .success,
+                entityID: nil,
+                references: [
+                    GraphChatConversationResultReference(
+                        ordinal: 1,
+                        reference:
+                            .node(firstNode),
+                        label: "Atlas",
+                        evidenceIDs: []
+                    ),
+                    GraphChatConversationResultReference(
+                        ordinal: 2,
+                        reference:
+                            .node(secondNode),
+                        label: "Ada",
+                        evidenceIDs: []
+                    ),
+                ],
+                groupReferences: [],
+                evidenceIDs: [],
+                appliedFilters: [],
+                technicalDescription:
+                    "Validated mixed result"
+            )
+        ]
+        state.referenceTargets =
+            GraphChatConversationReferenceTargets(
+                singular: nil,
+                plural: [
+                    .node(firstNode),
+                    .node(secondNode),
+                ],
+                ordinal: [
+                    .node(firstNode),
+                    .node(secondNode),
+                ],
+                group: nil,
+                compared: []
+            )
+        let context =
+            GraphChatConversationContextBuilder()
+                .makeSnapshot(
+                    from: state.snapshot
+                )
+        let resolver =
+            GraphChatConversationReferenceResolver(
+                revalidator:
+                    FakeReferenceRevalidator(
+                        nodes: [
+                            firstNode:
+                                GraphChatRevalidatedConversationNode(
+                                    node: firstNode,
+                                    label: "Atlas",
+                                    ownerEntityID:
+                                        firstEntityID
+                                ),
+                            secondNode:
+                                GraphChatRevalidatedConversationNode(
+                                    node: secondNode,
+                                    label: "Ada",
+                                    ownerEntityID:
+                                        secondEntityID
+                                ),
+                        ],
+                        entities: [
+                            firstEntityID:
+                                GraphChatRevalidatedConversationEntity(
+                                    entityID:
+                                        firstEntityID,
+                                    label:
+                                        "Projects"
+                                ),
+                            secondEntityID:
+                                GraphChatRevalidatedConversationEntity(
+                                    entityID:
+                                        secondEntityID,
+                                    label: "People"
+                                ),
+                        ],
+                        fields: [:],
+                        queryResult: nil
+                    )
+            )
+        let resolution =
+            try await resolver.resolveScope(
+                .latestResults,
+                in: context,
+                expectedGraphScope:
+                    graphScope,
+                expectedChatScope:
+                    chatScope
+            )
+        guard case .clarification(
+            let clarification
+        ) = resolution else {
+            Issue.record(
+                "Expected mixed-entity clarification."
+            )
+            return
+        }
+
+        #expect(
+            clarification.issue
+                == .mixedEntities
+        )
+        #expect(
+            clarification.options.count == 2
+        )
+    }
+
+    @Test
     func multipleGroupsOfTheSameEntityResolveDeterministically() async throws {
         let fixture = Fixture(hasGroupComparison: true)
         let first = try await fixture.resolver.resolveScope(
@@ -456,6 +645,14 @@ struct GraphChatConversationReferenceResolverTests {
         #expect(
             interpreter.interpretation(for: "Which of those are open?")?.proposal
                 == .latestResults
+        )
+        #expect(
+            interpreter.interpretation(for: "Sortiere diese Gruppe nach Name.")?.proposal
+                == .lastGroup
+        )
+        #expect(
+            interpreter.interpretation(for: "Sort this group by name.")?.proposal
+                == .lastGroup
         )
     }
 

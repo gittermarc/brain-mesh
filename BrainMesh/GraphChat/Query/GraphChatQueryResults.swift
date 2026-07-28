@@ -57,6 +57,19 @@ nonisolated struct GraphChatGroupCount: Hashable, Sendable, Identifiable {
     let value: GraphChatQueryCellValue
     let count: Int
     let evidenceIDs: [GraphEvidenceID]
+    let memberNodes: [NodeRefKey]
+
+    init(
+        value: GraphChatQueryCellValue,
+        count: Int,
+        evidenceIDs: [GraphEvidenceID],
+        memberNodes: [NodeRefKey] = []
+    ) {
+        self.value = value
+        self.count = count
+        self.evidenceIDs = evidenceIDs
+        self.memberNodes = memberNodes
+    }
 
     var id: String {
         "\(GraphChatQueryValueFormatting.stableKey(value)):\(count)"

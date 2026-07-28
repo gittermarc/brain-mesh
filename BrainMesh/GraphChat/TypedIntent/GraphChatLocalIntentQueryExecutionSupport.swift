@@ -94,7 +94,9 @@ nonisolated struct GraphChatLocalIntentQueryExecutionSupport:
         let validator = GraphQueryPlanValidator(
             calendar: calendar,
             timeZone: timeZone,
-            referenceDate: referenceDate(),
+            referenceDate:
+                action.compilationReferenceDate
+                ?? referenceDate(),
             defaultLimit:
                 GraphQueryPlanLimits.defaultResultLimit,
             maximumLimit:
@@ -226,7 +228,8 @@ nonisolated struct GraphChatLocalIntentQueryExecutionSupport:
                     budget: budget,
                     querySummary: summary
                 )
-        case .entityCollection:
+        case .entityCollection, .compiledCollection,
+            .count, .groupCount, .refinement:
             sourceDraft =
                 GraphChatAnswerArtifactFactory.queryResult(
                     result,
@@ -328,6 +331,124 @@ nonisolated struct GraphChatLocalIntentQueryExecutionSupport:
                 throw GraphChatLocalIntentExecutionError
                     .invalidCompiledAction
             }
+
+        case .compiledCollection:
+            guard intent.kind == .entityCollection,
+                  intent.factExpectation == .none,
+                  intent.expectedCardinality
+                    == .zeroOrMore,
+                  plan.aggregation == nil,
+                  plan.projection.first
+                    == .nodeIdentity,
+                  let collection =
+                    entityCollection(
+                        in: intent
+                    ),
+                  plan.entityID
+                    == collection.entity.id,
+                  Set(
+                    plan.projection.compactMap {
+                        if case .field(
+                            let fieldID
+                        ) = $0 {
+                            return fieldID
+                        }
+                        return nil
+                    }
+                  ) == Set(
+                    collection.projectedFields
+                        .map(\.id)
+                  ),
+                  fieldIDs(in: plan)
+                    == Set(
+                        collection
+                            .referencedFields
+                            .map(\.id)
+                    ) else {
+                throw GraphChatLocalIntentExecutionError
+                    .invalidCompiledAction
+            }
+
+        case .count:
+            guard intent.kind == .countOrGroup,
+                  intent.expectedCardinality
+                    == .exactlyOne,
+                  intent.factExpectation == .none,
+                  plan.sorting.isEmpty,
+                  plan.projection == [.nodeIdentity],
+                  plan.aggregation == .count,
+                  let value = countOrGroup(
+                    in: intent
+                  ),
+                  case .count = value.operation,
+                  plan.entityID == value.entity.id,
+                  fieldIDs(in: plan)
+                    == Set(
+                        value.referencedFields
+                            .map(\.id)
+                    ) else {
+                throw GraphChatLocalIntentExecutionError
+                    .invalidCompiledAction
+            }
+
+        case .groupCount:
+            guard intent.kind == .countOrGroup,
+                  intent.expectedCardinality
+                    == .zeroOrMore,
+                  intent.factExpectation == .none,
+                  plan.sorting.isEmpty,
+                  plan.projection == [.nodeIdentity],
+                  let value = countOrGroup(
+                    in: intent
+                  ),
+                  case .group(let groupField) =
+                    value.operation,
+                  plan.entityID == value.entity.id,
+                  plan.aggregation
+                    == .groupCount(groupField.id),
+                  fieldIDs(in: plan)
+                    == Set(
+                        value.referencedFields
+                            .map(\.id)
+                    ) else {
+                throw GraphChatLocalIntentExecutionError
+                    .invalidCompiledAction
+            }
+
+        case .refinement:
+            guard intent.kind == .narrowResultSet,
+                  intent.expectedCardinality
+                    == .zeroOrMore,
+                  intent.factExpectation == .none,
+                  plan.aggregation == nil,
+                  plan.projection.first
+                    == .nodeIdentity,
+                  let value = refinement(
+                    in: intent
+                  ),
+                  plan.entityID == value.entity.id,
+                  Set(
+                    plan.projection.compactMap {
+                        if case .field(
+                            let fieldID
+                        ) = $0 {
+                            return fieldID
+                        }
+                        return nil
+                    }
+                  ) == Set(
+                    value.projectedFields
+                        .map(\.id)
+                  ),
+                  fieldIDs(in: plan)
+                    == Set(value.fields.map(\.id)),
+                  planScopeNodes(plan.scope)
+                    == Set(
+                        value.nodes.map(\.node)
+                    ) else {
+                throw GraphChatLocalIntentExecutionError
+                    .invalidCompiledAction
+            }
         }
     }
 
@@ -360,7 +481,7 @@ nonisolated struct GraphChatLocalIntentQueryExecutionSupport:
         intent: GraphChatTypedIntent,
         schemaContext: GraphSchemaContext
     ) -> GraphChatQueryResult {
-        guard case .entityCollection = contract,
+        guard isCollectionContract(contract),
               intent.resolution.source
                 != .foundationalFastPath,
               let entity =
@@ -408,6 +529,231 @@ nonisolated struct GraphChatLocalIntentQueryExecutionSupport:
             integrityConflictedValueKeys:
                 result.integrityConflictedValueKeys
         )
+    }
+
+    func revalidateRefinementSource(
+        action: GraphChatLocalQueryAction,
+        intent: GraphChatTypedIntent,
+        providerPlan: GraphChatProviderTurnPlan,
+        schemaContext: GraphSchemaContext
+    ) throws {
+        guard let source = action.refinementSource else {
+            guard action.resultContract
+                    != .refinement else {
+                throw GraphChatLocalIntentExecutionError
+                    .staleResultSet
+            }
+            return
+        }
+        guard action.resultContract == .refinement
+                || action.resultContract == .count
+                || action.resultContract == .groupCount
+        else {
+            throw GraphChatLocalIntentExecutionError
+                .invalidCompiledAction
+        }
+        guard
+            providerPlan.currentResolvedScope
+                == source,
+            providerPlan.conversationContext
+                .currentResolvedScope == source,
+            source.graphScope
+                == intent.scope.graphScope,
+            source.chatScope
+                == intent.scope.chatScope,
+            source.conversationID
+                == intent.binding.conversationID,
+            source.nodes.isEmpty == false,
+            Set(source.nodes).count
+                == source.nodes.count,
+            source.nodes.allSatisfy({
+                $0.kind == .attribute
+                    && schemaContext.aliases
+                        .owningEntityID(for: $0)
+                        == source.entityID
+            }),
+            let sourceResultID =
+                source.revision.sourceResultID,
+            let sourceAlias =
+                source.revision.sourceAlias,
+            let sourceTurnID =
+                source.revision.sourceTurnID,
+            let sourceTurnCompletedAt =
+                source.revision
+                    .sourceTurnCompletedAt,
+            let sourcePlan =
+                source.revision
+                    .validatedQueryPlan,
+            sourcePlan.graphScope
+                == source.graphScope,
+            sourcePlan.entityID
+                == source.entityID,
+            let result =
+                providerPlan.conversationContext
+                    .results.first(
+                        where: {
+                            $0.id == sourceResultID
+                                && $0.alias
+                                    == sourceAlias
+                                && $0
+                                    .sourceReferenceCount
+                                    == source.revision
+                                        .sourceReferenceCount
+                        }
+                    ),
+            providerPlan.conversationContext
+                .turns.contains(
+                    where: {
+                        $0.id == sourceTurnID
+                            && $0.completedAt
+                                == sourceTurnCompletedAt
+                            && $0.resultAliases
+                                .contains(result.alias)
+                    }
+                ),
+            providerPlan.conversationContext
+                .resultRevalidations
+                .contains(
+                    where: {
+                        $0.resultAlias
+                            == result.alias
+                            && $0.plan
+                                == sourcePlan
+                            && $0
+                                .sourceReferenceCount
+                                == source.revision
+                                    .sourceReferenceCount
+                    }
+                )
+        else {
+            throw GraphChatLocalIntentExecutionError
+                .staleResultSet
+        }
+        let expectedNodes = Set(source.nodes)
+        let compiledNodes = scopeNodes(
+            action.plan.scope
+        )
+        guard expectedNodes == compiledNodes,
+              GraphChatScopeAuthorization.allows(
+                scope: action.plan.scope
+                    ?? intent.scope.queryScope,
+                within: source.chatScope,
+                aliases: schemaContext.aliases
+              ) else {
+            throw GraphChatLocalIntentExecutionError
+                .scopeExpansionPrevented
+        }
+        if action.resultContract == .refinement {
+            guard
+                let value = refinement(in: intent),
+                value.sourceResultContextID
+                    == sourceResultID,
+                Set(value.nodes.map(\.node))
+                    == expectedNodes,
+                value.entity.id
+                    == source.entityID
+            else {
+                throw GraphChatLocalIntentExecutionError
+                    .staleResultSet
+            }
+        }
+    }
+
+    private func entityCollection(
+        in intent: GraphChatTypedIntent
+    ) -> GraphChatTypedEntityCollectionIntent? {
+        guard case .entityCollection(let value) =
+            intent.payload else {
+            return nil
+        }
+        return value
+    }
+
+    private func countOrGroup(
+        in intent: GraphChatTypedIntent
+    ) -> GraphChatTypedCountOrGroupIntent? {
+        guard case .countOrGroup(let value) =
+            intent.payload else {
+            return nil
+        }
+        return value
+    }
+
+    private func refinement(
+        in intent: GraphChatTypedIntent
+    ) -> GraphChatTypedNarrowResultSetIntent? {
+        guard case .narrowResultSet(let value) =
+            intent.payload else {
+            return nil
+        }
+        return value
+    }
+
+    private func fieldIDs(
+        in plan: ValidatedGraphQueryPlan
+    ) -> Set<UUID> {
+        var result = Set(plan.filters.map(\.fieldID))
+        for sort in plan.sorting {
+            if case .field(let fieldID) = sort.key {
+                result.insert(fieldID)
+            }
+        }
+        for projection in plan.projection {
+            if case .field(let fieldID) = projection {
+                result.insert(fieldID)
+            }
+        }
+        switch plan.aggregation {
+        case .groupCount(let fieldID),
+            .minimum(let fieldID),
+            .maximum(let fieldID):
+            result.insert(fieldID)
+        case .count, nil:
+            break
+        }
+        return result
+    }
+
+    private func planScopeNodes(
+        _ scope: GraphResolvedQueryScope
+    ) -> Set<NodeRefKey> {
+        switch scope {
+        case .node(let node):
+            return [node]
+        case .selection(let nodes):
+            return Set(nodes)
+        case .graph, .entity:
+            return []
+        }
+    }
+
+    private func scopeNodes(
+        _ scope: GraphChatScope?
+    ) -> Set<NodeRefKey> {
+        guard let scope else {
+            return []
+        }
+        switch scope.target {
+        case .node(let node):
+            return [node]
+        case .selection(let nodes):
+            return Set(nodes)
+        case .graph, .entity:
+            return []
+        }
+    }
+
+    private func isCollectionContract(
+        _ contract: GraphChatLocalQueryResultContract
+    ) -> Bool {
+        switch contract {
+        case .entityCollection, .compiledCollection,
+            .refinement:
+            return true
+        case .authoritativeSingleField, .count,
+            .groupCount:
+            return false
+        }
     }
 
     private func compactCollectionArtifact(

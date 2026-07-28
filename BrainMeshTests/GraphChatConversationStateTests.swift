@@ -537,6 +537,7 @@ struct GraphChatConversationStateTests {
             GraphChatConversationReference.group($0.id)
         }
         #expect(comparison.references == expectedReferences)
+        #expect(state.referenceTargets.group == expectedReferences.last)
         #expect(state.referenceTargets.compared == comparison.references)
     }
 

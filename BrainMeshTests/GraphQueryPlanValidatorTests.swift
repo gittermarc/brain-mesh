@@ -142,6 +142,7 @@ struct GraphQueryPlanValidatorTests {
                 GraphFieldAlias("F5"),
                 .date,
                 [
+                    .equals,
                     .before,
                     .after,
                     .between,

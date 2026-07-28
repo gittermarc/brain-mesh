@@ -38,7 +38,7 @@ nonisolated extension GraphChatConversationStateReducer {
             singular: singular,
             plural: ordinal,
             ordinal: ordinal,
-            group: groups.count == 1 ? groups.first : nil,
+            group: groups.last,
             compared: state.lastComparison?.references ?? []
         )
     }
@@ -171,12 +171,21 @@ nonisolated extension GraphChatConversationStateReducer {
             let validIDs = boundedEvidenceIDs(
                 group.evidenceIDs.filter { evidenceByID[$0] != nil }
             )
-            let members = validIDs.compactMap { evidenceID in
-                evidenceByID[evidenceID]?.sourceReference.node?.nodeKey
-                    ?? evidenceByID[evidenceID].flatMap {
-                        inferredNode(from: $0.sourceReference)
-                    }
+            let evidenceMembers = validIDs.compactMap {
+                evidenceID in
+                evidenceByID[evidenceID]?
+                    .sourceReference.node?.nodeKey
+                    ?? evidenceByID[evidenceID]
+                        .flatMap {
+                            inferredNode(
+                                from:
+                                    $0.sourceReference
+                            )
+                        }
             }
+            let members = group.memberNodes.isEmpty
+                ? evidenceMembers
+                : group.memberNodes
             let valueDescription = valueDescription(group.value)
             let stableID = GraphChatConversationGroupIdentity.make(
                 fieldID: aggregation.fieldID,

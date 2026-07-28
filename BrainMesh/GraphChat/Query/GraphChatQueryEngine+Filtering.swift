@@ -74,6 +74,9 @@ nonisolated extension GraphChatQueryEngine {
         case (.numberDouble, .between, .decimalRange(let range), .decimal(let actual)):
             return actual >= range.lowerBound && actual <= range.upperBound
 
+        case (.date, .equals, .dateInterval(let interval), .date(let actual)):
+            return actual >= interval.lowerBound
+                && actual < interval.upperBoundExclusive
         case (.date, .before, .date(let boundary), .date(let actual)):
             return actual < boundary
         case (.date, .after, .date(let boundary), .date(let actual)):

@@ -149,6 +149,18 @@ nonisolated struct GraphChatTypedEntityCollectionIntent:
 {
     let entity: GraphChatTypedEntityIdentity
     let projectedFields: [GraphChatTypedFieldIdentity]
+    let referencedFields: [GraphChatTypedFieldIdentity]
+
+    init(
+        entity: GraphChatTypedEntityIdentity,
+        projectedFields: [GraphChatTypedFieldIdentity],
+        referencedFields: [GraphChatTypedFieldIdentity]? = nil
+    ) {
+        self.entity = entity
+        self.projectedFields = projectedFields
+        self.referencedFields =
+            referencedFields ?? projectedFields
+    }
 }
 
 nonisolated enum GraphChatTypedCountOrGroupOperation:
@@ -162,6 +174,23 @@ nonisolated enum GraphChatTypedCountOrGroupOperation:
 nonisolated struct GraphChatTypedCountOrGroupIntent: Hashable, Sendable {
     let entity: GraphChatTypedEntityIdentity
     let operation: GraphChatTypedCountOrGroupOperation
+    let referencedFields: [GraphChatTypedFieldIdentity]
+
+    init(
+        entity: GraphChatTypedEntityIdentity,
+        operation: GraphChatTypedCountOrGroupOperation,
+        referencedFields: [GraphChatTypedFieldIdentity]? = nil
+    ) {
+        self.entity = entity
+        self.operation = operation
+        if let referencedFields {
+            self.referencedFields = referencedFields
+        } else if case .group(let field) = operation {
+            self.referencedFields = [field]
+        } else {
+            self.referencedFields = []
+        }
+    }
 }
 
 nonisolated struct GraphChatTypedNodeDetailsIntent: Hashable, Sendable {
@@ -178,6 +207,22 @@ nonisolated struct GraphChatTypedNarrowResultSetIntent:
     let entity: GraphChatTypedEntityIdentity
     let nodes: [GraphChatTypedNodeIdentity]
     let fields: [GraphChatTypedFieldIdentity]
+    let projectedFields: [GraphChatTypedFieldIdentity]
+
+    init(
+        sourceResultContextID: UUID,
+        entity: GraphChatTypedEntityIdentity,
+        nodes: [GraphChatTypedNodeIdentity],
+        fields: [GraphChatTypedFieldIdentity],
+        projectedFields: [GraphChatTypedFieldIdentity]? = nil
+    ) {
+        self.sourceResultContextID = sourceResultContextID
+        self.entity = entity
+        self.nodes = nodes
+        self.fields = fields
+        self.projectedFields =
+            projectedFields ?? fields
+    }
 }
 
 nonisolated struct GraphChatTypedCompareNodesIntent: Hashable, Sendable {
@@ -245,12 +290,9 @@ nonisolated enum GraphChatTypedIntentPayload: Hashable, Sendable {
         case .findNodes(let value):
             return value.fields
         case .entityCollection(let value):
-            return value.projectedFields
+            return value.referencedFields
         case .countOrGroup(let value):
-            if case .group(let field) = value.operation {
-                return [field]
-            }
-            return []
+            return value.referencedFields
         case .nodeDetails(let value):
             return value.fields
         case .narrowResultSet(let value):
@@ -401,6 +443,26 @@ nonisolated struct GraphChatTypedIntent: Hashable, Sendable {
         }
 
         switch payload {
+        case .entityCollection(let value):
+            guard Set(
+                value.projectedFields.map(\.id)
+            ).isSubset(
+                of: Set(
+                    value.referencedFields.map(\.id)
+                )
+            ) else {
+                throw GraphChatTypedIntentValidationError
+                    .invalidFieldBinding
+            }
+        case .countOrGroup(let value):
+            if case .group(let field) = value.operation {
+                guard value.referencedFields.contains(
+                    where: { $0.id == field.id }
+                ) else {
+                    throw GraphChatTypedIntentValidationError
+                        .invalidFieldBinding
+                }
+            }
         case .nodeDetails(let value):
             guard value.fields.isEmpty == false else {
                 throw GraphChatTypedIntentValidationError
@@ -411,13 +473,20 @@ nonisolated struct GraphChatTypedIntent: Hashable, Sendable {
                 throw GraphChatTypedIntentValidationError
                     .invalidNodeBinding
             }
+            guard Set(
+                value.projectedFields.map(\.id)
+            ).isSubset(
+                of: Set(value.fields.map(\.id))
+            ) else {
+                throw GraphChatTypedIntentValidationError
+                    .invalidFieldBinding
+            }
         case .compareNodes(let value):
             guard value.nodes.count >= 2 else {
                 throw GraphChatTypedIntentValidationError
                     .invalidNodeBinding
             }
-        case .findNodes, .entityCollection, .countOrGroup,
-            .inspectGraphState:
+        case .findNodes, .inspectGraphState:
             break
         }
     }

@@ -100,6 +100,27 @@ nonisolated struct GraphChatDateInterpreter: Sendable {
         )
     }
 
+    func interval(forCalendarDay date: Date) throws
+        -> GraphQueryDateInterval
+    {
+        let lowerBound = calendar.startOfDay(for: date)
+        guard
+            let upperBound = calendar.date(
+                byAdding: .day,
+                value: 1,
+                to: lowerBound
+            ),
+            lowerBound < upperBound
+        else {
+            throw GraphChatDateInterpretationError
+                .invalidDateInterval
+        }
+        return GraphQueryDateInterval(
+            lowerBound: lowerBound,
+            upperBoundExclusive: upperBound
+        )
+    }
+
     func validate(
         interval: GraphQueryDateInterval
     ) throws -> GraphQueryDateInterval {

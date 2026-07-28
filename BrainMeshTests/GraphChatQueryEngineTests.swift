@@ -69,6 +69,21 @@ struct GraphChatQueryEngineTests {
                     fixture,
                     field: 4,
                     type: .date,
+                    operation: .equals,
+                    value: .dateInterval(
+                        GraphQueryDateInterval(
+                            lowerBound: date(2024, 1, 10),
+                            upperBoundExclusive: date(2024, 1, 11)
+                        )
+                    )
+                ),
+                [fixture.attributes[0].id]
+            ),
+            (
+                filter(
+                    fixture,
+                    field: 4,
+                    type: .date,
                     operation: .inYear,
                     value: .dateInterval(
                         GraphQueryDateInterval(
@@ -139,6 +154,11 @@ struct GraphChatQueryEngineTests {
         )
         #expect(grouped.aggregation?.groups.map(\.count).reduce(0, +) == 3)
         #expect(grouped.aggregation?.groups.contains { $0.value == .missing } == true)
+        #expect(
+            grouped.aggregation?.groups.allSatisfy {
+                $0.memberNodes.count == $0.count
+            } == true
+        )
         #expect(grouped.evidence.isEmpty == false)
 
         let minimum = try await engine.execute(

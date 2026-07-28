@@ -387,6 +387,7 @@ nonisolated enum GraphChatQueryOperatorCompatibility {
             ]
         case .date:
             return [
+                .equals,
                 .before,
                 .after,
                 .between,

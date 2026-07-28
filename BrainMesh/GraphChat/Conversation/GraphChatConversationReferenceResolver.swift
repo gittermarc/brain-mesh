@@ -144,8 +144,13 @@ nonisolated struct GraphChatRepositoryConversationReferenceRevalidator:
         let groups: [GraphChatRevalidatedConversationGroup]
         if let aggregation = result.aggregation {
             groups = aggregation.groups.enumerated().map { index, group in
-                let nodes = group.evidenceIDs.compactMap { evidenceID -> NodeRefKey? in
-                    guard let reference = evidenceByID[evidenceID]?.sourceReference else {
+                let evidenceNodes = group.evidenceIDs.compactMap {
+                    evidenceID -> NodeRefKey? in
+                    guard
+                        let reference =
+                            evidenceByID[evidenceID]?
+                                .sourceReference
+                    else {
                         return nil
                     }
                     switch reference.navigationTarget {
@@ -155,6 +160,9 @@ nonisolated struct GraphChatRepositoryConversationReferenceRevalidator:
                         return nil
                     }
                 }
+                let nodes = group.memberNodes.isEmpty
+                    ? evidenceNodes
+                    : group.memberNodes
                 return GraphChatRevalidatedConversationGroup(
                     id: GraphChatConversationGroupIdentity.make(
                         fieldID: aggregation.fieldID,

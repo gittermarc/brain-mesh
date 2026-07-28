@@ -44,11 +44,32 @@ nonisolated enum GraphChatLocalQueryResultContract:
         field: GraphChatTypedFieldIdentity
     )
     case entityCollection
+    case compiledCollection
+    case count
+    case groupCount
+    case refinement
 }
 
 nonisolated struct GraphChatLocalQueryAction: Hashable, Sendable {
     let plan: GraphQueryPlan
     let resultContract: GraphChatLocalQueryResultContract
+    let refinementSource:
+        GraphChatResolvedConversationScope?
+    let compilationReferenceDate: Date?
+
+    init(
+        plan: GraphQueryPlan,
+        resultContract: GraphChatLocalQueryResultContract,
+        refinementSource:
+            GraphChatResolvedConversationScope? = nil,
+        compilationReferenceDate: Date? = nil
+    ) {
+        self.plan = plan
+        self.resultContract = resultContract
+        self.refinementSource = refinementSource
+        self.compilationReferenceDate =
+            compilationReferenceDate
+    }
 }
 
 nonisolated enum GraphChatLocalSearchTarget:

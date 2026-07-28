@@ -399,6 +399,19 @@ nonisolated struct GraphQueryPlanValidator: Sendable {
         operation: GraphQueryFilterOperator
     ) -> String? {
         switch (operation, value) {
+        case (.equals, .dateInterval(let interval)):
+            return dateInterpreter.dateDescription(
+                interval.lowerBound
+            )
+        case (.before, .date(let date)),
+            (.after, .date(let date)):
+            return dateInterpreter.dateDescription(
+                date
+            )
+        case (.between, .dateInterval(let interval)):
+            return dateInterpreter.intervalDescription(
+                interval
+            )
         case (.inYear, .dateInterval(let interval)),
             (.inMonth, .dateInterval(let interval)):
             return dateInterpreter.intervalDescription(interval)
@@ -482,6 +495,18 @@ nonisolated struct GraphQueryPlanValidator: Sendable {
                 return nil
             }
             return .decimalRange(range)
+
+        case (.date, .equals, .date(let date)):
+            do {
+                return .dateInterval(
+                    try dateInterpreter.interval(
+                        forCalendarDay: date
+                    )
+                )
+            } catch {
+                issues.append(invalidRangeIssue(path: path))
+                return nil
+            }
 
         case (.date, .before, .date(let date)),
             (.date, .after, .date(let date)):

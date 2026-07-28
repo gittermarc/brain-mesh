@@ -8,12 +8,42 @@
 
 import Foundation
 
+nonisolated enum GraphChatSemanticFieldSelectionRole:
+    Hashable,
+    Sendable
+{
+    case filter(Int)
+    case sorting
+    case projection(Int)
+    case grouping
+}
+
+nonisolated struct GraphChatSemanticSelectedField:
+    Hashable,
+    Sendable
+{
+    let role: GraphChatSemanticFieldSelectionRole
+    let fieldID: UUID
+}
+
 nonisolated struct GraphChatSemanticIntentSelection:
     Hashable,
     Sendable
 {
     let draft: GraphChatUntrustedSemanticIntentDraft
     let selectedEntityID: UUID?
+    let selectedFields: [GraphChatSemanticSelectedField]
+
+    init(
+        draft: GraphChatUntrustedSemanticIntentDraft,
+        selectedEntityID: UUID?,
+        selectedFields:
+            [GraphChatSemanticSelectedField] = []
+    ) {
+        self.draft = draft
+        self.selectedEntityID = selectedEntityID
+        self.selectedFields = selectedFields
+    }
 }
 
 nonisolated struct GraphChatSemanticIntentContinuation:
@@ -31,6 +61,18 @@ nonisolated struct GraphChatSemanticEntityCandidate:
 {
     let entityID: UUID
     let displayName: String
+    let selectedFields: [GraphChatSemanticSelectedField]
+
+    init(
+        entityID: UUID,
+        displayName: String,
+        selectedFields:
+            [GraphChatSemanticSelectedField] = []
+    ) {
+        self.entityID = entityID
+        self.displayName = displayName
+        self.selectedFields = selectedFields
+    }
 }
 
 nonisolated struct GraphChatSemanticEntityClarification:
@@ -91,24 +133,44 @@ nonisolated struct GraphChatSemanticIntentResolver:
 {
     private let limitPolicy:
         GraphChatSemanticIntentLimitPolicy
+    private let queryCompiler:
+        GraphChatQueryIntentCompiler
 
     init(
         limitPolicy:
-            GraphChatSemanticIntentLimitPolicy = .default
+            GraphChatSemanticIntentLimitPolicy = .default,
+        queryCompiler:
+            GraphChatQueryIntentCompiler =
+                GraphChatQueryIntentCompiler(
+                    calendar: Calendar(
+                        identifier: .gregorian
+                    ),
+                    timeZone:
+                        TimeZone(
+                            secondsFromGMT: 0
+                        )!
+                )
     ) {
         self.limitPolicy = limitPolicy
+        self.queryCompiler = queryCompiler
     }
 
     func resolve(
         draft: GraphChatUntrustedSemanticIntentDraft,
         selectedEntityID: UUID?,
+        selectedFields:
+            [GraphChatSemanticSelectedField] = [],
         currentResolvedScope:
             GraphChatResolvedConversationScope?,
         providerPlan: GraphChatProviderTurnPlan,
         schemaContext: GraphSchemaContext,
         requestID: UUID,
         sourceTurnID: UUID?,
-        clarificationID: UUID?
+        clarificationID: UUID?,
+        referenceDate: Date =
+            Date(
+                timeIntervalSinceReferenceDate: 0
+            )
     ) throws -> GraphChatSemanticIntentResolution {
         guard
             schemaContext.graphScope
@@ -123,7 +185,55 @@ nonisolated struct GraphChatSemanticIntentResolver:
         switch draft.family {
         case .unrecognized, .openEnded:
             return .legacyProviderFallback
-        case .findNodes, .entityList:
+        case .entityList, .filteredCollection,
+            .count, .groupCount, .refinement:
+            let executionSchemaContext =
+                GraphSchemaContext(
+                    graphScope:
+                        schemaContext.graphScope,
+                    snapshot:
+                        schemaContext.snapshot,
+                    aliases:
+                        schemaContext
+                            .foundationalAliases
+                )
+            do {
+                let result = try queryCompiler.compile(
+                    draft: draft,
+                    selectedEntityID:
+                        selectedEntityID,
+                    selectedFields:
+                        selectedFields,
+                    currentResolvedScope:
+                        currentResolvedScope,
+                    providerPlan: providerPlan,
+                    schemaContext:
+                        executionSchemaContext,
+                    requestID: requestID,
+                    sourceTurnID:
+                        sourceTurnID,
+                    clarificationID:
+                        clarificationID,
+                    referenceDate:
+                        referenceDate
+                )
+                switch result {
+                case .compiled(let adaptation):
+                    return .compiled(adaptation)
+                case .clarification(
+                    let clarification
+                ):
+                    return .clarification(
+                        clarification
+                    )
+                }
+            } catch let error
+                as GraphChatQueryIntentCompilationError {
+                throw mappedQueryCompilationError(
+                    error
+                )
+            }
+        case .findNodes:
             break
         }
 
@@ -521,6 +631,10 @@ nonisolated struct GraphChatSemanticIntentResolver:
         case .unrecognized, .openEnded:
             throw GraphChatSemanticIntentResolutionError
                 .unsupportedCombination
+        case .filteredCollection, .count,
+            .groupCount, .refinement:
+            throw GraphChatSemanticIntentResolutionError
+                .unsupportedCombination
         }
     }
 
@@ -563,6 +677,31 @@ nonisolated struct GraphChatSemanticIntentResolver:
             return .attributes
         case .entityNodes:
             return .entityNodes
+        }
+    }
+
+    private func mappedQueryCompilationError(
+        _ error: GraphChatQueryIntentCompilationError
+    ) -> Error {
+        switch error {
+        case .entityNotFound:
+            return GraphChatSemanticIntentResolutionError
+                .entityNotFound
+        case .staleSelection:
+            return GraphChatSemanticIntentResolutionError
+                .staleEntitySelection
+        case .scopeExpansionPrevented:
+            return GraphChatSemanticIntentResolutionError
+                .scopeViolation
+        case .unsupportedFamily:
+            return GraphChatSemanticIntentResolutionError
+                .unsupportedCombination
+        case .fieldNotFound, .fieldEntityMismatch,
+            .typeConflict, .valueParsingRejected,
+            .projectionLimitExceeded,
+            .staleResultSet,
+            .invalidCompiledPlan:
+            return error
         }
     }
 }

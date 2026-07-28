@@ -200,7 +200,16 @@ nonisolated extension GraphChatQueryEngine {
                     GraphChatGroupCount(
                         value: value,
                         count: groupRows.count,
-                        evidenceIDs: ids
+                        evidenceIDs: ids,
+                        memberNodes:
+                            groupRows
+                                .map {
+                                    $0.attribute
+                                        .nodeKey
+                                }
+                                .sorted { lhs, rhs in
+                                    lhs.id.uuidString < rhs.id.uuidString
+                                }
                     )
                 )
             }

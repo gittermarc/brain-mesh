@@ -102,6 +102,8 @@ nonisolated struct GraphChatSemanticIntentCoordinator:
 
         let draft: GraphChatUntrustedSemanticIntentDraft
         let selectedEntityID: UUID?
+        let selectedFields:
+            [GraphChatSemanticSelectedField]
         do {
             if let continuation {
                 draft = try draftValidator.validate(
@@ -111,6 +113,9 @@ nonisolated struct GraphChatSemanticIntentCoordinator:
                 selectedEntityID =
                     continuation.selection
                         .selectedEntityID
+                selectedFields =
+                    continuation.selection
+                        .selectedFields
             } else {
                 await record(
                     .interpreterStarted,
@@ -125,6 +130,7 @@ nonisolated struct GraphChatSemanticIntentCoordinator:
                     for: request
                 )
                 selectedEntityID = nil
+                selectedFields = []
             }
             await record(
                 .draftAccepted,
@@ -167,7 +173,9 @@ nonisolated struct GraphChatSemanticIntentCoordinator:
                     requestedAt:
                         requestedAt,
                     selectedEntityID:
-                        selectedEntityID
+                        selectedEntityID,
+                    selectedFields:
+                        selectedFields
                 )
         } catch {
             if isCancellation(error) {
@@ -198,6 +206,8 @@ nonisolated struct GraphChatSemanticIntentCoordinator:
                     draft: draft,
                     selectedEntityID:
                         selectedEntityID,
+                    selectedFields:
+                        selectedFields,
                     currentResolvedScope:
                         currentResolvedScope,
                     providerPlan: providerPlan,
@@ -207,7 +217,9 @@ nonisolated struct GraphChatSemanticIntentCoordinator:
                         continuation?.sourceTurnID,
                     clarificationID:
                         continuation?
-                            .clarificationID
+                            .clarificationID,
+                    referenceDate:
+                        requestedAt
                 )
                 switch resolution {
                 case .legacyProviderFallback:
@@ -235,9 +247,10 @@ nonisolated struct GraphChatSemanticIntentCoordinator:
 
                 case .compiled(let adaptation):
                     await record(
-                        draft.family == .findNodes
-                            ? .findIntentCompiled
-                            : .listIntentCompiled,
+                        compilationEvent(
+                            for: draft.family,
+                            adaptation: adaptation
+                        ),
                         family: draft.family
                     )
                     let executionContext =
@@ -266,6 +279,16 @@ nonisolated struct GraphChatSemanticIntentCoordinator:
                     )
                     throw CancellationError()
                 }
+                if let event =
+                    compilationRejectionEvent(
+                        for: error
+                    )
+                {
+                    await record(
+                        event,
+                        family: draft.family
+                    )
+                }
                 await record(
                     .draftRejected,
                     family: draft.family
@@ -293,7 +316,9 @@ nonisolated struct GraphChatSemanticIntentCoordinator:
         providerPlan: GraphChatProviderTurnPlan,
         requestID: UUID,
         requestedAt: Date,
-        selectedEntityID: UUID?
+        selectedEntityID: UUID?,
+        selectedFields:
+            [GraphChatSemanticSelectedField]
     ) async throws -> CurrentScopeResolution {
         if let current =
             providerPlan.currentResolvedScope
@@ -321,6 +346,27 @@ nonisolated struct GraphChatSemanticIntentCoordinator:
             )
         if case .resolved(let scope) = resolution {
             return .resolved(scope)
+        }
+        switch resolution {
+        case .rejected(.staleResults):
+            await record(
+                .staleResultSetRejected,
+                family: draft.family
+            )
+        case .rejected(
+            .graphMismatch
+        ), .rejected(
+            .scopeMismatch
+        ), .rejected(
+            .entityMismatch
+        ):
+            await record(
+                .scopeExpansionPrevented,
+                family: draft.family
+            )
+        case .resolved, .clarification, .noResults,
+            .rejected:
+            break
         }
 
         let local = localAnswerBuilder
@@ -357,7 +403,9 @@ nonisolated struct GraphChatSemanticIntentCoordinator:
                                 GraphChatSemanticIntentSelection(
                                     draft: draft,
                                     selectedEntityID:
-                                        selectedEntityID
+                                        selectedEntityID,
+                                    selectedFields:
+                                        selectedFields
                                 )
                         )
                     },
@@ -420,7 +468,10 @@ nonisolated struct GraphChatSemanticIntentCoordinator:
                             draft:
                                 clarification.draft,
                             selectedEntityID:
-                                candidate.entityID
+                                candidate.entityID,
+                            selectedFields:
+                                candidate
+                                    .selectedFields
                         )
                 )
             }
@@ -556,5 +607,65 @@ nonisolated struct GraphChatSemanticIntentCoordinator:
                 )
             )
         )
+    }
+
+    private func compilationEvent(
+        for family: GraphChatSemanticIntentFamily,
+        adaptation: GraphChatTypedIntentAdaptation
+    ) -> GraphChatSemanticIntentLifecycleEvent {
+        if case .queryDetailValues(let action) =
+            adaptation.action,
+           action.resultContract == .refinement {
+            return .refinementIntentCompiled
+        }
+        switch family {
+        case .findNodes:
+            return .findIntentCompiled
+        case .entityList:
+            return .listIntentCompiled
+        case .filteredCollection:
+            return .filteredCollectionCompiled
+        case .count:
+            return .countIntentCompiled
+        case .groupCount:
+            return .groupIntentCompiled
+        case .refinement:
+            return .refinementIntentCompiled
+        case .unrecognized, .openEnded:
+            return .legacyProviderFallback
+        }
+    }
+
+    private func compilationRejectionEvent(
+        for error: Error
+    ) -> GraphChatSemanticIntentLifecycleEvent? {
+        if let queryError =
+            error
+                as? GraphChatQueryIntentCompilationError
+        {
+            switch queryError {
+            case .typeConflict:
+                return .typeConflict
+            case .valueParsingRejected:
+                return .valueParsingRejected
+            case .scopeExpansionPrevented:
+                return .scopeExpansionPrevented
+            case .staleResultSet:
+                return .staleResultSetRejected
+            case .unsupportedFamily, .entityNotFound,
+                .staleSelection, .fieldNotFound,
+                .fieldEntityMismatch,
+                .projectionLimitExceeded,
+                .invalidCompiledPlan:
+                return nil
+            }
+        }
+        if let semanticError =
+            error
+                as? GraphChatSemanticIntentResolutionError,
+           semanticError == .scopeViolation {
+            return .scopeExpansionPrevented
+        }
+        return nil
     }
 }

@@ -20,6 +20,8 @@ nonisolated enum GraphChatLocalIntentExecutionError:
     case safetyLimitExceeded
     case artifactUnavailable
     case primaryResultUnavailable
+    case scopeExpansionPrevented
+    case staleResultSet
 
     var errorDescription: String? {
         switch self {
@@ -37,6 +39,10 @@ nonisolated enum GraphChatLocalIntentExecutionError:
             return "Für das validierte lokale Ergebnis konnte kein Result-Artefakt erzeugt werden."
         case .primaryResultUnavailable:
             return "Das validierte lokale Ergebnis konnte nicht im Result-Ledger gebunden werden."
+        case .scopeExpansionPrevented:
+            return "Die lokale Query würde den revalidierten Ergebnisscope erweitern."
+        case .staleResultSet:
+            return "Die referenzierte Ergebnismenge ist nicht mehr frisch revalidierbar."
         }
     }
 }
@@ -209,6 +215,15 @@ nonisolated struct GraphChatLocalIntentExecutionKernel: Sendable {
                 let action = try querySupport
                     .queryAction(
                         in: adaptation.action
+                    )
+                try querySupport
+                    .revalidateRefinementSource(
+                        action: action,
+                        intent: intent,
+                        providerPlan:
+                            providerPlan,
+                        schemaContext:
+                            schemaContext
                     )
                 let plan = try querySupport
                     .validatedPlan(
@@ -733,8 +748,13 @@ nonisolated struct GraphChatLocalIntentExecutionKernel: Sendable {
                         .foundationalContinuation?
                         .sourceTurnID
                         == sourceTurnID
-                        || providerPlan
+                    || providerPlan
                             .semanticContinuation?
+                            .sourceTurnID
+                            == sourceTurnID
+                    || providerPlan
+                            .currentResolvedScope?
+                            .revision
                             .sourceTurnID
                             == sourceTurnID
                   ) else {
@@ -849,6 +869,23 @@ nonisolated struct GraphChatLocalIntentExecutionKernel: Sendable {
             )
             return
         }
+        if executionError
+            == .scopeExpansionPrevented
+        {
+            await record(
+                .scopeExpansionPrevented,
+                kind: kind,
+                rejection: .scope
+            )
+        } else if executionError
+            == .staleResultSet
+        {
+            await record(
+                .staleResultSetRejected,
+                kind: kind,
+                rejection: .compiledAction
+            )
+        }
         switch executionError {
         case .invalidBinding:
             rejection = .binding
@@ -857,7 +894,9 @@ nonisolated struct GraphChatLocalIntentExecutionKernel: Sendable {
         case .staleSchemaIdentity:
             rejection = .schemaIdentity
         case .invalidCompiledAction, .safetyLimitExceeded,
-            .artifactUnavailable, .primaryResultUnavailable:
+            .artifactUnavailable, .primaryResultUnavailable,
+            .scopeExpansionPrevented,
+            .staleResultSet:
             rejection = .compiledAction
         }
         await record(

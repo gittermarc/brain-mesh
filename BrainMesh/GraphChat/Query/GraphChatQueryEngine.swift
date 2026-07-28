@@ -224,7 +224,8 @@ actor GraphChatQueryEngine {
             return GraphChatGroupCount(
                 value: group.value,
                 count: group.count,
-                evidenceIDs: evidenceIDs
+                evidenceIDs: evidenceIDs,
+                memberNodes: group.memberNodes
             )
         }
         let adjustedCount = build.result.count

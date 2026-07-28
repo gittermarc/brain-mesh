@@ -86,6 +86,14 @@ nonisolated struct GraphChatOrchestratorComposition: Sendable {
         let semanticCoordinator =
             GraphChatSemanticIntentCoordinator(
                 interpreter: intentInterpreter,
+                resolver:
+                    GraphChatSemanticIntentResolver(
+                        queryCompiler:
+                            GraphChatQueryIntentCompiler(
+                                calendar: calendar,
+                                timeZone: timeZone
+                            )
+                    ),
                 referenceResolver:
                     referenceResolver,
                 localAnswerBuilder:

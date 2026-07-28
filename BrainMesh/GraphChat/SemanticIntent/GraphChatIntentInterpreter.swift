@@ -15,6 +15,10 @@ nonisolated enum GraphChatSemanticIntentFamily:
 {
     case findNodes
     case entityList
+    case filteredCollection
+    case count
+    case groupCount
+    case refinement
     case unrecognized
     case openEnded
 }
@@ -50,6 +54,70 @@ nonisolated enum GraphChatSemanticConversationReference:
     case currentSelection
 }
 
+nonisolated enum GraphChatSemanticFilterRelation:
+    String,
+    CaseIterable,
+    Hashable,
+    Sendable
+{
+    case unspecified
+    case contains
+    case equals
+    case startsWith
+    case isPresent
+    case isMissing
+    case lessThan
+    case lessThanOrEqual
+    case greaterThan
+    case greaterThanOrEqual
+    case between
+    case before
+    case after
+    case inYear
+    case inMonth
+    case isOverdue
+    case oneOf
+}
+
+nonisolated struct GraphChatSemanticFilterDraft:
+    Hashable,
+    Sendable
+{
+    let fieldTerm: String
+    let relation: GraphChatSemanticFilterRelation
+    let values: [String]
+}
+
+nonisolated enum GraphChatSemanticSortTarget:
+    String,
+    CaseIterable,
+    Hashable,
+    Sendable
+{
+    case nodeName
+    case field
+}
+
+nonisolated enum GraphChatSemanticSortDirection:
+    String,
+    CaseIterable,
+    Hashable,
+    Sendable
+{
+    case unspecified
+    case ascending
+    case descending
+}
+
+nonisolated struct GraphChatSemanticSortDraft:
+    Hashable,
+    Sendable
+{
+    let target: GraphChatSemanticSortTarget
+    let fieldTerm: String?
+    let direction: GraphChatSemanticSortDirection
+}
+
 /// This is deliberately not a resolved identity. Every string remains
 /// untrusted until the app validates and binds it against the live schema.
 nonisolated struct GraphChatUntrustedSemanticIntentDraft:
@@ -62,6 +130,10 @@ nonisolated struct GraphChatUntrustedSemanticIntentDraft:
     let findTarget: GraphChatSemanticFindTarget
     let resultAmount: GraphChatSemanticResultAmount
     let conversationReference: GraphChatSemanticConversationReference
+    let filters: [GraphChatSemanticFilterDraft]
+    let sorting: GraphChatSemanticSortDraft?
+    let projectionTerms: [String]
+    let groupFieldTerm: String?
     let responseLanguage: GraphChatResponseLanguage
 
     init(
@@ -71,6 +143,10 @@ nonisolated struct GraphChatUntrustedSemanticIntentDraft:
         findTarget: GraphChatSemanticFindTarget = .anyEntry,
         resultAmount: GraphChatSemanticResultAmount = .standard,
         conversationReference: GraphChatSemanticConversationReference = .none,
+        filters: [GraphChatSemanticFilterDraft] = [],
+        sorting: GraphChatSemanticSortDraft? = nil,
+        projectionTerms: [String] = [],
+        groupFieldTerm: String? = nil,
         responseLanguage: GraphChatResponseLanguage
     ) {
         self.family = family
@@ -79,6 +155,10 @@ nonisolated struct GraphChatUntrustedSemanticIntentDraft:
         self.findTarget = findTarget
         self.resultAmount = resultAmount
         self.conversationReference = conversationReference
+        self.filters = filters
+        self.sorting = sorting
+        self.projectionTerms = projectionTerms
+        self.groupFieldTerm = groupFieldTerm
         self.responseLanguage = responseLanguage
     }
 }
@@ -200,6 +280,13 @@ nonisolated enum GraphChatSemanticDraftValidationError:
 nonisolated enum GraphChatSemanticSafety {
     static let maximumEntityTermLength = 160
     static let maximumSearchTermLength = 240
+    static let maximumFieldTermLength = 160
+    static let maximumFilterValueLength = 240
+    static let maximumFilters = 8
+    static let maximumValuesPerFilter = 8
+    static let maximumProjectionTerms =
+        GraphChatAnswerArtifactFactoryBudget
+            .default.maximumColumns - 1
     static let maximumRequestedCount = 10_000
 
     private static let forbiddenTechnicalWords: Set<String> = [
@@ -292,7 +379,24 @@ nonisolated struct GraphChatSemanticDraftValidator:
         let searchTerm = GraphChatSemanticSafety.normalizedOptional(
             source.searchTerm
         )
-        for value in [entityTerm, searchTerm].compactMap({ $0 }) {
+        let groupFieldTerm =
+            GraphChatSemanticSafety.normalizedOptional(
+                source.groupFieldTerm
+            )
+        let filters = try normalizedFilters(source.filters)
+        let sorting = try normalizedSorting(source.sorting)
+        let projectionTerms = try normalizedProjectionTerms(
+            source.projectionTerms
+        )
+        let semanticValues =
+            [entityTerm, searchTerm, groupFieldTerm]
+                .compactMap { $0 }
+            + filters.flatMap {
+                [$0.fieldTerm] + $0.values
+            }
+            + projectionTerms
+            + [sorting?.fieldTerm].compactMap { $0 }
+        for value in semanticValues {
             guard GraphChatSemanticSafety.containsTechnicalIdentifier(value)
                     == false else {
                 throw GraphChatSemanticDraftValidationError
@@ -309,6 +413,14 @@ nonisolated struct GraphChatSemanticDraftValidator:
         if let searchTerm {
             guard searchTerm.count
                     <= GraphChatSemanticSafety.maximumSearchTermLength else {
+                throw GraphChatSemanticDraftValidationError
+                    .overlongValue
+            }
+        }
+        if let groupFieldTerm {
+            guard groupFieldTerm.count
+                    <= GraphChatSemanticSafety
+                        .maximumFieldTermLength else {
                 throw GraphChatSemanticDraftValidationError
                     .overlongValue
             }
@@ -335,11 +447,78 @@ nonisolated struct GraphChatSemanticDraftValidator:
                         .invalidCombination
                 }
             }
+            guard filters.isEmpty,
+                  sorting == nil,
+                  projectionTerms.isEmpty,
+                  groupFieldTerm == nil else {
+                throw GraphChatSemanticDraftValidationError
+                    .invalidCombination
+            }
 
         case .entityList:
             guard entityTerm != nil,
                   searchTerm == nil,
-                  source.findTarget == .anyEntry else {
+                  source.findTarget == .anyEntry,
+                  source.conversationReference == .none,
+                  filters.isEmpty,
+                  groupFieldTerm == nil else {
+                throw GraphChatSemanticDraftValidationError
+                    .invalidCombination
+            }
+
+        case .filteredCollection:
+            guard
+                entityTerm != nil,
+                searchTerm == nil,
+                source.findTarget == .anyEntry,
+                source.conversationReference == .none,
+                filters.isEmpty == false,
+                groupFieldTerm == nil
+            else {
+                throw GraphChatSemanticDraftValidationError
+                    .invalidCombination
+            }
+
+        case .count:
+            guard
+                entityTerm != nil
+                    || source.conversationReference
+                        == .currentSelection,
+                searchTerm == nil,
+                source.findTarget == .anyEntry,
+                sorting == nil,
+                projectionTerms.isEmpty,
+                groupFieldTerm == nil,
+                source.resultAmount == .standard
+            else {
+                throw GraphChatSemanticDraftValidationError
+                    .invalidCombination
+            }
+
+        case .groupCount:
+            guard
+                entityTerm != nil
+                    || source.conversationReference
+                        == .currentSelection,
+                searchTerm == nil,
+                source.findTarget == .anyEntry,
+                sorting == nil,
+                projectionTerms.isEmpty,
+                groupFieldTerm != nil
+            else {
+                throw GraphChatSemanticDraftValidationError
+                    .invalidCombination
+            }
+
+        case .refinement:
+            guard searchTerm == nil,
+                  source.findTarget == .anyEntry,
+                  source.conversationReference
+                    == .currentSelection,
+                  groupFieldTerm == nil,
+                  filters.isEmpty == false
+                    || sorting != nil
+                    || projectionTerms.isEmpty == false else {
                 throw GraphChatSemanticDraftValidationError
                     .invalidCombination
             }
@@ -349,7 +528,11 @@ nonisolated struct GraphChatSemanticDraftValidator:
                   searchTerm == nil,
                   source.findTarget == .anyEntry,
                   source.resultAmount == .standard,
-                  source.conversationReference == .none else {
+                  source.conversationReference == .none,
+                  filters.isEmpty,
+                  sorting == nil,
+                  projectionTerms.isEmpty,
+                  groupFieldTerm == nil else {
                 throw GraphChatSemanticDraftValidationError
                     .invalidCombination
             }
@@ -362,7 +545,138 @@ nonisolated struct GraphChatSemanticDraftValidator:
             findTarget: source.findTarget,
             resultAmount: source.resultAmount,
             conversationReference: source.conversationReference,
+            filters: filters,
+            sorting: sorting,
+            projectionTerms: projectionTerms,
+            groupFieldTerm: groupFieldTerm,
             responseLanguage: source.responseLanguage
         )
+    }
+
+    private func normalizedFilters(
+        _ source: [GraphChatSemanticFilterDraft]
+    ) throws -> [GraphChatSemanticFilterDraft] {
+        guard source.count
+                <= GraphChatSemanticSafety.maximumFilters else {
+            throw GraphChatSemanticDraftValidationError
+                .invalidCombination
+        }
+        return try source.map { filter in
+            guard
+                let fieldTerm =
+                    GraphChatSemanticSafety.normalizedOptional(
+                        filter.fieldTerm
+                    ),
+                fieldTerm.count
+                    <= GraphChatSemanticSafety
+                        .maximumFieldTermLength,
+                filter.values.count
+                    <= GraphChatSemanticSafety
+                        .maximumValuesPerFilter
+            else {
+                throw GraphChatSemanticDraftValidationError
+                    .overlongValue
+            }
+            let values = try filter.values.map { value in
+                guard
+                    let normalized =
+                        GraphChatSemanticSafety
+                            .normalizedOptional(value),
+                    normalized.count
+                        <= GraphChatSemanticSafety
+                            .maximumFilterValueLength
+                else {
+                    throw GraphChatSemanticDraftValidationError
+                        .overlongValue
+                }
+                return normalized
+            }
+            let expectedValueCount: ClosedRange<Int>
+            switch filter.relation {
+            case .isPresent, .isMissing, .isOverdue:
+                expectedValueCount = 0...0
+            case .between:
+                expectedValueCount = 2...2
+            case .oneOf:
+                expectedValueCount =
+                    1...GraphChatSemanticSafety
+                        .maximumValuesPerFilter
+            case .unspecified, .equals:
+                expectedValueCount =
+                    1...GraphChatSemanticSafety
+                        .maximumValuesPerFilter
+            case .contains, .startsWith, .lessThan,
+                .lessThanOrEqual, .greaterThan,
+                .greaterThanOrEqual, .before, .after,
+                .inYear, .inMonth:
+                expectedValueCount = 1...1
+            }
+            guard expectedValueCount.contains(values.count) else {
+                throw GraphChatSemanticDraftValidationError
+                    .invalidCombination
+            }
+            return GraphChatSemanticFilterDraft(
+                fieldTerm: fieldTerm,
+                relation: filter.relation,
+                values: values
+            )
+        }
+    }
+
+    private func normalizedSorting(
+        _ source: GraphChatSemanticSortDraft?
+    ) throws -> GraphChatSemanticSortDraft? {
+        guard let source else {
+            return nil
+        }
+        let fieldTerm =
+            GraphChatSemanticSafety.normalizedOptional(
+                source.fieldTerm
+            )
+        switch source.target {
+        case .nodeName:
+            guard fieldTerm == nil else {
+                throw GraphChatSemanticDraftValidationError
+                    .invalidCombination
+            }
+        case .field:
+            guard let fieldTerm,
+                  fieldTerm.count
+                    <= GraphChatSemanticSafety
+                        .maximumFieldTermLength else {
+                throw GraphChatSemanticDraftValidationError
+                    .invalidCombination
+            }
+        }
+        return GraphChatSemanticSortDraft(
+            target: source.target,
+            fieldTerm: fieldTerm,
+            direction: source.direction
+        )
+    }
+
+    private func normalizedProjectionTerms(
+        _ source: [String]
+    ) throws -> [String] {
+        guard source.count
+                <= GraphChatSemanticSafety
+                    .maximumProjectionTerms else {
+            throw GraphChatSemanticDraftValidationError
+                .invalidCombination
+        }
+        return try source.map { value in
+            guard
+                let normalized =
+                    GraphChatSemanticSafety
+                        .normalizedOptional(value),
+                normalized.count
+                    <= GraphChatSemanticSafety
+                        .maximumFieldTermLength
+            else {
+                throw GraphChatSemanticDraftValidationError
+                    .overlongValue
+            }
+            return normalized
+        }
     }
 }
