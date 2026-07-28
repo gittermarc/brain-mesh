@@ -21,6 +21,7 @@ struct GraphChatAnswerFinalizerTests {
 
         #expect(turn.answer.evidence == [evidence])
         #expect(turn.answer.evidenceIDs == [evidence.id])
+        #expect(turn.answer.interpretation == nil)
         #expect(turn.conversationState.turnContexts.last?.evidenceIDs == [evidence.id])
     }
 

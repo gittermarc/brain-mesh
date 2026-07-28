@@ -916,7 +916,40 @@ Execution-Kernel:
 
 Bewusste Grenze:
 
-- Sichtbare Modellinterpretation, Interpretation Editor, Writes, Multi-Hop-Analyse, Attachment-Inhaltsanalyse und eine allgemeine semantische Wahrheitsprüfung offener Providerantworten bleiben außerhalb dieses Stands. Minimum/Maximum werden weiterhin nicht durch den Semantic Query Compiler erzeugt.
+- Interpretation Editor, Rerun-Action, Schema-Picker, Writes, Multi-Hop-Analyse, Attachment-Inhaltsanalyse und eine allgemeine semantische Wahrheitsprüfung offener Providerantworten bleiben außerhalb dieses Stands. Minimum/Maximum werden weiterhin nicht durch den Semantic Query Compiler erzeugt.
+
+### Graph Chat Intent Interpretation Presentation
+
+Pfade:
+
+- `BrainMesh/GraphChat/Interpretation/GraphChatIntentInterpretation.swift`
+- `BrainMesh/GraphChat/Interpretation/GraphChatIntentInterpretationBuilder.swift`
+- `BrainMesh/GraphChat/Interpretation/GraphChatIntentInterpretationRenderer.swift`
+- `BrainMesh/GraphChat/Interpretation/GraphChatLocalIntentPreparedExecution+Interpretation.swift`
+- `BrainMesh/GraphChat/Core/GraphChatModels.swift`
+- `BrainMesh/GraphChat/Orchestration/GraphChatAnswerFinalizer.swift`
+- `BrainMesh/GraphChat/Presentation/GraphChatPresentationFirewall.swift`
+- `BrainMesh/GraphChat/UI/Artifacts/GraphChatFinalAnswerView.swift`
+
+Domain und Ableitung:
+
+- `GraphChatIntentInterpretation` ist versioniert, value-only, `Hashable` und `Sendable`. Der Vertrag bindet Intent-Art, Graph-, Chat- und Query-Scope, Request, Conversation, Turn und optionalen Quell-Turn sowie Sprache, Entity-, Node- und Feldidentitäten, typisierte Filter, Sortierung, Gruppierung beziehungsweise Aggregation, Ergebnisumfang, Graph-State-Aspekt, Resolution Source/Origin/Quality und die künftig editierbaren Bestandteile.
+- IDs bleiben ausschließlich für Konsistenzprüfung und Revalidation im Wert gebunden. Der Renderer greift nur auf revalidierte Anzeigenamen, typisierte Fachwerte und feste lokalisierte Labels zu.
+- Der Finalizer erzeugt die Interpretation nur für einen erfolgreich vorbereiteten lokalen Intent. Query-basierte Familien verwenden den im Conversation-Transaction-State gehaltenen `ValidatedGraphQueryPlan`. Search, direkte Node Details, Structural Comparison und Graph State benötigen zusätzlich einen passenden revalidierten Result Context, Primary-Result-Tooltyp und bei Comparisons die exakt gebundene Node-Menge.
+- Semantic Draft, Provider-Text, Tool-Content-Strings, technische Aliasse und `GraphChatAnswerArtifactQuerySummary` sind keine Ableitungs- oder Fallbackquelle. Ein Legacy-Provider-Turn ohne lokalen Typed Intent behält `interpretation == nil`.
+
+Presentation und Retention:
+
+- `GraphChatIntentInterpretationRenderer` erzeugt ausschließlich fachlich kompakte deutsche oder englische Titel. Technische Query-Zusammenfassungen, Toolnamen, Operator-Rohwerte, Scope-Namen, Limits, Aliasse und IDs werden nicht formatiert.
+- Die Presentation Firewall prüft zusätzlich Label und Titel sowie alle verwendeten Entity-, Node-, Feld-, Einheiten-, Filterwert-, Sortier- und Gruppierungsanzeigen. Bei einem Verstoß wird nur die optionale Interpretation entfernt; die ansonsten sichere validierte Antwort bleibt erhalten.
+- `GraphChatAnswer` trägt die optionale Interpretation rückwärtskompatibel. Message-State-Normalisierung, Artifact-Retention, Finalizer-Fallbacks, Regenerate, Edit-and-Resend und Transcript Checkpoints behalten den Wert, solange der zugehörige Answer erhalten bleibt; die UI revalidiert ihn unmittelbar vor der Darstellung erneut.
+- `GraphChatFinalAnswerView` zeigt die nicht interaktive Interpretation direkt oberhalb des direkten Antworttexts als kompakte Materialdarstellung. Dynamic Type besitzt kein Zeilenlimit; VoiceOver erhält genau ein kombiniertes lokalisiertes Label ohne technische Werte.
+- Standard-Copy bleibt auf den finalisierten autoritativen Antworttext und die bisherige Answer-Struktur begrenzt. Die Interpretation wird nicht ungefragt in den kopierten Fachwert aufgenommen.
+- Content-free Observability unterscheidet ausschließlich `created`, `displayed` und `discardedPresentationViolation`; Titel, Anzeigenamen, Werte, IDs und Antworttext werden nicht protokolliert.
+
+Bewusste Grenze:
+
+- Die Darstellung ist in diesem Stand weder antippbar noch editierbar. Es gibt keinen Editor, keine Rerun-Action, keine Schema-Picker, keine neue Intent-Familie und keinen Write-Pfad.
 
 ### Graph Chat Authoritative Fact Trust Boundary
 
@@ -979,7 +1012,7 @@ Vertrag:
 - Der Tool-Runtime ergänzt ausschließlich validierte Node-, Evidence- und Artifact-Präsentationen.
 - Partials werden als kumulative Foundation-Models-Snapshots vollständig erneut geprüft. Unvollständige Suffixe technischer Tokens werden gepuffert, sodass auch ein über mehrere Chunks verteiltes Alias nie kurzzeitig im UI erscheint.
 - Öffentliche Failure-Texte werden ausschließlich aus dem typisierten `GraphChatErrorCode` lokalisiert. Modell-, Tool-, Resolver-, Provider-, Repository- und Validierungsdetails werden nicht in UI-State oder Copy übernommen.
-- Der Finalizer prüft direkte Antwort, Sections, Filter, Follow-ups und Clarifications gemeinsam. Bei einem erfolgreichen Primärergebnis führen unbekannte Aliase, Conversation-Referenzen, UUIDs oder andere Firewall-Verstöße zum deterministischen Result-Fallback. Ohne erfolgreiches Primärergebnis bleiben die bestehenden typisierten Zustände und sicheren lokalisierten Ersatztexte maßgeblich.
+- Der Finalizer prüft direkte Antwort, Sections, Filter, Follow-ups und Clarifications gemeinsam. Die optionale Intent-Interpretation wird einschließlich ihrer Anzeigenamen, Werte und Sortier-/Gruppierungslabels separat geprüft; ein Verstoß entfernt nur sie. Bei einem erfolgreichen Primärergebnis führen Verstöße im eigentlichen Antwortinhalt weiterhin zum deterministischen Result-Fallback. Ohne erfolgreiches Primärergebnis bleiben die bestehenden typisierten Zustände und sicheren lokalisierten Ersatztexte maßgeblich.
 - `GraphChatAnswer` trägt den geprüften turn-bezogenen Presentation-Kontext bis zum Copy-Pfad. Copy verwendet dieselbe Firewall; der frühere separate UUID-Redactor existiert nicht mehr.
 - Die Xcode-Gruppen sind filesystem-synchronisiert; neue Dateien unter `BrainMesh/` und `BrainMeshTests/` werden automatisch den jeweiligen Targets zugeordnet.
 

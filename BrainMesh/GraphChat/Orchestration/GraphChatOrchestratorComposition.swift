@@ -135,6 +135,7 @@ nonisolated struct GraphChatOrchestratorComposition: Sendable {
             missingContextPolicy: missingContextPolicy,
             localAnswerBuilder: localAnswerBuilder,
             evidenceValidator: evidenceValidator,
+            timeZone: timeZone,
             observability: observability
         )
         let contextRetry = GraphChatProviderContextRetry(

@@ -176,6 +176,7 @@ nonisolated struct GraphChatAnswer: Hashable, Sendable {
     let followUpSuggestions: [GraphChatFollowUpSuggestion]
     let hasInsufficientEvidence: Bool
     let presentationContext: GraphChatPresentationContext?
+    let interpretation: GraphChatIntentInterpretation?
 
     var evidenceIDs: [GraphEvidenceID] {
         evidence.map(\.id)
@@ -190,7 +191,8 @@ nonisolated struct GraphChatAnswer: Hashable, Sendable {
         appliedFilters: [GraphChatAppliedFilter] = [],
         followUpSuggestions: [GraphChatFollowUpSuggestion] = [],
         hasInsufficientEvidence: Bool,
-        presentationContext: GraphChatPresentationContext? = nil
+        presentationContext: GraphChatPresentationContext? = nil,
+        interpretation: GraphChatIntentInterpretation? = nil
     ) {
         self.state = state
         self.directAnswer = directAnswer
@@ -202,6 +204,7 @@ nonisolated struct GraphChatAnswer: Hashable, Sendable {
         self.followUpSuggestions = followUpSuggestions
         self.hasInsufficientEvidence = hasInsufficientEvidence
         self.presentationContext = presentationContext
+        self.interpretation = interpretation
     }
 
     func retainingArtifactIDs(
@@ -230,7 +233,8 @@ nonisolated struct GraphChatAnswer: Hashable, Sendable {
             appliedFilters: appliedFilters,
             followUpSuggestions: followUpSuggestions,
             hasInsufficientEvidence: hasInsufficientEvidence,
-            presentationContext: presentationContext
+            presentationContext: presentationContext,
+            interpretation: interpretation
         )
     }
 }

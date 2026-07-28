@@ -42,10 +42,24 @@ struct GraphChatMessageActionUIContractTests {
         var assistantState = GraphChatAssistantMessageState(
             question: "Welche offenen Punkte gibt es?"
         )
+        let interpretation = try
+            GraphChatIntentInterpretationTestFixture()
+                .filteredCollection(
+                    language: .german
+                )
         assistantState.apply(
             .completed(
-                GraphChatUITestSupport.finalAnswer(
-                    directAnswer: "Es gibt zwei offene Punkte mit einer ausführlichen Beschreibung für den Dynamic-Type-Test."
+                GraphChatAnswer(
+                    directAnswer:
+                        "Es gibt zwei offene Punkte mit einer ausführlichen Beschreibung für den Dynamic-Type-Test.",
+                    hasInsufficientEvidence: false,
+                    presentationContext:
+                        GraphChatPresentationContext(
+                            registry: .empty,
+                            language: .german
+                        ),
+                    interpretation:
+                        interpretation
                 )
             )
         )

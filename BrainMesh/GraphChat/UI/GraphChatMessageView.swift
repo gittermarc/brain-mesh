@@ -20,6 +20,9 @@ struct GraphChatMessageView: View {
     let onResolveAnswerPresentation: (GraphChatAnswer) async -> GraphChatAnswerPresentationResolution
     let canOpenArtifactTarget: (GraphChatAnswerArtifactNavigationTarget) -> Bool
     let onOpenArtifactTarget: (GraphChatAnswerArtifactNavigationTarget) -> Void
+    let onInterpretationEvent: (
+        GraphChatIntentInterpretationLifecycleEvent
+    ) -> Void
 
     init(
         message: GraphChatTranscriptMessage,
@@ -46,7 +49,11 @@ struct GraphChatMessageView: View {
             )
         },
         canOpenArtifactTarget: @escaping (GraphChatAnswerArtifactNavigationTarget) -> Bool = { _ in false },
-        onOpenArtifactTarget: @escaping (GraphChatAnswerArtifactNavigationTarget) -> Void = { _ in }
+        onOpenArtifactTarget: @escaping (GraphChatAnswerArtifactNavigationTarget) -> Void = { _ in },
+        onInterpretationEvent:
+            @escaping (
+                GraphChatIntentInterpretationLifecycleEvent
+            ) -> Void = { _ in }
     ) {
         self.message = message
         self.actionAvailability = actionAvailability
@@ -60,6 +67,8 @@ struct GraphChatMessageView: View {
         self.onResolveAnswerPresentation = onResolveAnswerPresentation
         self.canOpenArtifactTarget = canOpenArtifactTarget
         self.onOpenArtifactTarget = onOpenArtifactTarget
+        self.onInterpretationEvent =
+            onInterpretationEvent
     }
 
     var body: some View {
@@ -153,7 +162,20 @@ struct GraphChatMessageView: View {
                         finalAnswer(answer, allowsEvidenceActions: state.allowsEvidenceActions)
                     }
                 case .noResults:
-                    noResults(state)
+                    if let answer = state.answer {
+                        VStack(
+                            alignment: .leading,
+                            spacing: 8
+                        ) {
+                            finalAnswer(
+                                answer,
+                                allowsEvidenceActions: false
+                            )
+                            noResultsExplanation
+                        }
+                    } else {
+                        noResults(state)
+                    }
                 case .availabilityError:
                     availabilityError(state)
                 case .technicalError:
@@ -288,7 +310,9 @@ struct GraphChatMessageView: View {
             onOpenArtifactTarget: onOpenArtifactTarget,
             onOpenEvidence: onOpenEvidence,
             onShowEvidenceInGraph: onShowEvidenceInGraph,
-            onUseFollowUp: onUseFollowUp
+            onUseFollowUp: onUseFollowUp,
+            onInterpretationEvent:
+                onInterpretationEvent
         )
     }
 
@@ -301,15 +325,19 @@ struct GraphChatMessageView: View {
                     .font(.body)
                     .fixedSize(horizontal: false, vertical: true)
             }
-            Label(
-                "Es wurden keine passenden dokumentierten Graphdaten gefunden. Nicht dokumentierte Informationen wurden nicht berücksichtigt.",
-                systemImage: "magnifyingglass"
-            )
-            .font(.callout)
-            .foregroundStyle(.secondary)
-            .fixedSize(horizontal: false, vertical: true)
+            noResultsExplanation
         }
         .accessibilityElement(children: .combine)
+    }
+
+    private var noResultsExplanation: some View {
+        Label(
+            "Es wurden keine passenden dokumentierten Graphdaten gefunden. Nicht dokumentierte Informationen wurden nicht berücksichtigt.",
+            systemImage: "magnifyingglass"
+        )
+        .font(.callout)
+        .foregroundStyle(.secondary)
+        .fixedSize(horizontal: false, vertical: true)
     }
 
     private func availabilityError(

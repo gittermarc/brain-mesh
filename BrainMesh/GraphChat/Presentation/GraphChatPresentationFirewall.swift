@@ -294,6 +294,13 @@ nonisolated struct GraphChatPresentationFirewall: Sendable {
             )
         }
 
+        let interpretation = answer.interpretation.flatMap {
+            presentationSafeInterpretation(
+                $0,
+                context: context
+            )
+        }
+
         return .safe(
             GraphChatAnswer(
                 state: state,
@@ -304,9 +311,54 @@ nonisolated struct GraphChatPresentationFirewall: Sendable {
                 appliedFilters: filters,
                 followUpSuggestions: followUps,
                 hasInsufficientEvidence: answer.hasInsufficientEvidence,
-                presentationContext: context
+                presentationContext: context,
+                interpretation: interpretation
             )
         )
+    }
+
+    func presentationSafeInterpretation(
+        _ interpretation: GraphChatIntentInterpretation,
+        context: GraphChatPresentationContext
+    ) -> GraphChatIntentInterpretation? {
+        guard interpretation.isInternallyConsistent,
+              interpretation.responseLanguage
+                == context.language else {
+            return nil
+        }
+        let strings =
+            GraphChatIntentInterpretationRenderer()
+                .presentationStrings(
+                    for: interpretation
+                )
+        guard strings.isEmpty == false else {
+            return nil
+        }
+        for value in strings {
+            let normalized = value.trimmingCharacters(
+                in: .whitespacesAndNewlines
+            )
+            guard normalized.isEmpty == false,
+                  normalized == value,
+                  normalized.count <= 1_000,
+                  normalized.rangeOfCharacter(
+                      from: .newlines
+                  ) == nil else {
+                return nil
+            }
+            switch present(
+                normalized,
+                using: context.registry
+            ) {
+            case .safe(let safeValue):
+                guard safeValue == normalized else {
+                    return nil
+                }
+            case .unsafe:
+                return nil
+            }
+        }
+        return interpretation
     }
 
     func replacementAnswer(

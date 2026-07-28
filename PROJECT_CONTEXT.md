@@ -1,6 +1,6 @@
 # BrainMesh – Project Context
 
-> Start Here für neue Entwickler:innen. Stand: INTENT-COMPILER-4 mit vollständig appseitig kompilierten Node-Details-, Node-Comparison- und Graph-State-Intents zusätzlich zu Collection, Filter, Sortierung, Projektion, Count, Group Count und schnittmengenbasierten Resultset-Refinements.
+> Start Here für neue Entwickler:innen. Stand: INTENT-COMPILER-5 mit einer sichtbaren, noch nicht editierbaren und vollständig appseitig abgeleiteten Intent-Interpretation für alle erfolgreich kompilierten Intent-Familien aus INTENT-COMPILER-4.
 
 ## TL;DR
 
@@ -46,6 +46,7 @@ BrainMesh ist eine native SwiftUI-App für iPhone und iPad, in der Nutzer:innen 
 - **Comparison Plan**: Zentraler value-only Vertrag für mindestens zwei revalidierte Nodes. `GraphChatComparisonPlan` bindet Graph, Chat-Scope, Request, Conversation und Turn sowie appseitig gewählte Comparison-Art, Features, Selection Query, gemeinsame Limits, Sprache und erwartete Kardinalität.
 - **Typed-Intent-Domain**: Versionierter, value-only, `Hashable` und `Sendable` Vertrag für appseitig aufgelöste Absichten. Er unterscheidet Find Nodes, Entity Collection, Count/Group, Node Details, Narrow Result Set, Compare Nodes und Inspect Graph State und bindet Intent, Scope, Sprache, Request, Conversation, Turn, Resolution-Qualität, Kardinalität, Limits sowie validierte Identitäten.
 - **Local Intent Execution Kernel**: Providerfreier Lifecycle für bereits appseitig kompilierte lokale Actions. Der Kernel revalidiert Bindings, Scope, Schemaidentitäten und Query-Plan, besitzt genau eine Conversation-, Evidence-, Presentation-, Artifact- und Ledger-Transaktion und führt Finalisierung, äußeren Turn-Commit, Rollback und Cleanup über einen gemeinsamen Pfad.
+- **Intent Interpretation**: Value-only, request-/conversation-/turn-gebundene und presentation-sichere Ableitung des revalidierten Typed Intent und Execution Plans. Sie beschreibt fachlich kompakt Entity, Nodes, Felder, Filter, Sortierung, Gruppierung beziehungsweise Aggregation, Ergebnisumfang und Graph-State-Aspekt; Provider-Text, Semantic Drafts, Tool-Content und Query-Summary-Text sind keine Quelle.
 - **Authoritative Fact**: Nicht persistierter, value-only und `Sendable` Single-Fact-Vertrag aus genau einem revalidierten primären Query-Ergebnis, einem typisierten Table-Artifact und passender Live-Evidence. Er bindet Graph, Chat-Scope, Request/Turn, Artifact-Session und -Transaktion sowie Node, Entity, Feld, Typ, Wert und Einheit. Für kompilierte Single-Field-Turns rendert die App daraus den vollständigen sichtbaren Antworttext; Provider-Text ist keine Fachwertquelle.
 - **Pro**: StoreKit-gesteuerte Berechtigung für kostenpflichtige Funktionen.
 
@@ -111,6 +112,7 @@ BrainMesh ist eine native SwiftUI-App für iPhone und iPad, in der Nutzer:innen 
 - Akzeptierter Comparison-Draft → `GraphChatComparisonPlan` mit höchstens `8` Nodes und `8` Features. Gleichartige Attributes derselben Entity verwenden eine Selection Query mit Node Identity und expliziten oder deterministischen Defaultfeldern. Andere Node-Kombinationen verwenden ausschließlich gemeinsame Strukturmerkmale; Notizinhalte werden nicht in Output oder Evidence transportiert und nicht semantisch analysiert, Attachment-Inhalte werden gar nicht geladen.
 - Akzeptierter Graph-State-Draft → appseitig gewählter Aspekt `overview`, `counts`, `structure` oder `health` → feste `GraphStatsTool`-Action mit Hub-Limit `10` und erlaubter Metric-/Ranking-/Health-Finding-Auswahl. Der Pfad ist nur bei exakt `.entireGraph` zulässig und erweitert Entity-, Node- oder Selection-Chats niemals.
 - Erfolgreiche semantische Find-/Query-/Node-/Comparison-/Graph-State-Turns verwenden den gemeinsamen Local Intent Execution Kernel, lokale Tools, Evidence Registry, Artifact Factory, Primary Result Ledger, deterministischen Answer Fallback, Presentation Firewall und Conversation Reducer. Es entsteht weder eine freie Answer-Provider-Session noch ein zweiter Modellaufruf.
+- Nach erfolgreicher lokaler Revalidation rekonstruiert der Finalizer eine `GraphChatIntentInterpretation` aus dem Typed Intent und dem validierten Query-Plan beziehungsweise dem revalidierten Search-/Node-/Comparison-/Stats-Execution-Nachweis. Der lokalisierte Titel wird unmittelbar oberhalb des direkten Antworttexts gezeigt; eine Interpretation ohne kompilierten Intent wird nicht erfunden.
 - Nur explizite `.unrecognized`-/`.openEnded`-Drafts erreichen die unveränderte freie Provider-Pipeline. Ein erkannter, aber nicht sicher auflösbarer Draft wird geklärt oder abgelehnt und niemals als freie Tool-Improvisation fortgesetzt.
 - Foundational Single-Field → exakt ein graph-/chat-gescopter Attribute-Node, Node Identity plus exakt ein validiertes Feld, appseitiges Limit `1`, erneute Query-Plan-/Scope-Validierung und Ausführung über die bestehende Query Engine. Der Erfolg wird als typisierte einzeilige Table-Artefaktprojektion transportiert. Ein Suchtreffer allein ist nie Detailwert-Autorität.
 - Foundational Entity Collection → unveränderter autorisierter Entity-/Node-/Selection-Scope, Node-Identity-Projektion, stabile Namenssortierung und `GraphQueryPlanLimits.maximumResultLimit`. „Alle“ bedeutet alle autorisierten Ergebnisse bis zu diesem gemeinsamen Sicherheitslimit; Truncation bleibt im Result-Artefakt und in der lokalisierten Mindestantwort sichtbar.
@@ -451,6 +453,7 @@ Duplicate-Resolution:
 - Migrationen idempotent und mit Store-Fixtures testen.
 - Detailfeld- und Detailwert-Zuordnungen vor jeder Mutation mit der zentralen Integrity-Policy prüfen.
 - Single-Fact-Antworten ausschließlich aus dem revalidierten Primary Result, einem typisierten Result-Artefakt und wertgleicher Detail-Value-Evidence erzeugen.
+- Sichtbare Intent-Interpretationen ausschließlich aus dem revalidierten Typed Intent und Execution-Nachweis erzeugen und vor UI beziehungsweise erweiterter Copy-Nutzung erneut durch die Presentation Firewall führen.
 - Neue lokale Intent-Familien zuerst als validierten Typed-Intent- und Local-Action-Vertrag modellieren; freie Semantik darf nicht in den Execution Kernel wandern.
 - Semantische Query-Drafts nur über `GraphChatQueryIntentCompiler` in technische Query-Werte überführen; lokalisierte Werte, Operatoren, Feldzugehörigkeit, Scope und Limits niemals aus Modellargumenten übernehmen.
 - Node-Details-, Comparison- und Graph-State-Drafts nur über `GraphChatAdvancedIntentCompiler` und `GraphChatAdvancedIntentPolicy` in technische Actions überführen.
@@ -465,6 +468,7 @@ Duplicate-Resolution:
 - IDs nicht graphübergreifend ohne Scope auflösen.
 - Detailwerte nicht per `first(where:)` oder Fetch-Reihenfolge auswählen; Authority immer über den gemeinsamen `(graphID, attributeID, fieldID)`-Vertrag bestimmen.
 - Keine konkreten Detailwerte aus `SearchGraph`-Snippets, Provider-Text, Aliassen oder technischen IDs ableiten. Search belegt ohne transportierten Feldwert nur Trefferexistenz, Anzeigename und validierte Navigation.
+- Keine Interpretation aus Semantic Draft, Provider-Text, Tool-Content-Strings oder `GraphChatAnswerArtifactQuerySummary.displayText` rekonstruieren.
 - `CURRENT` oder andere Conversation-Aliase nicht als String bis in Query-Plan oder Repository weiterreichen; zuerst in einen `GraphChatResolvedConversationScope` überführen.
 - Ein Refinement niemals aus einem Modellverweis oder stale Resultset rekonstruieren und niemals auf den Entity-/Graph-Scope zurückfallen; die revalidierten Quell-Nodes sind die maximale Ergebnismenge.
 - Für gemischte Node-Arten oder unterschiedliche Entities keine gemeinsamen Detailfelder erfinden; nur appseitig belegte Strukturmerkmale vergleichen.

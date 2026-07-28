@@ -21,6 +21,52 @@ nonisolated struct GraphChatProviderAnswerFinalizationInput: Sendable {
         GraphChatAuthoritativeFactExpectation?
     let artifactContext: GraphChatArtifactCommitContext
     let presentationRegistry: GraphChatPresentationRegistry
+    let interpretation:
+        GraphChatIntentInterpretation?
+
+    init(
+        requestID: UUID,
+        completedAt: Date,
+        providerAnswer: GraphChatProviderFinalAnswer,
+        conversationContext:
+            GraphChatConversationContextSnapshot,
+        responseLanguage: GraphChatResponseLanguage,
+        continuationOperation:
+            GraphChatConversationContinuationOperation?,
+        requestQuestion: String,
+        expectedCommittedState:
+            GraphChatConversationState,
+        primaryResult:
+            GraphChatToolExecutionLedgerEntry?,
+        authoritativeFactExpectation:
+            GraphChatAuthoritativeFactExpectation?,
+        artifactContext:
+            GraphChatArtifactCommitContext,
+        presentationRegistry:
+            GraphChatPresentationRegistry,
+        interpretation:
+            GraphChatIntentInterpretation? = nil
+    ) {
+        self.requestID = requestID
+        self.completedAt = completedAt
+        self.providerAnswer = providerAnswer
+        self.conversationContext =
+            conversationContext
+        self.responseLanguage =
+            responseLanguage
+        self.continuationOperation =
+            continuationOperation
+        self.requestQuestion = requestQuestion
+        self.expectedCommittedState =
+            expectedCommittedState
+        self.primaryResult = primaryResult
+        self.authoritativeFactExpectation =
+            authoritativeFactExpectation
+        self.artifactContext = artifactContext
+        self.presentationRegistry =
+            presentationRegistry
+        self.interpretation = interpretation
+    }
 }
 
 nonisolated struct GraphChatLocalAnswerFinalizationInput: Hashable, Sendable {
@@ -65,6 +111,7 @@ nonisolated struct GraphChatAnswerFinalizer: Sendable {
         GraphChatAuthoritativeFactExtractor
     private let authoritativeFactRenderer:
         GraphChatAuthoritativeFactRenderer
+    private let timeZone: TimeZone
     private let observability: any GraphChatObservabilityRecording
 
     init(
@@ -92,6 +139,8 @@ nonisolated struct GraphChatAnswerFinalizer: Sendable {
         authoritativeFactRenderer:
             GraphChatAuthoritativeFactRenderer =
                 GraphChatAuthoritativeFactRenderer(),
+        timeZone: TimeZone =
+            .autoupdatingCurrent,
         observability: any GraphChatObservabilityRecording =
             NoOpGraphChatObservabilityRecorder()
     ) {
@@ -108,6 +157,7 @@ nonisolated struct GraphChatAnswerFinalizer: Sendable {
             authoritativeFactExtractor
         self.authoritativeFactRenderer =
             authoritativeFactRenderer
+        self.timeZone = timeZone
         self.observability = observability
     }
 
@@ -181,6 +231,10 @@ nonisolated struct GraphChatAnswerFinalizer: Sendable {
             source: nil,
             context: presentationContext
         )
+        await recordInterpretationDiscardIfNeeded(
+            source: validatedAnswer,
+            finalized: answer
+        )
         return try await commitCoordinator.commit(
             GraphChatTurnCommitInput(
                 requestID: input.requestID,
@@ -200,6 +254,20 @@ nonisolated struct GraphChatAnswerFinalizer: Sendable {
         currentCommittedState: GraphChatConversationState
     ) async throws -> GraphChatFinalizedTurn {
         let execution = input.execution
+        let interpretation =
+            await execution
+                .resolvedIntentInterpretation(
+                    timeZone: timeZone
+                )
+        if interpretation != nil {
+            await observability.record(
+                .intentInterpretation(
+                    GraphChatIntentInterpretationMetric(
+                        event: .created
+                    )
+                )
+            )
+        }
         let providerInput = GraphChatProviderAnswerFinalizationInput(
             requestID: input.requestID,
             completedAt: input.completedAt,
@@ -228,7 +296,8 @@ nonisolated struct GraphChatAnswerFinalizer: Sendable {
             authoritativeFactExpectation:
                 execution.authoritativeFactExpectation,
             artifactContext: execution.artifactContext,
-            presentationRegistry: execution.presentationRegistry
+            presentationRegistry: execution.presentationRegistry,
+            interpretation: interpretation
         )
         let answer: GraphChatAnswer
         do {
@@ -288,19 +357,30 @@ nonisolated struct GraphChatAnswerFinalizer: Sendable {
             retaining: answer
         )
         if let expectation = input.authoritativeFactExpectation {
-            return try await finalizedAuthoritativeFactPresentation(
-                replacing: answer,
-                expectation: expectation,
-                primaryResult: primaryResult,
-                source: source,
-                context: presentationContext
+            let finalized =
+                try await finalizedAuthoritativeFactPresentation(
+                    replacing: answer,
+                    expectation: expectation,
+                    primaryResult: primaryResult,
+                    source: source,
+                    context: presentationContext
+                )
+            await recordInterpretationDiscardIfNeeded(
+                source: answer,
+                finalized: finalized
             )
+            return finalized
         }
-        return try finalizedPresentation(
+        let finalized = try finalizedPresentation(
             for: answer,
             source: source,
             context: presentationContext
         )
+        await recordInterpretationDiscardIfNeeded(
+            source: answer,
+            finalized: finalized
+        )
+        return finalized
     }
 
     private func finalizedAuthoritativeFactPresentation(
@@ -334,7 +414,9 @@ nonisolated struct GraphChatAnswerFinalizer: Sendable {
                 appliedFilters: source?.appliedFilters ?? [],
                 followUpSuggestions: [],
                 hasInsufficientEvidence: false,
-                presentationContext: context
+                presentationContext: context,
+                interpretation:
+                    answer.interpretation
             )
             switch presentationFirewall.present(
                 candidate,
@@ -393,7 +475,12 @@ nonisolated struct GraphChatAnswerFinalizer: Sendable {
             appliedFilters: source?.appliedFilters ?? [],
             followUpSuggestions: [],
             hasInsufficientEvidence: true,
-            presentationContext: context
+            presentationContext: context,
+            interpretation:
+                presentationSafeInterpretation(
+                    answer.interpretation,
+                    context: context
+                )
         )
     }
 
@@ -536,7 +623,12 @@ nonisolated struct GraphChatAnswerFinalizer: Sendable {
                 evidence: answer.evidence,
                 artifactIDs: answer.artifactIDs,
                 hasInsufficientEvidence: true,
-                presentationContext: context
+                presentationContext: context,
+                interpretation:
+                    presentationSafeInterpretation(
+                        answer.interpretation,
+                        context: context
+                    )
             )
 
         case .unsupported(let capability):
@@ -594,7 +686,9 @@ nonisolated struct GraphChatAnswerFinalizer: Sendable {
             appliedFilters: source?.appliedFilters ?? [],
             hasInsufficientEvidence: answer.evidence.isEmpty
                 && answer.artifactIDs.isEmpty,
-            presentationContext: context
+            presentationContext: context,
+            interpretation:
+                answer.interpretation
         )
         switch presentationFirewall.present(
             candidate,
@@ -620,8 +714,27 @@ nonisolated struct GraphChatAnswerFinalizer: Sendable {
                 artifactIDs: answer.artifactIDs,
                 hasInsufficientEvidence: answer.evidence.isEmpty
                     && answer.artifactIDs.isEmpty,
-                presentationContext: context
+                presentationContext: context,
+                interpretation:
+                    presentationSafeInterpretation(
+                        answer.interpretation,
+                        context: context
+                    )
             )
+        }
+    }
+
+    private func presentationSafeInterpretation(
+        _ interpretation:
+            GraphChatIntentInterpretation?,
+        context: GraphChatPresentationContext
+    ) -> GraphChatIntentInterpretation? {
+        interpretation.flatMap {
+            presentationFirewall
+                .presentationSafeInterpretation(
+                    $0,
+                    context: context
+                )
         }
     }
 
@@ -632,6 +745,11 @@ nonisolated struct GraphChatAnswerFinalizer: Sendable {
         conversationTransaction: GraphChatConversationStateTransaction
     ) async throws -> GraphChatAnswer {
         try validateInputScopes(input)
+        let interpretation =
+            validatedInterpretation(
+                input.interpretation,
+                input: input
+            )
         let providerAnswer = input.providerAnswer
         let primaryResult = validatedPrimaryResult(input.primaryResult, input: input)
         let responseState = authoritativeResponseState(
@@ -810,7 +928,8 @@ nonisolated struct GraphChatAnswerFinalizer: Sendable {
                 appliedFilters: filters,
                 followUpSuggestions: followUps,
                 hasInsufficientEvidence: providerAnswer.hasInsufficientEvidence
-                    || finalEvidence.isEmpty
+                    || finalEvidence.isEmpty,
+                interpretation: interpretation
             )
 
         case .noResults:
@@ -824,7 +943,9 @@ nonisolated struct GraphChatAnswerFinalizer: Sendable {
                     artifactIDs: artifacts.map(\.id),
                     appliedFilters: filters,
                     followUpSuggestions: followUps,
-                    hasInsufficientEvidence: true
+                    hasInsufficientEvidence: true,
+                    interpretation:
+                        interpretation
                 )
             }
             let text =
@@ -841,7 +962,8 @@ nonisolated struct GraphChatAnswerFinalizer: Sendable {
                 artifactIDs: artifacts.map(\.id),
                 appliedFilters: filters,
                 followUpSuggestions: followUps,
-                hasInsufficientEvidence: true
+                hasInsufficientEvidence: true,
+                interpretation: interpretation
             )
 
         case .unsupported:
@@ -953,7 +1075,68 @@ nonisolated struct GraphChatAnswerFinalizer: Sendable {
             appliedFilters: answer.appliedFilters,
             followUpSuggestions: answer.followUpSuggestions,
             hasInsufficientEvidence: answer.hasInsufficientEvidence
-                || (answer.evidence.isEmpty == false && evidence.isEmpty)
+                || (answer.evidence.isEmpty == false && evidence.isEmpty),
+            interpretation: answer.interpretation
+        )
+    }
+
+    private func validatedInterpretation(
+        _ interpretation:
+            GraphChatIntentInterpretation?,
+        input:
+            GraphChatProviderAnswerFinalizationInput
+    ) -> GraphChatIntentInterpretation? {
+        guard let interpretation,
+              interpretation.isInternallyConsistent,
+              interpretation.responseLanguage
+                == input.responseLanguage,
+              interpretation.scopeBinding.graphScope
+                == input.conversationContext.graphScope,
+              interpretation.scopeBinding.graphScope
+                == input.artifactContext.graphScope,
+              interpretation.scopeBinding.chatScope
+                == input.conversationContext.chatScope,
+              interpretation.scopeBinding.chatScope
+                == input.artifactContext.chatScope,
+              interpretation.turnBinding.requestID
+                == input.requestID,
+              interpretation.turnBinding.turnID
+                == input.requestID,
+              interpretation.turnBinding.conversationID
+                == input.expectedCommittedState
+                    .conversationID
+        else {
+            return nil
+        }
+        if let sourceTurnID =
+                interpretation.turnBinding
+                    .sourceTurnID,
+           input.expectedCommittedState
+            .turnContexts.contains(
+                where: {
+                    $0.id == sourceTurnID
+                }
+            ) == false {
+            return nil
+        }
+        return interpretation
+    }
+
+    private func recordInterpretationDiscardIfNeeded(
+        source: GraphChatAnswer,
+        finalized: GraphChatAnswer
+    ) async {
+        guard source.interpretation != nil,
+              finalized.interpretation == nil else {
+            return
+        }
+        await observability.record(
+            .intentInterpretation(
+                GraphChatIntentInterpretationMetric(
+                    event:
+                        .discardedPresentationViolation
+                )
+            )
         )
     }
 

@@ -228,7 +228,8 @@ nonisolated struct GraphChatAssistantMessageState: Hashable, Sendable {
             appliedFilters: Array(answer.appliedFilters.prefix(maximumFilters)),
             followUpSuggestions: Array(answer.followUpSuggestions.prefix(maximumFollowUps)),
             hasInsufficientEvidence: answer.hasInsufficientEvidence,
-            presentationContext: answer.presentationContext
+            presentationContext: answer.presentationContext,
+            interpretation: answer.interpretation
         )
     }
 

@@ -17,10 +17,64 @@ struct GraphChatFinalAnswerView: View {
     let onOpenEvidence: (GraphChatEvidencePresentation) -> Void
     let onShowEvidenceInGraph: (GraphChatEvidencePresentation) -> Void
     let onUseFollowUp: (GraphChatFollowUpSuggestion) -> Void
+    let onInterpretationEvent: (
+        GraphChatIntentInterpretationLifecycleEvent
+    ) -> Void
 
     @State private var resolution: GraphChatAnswerPresentationResolution?
     @State private var selectedEvidenceDrawer: GraphChatEvidenceDrawerPresentation?
     @State private var isResolving = false
+
+    init(
+        answer: GraphChatAnswer,
+        language: GraphChatResponseLanguage,
+        allowsEvidenceActions: Bool,
+        resolvePresentation:
+            @escaping (
+                GraphChatAnswer
+            ) async -> GraphChatAnswerPresentationResolution,
+        canOpenArtifactTarget:
+            @escaping (
+                GraphChatAnswerArtifactNavigationTarget
+            ) -> Bool,
+        onOpenArtifactTarget:
+            @escaping (
+                GraphChatAnswerArtifactNavigationTarget
+            ) -> Void,
+        onOpenEvidence:
+            @escaping (
+                GraphChatEvidencePresentation
+            ) -> Void,
+        onShowEvidenceInGraph:
+            @escaping (
+                GraphChatEvidencePresentation
+            ) -> Void,
+        onUseFollowUp:
+            @escaping (
+                GraphChatFollowUpSuggestion
+            ) -> Void,
+        onInterpretationEvent:
+            @escaping (
+                GraphChatIntentInterpretationLifecycleEvent
+            ) -> Void = { _ in }
+    ) {
+        self.answer = answer
+        self.language = language
+        self.allowsEvidenceActions =
+            allowsEvidenceActions
+        self.resolvePresentation =
+            resolvePresentation
+        self.canOpenArtifactTarget =
+            canOpenArtifactTarget
+        self.onOpenArtifactTarget =
+            onOpenArtifactTarget
+        self.onOpenEvidence = onOpenEvidence
+        self.onShowEvidenceInGraph =
+            onShowEvidenceInGraph
+        self.onUseFollowUp = onUseFollowUp
+        self.onInterpretationEvent =
+            onInterpretationEvent
+    }
 
     private var taskKey: GraphChatFinalAnswerResolutionKey {
         GraphChatFinalAnswerResolutionKey(
@@ -44,9 +98,52 @@ struct GraphChatFinalAnswerView: View {
         resolution?.evidenceByID ?? [:]
     }
 
+    private var presentationSafeInterpretation:
+        GraphChatIntentInterpretation?
+    {
+        guard let interpretation =
+                answer.interpretation
+        else {
+            return nil
+        }
+        let context =
+            answer.presentationContext
+            ?? GraphChatPresentationContext(
+                registry: .empty,
+                language: language
+            )
+        return GraphChatPresentationFirewall()
+            .presentationSafeInterpretation(
+                interpretation,
+                context: context
+            )
+    }
+
+    private var interpretationTaskKey:
+        GraphChatInterpretationPresentationTaskKey?
+    {
+        guard let interpretation =
+                answer.interpretation
+        else {
+            return nil
+        }
+        return GraphChatInterpretationPresentationTaskKey(
+            turnID:
+                interpretation.turnBinding.turnID,
+            isPresented:
+                presentationSafeInterpretation
+                    != nil
+        )
+    }
+
     var body: some View {
         let strings = GraphChatAnswerArtifactStrings(language: language)
         Group {
+            if let interpretation =
+                    presentationSafeInterpretation {
+                interpretationView(interpretation)
+            }
+
             Text(answer.directAnswer)
                 .font(.body)
                 .fixedSize(horizontal: false, vertical: true)
@@ -85,6 +182,18 @@ struct GraphChatFinalAnswerView: View {
             resolution = resolvedPresentation
             isResolving = false
         }
+        .task(id: interpretationTaskKey) {
+            guard let key =
+                    interpretationTaskKey
+            else {
+                return
+            }
+            onInterpretationEvent(
+                key.isPresented
+                    ? .displayed
+                    : .discardedPresentationViolation
+            )
+        }
         .sheet(item: $selectedEvidenceDrawer) { presentation in
             GraphChatEvidenceDrawerView(
                 presentation: presentation,
@@ -95,6 +204,77 @@ struct GraphChatFinalAnswerView: View {
             .presentationDetents([.medium, .large])
             .presentationDragIndicator(.visible)
         }
+    }
+
+    private func interpretationView(
+        _ interpretation:
+            GraphChatIntentInterpretation
+    ) -> some View {
+        let presentation =
+            interpretation.presentation
+        return HStack(
+            alignment: .top,
+            spacing: 9
+        ) {
+            Image(
+                systemName: "slider.horizontal.3"
+            )
+            .font(.caption)
+            .foregroundStyle(.tertiary)
+            .accessibilityHidden(true)
+
+            VStack(
+                alignment: .leading,
+                spacing: 2
+            ) {
+                Text(presentation.label)
+                    .font(
+                        .caption2
+                            .weight(.semibold)
+                    )
+                    .foregroundStyle(.tertiary)
+                Text(presentation.title)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(
+                        horizontal: false,
+                        vertical: true
+                    )
+            }
+        }
+        .frame(
+            maxWidth: .infinity,
+            alignment: .leading
+        )
+        .padding(.horizontal, 10)
+        .padding(.vertical, 8)
+        .background(
+            .thinMaterial,
+            in: RoundedRectangle(
+                cornerRadius: 10,
+                style: .continuous
+            )
+        )
+        .overlay {
+            RoundedRectangle(
+                cornerRadius: 10,
+                style: .continuous
+            )
+            .stroke(.quaternary, lineWidth: 1)
+        }
+        .fixedSize(
+            horizontal: false,
+            vertical: true
+        )
+        .accessibilityElement(
+            children: .ignore
+        )
+        .accessibilityLabel(
+            presentation.accessibilityLabel
+        )
+        .accessibilityIdentifier(
+            "graph-chat-intent-interpretation"
+        )
     }
 
     @ViewBuilder
@@ -294,6 +474,13 @@ struct GraphChatFinalAnswerView: View {
 private nonisolated struct GraphChatFinalAnswerResolutionKey: Hashable {
     let artifactIDs: [GraphChatAnswerArtifactID]
     let evidenceIDs: [GraphEvidenceID]
+}
+
+private nonisolated struct GraphChatInterpretationPresentationTaskKey:
+    Hashable
+{
+    let turnID: UUID
+    let isPresented: Bool
 }
 
 nonisolated extension GraphChatAnswerArtifactViewSupport {

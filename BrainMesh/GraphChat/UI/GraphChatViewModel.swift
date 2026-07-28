@@ -212,6 +212,22 @@ final class GraphChatViewModel: ObservableObject {
             || isGenerating
     }
 
+    func recordInterpretationEvent(
+        _ event:
+            GraphChatIntentInterpretationLifecycleEvent
+    ) {
+        let observability = observability
+        Task {
+            await observability.record(
+                .intentInterpretation(
+                    GraphChatIntentInterpretationMetric(
+                        event: event
+                    )
+                )
+            )
+        }
+    }
+
     var suggestions: [GraphChatEmptyStateSuggestion] {
         guard let schemaContext else {
             return []

@@ -171,7 +171,9 @@ struct GraphChatView: View {
                                 onUseFollowUp: viewModel.useFollowUp,
                                 onResolveAnswerPresentation: viewModel.resolveAnswerPresentation,
                                 canOpenArtifactTarget: viewModel.canOpenArtifactTarget,
-                                onOpenArtifactTarget: viewModel.openArtifactTarget
+                                onOpenArtifactTarget: viewModel.openArtifactTarget,
+                                onInterpretationEvent:
+                                    viewModel.recordInterpretationEvent
                             )
                             .id(message.id)
                         }

@@ -369,6 +369,20 @@ struct GraphChatTypedIntentCoreTests {
                 onActivity: { _ in },
                 validateCurrentRequest: {},
                 finalize: { execution in
+                    let interpretation =
+                        await execution
+                            .resolvedIntentInterpretation(
+                                timeZone:
+                                    TimeZone(
+                                        identifier:
+                                            "Europe/Berlin"
+                                    )!
+                            )
+                    #expect(
+                        interpretation?
+                            .intentKind
+                            == .entityCollection
+                    )
                     let retained =
                         try await execution.artifactRegistry
                             .commit(
@@ -384,7 +398,9 @@ struct GraphChatTypedIntentCoreTests {
                         evidence:
                             execution.primaryResult.evidence,
                         artifactIDs: retained,
-                        hasInsufficientEvidence: false
+                        hasInsufficientEvidence: false,
+                        interpretation:
+                            interpretation
                     )
                     let state =
                         try await execution

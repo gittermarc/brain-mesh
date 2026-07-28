@@ -454,15 +454,27 @@ struct GraphChatMessageActionControllerTests {
     }
 
     @Test
-    func editAndResendKeepsPriorHistoryAndRemovesTheWholeFollowingBranch() async {
+    func editAndResendKeepsPriorHistoryAndRemovesTheWholeFollowingBranch()
+        async throws
+    {
         let history = Self.twoCompletedTurns()
+        let interpretation = try
+            GraphChatIntentInterpretationTestFixture()
+                .filteredCollection(
+                    language: .english
+                )
         let orchestrator = GraphChatUIFakeOrchestrator(
             scripts: [
                 GraphChatUIFakeScript(
                     events: [
                         .completed(
-                            GraphChatUITestSupport.finalAnswer(
-                                directAnswer: "Replacement answer"
+                            GraphChatAnswer(
+                                directAnswer:
+                                    "Replacement answer",
+                                hasInsufficientEvidence:
+                                    false,
+                                interpretation:
+                                    interpretation
                             )
                         )
                     ]
@@ -502,6 +514,10 @@ struct GraphChatMessageActionControllerTests {
         }
         #expect(question == "Replacement question")
         #expect(answer.text == "Replacement answer")
+        #expect(
+            answer.answer?.interpretation
+                == interpretation
+        )
     }
 
     @Test
@@ -585,19 +601,31 @@ struct GraphChatMessageActionControllerTests {
     }
 
     @Test
-    func regenerationKeepsUserAssistantIdentityAndCreationDate() async {
+    func regenerationKeepsUserAssistantIdentityAndCreationDate()
+        async throws
+    {
         let turn = Self.singleCompletedTurn(
             question: "Same question",
             directAnswer: "Old answer"
         )
+        let interpretation = try
+            GraphChatIntentInterpretationTestFixture()
+                .filteredCollection(
+                    language: .english
+                )
         let originalCreatedAt = turn.messages[1].createdAt
         let setup = Self.makeSetup(
             scripts: [
                 GraphChatUIFakeScript(
                     events: [
                         .completed(
-                            GraphChatUITestSupport.finalAnswer(
-                                directAnswer: "New answer"
+                            GraphChatAnswer(
+                                directAnswer:
+                                    "New answer",
+                                hasInsufficientEvidence:
+                                    false,
+                                interpretation:
+                                    interpretation
                             )
                         )
                     ]
@@ -622,6 +650,10 @@ struct GraphChatMessageActionControllerTests {
             return
         }
         #expect(answer.text == "New answer")
+        #expect(
+            answer.answer?.interpretation
+                == interpretation
+        )
     }
 
     @Test

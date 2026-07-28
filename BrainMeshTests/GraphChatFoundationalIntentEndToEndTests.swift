@@ -105,6 +105,9 @@ struct GraphChatFoundationalIntentEndToEndTests {
         let providerSnapshot = await runtime.provider.snapshot()
         let localLifecycle =
             await runtime.observability.lifecycleEvents()
+        let interpretationLifecycle =
+            await runtime.observability
+                .interpretationEvents()
         let toolActivities: [GraphChatToolKind] = events.compactMap {
             event in
             if case .toolActivity(let activity) = event {
@@ -118,6 +121,23 @@ struct GraphChatFoundationalIntentEndToEndTests {
         ]
 
         #expect(answer.state == .answer)
+        #expect(
+            answer.interpretation?
+                .presentation.label
+                == "Verstanden als"
+        )
+        #expect(
+            answer.interpretation?
+                .presentation.title
+                .contains("Geburtsdatum")
+                == true
+        )
+        #expect(
+            answer.interpretation?
+                .presentation.title
+                .contains("02.11.1999")
+                == false
+        )
         #expect(
             answer.directAnswer
                 == "Geburtsdatum von Person X: 17.05.1990."
@@ -167,6 +187,10 @@ struct GraphChatFoundationalIntentEndToEndTests {
                 .executionStarted,
                 .executionCommitted,
             ]
+        )
+        #expect(
+            interpretationLifecycle
+                == [.created]
         )
         #expect(terminalEventCount(events) == 1)
         #expect(toolActivities == expectedToolActivities)
@@ -1062,6 +1086,21 @@ private actor FoundationalKernelObservabilityRecorder:
     {
         events.compactMap { event in
             guard case .localIntent(let metric) = event else {
+                return nil
+            }
+            return metric.event
+        }
+    }
+
+    func interpretationEvents()
+        -> [
+            GraphChatIntentInterpretationLifecycleEvent
+        ]
+    {
+        events.compactMap { event in
+            guard case .intentInterpretation(
+                let metric
+            ) = event else {
                 return nil
             }
             return metric.event

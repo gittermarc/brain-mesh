@@ -193,6 +193,25 @@ nonisolated struct GraphChatSemanticIntentMetric:
     }
 }
 
+nonisolated enum GraphChatIntentInterpretationLifecycleEvent:
+    String,
+    CaseIterable,
+    Hashable,
+    Sendable
+{
+    case created
+    case displayed
+    case discardedPresentationViolation
+}
+
+nonisolated struct GraphChatIntentInterpretationMetric:
+    Hashable,
+    Sendable
+{
+    let event:
+        GraphChatIntentInterpretationLifecycleEvent
+}
+
 nonisolated enum GraphChatObservabilityEvent: Hashable, Sendable {
     case request(GraphChatRequestMetric)
     case availability(GraphChatAvailabilityMetricState)
@@ -200,6 +219,9 @@ nonisolated enum GraphChatObservabilityEvent: Hashable, Sendable {
     case authoritativeFact(GraphChatAuthoritativeFactMetric)
     case localIntent(GraphChatLocalIntentMetric)
     case semanticIntent(GraphChatSemanticIntentMetric)
+    case intentInterpretation(
+        GraphChatIntentInterpretationMetric
+    )
 }
 
 nonisolated protocol GraphChatObservabilityRecording: Sendable {
@@ -242,6 +264,10 @@ actor GraphChatTechnicalObservabilityRecorder: GraphChatObservabilityRecording {
             let family = metric.family?.rawValue ?? "none"
             BMLog.chat.info(
                 "Semantic intent event=\(metric.event.rawValue, privacy: .public) family=\(family, privacy: .public) interpreterCalls=\(metric.interpreterCallCount) answerProviderCalls=\(metric.answerProviderCallCount)"
+            )
+        case .intentInterpretation(let metric):
+            BMLog.chat.info(
+                "Intent interpretation event=\(metric.event.rawValue, privacy: .public)"
             )
         }
     }
