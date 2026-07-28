@@ -720,8 +720,10 @@ nonisolated struct GraphChatAnswerArtifactStrings: Sendable {
 nonisolated extension GraphChatAnswerArtifactPayload {
     var resultMetadata: GraphChatAnswerArtifactResultMetadata? {
         switch self {
-        case .metric, .comparison, .healthFinding:
+        case .metric, .healthFinding:
             return nil
+        case .comparison(let payload):
+            return payload.resultMetadata
         case .resultList(let payload):
             return payload.resultMetadata
         case .table(let payload):

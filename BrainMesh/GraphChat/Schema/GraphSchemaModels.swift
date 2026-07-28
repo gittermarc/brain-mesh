@@ -125,6 +125,32 @@ nonisolated struct GraphSchemaFieldResolution: Hashable, Sendable {
     let type: DetailFieldType
     let unit: String?
     let choiceOptions: [String]
+    let isPinned: Bool
+    let sortIndex: Int
+
+    init(
+        alias: GraphFieldAlias,
+        entityAlias: GraphEntityAlias,
+        entityID: UUID,
+        fieldID: UUID,
+        name: String,
+        type: DetailFieldType,
+        unit: String?,
+        choiceOptions: [String],
+        isPinned: Bool = false,
+        sortIndex: Int = 0
+    ) {
+        self.alias = alias
+        self.entityAlias = entityAlias
+        self.entityID = entityID
+        self.fieldID = fieldID
+        self.name = name
+        self.type = type
+        self.unit = unit
+        self.choiceOptions = choiceOptions
+        self.isPinned = isPinned
+        self.sortIndex = sortIndex
+    }
 }
 
 nonisolated struct GraphSchemaNodeResolution: Hashable, Sendable {

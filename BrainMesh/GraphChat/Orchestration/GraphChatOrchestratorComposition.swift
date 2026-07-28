@@ -28,6 +28,10 @@ nonisolated struct GraphChatOrchestratorComposition: Sendable {
             any GraphChatFoundationalQueryExecuting,
         semanticSearchExecutor:
             any GraphChatLocalIntentSearchExecuting,
+        semanticNodeExecutor:
+            any GraphChatLocalIntentNodeExecuting,
+        semanticStatsExecutor:
+            any GraphChatLocalIntentStatsExecuting,
         toolRunnerFactory: any GraphChatModelToolRunnerFactory,
         toolBudgetPolicy: GraphChatToolBudgetPolicy,
         conversationStatePolicy: GraphChatConversationStatePolicy,
@@ -106,6 +110,10 @@ nonisolated struct GraphChatOrchestratorComposition: Sendable {
                     foundationalQueryExecutor,
                 searchExecutor:
                     semanticSearchExecutor,
+                nodeExecutor:
+                    semanticNodeExecutor,
+                statsExecutor:
+                    semanticStatsExecutor,
                 conversationStateReducer:
                     stateReducer,
                 calendar: calendar,

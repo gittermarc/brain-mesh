@@ -21,10 +21,16 @@ extension GraphReadRepository: GraphChatNodeReading {}
 nonisolated struct GetNodeInput: Sendable {
     let node: NodeRefKey
     let relatedLimit: Int
+    let includeNotes: Bool
 
-    init(node: NodeRefKey, relatedLimit: Int = 20) {
+    init(
+        node: NodeRefKey,
+        relatedLimit: Int = 20,
+        includeNotes: Bool = true
+    ) {
         self.node = node
         self.relatedLimit = relatedLimit
+        self.includeNotes = includeNotes
     }
 }
 
@@ -84,6 +90,11 @@ nonisolated struct GetNodeOutput: Sendable {
     let attachments: [GraphChatAttachmentMetadata]
     let evidenceIDs: [GraphEvidenceID]
     let detailValueWindow: GraphChatResultWindow
+    let hasNotes: Bool
+    let directLinkCount: Int
+    let attachmentMetadataCount: Int
+    let authoritativeDetailValueCount: Int
+    let structureEvidenceID: GraphEvidenceID?
 
     init(
         node: NodeRefKey,
@@ -94,7 +105,12 @@ nonisolated struct GetNodeOutput: Sendable {
         links: [GraphChatNodeLinkMetadata],
         attachments: [GraphChatAttachmentMetadata],
         evidenceIDs: [GraphEvidenceID],
-        detailValueWindow: GraphChatResultWindow? = nil
+        detailValueWindow: GraphChatResultWindow? = nil,
+        hasNotes: Bool? = nil,
+        directLinkCount: Int? = nil,
+        attachmentMetadataCount: Int? = nil,
+        authoritativeDetailValueCount: Int? = nil,
+        structureEvidenceID: GraphEvidenceID? = nil
     ) {
         self.node = node
         self.label = label
@@ -105,6 +121,21 @@ nonisolated struct GetNodeOutput: Sendable {
         self.attachments = attachments
         self.evidenceIDs = evidenceIDs
         self.detailValueWindow = detailValueWindow ?? .complete(totalCount: detailValues.count)
+        self.hasNotes =
+            hasNotes
+            ?? notes.trimmingCharacters(
+                in: .whitespacesAndNewlines
+            ).isEmpty == false
+        self.directLinkCount =
+            directLinkCount ?? links.count
+        self.attachmentMetadataCount =
+            attachmentMetadataCount
+            ?? attachments.count
+        self.authoritativeDetailValueCount =
+            authoritativeDetailValueCount
+            ?? detailValues.count
+        self.structureEvidenceID =
+            structureEvidenceID
     }
 }
 
@@ -153,6 +184,7 @@ nonisolated struct GetNodeTool: GraphChatTool {
             guard let prepared = try await prepare(
                 node: input.node,
                 relatedLimit: relatedLimit,
+                includeNotes: input.includeNotes,
                 graphScope: context.scope.graphScope
             ) else {
                 logger.record(timer.metric(tool: kind, resultCount: 0, wasCancelled: false))
@@ -173,8 +205,7 @@ nonisolated struct GetNodeTool: GraphChatTool {
             let validatedDetailValues = prepared.output.detailValues.filter {
                 validIDs.contains($0.evidenceID)
             }
-            let detailEvidenceWasRemoved = validatedDetailValues.count
-                < prepared.output.detailValueWindow.returnedCount
+            let detailEvidenceWasRemoved = validatedDetailValues.count < prepared.output.detailValueWindow.returnedCount
             let output = GetNodeOutput(
                 node: prepared.output.node,
                 label: prepared.output.label,
@@ -200,7 +231,25 @@ nonisolated struct GetNodeTool: GraphChatTool {
                         || detailEvidenceWasRemoved,
                     limitSources: prepared.output.detailValueWindow.limitSources
                         + (detailEvidenceWasRemoved ? [.source] : [])
-                )
+                ),
+                hasNotes:
+                    prepared.output.hasNotes,
+                directLinkCount:
+                    prepared.output
+                        .directLinkCount,
+                attachmentMetadataCount:
+                    prepared.output
+                        .attachmentMetadataCount,
+                authoritativeDetailValueCount:
+                    prepared.output
+                        .authoritativeDetailValueCount,
+                structureEvidenceID:
+                    prepared.output.structureEvidenceID
+                        .flatMap { evidenceID in
+                            validIDs.contains(evidenceID)
+                                ? evidenceID
+                                : nil
+                        }
             )
             try await context.budget.consumeEvidence(evidence.count)
             let resultCount = 1 + output.detailValues.count + output.links.count + output.attachments.count
@@ -218,6 +267,7 @@ nonisolated struct GetNodeTool: GraphChatTool {
     private func prepare(
         node: NodeRefKey,
         relatedLimit: Int,
+        includeNotes: Bool,
         graphScope: GraphScope
     ) async throws -> PreparedOutput? {
         let label: String
@@ -270,10 +320,15 @@ nonisolated struct GetNodeTool: GraphChatTool {
                 )
             )
         }
+        let hasNotes = notes.trimmingCharacters(
+            in: .whitespacesAndNewlines
+        ).isEmpty == false
+        let visibleNotes = includeNotes ? notes : ""
         let baseEvidence = GraphEvidence(
             sourceReference: baseReference,
             summary: label,
-            fieldValues: baseFields,
+            fieldValues:
+                includeNotes ? baseFields : [],
             navigationTitle: label,
             identitySuffix: "node-detail"
         )
@@ -337,9 +392,10 @@ nonisolated struct GetNodeTool: GraphChatTool {
             }
         }
 
-        let links = remainingRelatedItems > 0
-            ? try await repository.links(connectedTo: node, in: graphScope)
-            : []
+        let links = try await repository.links(
+            connectedTo: node,
+            in: graphScope
+        )
         var linkItems: [GraphChatNodeLinkMetadata] = []
         for link in links.prefix(remainingRelatedItems) {
             try Task.checkCancellation()
@@ -385,9 +441,11 @@ nonisolated struct GetNodeTool: GraphChatTool {
             remainingRelatedItems -= 1
         }
 
-        let attachments = remainingRelatedItems > 0
-            ? try await repository.attachmentMetadata(owner: node, in: graphScope)
-            : []
+        let attachments =
+            try await repository.attachmentMetadata(
+                owner: node,
+                in: graphScope
+            )
         var attachmentItems: [GraphChatAttachmentMetadata] = []
         for attachment in attachments.prefix(remainingRelatedItems) {
             try Task.checkCancellation()
@@ -435,10 +493,65 @@ nonisolated struct GetNodeTool: GraphChatTool {
             )
         }
 
+        var structureFields: [GraphEvidenceFieldValue] = [
+            GraphEvidenceFieldValue(
+                fieldID: nil,
+                fieldName: "Node-Art",
+                value: .text(
+                    node.kind == .entity
+                    ? "entity"
+                    : "attribute"
+                ),
+                unit: nil
+            ),
+            GraphEvidenceFieldValue(
+                fieldID: nil,
+                fieldName: "Direkte Verbindungen",
+                value: .integer(links.count),
+                unit: nil
+            ),
+            GraphEvidenceFieldValue(
+                fieldID: nil,
+                fieldName: "Attachment-Metadaten",
+                value: .integer(attachments.count),
+                unit: nil
+            ),
+            GraphEvidenceFieldValue(
+                fieldID: nil,
+                fieldName: "Notizen vorhanden",
+                value: .boolean(hasNotes),
+                unit: nil
+            ),
+            GraphEvidenceFieldValue(
+                fieldID: nil,
+                fieldName: "Autoritative Detailwerte",
+                value: .integer(detailValueTotalCount),
+                unit: nil
+            ),
+        ]
+        if let ownerLabel = owner?.label {
+            structureFields.append(
+                GraphEvidenceFieldValue(
+                    fieldID: nil,
+                    fieldName: "Owner",
+                    value: .text(ownerLabel),
+                    unit: nil
+                )
+            )
+        }
+        let structureEvidence = GraphEvidence(
+            sourceReference: baseReference,
+            summary: label,
+            fieldValues: structureFields,
+            navigationTitle: label,
+            identitySuffix: "node-structure"
+        )
+        evidence.append(structureEvidence)
+
         let output = GetNodeOutput(
             node: node,
             label: label,
-            notes: notes,
+            notes: visibleNotes,
             owner: owner,
             detailValues: detailItems,
             links: linkItems,
@@ -451,7 +564,15 @@ nonisolated struct GetNodeTool: GraphChatTool {
                 limitReached: detailValueToolLimitReached || detailValueSourceLimited,
                 limitSources: (detailValueToolLimitReached ? [.tool] : [])
                     + (detailValueSourceLimited ? [.source] : [])
-            )
+            ),
+            hasNotes: hasNotes,
+            directLinkCount: links.count,
+            attachmentMetadataCount:
+                attachments.count,
+            authoritativeDetailValueCount:
+                detailValueTotalCount,
+            structureEvidenceID:
+                structureEvidence.id
         )
         return PreparedOutput(output: output, evidence: GraphEvidenceCollection(evidence).values)
     }

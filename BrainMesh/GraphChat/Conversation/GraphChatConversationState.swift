@@ -24,6 +24,7 @@ nonisolated enum GraphChatConversationResultKind: String, CaseIterable, Hashable
     case node
     case neighbors
     case stats
+    case comparison
 }
 
 nonisolated enum GraphChatConversationReference: Hashable, Sendable {
@@ -119,6 +120,16 @@ nonisolated struct GraphChatConversationResultContext: Hashable, Sendable, Ident
 nonisolated struct GraphChatConversationComparisonContext: Hashable, Sendable {
     let references: [GraphChatConversationReference]
     let technicalDescription: String
+}
+
+nonisolated struct GraphChatConversationComparisonSubject:
+    Hashable,
+    Sendable
+{
+    let node: NodeRefKey
+    let label: String
+    let ownerEntityID: UUID?
+    let evidenceIDs: [GraphEvidenceID]
 }
 
 nonisolated struct GraphChatConversationReferenceTargets: Hashable, Sendable {

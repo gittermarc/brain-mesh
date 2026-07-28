@@ -35,7 +35,7 @@ private nonisolated struct FoundationGraphChatGeneratedFilterDraft {
 private nonisolated struct FoundationGraphChatGeneratedIntentDraft {
     @Guide(
         description:
-            "Exactly one of findNodes, entityList, filteredCollection, count, groupCount, refinement, unrecognized, or openEnded."
+            "Exactly one of findNodes, entityList, filteredCollection, count, groupCount, refinement, nodeDetails, compareNodes, inspectGraphState, unrecognized, or openEnded."
     )
     var family: String
 
@@ -50,6 +50,12 @@ private nonisolated struct FoundationGraphChatGeneratedIntentDraft {
             "The user's literal search meaning only. Use an empty string when absent."
     )
     var searchTerm: String
+
+    @Guide(
+        description:
+            "Literal user-visible node display names, in requested order. Use one for nodeDetails, two or more for compareNodes, and none for conversation references."
+    )
+    var nodeTerms: [String]
 
     @Guide(
         description:
@@ -111,6 +117,12 @@ private nonisolated struct FoundationGraphChatGeneratedIntentDraft {
             "Exact visible field name for groupCount; otherwise empty."
     )
     var groupFieldTerm: String
+
+    @Guide(
+        description:
+            "Exactly one of overview, counts, structure, or health. Use only for inspectGraphState; otherwise overview."
+    )
+    var graphStateAspect: String
 
     @Guide(
         description:
@@ -200,10 +212,16 @@ actor FoundationModelsGraphChatIntentInterpreter:
         Use filteredCollection for a new collection constrained by one or more field meanings.
         Use count for a requested count and groupCount for counts grouped by one visible field.
         Use refinement for filtering, sorting, or projecting the revalidated current result set.
+        Use nodeDetails when the user asks to show or describe one named or referenced node.
+        Use compareNodes only when the user asks to compare two or more named or referenced nodes.
+        Use inspectGraphState for graph overview, counts, structure, health, or strongly connected nodes.
         Use unrecognized when the meaning does not match those families.
         Use openEnded only when the user explicitly asks an open-ended graph question that needs the legacy answer flow.
         When an entity type is clear, place only its exact supplied display name in entityTerm; never an alias or ID.
         Put only exact supplied field display names in filters, sortFieldTerm, projectionTerms, and groupFieldTerm.
+        Put literal user-visible node display names in nodeTerms. Do not invent or normalize node names.
+        For nodeDetails and compareNodes, projectionTerms contains only comparison or detail fields explicitly requested by the user.
+        For inspectGraphState choose overview, counts, structure, or health from the user's meaning.
         Node identity is projected by the app; never place node name in projectionTerms.
         Preserve user values literally. Describe only the semantic relation; the app chooses operators and parses typed values.
         Use conversationReference=currentSelection only when the user refers to prior results, such as these, those, davon, or diese Gruppe.
@@ -269,7 +287,12 @@ actor FoundationModelsGraphChatIntentInterpreter:
                 ),
             let language = GraphChatResponseLanguage(
                 rawValue: generated.responseLanguage
-            )
+            ),
+            let graphStateAspect =
+                GraphChatGraphStateAspect(
+                    rawValue:
+                        generated.graphStateAspect
+                )
         else {
             throw invalidOutput()
         }
@@ -352,6 +375,7 @@ actor FoundationModelsGraphChatIntentInterpreter:
             family: family,
             entityTerm: generated.entityTerm,
             searchTerm: generated.searchTerm,
+            nodeTerms: generated.nodeTerms,
             findTarget: target,
             resultAmount: amount,
             conversationReference: reference,
@@ -361,6 +385,8 @@ actor FoundationModelsGraphChatIntentInterpreter:
                 generated.projectionTerms,
             groupFieldTerm:
                 generated.groupFieldTerm,
+            graphStateAspect:
+                graphStateAspect,
             responseLanguage: language
         )
     }

@@ -125,6 +125,10 @@ nonisolated struct GraphChatLocalIntentExecutionKernel: Sendable {
         any GraphChatLocalIntentQueryExecuting
     private let searchExecutor:
         any GraphChatLocalIntentSearchExecuting
+    private let nodeExecutor:
+        any GraphChatLocalIntentNodeExecuting
+    private let statsExecutor:
+        any GraphChatLocalIntentStatsExecuting
     private let conversationStateReducer:
         GraphChatConversationStateReducer
     private let timeZone: TimeZone
@@ -143,6 +147,12 @@ nonisolated struct GraphChatLocalIntentExecutionKernel: Sendable {
         searchExecutor:
             any GraphChatLocalIntentSearchExecuting =
                 SearchGraphTool(),
+        nodeExecutor:
+            any GraphChatLocalIntentNodeExecuting =
+                GetNodeTool(),
+        statsExecutor:
+            any GraphChatLocalIntentStatsExecuting =
+                UnavailableGraphChatLocalStatsExecutor(),
         conversationStateReducer:
             GraphChatConversationStateReducer,
         calendar: Calendar,
@@ -157,6 +167,8 @@ nonisolated struct GraphChatLocalIntentExecutionKernel: Sendable {
     ) {
         self.queryExecutor = queryExecutor
         self.searchExecutor = searchExecutor
+        self.nodeExecutor = nodeExecutor
+        self.statsExecutor = statsExecutor
         self.conversationStateReducer =
             conversationStateReducer
         self.timeZone = timeZone
@@ -245,6 +257,50 @@ nonisolated struct GraphChatLocalIntentExecutionKernel: Sendable {
                 validatedAction = .search(
                     action
                 )
+            case .nodeDetails(let action):
+                try validateNodeAction(
+                    action,
+                    intent: intent,
+                    schemaContext:
+                        schemaContext
+                )
+                validatedAction = .node(action)
+            case .compareNodes(let plan):
+                try validateComparisonAction(
+                    plan,
+                    intent: intent,
+                    schemaContext:
+                        schemaContext
+                )
+                if plan.kind
+                    == .sameEntityAttributes
+                {
+                    let queryPlan =
+                        try querySupport
+                            .validatedComparisonPlan(
+                                plan,
+                                intent: intent,
+                                schemaContext:
+                                    schemaContext
+                            )
+                    validatedAction =
+                        .sameEntityComparison(
+                            plan: plan,
+                            queryPlan: queryPlan
+                        )
+                } else {
+                    validatedAction =
+                        .structuralComparison(
+                            plan
+                        )
+                }
+            case .inspectGraphState(let action):
+                try validateGraphStateAction(
+                    action,
+                    intent: intent
+                )
+                validatedAction =
+                    .graphState(action)
             }
         } catch {
             await recordRevalidationRejection(
@@ -399,6 +455,13 @@ nonisolated struct GraphChatLocalIntentExecutionKernel: Sendable {
             try Task.checkCancellation()
             let candidateTurn = try await finalize(execution)
             finalizedTurn = candidateTurn
+            try validateFinalizedAdvancedTurn(
+                candidateTurn,
+                action: validatedAction,
+                requestedArtifactIDs:
+                    actionExecution
+                        .artifactIDs
+            )
             try await validateCurrentRequest()
             try Task.checkCancellation()
             try await commit(candidateTurn)
@@ -425,6 +488,22 @@ nonisolated struct GraphChatLocalIntentExecutionKernel: Sendable {
             )
             return candidateTurn
         } catch {
+            if let executionError =
+                    error
+                        as? GraphChatLocalIntentExecutionError,
+               executionError == .staleSchemaIdentity,
+               (
+                   intent.kind == .nodeDetails
+                       || intent.kind == .compareNodes
+               )
+            {
+                await record(
+                    .staleNodeDiscarded,
+                    kind: intent.kind,
+                    rejection:
+                        .schemaIdentity
+                )
+            }
             if let finalizedTurn {
                 await artifactSession.registry
                     .removeCommittedArtifacts(
@@ -463,12 +542,49 @@ nonisolated struct GraphChatLocalIntentExecutionKernel: Sendable {
         }
     }
 
+    private func validateFinalizedAdvancedTurn(
+        _ turn: GraphChatFinalizedTurn,
+        action: ValidatedAction,
+        requestedArtifactIDs:
+            [GraphChatAnswerArtifactID]
+    ) throws {
+        switch action {
+        case .node, .sameEntityComparison,
+            .structuralComparison, .graphState:
+            guard
+                requestedArtifactIDs.isEmpty
+                    == false,
+                Set(
+                    turn.committedArtifactIDs
+                ) == Set(
+                    requestedArtifactIDs
+                )
+            else {
+                throw GraphChatLocalIntentExecutionError
+                    .artifactUnavailable
+            }
+        case .query, .search:
+            break
+        }
+    }
+
     private enum ValidatedAction {
         case query(
             plan: ValidatedGraphQueryPlan,
             action: GraphChatLocalQueryAction
         )
         case search(GraphChatLocalSearchAction)
+        case node(GraphChatLocalNodeDetailsAction)
+        case sameEntityComparison(
+            plan: GraphChatComparisonPlan,
+            queryPlan: ValidatedGraphQueryPlan
+        )
+        case structuralComparison(
+            GraphChatComparisonPlan
+        )
+        case graphState(
+            GraphChatLocalGraphStateAction
+        )
 
         var toolKind: GraphChatToolKind {
             switch self {
@@ -476,6 +592,13 @@ nonisolated struct GraphChatLocalIntentExecutionKernel: Sendable {
                 return .queryDetailValues
             case .search:
                 return .searchGraph
+            case .node,
+                .structuralComparison:
+                return .getNode
+            case .sameEntityComparison:
+                return .queryDetailValues
+            case .graphState:
+                return .graphStats
             }
         }
     }
@@ -721,6 +844,803 @@ nonisolated struct GraphChatLocalIntentExecutionKernel: Sendable {
                 authoritativeFactExpectation:
                     nil
             )
+
+        case .node(let nodeAction):
+            let budget = GraphChatToolBudget(
+                policy:
+                    GraphChatToolBudgetPolicy(
+                        maximumCalls: 1,
+                        maximumResultCountPerTool:
+                            GetNodeTool
+                                .maximumRelatedItemCount
+                                + 1,
+                        maximumEvidenceCount:
+                            intent.limits
+                                .maximumEvidenceCount
+                    )
+            )
+            let result = try await nodeExecutor
+                .execute(
+                    GetNodeInput(
+                        node:
+                            nodeAction.node.node,
+                        relatedLimit:
+                            nodeAction
+                                .relatedLimit,
+                        includeNotes: true
+                    ),
+                    context:
+                        GraphChatToolContext(
+                            scope:
+                                intent.scope
+                                    .queryScope,
+                            budget: budget
+                        )
+                )
+            try Task.checkCancellation()
+            guard result.state == .success,
+                  let output = result.payload,
+                  output.node
+                    == nodeAction.node.node,
+                  result.evidence.count
+                    <= intent.limits
+                        .maximumEvidenceCount
+            else {
+                throw GraphChatLocalIntentExecutionError
+                    .staleSchemaIdentity
+            }
+            try await evidenceRegistry.register(
+                result.evidence
+            )
+            await presentationRegistry
+                .registerValidatedEvidence(
+                    result.evidence
+                )
+            try await conversationTransaction
+                .apply(
+                    GraphChatConversationTrustedEvent(
+                        graphScope:
+                            intent.scope
+                                .graphScope,
+                        chatScope:
+                            intent.scope
+                                .chatScope,
+                        payload: .nodeResolved(
+                            output: output,
+                            state: result.state,
+                            evidence:
+                                result.evidence
+                        )
+                    )
+                )
+            let draft =
+                GraphChatAnswerArtifactFactory
+                    .nodeDetails(
+                        output: output,
+                        graphScope:
+                            intent.scope
+                                .graphScope,
+                        language:
+                            intent
+                                .responseLanguage
+                    )
+                ?? GraphChatAnswerArtifactFactory
+                    .nodeOverview(
+                        output: output,
+                        graphScope:
+                            intent.scope
+                                .graphScope,
+                        language:
+                            intent
+                                .responseLanguage
+                    )
+            guard let draft else {
+                throw GraphChatLocalIntentExecutionError
+                    .artifactUnavailable
+            }
+            let artifactIDs = try await stage(
+                [draft],
+                registry: artifactRegistry,
+                evidenceRegistry:
+                    evidenceRegistry,
+                presentationRegistry:
+                    presentationRegistry,
+                transactionID: transactionID
+            )
+            return ActionExecution(
+                response:
+                    GraphChatModelToolResponse(
+                        tool: .getNode,
+                        state: .success,
+                        content:
+                            "local-node-details-result",
+                        evidenceIDs:
+                            result.evidence
+                                .map(\.id),
+                        artifactIDs:
+                            artifactIDs
+                    ),
+                evidence: result.evidence,
+                artifactIDs: artifactIDs,
+                authoritativeFactExpectation:
+                    nil
+            )
+
+        case .sameEntityComparison(
+            let comparison,
+            let queryPlan
+        ):
+            let result = try await queryExecutor
+                .execute(queryPlan)
+            try Task.checkCancellation()
+            let resultNodes = Set(
+                result.rows.map(\.node)
+            )
+            guard
+                result.state == .success,
+                resultNodes
+                    == Set(
+                        comparison.nodes
+                            .map(\.node)
+                    ),
+                result.rows.count
+                    == comparison.nodes.count,
+                result.evidence.isEmpty
+                    == false,
+                result.evidence.count
+                    <= intent.limits
+                        .maximumEvidenceCount
+            else {
+                throw GraphChatLocalIntentExecutionError
+                    .staleSchemaIdentity
+            }
+            guard let draft =
+                    GraphChatAnswerArtifactFactory
+                        .comparison(
+                            result: result,
+                            plan: comparison,
+                            schemaContext:
+                                schemaContext
+                        )
+            else {
+                throw GraphChatLocalIntentExecutionError
+                    .artifactUnavailable
+            }
+            try await evidenceRegistry.register(
+                result.evidence
+            )
+            await presentationRegistry
+                .registerValidatedEvidence(
+                    result.evidence
+                )
+            try await conversationTransaction
+                .apply(
+                    GraphChatConversationTrustedEvent(
+                        graphScope:
+                            intent.scope
+                                .graphScope,
+                        chatScope:
+                            intent.scope
+                                .chatScope,
+                        payload: .queryResolved(
+                            plan: queryPlan,
+                            result: result,
+                            schemaContext:
+                                schemaContext
+                        )
+                    )
+                )
+            let comparisonSubjects =
+                conversationComparisonSubjects(
+                    from: draft,
+                    plannedNodes:
+                        comparison.nodes
+                )
+            guard comparisonSubjects.count >= 2 else {
+                throw GraphChatLocalIntentExecutionError
+                    .artifactUnavailable
+            }
+            try await conversationTransaction
+                .apply(
+                    GraphChatConversationTrustedEvent(
+                        graphScope:
+                            intent.scope
+                                .graphScope,
+                        chatScope:
+                            intent.scope
+                                .chatScope,
+                        payload:
+                            .comparisonResultResolved(
+                                subjects:
+                                    comparisonSubjects,
+                                evidence:
+                                    result.evidence,
+                                technicalDescription:
+                                    "Fachlicher Vergleich mit \(comparisonSubjects.count) Subjects und \(comparison.features.count) autoritativen Features"
+                            )
+                    )
+                )
+            let artifactIDs = try await stage(
+                [draft],
+                registry: artifactRegistry,
+                evidenceRegistry:
+                    evidenceRegistry,
+                presentationRegistry:
+                    presentationRegistry,
+                transactionID: transactionID
+            )
+            return ActionExecution(
+                response:
+                    GraphChatModelToolResponse(
+                        tool:
+                            .queryDetailValues,
+                        state: .success,
+                        content:
+                            "local-same-entity-comparison-result",
+                        evidenceIDs:
+                            result.evidence
+                                .map(\.id),
+                        artifactIDs:
+                            artifactIDs
+                    ),
+                evidence: result.evidence,
+                artifactIDs: artifactIDs,
+                authoritativeFactExpectation:
+                    nil
+            )
+
+        case .structuralComparison(
+            let comparison
+        ):
+            let budget = GraphChatToolBudget(
+                policy:
+                    GraphChatToolBudgetPolicy(
+                        maximumCalls:
+                            comparison.nodes.count,
+                        maximumResultCountPerTool:
+                            GetNodeTool
+                                .maximumRelatedItemCount
+                                + 1,
+                        maximumEvidenceCount:
+                            intent.limits
+                                .maximumEvidenceCount
+                    )
+            )
+            var outputs: [GetNodeOutput] = []
+            var collectedEvidence:
+                [GraphEvidence] = []
+            for node in comparison.nodes {
+                try Task.checkCancellation()
+                let result =
+                    try await nodeExecutor.execute(
+                        GetNodeInput(
+                            node: node.node,
+                            relatedLimit:
+                                comparison
+                                    .relatedLimit,
+                            includeNotes: false
+                        ),
+                        context:
+                            GraphChatToolContext(
+                                scope:
+                                    comparison
+                                        .chatScope,
+                                budget: budget
+                            )
+                    )
+                guard
+                    result.state == .success,
+                    let output =
+                        result.payload,
+                    output.node == node.node,
+                    output.structureEvidenceID
+                        != nil
+                else {
+                    throw GraphChatLocalIntentExecutionError
+                        .staleSchemaIdentity
+                }
+                outputs.append(output)
+                collectedEvidence.append(
+                    contentsOf:
+                        result.evidence
+                )
+            }
+            let evidence =
+                GraphEvidenceCollection(
+                    collectedEvidence
+                ).values
+            guard outputs.count
+                    == comparison.nodes.count,
+                  evidence.count
+                    <= intent.limits
+                        .maximumEvidenceCount,
+                  let draft =
+                    GraphChatAnswerArtifactFactory
+                        .structuralComparison(
+                            outputs: outputs,
+                            evidence: evidence,
+                            plan: comparison
+                        )
+            else {
+                throw GraphChatLocalIntentExecutionError
+                    .artifactUnavailable
+            }
+            try await evidenceRegistry.register(
+                evidence
+            )
+            await presentationRegistry
+                .registerValidatedEvidence(
+                    evidence
+                )
+            let comparisonSubjects =
+                conversationComparisonSubjects(
+                    from: draft,
+                    plannedNodes:
+                        comparison.nodes
+                )
+            guard comparisonSubjects.count >= 2 else {
+                throw GraphChatLocalIntentExecutionError
+                    .artifactUnavailable
+            }
+            try await conversationTransaction
+                .apply(
+                    GraphChatConversationTrustedEvent(
+                        graphScope:
+                            intent.scope
+                                .graphScope,
+                        chatScope:
+                            intent.scope
+                                .chatScope,
+                        payload:
+                            .comparisonResultResolved(
+                                subjects:
+                                    comparisonSubjects,
+                                evidence:
+                                    evidence,
+                                technicalDescription:
+                                    "Struktureller Vergleich mit \(comparisonSubjects.count) Subjects und \(comparison.features.count) belegten Features"
+                            )
+                    )
+                )
+            let artifactIDs = try await stage(
+                [draft],
+                registry: artifactRegistry,
+                evidenceRegistry:
+                    evidenceRegistry,
+                presentationRegistry:
+                    presentationRegistry,
+                transactionID: transactionID
+            )
+            return ActionExecution(
+                response:
+                    GraphChatModelToolResponse(
+                        tool: .getNode,
+                        state: .success,
+                        content:
+                            "local-structural-comparison-result",
+                        evidenceIDs:
+                            evidence.map(\.id),
+                        artifactIDs:
+                            artifactIDs
+                    ),
+                evidence: evidence,
+                artifactIDs: artifactIDs,
+                authoritativeFactExpectation:
+                    nil
+            )
+
+        case .graphState(let stateAction):
+            let budget = GraphChatToolBudget(
+                policy:
+                    GraphChatToolBudgetPolicy(
+                        maximumCalls: 1,
+                        maximumResultCountPerTool:
+                            GraphStatsTool
+                                .maximumHubCount
+                                + 1,
+                        maximumEvidenceCount:
+                            intent.limits
+                                .maximumEvidenceCount
+                    )
+            )
+            let result = try await statsExecutor
+                .execute(
+                    GraphStatsInput(
+                        hubLimit:
+                            stateAction.hubLimit
+                    ),
+                    context:
+                        GraphChatToolContext(
+                            scope:
+                                intent.scope
+                                    .chatScope,
+                            budget: budget
+                        )
+                )
+            try Task.checkCancellation()
+            guard result.state == .success,
+                  let output = result.payload,
+                  result.evidence.isEmpty
+                    == false,
+                  result.evidence.count
+                    <= intent.limits
+                        .maximumEvidenceCount
+            else {
+                throw GraphChatLocalIntentExecutionError
+                    .artifactUnavailable
+            }
+            let drafts =
+                GraphChatAnswerArtifactFactory
+                    .graphState(
+                        output: output,
+                        aspect:
+                            stateAction.aspect,
+                        graphScope:
+                            intent.scope
+                                .graphScope,
+                        requestedHubLimit:
+                            stateAction.hubLimit,
+                        language:
+                            intent
+                                .responseLanguage
+                    )
+            guard drafts.isEmpty == false,
+                  drafts.count
+                    <= intent.limits
+                        .maximumArtifactCount
+            else {
+                throw GraphChatLocalIntentExecutionError
+                    .artifactUnavailable
+            }
+            try await evidenceRegistry.register(
+                result.evidence
+            )
+            await presentationRegistry
+                .registerValidatedEvidence(
+                    result.evidence
+                )
+            try await conversationTransaction
+                .apply(
+                    GraphChatConversationTrustedEvent(
+                        graphScope:
+                            intent.scope
+                                .graphScope,
+                        chatScope:
+                            intent.scope
+                                .chatScope,
+                        payload: .statsResolved(
+                            output: output,
+                            state: result.state,
+                            evidence:
+                                result.evidence
+                        )
+                    )
+                )
+            let artifactIDs = try await stage(
+                drafts,
+                registry: artifactRegistry,
+                evidenceRegistry:
+                    evidenceRegistry,
+                presentationRegistry:
+                    presentationRegistry,
+                transactionID: transactionID
+            )
+            return ActionExecution(
+                response:
+                    GraphChatModelToolResponse(
+                        tool: .graphStats,
+                        state: .success,
+                        content:
+                            "local-graph-state-result",
+                        evidenceIDs:
+                            result.evidence
+                                .map(\.id),
+                        artifactIDs:
+                            artifactIDs
+                    ),
+                evidence: result.evidence,
+                artifactIDs: artifactIDs,
+                authoritativeFactExpectation:
+                    nil
+            )
+        }
+    }
+
+    private func stage(
+        _ drafts:
+            [GraphChatAnswerArtifactDraft],
+        registry:
+            GraphChatAnswerArtifactRegistry,
+        evidenceRegistry:
+            GraphChatEvidenceRegistry,
+        presentationRegistry:
+            GraphChatPresentationRegistry,
+        transactionID:
+            GraphChatAnswerArtifactTransactionID
+    ) async throws
+        -> [GraphChatAnswerArtifactID]
+    {
+        var values:
+            [GraphChatAnswerArtifactID] = []
+        for draft in drafts {
+            try Task.checkCancellation()
+            try validateLocallyCompiledArtifact(
+                draft
+            )
+            let id = try await registry.stage(
+                draft,
+                transactionID:
+                    transactionID,
+                evidenceRegistry:
+                    evidenceRegistry
+            )
+            await presentationRegistry
+                .registerValidatedArtifact(
+                    id: id,
+                    title: draft.title
+                )
+            values.append(id)
+        }
+        return values
+    }
+
+    private func validateLocallyCompiledArtifact(
+        _ draft:
+            GraphChatAnswerArtifactDraft
+    ) throws {
+        guard case .comparison(let payload) =
+                draft.payload
+        else {
+            return
+        }
+        let subjectIDs = Set(
+            payload.subjects.map(\.id)
+        )
+        let featureIDs = Set(
+            payload.features.map(\.id)
+        )
+        let valueSubjectIDs = Set(
+            payload.values.map(\.subjectID)
+        )
+        let valueFeatureIDs = Set(
+            payload.values.map(\.featureID)
+        )
+        guard
+            payload.subjects.count >= 2,
+            payload.features.isEmpty == false,
+            payload.values.isEmpty == false,
+            valueSubjectIDs == subjectIDs,
+            valueFeatureIDs == featureIDs,
+            payload.values.allSatisfy({
+                guard let evidence =
+                        $0.evidence
+                else {
+                    return false
+                }
+                return evidence
+                    .evidenceIDs
+                    .isEmpty == false
+            })
+        else {
+            throw GraphChatLocalIntentExecutionError
+                .artifactUnavailable
+        }
+    }
+
+    private func conversationComparisonSubjects(
+        from draft:
+            GraphChatAnswerArtifactDraft,
+        plannedNodes:
+            [GraphChatTypedNodeIdentity]
+    ) -> [GraphChatConversationComparisonSubject] {
+        guard case .comparison(let payload) =
+                draft.payload
+        else {
+            return []
+        }
+        let plannedByNode = Dictionary(
+            uniqueKeysWithValues:
+                plannedNodes.map {
+                    ($0.node, $0)
+                }
+        )
+        return payload.subjects.compactMap {
+            subject in
+            guard
+                let target =
+                    subject.navigationTarget,
+                case .openNode(
+                    _,
+                    let node
+                ) = target,
+                let planned = plannedByNode[node]
+            else {
+                return nil
+            }
+            var seen = Set<GraphEvidenceID>()
+            let evidenceIDs =
+                (
+                    subject.evidence.evidenceIDs
+                    + payload.values
+                        .filter {
+                            $0.subjectID == subject.id
+                        }
+                        .flatMap {
+                            $0.evidence?
+                                .evidenceIDs ?? []
+                        }
+                ).filter {
+                    seen.insert($0).inserted
+                }
+            guard evidenceIDs.isEmpty == false else {
+                return nil
+            }
+            return GraphChatConversationComparisonSubject(
+                node: node,
+                label: subject.label,
+                ownerEntityID:
+                    planned.ownerEntityID,
+                evidenceIDs: evidenceIDs
+            )
+        }
+    }
+
+    private func validateNodeAction(
+        _ action:
+            GraphChatLocalNodeDetailsAction,
+        intent: GraphChatTypedIntent,
+        schemaContext: GraphSchemaContext
+    ) throws {
+        let policy =
+            GraphChatAdvancedIntentPolicy
+                .default
+        guard
+            intent.kind == .nodeDetails,
+            intent.factExpectation == .none,
+            intent.expectedCardinality
+                == .zeroOrOne,
+            case .nodeDetails(let details) =
+                intent.payload,
+            details.node == action.node,
+            action.relatedLimit
+                == policy
+                    .nodeDetailRelatedLimit,
+            intent.scope.queryScope
+                == .node(
+                    action.node.node,
+                    in:
+                        intent.scope
+                            .graphScope
+                ),
+            GraphChatScopeAuthorization.allows(
+                scope:
+                    intent.scope.queryScope,
+                within:
+                    intent.scope.chatScope,
+                aliases:
+                    schemaContext.aliases
+            )
+        else {
+            throw GraphChatLocalIntentExecutionError
+                .invalidCompiledAction
+        }
+    }
+
+    private func validateComparisonAction(
+        _ plan: GraphChatComparisonPlan,
+        intent: GraphChatTypedIntent,
+        schemaContext: GraphSchemaContext
+    ) throws {
+        guard
+            intent.kind == .compareNodes,
+            intent.factExpectation == .none,
+            intent.expectedCardinality
+                == .twoOrMore,
+            case .compareNodes(let details) =
+                intent.payload,
+            plan.policy
+                == GraphChatAdvancedIntentPolicy
+                    .default,
+            plan.binding == intent.binding,
+            plan.graphScope
+                == intent.scope.graphScope,
+            plan.chatScope
+                == intent.scope.chatScope,
+            plan.responseLanguage
+                == intent.responseLanguage,
+            plan.nodes == details.nodes,
+            Set(
+                plan.nodes.map(\.node)
+            ).count == plan.nodes.count,
+            plan.nodes.count
+                <= plan.policy
+                    .maximumComparisonNodeCount,
+            plan.features.count
+                <= plan.policy
+                    .maximumComparisonFeatureCount,
+            intent.scope.queryScope
+                == (try GraphChatScope.selection(
+                    plan.nodes.map(\.node),
+                    in: plan.graphScope
+                )),
+            GraphChatScopeAuthorization.allows(
+                scope:
+                    intent.scope.queryScope,
+                within: plan.chatScope,
+                aliases:
+                    schemaContext.aliases
+            )
+        else {
+            throw GraphChatLocalIntentExecutionError
+                .invalidCompiledAction
+        }
+        switch plan.kind {
+        case .sameEntityAttributes:
+            let fields =
+                plan.features.compactMap {
+                    if case .field(let field) =
+                        $0 {
+                        return field
+                    }
+                    return nil
+                }
+            guard
+                fields == details.fields,
+                plan.relatedLimit == 0,
+                plan.selectionQuery != nil
+            else {
+                throw GraphChatLocalIntentExecutionError
+                    .invalidCompiledAction
+            }
+        case .structural:
+            guard details.fields.isEmpty,
+                  plan.relatedLimit
+                    == plan.policy
+                        .structuralRelatedLimit,
+                  plan.selectionQuery == nil,
+                  plan.features.allSatisfy({ feature in
+                      if case .structure = feature {
+                          return true
+                      }
+                      return false
+                  }) else {
+                throw GraphChatLocalIntentExecutionError
+                    .invalidCompiledAction
+            }
+        }
+    }
+
+    private func validateGraphStateAction(
+        _ action:
+            GraphChatLocalGraphStateAction,
+        intent: GraphChatTypedIntent
+    ) throws {
+        let policy =
+            GraphChatAdvancedIntentPolicy
+                .default
+        guard
+            intent.kind
+                == .inspectGraphState,
+            intent.factExpectation == .none,
+            intent.expectedCardinality
+                == .exactlyOne,
+            case .inspectGraphState(
+                let details
+            ) = intent.payload,
+            details.entity == nil,
+            details.aspect
+                == action.aspect,
+            action.hubLimit
+                == policy.graphHubLimit,
+            intent.scope.chatScope
+                == GraphChatScope.entireGraph(
+                    intent.scope.graphScope
+                ),
+            intent.scope.queryScope
+                == intent.scope.chatScope
+        else {
+            throw GraphChatLocalIntentExecutionError
+                .scopeExpansionPrevented
         }
     }
 
@@ -884,6 +1804,16 @@ nonisolated struct GraphChatLocalIntentExecutionKernel: Sendable {
                 .staleResultSetRejected,
                 kind: kind,
                 rejection: .compiledAction
+            )
+        } else if executionError
+            == .staleSchemaIdentity,
+            kind == .nodeDetails
+                || kind == .compareNodes
+        {
+            await record(
+                .staleNodeDiscarded,
+                kind: kind,
+                rejection: .schemaIdentity
             )
         }
         switch executionError {

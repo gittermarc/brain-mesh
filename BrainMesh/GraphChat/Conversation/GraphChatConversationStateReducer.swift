@@ -107,6 +107,23 @@ nonisolated struct GraphChatConversationStateReducer: Sendable {
                 technicalDescription: technicalDescription,
                 to: &candidate
             )
+        case .comparisonResultResolved(
+            let subjects,
+            let evidence,
+            let technicalDescription
+        ):
+            try validate(
+                evidence: evidence,
+                state: state
+            )
+            applyComparisonResult(
+                subjects: subjects,
+                evidence: evidence,
+                technicalDescription:
+                    technicalDescription,
+                eventID: event.id,
+                to: &candidate
+            )
         case .clarificationRequested(let clarification):
             guard clarification.graphScope == state.graphScope else {
                 throw GraphChatConversationStateError.graphScopeMismatch

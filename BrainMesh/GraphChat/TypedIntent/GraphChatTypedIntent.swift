@@ -236,6 +236,15 @@ nonisolated struct GraphChatTypedInspectGraphStateIntent:
     Sendable
 {
     let entity: GraphChatTypedEntityIdentity?
+    let aspect: GraphChatGraphStateAspect
+
+    init(
+        entity: GraphChatTypedEntityIdentity? = nil,
+        aspect: GraphChatGraphStateAspect = .overview
+    ) {
+        self.entity = entity
+        self.aspect = aspect
+    }
 }
 
 nonisolated enum GraphChatTypedIntentPayload: Hashable, Sendable {
@@ -463,11 +472,8 @@ nonisolated struct GraphChatTypedIntent: Hashable, Sendable {
                         .invalidFieldBinding
                 }
             }
-        case .nodeDetails(let value):
-            guard value.fields.isEmpty == false else {
-                throw GraphChatTypedIntentValidationError
-                    .invalidFieldBinding
-            }
+        case .nodeDetails:
+            break
         case .narrowResultSet(let value):
             guard value.nodes.isEmpty == false else {
                 throw GraphChatTypedIntentValidationError

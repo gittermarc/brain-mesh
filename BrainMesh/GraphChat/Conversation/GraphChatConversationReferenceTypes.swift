@@ -276,7 +276,9 @@ nonisolated struct GraphChatConversationReferenceInterpreter: Sendable {
             normalized,
             values: [
                 "dieses projekt", "dieser eintrag", "dieses objekt", "derselbe eintrag",
-                "das gleiche objekt", "this project", "this item", "this object", "the same object",
+                "das gleiche objekt", "letzter node", "letzte node", "letzten node",
+                "letztes node", "this project", "this item", "this object", "the same object",
+                "last node",
             ])
         {
             return GraphChatConversationReferenceInterpretation(

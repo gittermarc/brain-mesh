@@ -654,6 +654,15 @@ struct GraphChatConversationReferenceResolverTests {
             interpreter.interpretation(for: "Sort this group by name.")?.proposal
                 == .lastGroup
         )
+        #expect(
+            interpreter.interpretation(
+                for: "Was weißt du über den letzten Node?"
+            )?.proposal == .lastNode
+        )
+        #expect(
+            interpreter.interpretation(for: "Show the last node.")?.proposal
+                == .lastNode
+        )
     }
 
     @Test

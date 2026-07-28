@@ -19,6 +19,9 @@ nonisolated enum GraphChatSemanticIntentFamily:
     case count
     case groupCount
     case refinement
+    case nodeDetails
+    case compareNodes
+    case inspectGraphState
     case unrecognized
     case openEnded
 }
@@ -127,6 +130,7 @@ nonisolated struct GraphChatUntrustedSemanticIntentDraft:
     let family: GraphChatSemanticIntentFamily
     let entityTerm: String?
     let searchTerm: String?
+    let nodeTerms: [String]
     let findTarget: GraphChatSemanticFindTarget
     let resultAmount: GraphChatSemanticResultAmount
     let conversationReference: GraphChatSemanticConversationReference
@@ -134,12 +138,14 @@ nonisolated struct GraphChatUntrustedSemanticIntentDraft:
     let sorting: GraphChatSemanticSortDraft?
     let projectionTerms: [String]
     let groupFieldTerm: String?
+    let graphStateAspect: GraphChatGraphStateAspect
     let responseLanguage: GraphChatResponseLanguage
 
     init(
         family: GraphChatSemanticIntentFamily,
         entityTerm: String? = nil,
         searchTerm: String? = nil,
+        nodeTerms: [String] = [],
         findTarget: GraphChatSemanticFindTarget = .anyEntry,
         resultAmount: GraphChatSemanticResultAmount = .standard,
         conversationReference: GraphChatSemanticConversationReference = .none,
@@ -147,11 +153,14 @@ nonisolated struct GraphChatUntrustedSemanticIntentDraft:
         sorting: GraphChatSemanticSortDraft? = nil,
         projectionTerms: [String] = [],
         groupFieldTerm: String? = nil,
+        graphStateAspect:
+            GraphChatGraphStateAspect = .overview,
         responseLanguage: GraphChatResponseLanguage
     ) {
         self.family = family
         self.entityTerm = entityTerm
         self.searchTerm = searchTerm
+        self.nodeTerms = nodeTerms
         self.findTarget = findTarget
         self.resultAmount = resultAmount
         self.conversationReference = conversationReference
@@ -159,6 +168,7 @@ nonisolated struct GraphChatUntrustedSemanticIntentDraft:
         self.sorting = sorting
         self.projectionTerms = projectionTerms
         self.groupFieldTerm = groupFieldTerm
+        self.graphStateAspect = graphStateAspect
         self.responseLanguage = responseLanguage
     }
 }
@@ -287,6 +297,9 @@ nonisolated enum GraphChatSemanticSafety {
     static let maximumProjectionTerms =
         GraphChatAnswerArtifactFactoryBudget
             .default.maximumColumns - 1
+    static let maximumNodeTerms =
+        GraphChatAdvancedIntentPolicy
+            .default.maximumComparisonNodeCount
     static let maximumRequestedCount = 10_000
 
     private static let forbiddenTechnicalWords: Set<String> = [
@@ -388,6 +401,9 @@ nonisolated struct GraphChatSemanticDraftValidator:
         let projectionTerms = try normalizedProjectionTerms(
             source.projectionTerms
         )
+        let nodeTerms = try normalizedNodeTerms(
+            source.nodeTerms
+        )
         let semanticValues =
             [entityTerm, searchTerm, groupFieldTerm]
                 .compactMap { $0 }
@@ -395,6 +411,7 @@ nonisolated struct GraphChatSemanticDraftValidator:
                 [$0.fieldTerm] + $0.values
             }
             + projectionTerms
+            + nodeTerms
             + [sorting?.fieldTerm].compactMap { $0 }
         for value in semanticValues {
             guard GraphChatSemanticSafety.containsTechnicalIdentifier(value)
@@ -523,9 +540,55 @@ nonisolated struct GraphChatSemanticDraftValidator:
                     .invalidCombination
             }
 
+        case .nodeDetails:
+            guard
+                searchTerm == nil,
+                source.findTarget == .anyEntry,
+                source.resultAmount == .standard,
+                filters.isEmpty,
+                sorting == nil,
+                groupFieldTerm == nil,
+                nodeTerms.count == 1
+                    || nodeTerms.isEmpty
+            else {
+                throw GraphChatSemanticDraftValidationError
+                    .invalidCombination
+            }
+
+        case .compareNodes:
+            guard
+                searchTerm == nil,
+                source.findTarget == .anyEntry,
+                source.resultAmount == .standard,
+                filters.isEmpty,
+                sorting == nil,
+                groupFieldTerm == nil,
+                nodeTerms.count >= 2
+                    || nodeTerms.isEmpty
+            else {
+                throw GraphChatSemanticDraftValidationError
+                    .invalidCombination
+            }
+
+        case .inspectGraphState:
+            guard entityTerm == nil,
+                  searchTerm == nil,
+                  nodeTerms.isEmpty,
+                  source.findTarget == .anyEntry,
+                  source.resultAmount == .standard,
+                  source.conversationReference == .none,
+                  filters.isEmpty,
+                  sorting == nil,
+                  projectionTerms.isEmpty,
+                  groupFieldTerm == nil else {
+                throw GraphChatSemanticDraftValidationError
+                    .invalidCombination
+            }
+
         case .unrecognized, .openEnded:
             guard entityTerm == nil,
                   searchTerm == nil,
+                  nodeTerms.isEmpty,
                   source.findTarget == .anyEntry,
                   source.resultAmount == .standard,
                   source.conversationReference == .none,
@@ -542,6 +605,7 @@ nonisolated struct GraphChatSemanticDraftValidator:
             family: source.family,
             entityTerm: entityTerm,
             searchTerm: searchTerm,
+            nodeTerms: nodeTerms,
             findTarget: source.findTarget,
             resultAmount: source.resultAmount,
             conversationReference: source.conversationReference,
@@ -549,8 +613,39 @@ nonisolated struct GraphChatSemanticDraftValidator:
             sorting: sorting,
             projectionTerms: projectionTerms,
             groupFieldTerm: groupFieldTerm,
+            graphStateAspect:
+                source.graphStateAspect,
             responseLanguage: source.responseLanguage
         )
+    }
+
+    private func normalizedNodeTerms(
+        _ source: [String]
+    ) throws -> [String] {
+        guard source.count
+                <= GraphChatSemanticSafety.maximumNodeTerms
+        else {
+            throw GraphChatSemanticDraftValidationError
+                .invalidCombination
+        }
+        var seen = Set<String>()
+        return try source.compactMap { value in
+            guard
+                let normalized =
+                    GraphChatSemanticSafety
+                        .normalizedOptional(value),
+                normalized.count
+                    <= GraphChatSemanticSafety
+                        .maximumSearchTermLength
+            else {
+                throw GraphChatSemanticDraftValidationError
+                    .overlongValue
+            }
+            let key = BMSearch.fold(normalized)
+            return seen.insert(key).inserted
+                ? normalized
+                : nil
+        }
     }
 
     private func normalizedFilters(

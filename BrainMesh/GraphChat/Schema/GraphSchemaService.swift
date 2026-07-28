@@ -216,7 +216,9 @@ actor GraphSchemaService {
                     name: definition.name,
                     type: definition.type,
                     unit: definition.unit,
-                    choiceOptions: includedOptions
+                    choiceOptions: includedOptions,
+                    isPinned: definition.isPinned,
+                    sortIndex: definition.sortIndex
                 )
             }
 
@@ -292,7 +294,9 @@ actor GraphSchemaService {
                         name: definition.name,
                         type: definition.type,
                         unit: definition.unit,
-                        choiceOptions: definition.options
+                        choiceOptions: definition.options,
+                        isPinned: definition.isPinned,
+                        sortIndex: definition.sortIndex
                     )
             }
         }

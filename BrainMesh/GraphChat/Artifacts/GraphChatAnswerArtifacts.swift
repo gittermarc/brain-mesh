@@ -471,7 +471,35 @@ nonisolated struct GraphChatAnswerArtifactComparisonPayload: Hashable, Sendable 
     let subjects: [GraphChatAnswerArtifactComparisonSubject]
     let features: [GraphChatAnswerArtifactComparisonFeature]
     let values: [GraphChatAnswerArtifactComparisonValue]
+    let resultMetadata:
+        GraphChatAnswerArtifactResultMetadata
     let evidence: GraphChatAnswerArtifactEvidenceBinding
+
+    init(
+        title: String,
+        subjects:
+            [GraphChatAnswerArtifactComparisonSubject],
+        features:
+            [GraphChatAnswerArtifactComparisonFeature],
+        values:
+            [GraphChatAnswerArtifactComparisonValue],
+        resultMetadata:
+            GraphChatAnswerArtifactResultMetadata? = nil,
+        evidence:
+            GraphChatAnswerArtifactEvidenceBinding
+    ) {
+        self.title = title
+        self.subjects = subjects
+        self.features = features
+        self.values = values
+        self.resultMetadata =
+            resultMetadata
+            ?? GraphChatAnswerArtifactResultMetadata(
+                resultCount: subjects.count,
+                returnedCount: subjects.count
+            )
+        self.evidence = evidence
+    }
 }
 
 nonisolated enum GraphChatAnswerArtifactHealthFindingType: String, CaseIterable, Hashable, Sendable {

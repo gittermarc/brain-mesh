@@ -130,10 +130,115 @@ nonisolated struct GraphChatLocalIntentQueryExecutionSupport:
         switch action {
         case .queryDetailValues(let query):
             return query
-        case .searchGraph:
+        case .searchGraph, .nodeDetails,
+            .compareNodes,
+            .inspectGraphState:
             throw GraphChatLocalIntentExecutionError
                 .invalidCompiledAction
         }
+    }
+
+    func validatedComparisonPlan(
+        _ comparison: GraphChatComparisonPlan,
+        intent: GraphChatTypedIntent,
+        schemaContext: GraphSchemaContext
+    ) throws -> ValidatedGraphQueryPlan {
+        let featureFields =
+            comparison.features.compactMap {
+                if case .field(let value) = $0 {
+                    return value
+                }
+                return nil
+            }
+        guard
+            comparison.kind
+                == .sameEntityAttributes,
+            comparison.binding
+                == intent.binding,
+            comparison.graphScope
+                == intent.scope.graphScope,
+            comparison.chatScope
+                == intent.scope.chatScope,
+            comparison.nodes
+                == intent.payload.nodes,
+            featureFields
+                == intent.payload.fields,
+            let source =
+                comparison.selectionQuery,
+            source.scope
+                == intent.scope.queryScope,
+            source.limit
+                == comparison.nodes.count
+        else {
+            throw GraphChatLocalIntentExecutionError
+                .invalidCompiledAction
+        }
+        let validator = GraphQueryPlanValidator(
+            calendar: calendar,
+            timeZone: timeZone,
+            referenceDate: referenceDate(),
+            defaultLimit:
+                GraphQueryPlanLimits
+                    .defaultResultLimit,
+            maximumLimit:
+                GraphQueryPlanLimits
+                    .maximumResultLimit
+        )
+        let plan = try validator.validate(
+            source,
+            against: schemaContext
+        )
+        let projectedFields =
+            plan.projection.compactMap {
+                if case .field(let fieldID) = $0 {
+                    return fieldID
+                }
+                return nil
+            }
+        guard case .selection(
+            let expectedSelection
+        ) = intent.scope.queryScope.target else {
+            throw GraphChatLocalIntentExecutionError
+                .invalidCompiledAction
+        }
+        guard
+            plan.graphScope
+                == intent.scope.graphScope,
+            plan.entityID
+                == comparison.nodes[0]
+                    .ownerEntityID,
+            plan.scope
+                == .selection(
+                    expectedSelection
+                ),
+            plan.filters.isEmpty,
+            plan.aggregation == nil,
+            plan.sorting == [
+                GraphValidatedQuerySort(
+                    key: .nodeName,
+                    direction: .ascending
+                ),
+            ],
+            projectedFields
+                == intent.payload.fields
+                    .map(\.id),
+            plan.limit
+                == comparison.nodes.count,
+            GraphChatScopeAuthorization.allows(
+                plan: plan,
+                within:
+                    intent.scope.chatScope
+            )
+        else {
+            throw GraphChatLocalIntentExecutionError
+                .invalidCompiledAction
+        }
+        try validate(
+            plan: plan,
+            contract: .comparison,
+            intent: intent
+        )
+        return plan
     }
 
     func normalizedResult(
@@ -229,7 +334,8 @@ nonisolated struct GraphChatLocalIntentQueryExecutionSupport:
                     querySummary: summary
                 )
         case .entityCollection, .compiledCollection,
-            .count, .groupCount, .refinement:
+            .count, .groupCount, .refinement,
+            .comparison:
             sourceDraft =
                 GraphChatAnswerArtifactFactory.queryResult(
                     result,
@@ -446,6 +552,19 @@ nonisolated struct GraphChatLocalIntentQueryExecutionSupport:
                     == Set(
                         value.nodes.map(\.node)
                     ) else {
+                throw GraphChatLocalIntentExecutionError
+                    .invalidCompiledAction
+            }
+        case .comparison:
+            guard intent.kind == .compareNodes,
+                  intent.expectedCardinality
+                    == .twoOrMore,
+                  intent.factExpectation == .none,
+                  plan.aggregation == nil,
+                  plan.filters.isEmpty,
+                  plan.projection.first
+                    == .nodeIdentity
+            else {
                 throw GraphChatLocalIntentExecutionError
                     .invalidCompiledAction
             }
@@ -751,7 +870,7 @@ nonisolated struct GraphChatLocalIntentQueryExecutionSupport:
             .refinement:
             return true
         case .authoritativeSingleField, .count,
-            .groupCount:
+            .groupCount, .comparison:
             return false
         }
     }

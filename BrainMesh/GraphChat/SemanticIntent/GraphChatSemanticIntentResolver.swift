@@ -26,6 +26,22 @@ nonisolated struct GraphChatSemanticSelectedField:
     let fieldID: UUID
 }
 
+nonisolated enum GraphChatSemanticNodeSelectionRole:
+    Hashable,
+    Sendable
+{
+    case details
+    case comparison(Int)
+}
+
+nonisolated struct GraphChatSemanticSelectedNode:
+    Hashable,
+    Sendable
+{
+    let role: GraphChatSemanticNodeSelectionRole
+    let node: NodeRefKey
+}
+
 nonisolated struct GraphChatSemanticIntentSelection:
     Hashable,
     Sendable
@@ -33,16 +49,20 @@ nonisolated struct GraphChatSemanticIntentSelection:
     let draft: GraphChatUntrustedSemanticIntentDraft
     let selectedEntityID: UUID?
     let selectedFields: [GraphChatSemanticSelectedField]
+    let selectedNodes: [GraphChatSemanticSelectedNode]
 
     init(
         draft: GraphChatUntrustedSemanticIntentDraft,
         selectedEntityID: UUID?,
         selectedFields:
-            [GraphChatSemanticSelectedField] = []
+            [GraphChatSemanticSelectedField] = [],
+        selectedNodes:
+            [GraphChatSemanticSelectedNode] = []
     ) {
         self.draft = draft
         self.selectedEntityID = selectedEntityID
         self.selectedFields = selectedFields
+        self.selectedNodes = selectedNodes
     }
 }
 
@@ -62,16 +82,20 @@ nonisolated struct GraphChatSemanticEntityCandidate:
     let entityID: UUID
     let displayName: String
     let selectedFields: [GraphChatSemanticSelectedField]
+    let selectedNodes: [GraphChatSemanticSelectedNode]
 
     init(
         entityID: UUID,
         displayName: String,
         selectedFields:
-            [GraphChatSemanticSelectedField] = []
+            [GraphChatSemanticSelectedField] = [],
+        selectedNodes:
+            [GraphChatSemanticSelectedNode] = []
     ) {
         self.entityID = entityID
         self.displayName = displayName
         self.selectedFields = selectedFields
+        self.selectedNodes = selectedNodes
     }
 }
 
@@ -106,6 +130,14 @@ nonisolated enum GraphChatSemanticIntentResolutionError:
     case conversationSelectionMismatch
     case invalidSchemaIdentity
     case unsupportedCombination
+    case nodeNotFound
+    case staleNodeSelection
+    case comparisonLimitExceeded
+    case featureLimitExceeded
+    case unsupportedComparison(
+        GraphChatResponseLanguage
+    )
+    case graphStateRequiresEntireGraph
 
     var errorDescription: String? {
         switch self {
@@ -123,6 +155,20 @@ nonisolated enum GraphChatSemanticIntentResolutionError:
             return "Das vollständige appseitige Schema enthält keine konsistente Identität."
         case .unsupportedCombination:
             return "Die erkannte Intent-Kombination wird lokal nicht unterstützt."
+        case .nodeNotFound:
+            return "Der gemeinte Node konnte im autorisierten Chat-Scope nicht eindeutig gefunden werden."
+        case .staleNodeSelection:
+            return "Ein ausgewählter oder referenzierter Node ist nicht mehr aktuell."
+        case .comparisonLimitExceeded:
+            return "Der Vergleich enthält zu viele Nodes und muss eingegrenzt werden."
+        case .featureLimitExceeded:
+            return "Der Vergleich enthält zu viele Features und muss eingegrenzt werden."
+        case .unsupportedComparison(let language):
+            return language == .german
+                ? "Für diese Nodes ist kein belegbarer gemeinsamer Vergleich verfügbar."
+                : "No evidence-backed common comparison is available for these nodes."
+        case .graphStateRequiresEntireGraph:
+            return "Graph-Statistiken sind nur im Chat-Scope des gesamten Graphen verfügbar."
         }
     }
 }
@@ -135,6 +181,8 @@ nonisolated struct GraphChatSemanticIntentResolver:
         GraphChatSemanticIntentLimitPolicy
     private let queryCompiler:
         GraphChatQueryIntentCompiler
+    private let advancedCompiler:
+        GraphChatAdvancedIntentCompiler
 
     init(
         limitPolicy:
@@ -149,10 +197,14 @@ nonisolated struct GraphChatSemanticIntentResolver:
                         TimeZone(
                             secondsFromGMT: 0
                         )!
-                )
+                ),
+        advancedCompiler:
+            GraphChatAdvancedIntentCompiler =
+                GraphChatAdvancedIntentCompiler()
     ) {
         self.limitPolicy = limitPolicy
         self.queryCompiler = queryCompiler
+        self.advancedCompiler = advancedCompiler
     }
 
     func resolve(
@@ -160,6 +212,8 @@ nonisolated struct GraphChatSemanticIntentResolver:
         selectedEntityID: UUID?,
         selectedFields:
             [GraphChatSemanticSelectedField] = [],
+        selectedNodes:
+            [GraphChatSemanticSelectedNode] = [],
         currentResolvedScope:
             GraphChatResolvedConversationScope?,
         providerPlan: GraphChatProviderTurnPlan,
@@ -233,6 +287,20 @@ nonisolated struct GraphChatSemanticIntentResolver:
                     error
                 )
             }
+        case .nodeDetails, .compareNodes,
+            .inspectGraphState:
+            return try advancedCompiler.compile(
+                draft: draft,
+                selectedFields: selectedFields,
+                selectedNodes: selectedNodes,
+                currentResolvedScope:
+                    currentResolvedScope,
+                providerPlan: providerPlan,
+                schemaContext: schemaContext,
+                requestID: requestID,
+                sourceTurnID: sourceTurnID,
+                clarificationID: clarificationID
+            )
         case .findNodes:
             break
         }
@@ -632,7 +700,9 @@ nonisolated struct GraphChatSemanticIntentResolver:
             throw GraphChatSemanticIntentResolutionError
                 .unsupportedCombination
         case .filteredCollection, .count,
-            .groupCount, .refinement:
+            .groupCount, .refinement,
+            .nodeDetails, .compareNodes,
+            .inspectGraphState:
             throw GraphChatSemanticIntentResolutionError
                 .unsupportedCombination
         }

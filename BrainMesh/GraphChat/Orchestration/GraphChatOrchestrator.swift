@@ -40,6 +40,12 @@ actor GraphChatOrchestrator {
         semanticSearchExecutor:
             any GraphChatLocalIntentSearchExecuting =
                 SearchGraphTool(),
+        semanticNodeExecutor:
+            any GraphChatLocalIntentNodeExecuting =
+                GetNodeTool(),
+        semanticStatsExecutor:
+            any GraphChatLocalIntentStatsExecuting =
+                UnavailableGraphChatLocalStatsExecutor(),
         toolRunnerFactory: any GraphChatModelToolRunnerFactory,
         toolBudgetPolicy: GraphChatToolBudgetPolicy = .default,
         concurrentRequestPolicy: GraphChatConcurrentRequestPolicy = .cancelPrevious,
@@ -68,6 +74,10 @@ actor GraphChatOrchestrator {
             foundationalQueryExecutor: foundationalQueryExecutor,
             semanticSearchExecutor:
                 semanticSearchExecutor,
+            semanticNodeExecutor:
+                semanticNodeExecutor,
+            semanticStatsExecutor:
+                semanticStatsExecutor,
             toolRunnerFactory: toolRunnerFactory,
             toolBudgetPolicy: toolBudgetPolicy,
             conversationStatePolicy: conversationStatePolicy,

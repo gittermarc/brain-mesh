@@ -150,7 +150,11 @@ nonisolated struct GraphStatsTool: GraphChatTool {
                     message: "GraphStats erlaubt höchstens \(Self.maximumHubCount) Detailergebnisse."
                 )
             }
-            guard case .graph = context.scope.target else {
+            guard context.scope
+                    == GraphChatScope.entireGraph(
+                        context.scope.graphScope
+                    )
+            else {
                 throw GraphChatToolError(
                     code: .invalidInput,
                     message: "GraphStats kann nur für den gesamten aktiven Graphen ausgeführt werden."
@@ -227,8 +231,8 @@ nonisolated struct GraphStatsTool: GraphChatTool {
             )
             let evidenceLimited = validHubs.count < hubs.count
             let toolLimitReached = totalHubCount > hubLimit
-            let sourceLimitReached = snapshot.structure.topHubs.count
-                < min(totalHubCount, hubLimit)
+            let sourceLimitReached =
+                snapshot.structure.topHubs.count < min(totalHubCount, hubLimit)
             let output = GraphStatsOutput(
                 counts: GraphChatStatsCounts(
                     entities: snapshot.counts.entities,

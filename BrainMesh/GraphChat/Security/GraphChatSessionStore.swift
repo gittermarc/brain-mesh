@@ -61,6 +61,18 @@ final class GraphChatSessionStore: ObservableObject {
             intentInterpreter:
                 FoundationModelsGraphChatIntentInterpreter(),
             schemaProvider: schemaProvider,
+            semanticNodeExecutor:
+                GetNodeTool(),
+            semanticStatsExecutor:
+                GraphStatsTool(
+                    reader:
+                        GraphStatsServiceReader(
+                            container:
+                                AnyModelContainer(
+                                    modelContainer
+                                )
+                        )
+                ),
             toolRunnerFactory: GraphChatModelToolRuntimeFactory(
                 modelContainer: modelContainer
             ),

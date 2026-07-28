@@ -112,6 +112,7 @@ nonisolated enum GraphChatLocalIntentLifecycleEvent:
     case cancelledBeforeCommit
     case scopeExpansionPrevented
     case staleResultSetRejected
+    case staleNodeDiscarded
 }
 
 nonisolated enum GraphChatLocalIntentRevalidationRejection:
@@ -147,6 +148,13 @@ nonisolated enum GraphChatSemanticIntentLifecycleEvent:
     case countIntentCompiled
     case groupIntentCompiled
     case refinementIntentCompiled
+    case nodeDetailsCompiled
+    case sameEntityComparisonCompiled
+    case structuralComparisonCompiled
+    case comparisonRejected
+    case graphOverviewCompiled
+    case graphHealthCompiled
+    case staleNodeDiscarded
     case typeConflict
     case valueParsingRejected
     case scopeExpansionPrevented

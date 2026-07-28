@@ -75,6 +75,12 @@ nonisolated enum GraphChatConversationTrustedPayload: Sendable {
         references: [GraphChatConversationReference],
         technicalDescription: String
     )
+    case comparisonResultResolved(
+        subjects:
+            [GraphChatConversationComparisonSubject],
+        evidence: [GraphEvidence],
+        technicalDescription: String
+    )
     case clarificationRequested(GraphChatPendingClarification)
     case clarificationResolved
     case turnCompleted(GraphChatConversationTurnCompletion)
@@ -95,7 +101,11 @@ nonisolated enum GraphChatConversationTrustedPayload: Sendable {
             return .graphStats
         case .validatedEvidence(let tool, _, _):
             return tool
-        case .comparisonResolved, .clarificationRequested, .clarificationResolved, .turnCompleted:
+        case .comparisonResolved,
+            .comparisonResultResolved,
+            .clarificationRequested,
+            .clarificationResolved,
+            .turnCompleted:
             return nil
         }
     }
@@ -124,4 +134,3 @@ nonisolated struct GraphChatConversationStateReduction: Sendable {
     let state: GraphChatConversationState
     let evictedItemCount: Int
 }
-

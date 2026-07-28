@@ -104,6 +104,8 @@ nonisolated struct GraphChatSemanticIntentCoordinator:
         let selectedEntityID: UUID?
         let selectedFields:
             [GraphChatSemanticSelectedField]
+        let selectedNodes:
+            [GraphChatSemanticSelectedNode]
         do {
             if let continuation {
                 draft = try draftValidator.validate(
@@ -116,6 +118,9 @@ nonisolated struct GraphChatSemanticIntentCoordinator:
                 selectedFields =
                     continuation.selection
                         .selectedFields
+                selectedNodes =
+                    continuation.selection
+                        .selectedNodes
             } else {
                 await record(
                     .interpreterStarted,
@@ -131,6 +136,7 @@ nonisolated struct GraphChatSemanticIntentCoordinator:
                 )
                 selectedEntityID = nil
                 selectedFields = []
+                selectedNodes = []
             }
             await record(
                 .draftAccepted,
@@ -175,7 +181,9 @@ nonisolated struct GraphChatSemanticIntentCoordinator:
                     selectedEntityID:
                         selectedEntityID,
                     selectedFields:
-                        selectedFields
+                        selectedFields,
+                    selectedNodes:
+                        selectedNodes
                 )
         } catch {
             if isCancellation(error) {
@@ -208,6 +216,8 @@ nonisolated struct GraphChatSemanticIntentCoordinator:
                         selectedEntityID,
                     selectedFields:
                         selectedFields,
+                    selectedNodes:
+                        selectedNodes,
                     currentResolvedScope:
                         currentResolvedScope,
                     providerPlan: providerPlan,
@@ -281,7 +291,8 @@ nonisolated struct GraphChatSemanticIntentCoordinator:
                 }
                 if let event =
                     compilationRejectionEvent(
-                        for: error
+                        for: error,
+                        family: draft.family
                     )
                 {
                     await record(
@@ -318,12 +329,18 @@ nonisolated struct GraphChatSemanticIntentCoordinator:
         requestedAt: Date,
         selectedEntityID: UUID?,
         selectedFields:
-            [GraphChatSemanticSelectedField]
+            [GraphChatSemanticSelectedField],
+        selectedNodes:
+            [GraphChatSemanticSelectedNode]
     ) async throws -> CurrentScopeResolution {
         if let current =
             providerPlan.currentResolvedScope
         {
             return .resolved(current)
+        }
+        if draft.family == .compareNodes,
+           providerPlan.currentReference != nil {
+            return .resolved(nil)
         }
         guard
             draft.conversationReference
@@ -405,7 +422,9 @@ nonisolated struct GraphChatSemanticIntentCoordinator:
                                     selectedEntityID:
                                         selectedEntityID,
                                     selectedFields:
-                                        selectedFields
+                                        selectedFields,
+                                    selectedNodes:
+                                        selectedNodes
                                 )
                         )
                     },
@@ -471,7 +490,10 @@ nonisolated struct GraphChatSemanticIntentCoordinator:
                                 candidate.entityID,
                             selectedFields:
                                 candidate
-                                    .selectedFields
+                                    .selectedFields,
+                            selectedNodes:
+                                candidate
+                                    .selectedNodes
                         )
                 )
             }
@@ -631,13 +653,34 @@ nonisolated struct GraphChatSemanticIntentCoordinator:
             return .groupIntentCompiled
         case .refinement:
             return .refinementIntentCompiled
+        case .nodeDetails:
+            return .nodeDetailsCompiled
+        case .compareNodes:
+            if case .compareNodes(let plan) =
+                adaptation.action {
+                return plan.kind
+                    == .sameEntityAttributes
+                    ? .sameEntityComparisonCompiled
+                    : .structuralComparisonCompiled
+            }
+            return .comparisonRejected
+        case .inspectGraphState:
+            if case .inspectGraphState(
+                let action
+            ) = adaptation.action {
+                return action.aspect == .health
+                    ? .graphHealthCompiled
+                    : .graphOverviewCompiled
+            }
+            return .graphOverviewCompiled
         case .unrecognized, .openEnded:
             return .legacyProviderFallback
         }
     }
 
     private func compilationRejectionEvent(
-        for error: Error
+        for error: Error,
+        family: GraphChatSemanticIntentFamily
     ) -> GraphChatSemanticIntentLifecycleEvent? {
         if let queryError =
             error
@@ -662,9 +705,29 @@ nonisolated struct GraphChatSemanticIntentCoordinator:
         }
         if let semanticError =
             error
-                as? GraphChatSemanticIntentResolutionError,
-           semanticError == .scopeViolation {
-            return .scopeExpansionPrevented
+                as? GraphChatSemanticIntentResolutionError {
+            switch semanticError {
+            case .scopeViolation,
+                .graphStateRequiresEntireGraph:
+                return .scopeExpansionPrevented
+            case .staleNodeSelection:
+                return .staleNodeDiscarded
+            case .comparisonLimitExceeded,
+                .featureLimitExceeded,
+                .unsupportedComparison:
+                return .comparisonRejected
+            case .unsupportedCombination,
+                .nodeNotFound:
+                return family == .compareNodes
+                    ? .comparisonRejected
+                    : nil
+            case .entityNotFound,
+                .staleEntitySelection,
+                .conversationSelectionUnavailable,
+                .conversationSelectionMismatch,
+                .invalidSchemaIdentity:
+                return nil
+            }
         }
         return nil
     }

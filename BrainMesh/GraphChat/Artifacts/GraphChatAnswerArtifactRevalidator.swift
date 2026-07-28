@@ -59,6 +59,20 @@ nonisolated struct GraphChatLiveAnswerArtifactRevalidator: GraphChatAnswerArtifa
             in: scope
         )
         let validatedEvidenceIDs = Set(validatedEvidence.map(\.id))
+        if case .comparison = artifact.payload {
+            guard let comparison =
+                    revalidatedComparison(
+                    artifact,
+                    availableEvidenceIDs:
+                        validatedEvidenceIDs
+                ) else {
+                return nil
+            }
+            return try await revalidatedNavigation(
+                comparison,
+                scope: scope
+            )
+        }
         guard Set(artifact.allEvidenceIDs).isSubset(of: validatedEvidenceIDs) else {
             return nil
         }
@@ -69,9 +83,21 @@ nonisolated struct GraphChatLiveAnswerArtifactRevalidator: GraphChatAnswerArtifa
             return nil
         }
 
-        let targetRevalidator = GraphChatAnswerArtifactNavigationTargetRevalidator(
-            sourceRepository: sourceRepository
+        return try await revalidatedNavigation(
+            artifact,
+            scope: scope
         )
+    }
+
+    private func revalidatedNavigation(
+        _ artifact: GraphChatAnswerArtifact,
+        scope: GraphChatScope
+    ) async throws -> GraphChatAnswerArtifact? {
+        let targetRevalidator =
+            GraphChatAnswerArtifactNavigationTargetRevalidator(
+                sourceRepository:
+                    sourceRepository
+            )
         for target in artifact.allNavigationTargets {
             try Task.checkCancellation()
             guard
@@ -85,6 +111,183 @@ nonisolated struct GraphChatLiveAnswerArtifactRevalidator: GraphChatAnswerArtifa
         }
 
         return artifact
+    }
+
+    private func revalidatedComparison(
+        _ artifact: GraphChatAnswerArtifact,
+        availableEvidenceIDs:
+            Set<GraphEvidenceID>
+    ) -> GraphChatAnswerArtifact? {
+        guard case .comparison(let source) =
+                artifact.payload
+        else {
+            return nil
+        }
+        let subjects = source.subjects.filter {
+            $0.evidence.evidenceIDs.isEmpty == false
+                && Set(
+                    $0.evidence.evidenceIDs
+                ).isSubset(
+                    of: availableEvidenceIDs
+                )
+        }
+        let preliminarySubjectIDs = Set(
+            subjects.map(\.id)
+        )
+        let preliminaryFeatures =
+            source.features.filter {
+                Set(
+                    $0.evidence.evidenceIDs
+                ).isSubset(
+                    of: availableEvidenceIDs
+                )
+            }
+        let preliminaryFeatureIDs = Set(
+            preliminaryFeatures.map(\.id)
+        )
+        let values = source.values.filter {
+            guard
+                preliminarySubjectIDs
+                    .contains($0.subjectID),
+                preliminaryFeatureIDs
+                    .contains($0.featureID),
+                let evidence = $0.evidence,
+                evidence.evidenceIDs
+                    .isEmpty == false
+            else {
+                return false
+            }
+            return Set(
+                evidence.evidenceIDs
+            ).isSubset(
+                of: availableEvidenceIDs
+            )
+        }
+        let usedSubjectIDs = Set(
+            values.map(\.subjectID)
+        )
+        let usedFeatureIDs = Set(
+            values.map(\.featureID)
+        )
+        let retainedSubjects =
+            subjects.filter {
+                usedSubjectIDs.contains($0.id)
+            }
+        let retainedFeatures =
+            preliminaryFeatures.filter {
+                usedFeatureIDs.contains($0.id)
+            }
+        guard retainedSubjects.count >= 2,
+              retainedFeatures.isEmpty == false
+        else {
+            return nil
+        }
+        let subjectsWereReduced =
+            retainedSubjects.count < source.subjects.count
+        let featuresWereReduced =
+            retainedFeatures.count < source.features.count
+        let valuesWereReduced =
+            values.count < source.values.count
+        var truncationReasons =
+            source.resultMetadata
+                .truncation.reasons
+        if subjectsWereReduced ||
+            featuresWereReduced ||
+            valuesWereReduced
+        {
+            truncationReasons.insert(
+                .sourceLimited,
+                at: 0
+            )
+        }
+        let evidence =
+            GraphChatAnswerArtifactEvidenceBinding(
+                evidenceIDs:
+                    retainedSubjects.flatMap {
+                        $0.evidence.evidenceIDs
+                    }
+                    + retainedFeatures.flatMap {
+                        $0.evidence.evidenceIDs
+                    }
+                    + values.flatMap {
+                        $0.evidence?
+                            .evidenceIDs ?? []
+                    }
+            )
+        let comparison =
+            GraphChatAnswerArtifactComparisonPayload(
+                title: source.title,
+                subjects: retainedSubjects,
+                features: retainedFeatures,
+                values: values,
+                resultMetadata:
+                    GraphChatAnswerArtifactResultMetadata(
+                        resultCount:
+                            source
+                                .resultMetadata
+                                .totalCount,
+                        returnedCount:
+                            retainedSubjects
+                                .count,
+                        truncation:
+                            GraphChatAnswerArtifactTruncation(
+                                reasons:
+                                    truncationReasons,
+                                omittedCount:
+                                    source
+                                        .resultMetadata
+                                        .totalCount
+                                        .map {
+                                            max(
+                                                0,
+                                                $0
+                                                    - retainedSubjects
+                                                        .count
+                                            )
+                                        }
+                            )
+                    ),
+                evidence: evidence
+            )
+        let retainedNodes =
+            retainedSubjects.compactMap {
+                subject -> NodeRefKey? in
+                guard
+                    case .openNode(
+                        _,
+                        let node
+                    ) =
+                        subject
+                            .navigationTarget
+                else {
+                    return nil
+                }
+                return node
+            }
+        let navigationTargets =
+            retainedNodes.count >= 2
+            ? [
+                GraphChatAnswerArtifactNavigationTarget
+                    .compareNodes(
+                        graphScope:
+                            artifact.graphScope,
+                        nodes:
+                            retainedNodes
+                    ),
+            ]
+            : []
+        return GraphChatAnswerArtifact(
+            id: artifact.id,
+            sessionID: artifact.sessionID,
+            graphScope: artifact.graphScope,
+            title: artifact.title,
+            payload: .comparison(comparison),
+            evidence: evidence,
+            navigationTargets:
+                navigationTargets,
+            querySummary:
+                artifact.querySummary
+        )
     }
 }
 

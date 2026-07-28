@@ -737,42 +737,116 @@ nonisolated struct GraphChatRequestPreflight: Sendable {
         } else if let interpretation = referenceInterpreter.interpretation(
             for: normalizedQuestion
         ) {
-            let resolution = try await referenceResolver.resolveScope(
-                interpretation.proposal,
-                in: context,
-                expectedGraphScope: key.graphScope,
-                expectedChatScope: key.chatScope
-            )
-            switch resolution {
-            case .resolved(let resolvedScope):
-                currentResolvedScope = resolvedScope
-                currentReference = resolvedScope.reference
-                continuationOperation = interpretation.operation
-
-            case .clarification, .noResults, .rejected:
-                let referenceResolution = resolution.referenceResolution
-                if missingContextPolicy.shouldDeferToProvider(referenceResolution) == false {
-                    let local = localAnswerBuilder.referenceResolution(
-                        referenceResolution,
-                        language: language,
-                        operation: interpretation.operation,
-                        state: requestBaseState,
-                        sourceTurnID: requestBaseState.turnContexts.last?.id,
-                        continuationQuestion: normalizedQuestion,
-                        clarificationID: input.requestID,
-                        referenceDate: input.requestedAt
-                    )
-                    return .local(
-                        localPlan(
-                            key: key,
-                            normalizedQuestion: normalizedQuestion,
-                            language: language,
-                            answer: local.answer,
-                            baseState: requestBaseState,
-                            expectedCommittedState: expectedCommittedState,
-                            pendingClarification: local.pendingClarification
+            if interpretation.operation
+                == .compareReferences
+            {
+                let resolution =
+                    try await referenceResolver
+                        .resolve(
+                            interpretation
+                                .proposal,
+                            in: context,
+                            expectedGraphScope:
+                                key.graphScope,
+                            expectedChatScope:
+                                key.chatScope
                         )
-                    )
+                switch resolution {
+                case .resolved(let reference):
+                    currentReference =
+                        reference
+                    currentResolvedScope = nil
+                    continuationOperation =
+                        interpretation.operation
+                case .clarification, .noResults,
+                    .rejected:
+                    if missingContextPolicy
+                        .shouldDeferToProvider(
+                            resolution
+                        ) == false
+                    {
+                        let local =
+                            localAnswerBuilder
+                                .referenceResolution(
+                                    resolution,
+                                    language:
+                                        language,
+                                    operation:
+                                        interpretation
+                                            .operation,
+                                    state:
+                                        requestBaseState,
+                                    sourceTurnID:
+                                        requestBaseState
+                                            .turnContexts
+                                            .last?.id,
+                                    continuationQuestion:
+                                        normalizedQuestion,
+                                    clarificationID:
+                                        input.requestID,
+                                    referenceDate:
+                                        input.requestedAt
+                                )
+                        return .local(
+                            localPlan(
+                                key: key,
+                                normalizedQuestion:
+                                    normalizedQuestion,
+                                language:
+                                    language,
+                                answer:
+                                    local.answer,
+                                baseState:
+                                    requestBaseState,
+                                expectedCommittedState:
+                                    expectedCommittedState,
+                                pendingClarification:
+                                    local
+                                        .pendingClarification
+                            )
+                        )
+                    }
+                }
+            } else {
+                let resolution = try await referenceResolver.resolveScope(
+                    interpretation.proposal,
+                    in: context,
+                    expectedGraphScope: key.graphScope,
+                    expectedChatScope: key.chatScope
+                )
+                switch resolution {
+                case .resolved(let resolvedScope):
+                    currentResolvedScope = resolvedScope
+                    currentReference = resolvedScope.reference
+                    continuationOperation = interpretation.operation
+
+                case .clarification, .noResults, .rejected:
+                    let referenceResolution = resolution.referenceResolution
+                    if missingContextPolicy
+                        .shouldDeferToProvider(referenceResolution) == false
+                    {
+                        let local = localAnswerBuilder.referenceResolution(
+                            referenceResolution,
+                            language: language,
+                            operation: interpretation.operation,
+                            state: requestBaseState,
+                            sourceTurnID: requestBaseState.turnContexts.last?.id,
+                            continuationQuestion: normalizedQuestion,
+                            clarificationID: input.requestID,
+                            referenceDate: input.requestedAt
+                        )
+                        return .local(
+                            localPlan(
+                                key: key,
+                                normalizedQuestion: normalizedQuestion,
+                                language: language,
+                                answer: local.answer,
+                                baseState: requestBaseState,
+                                expectedCommittedState: expectedCommittedState,
+                                pendingClarification: local.pendingClarification
+                            )
+                        )
+                    }
                 }
             }
         }

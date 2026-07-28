@@ -176,6 +176,11 @@ struct GraphChatToolsTests {
         #expect(output.attachments.count == 1)
         #expect(output.attachments[0].originalFilename == "policy.pdf")
         #expect(output.attachments[0].byteCount > 0)
+        #expect(output.hasNotes)
+        #expect(output.directLinkCount == 0)
+        #expect(output.attachmentMetadataCount == 1)
+        #expect(output.authoritativeDetailValueCount == 1)
+        #expect(output.structureEvidenceID != nil)
         #expect(String(describing: output).contains("BINARY-CONTENT-MUST-STAY-UNREAD") == false)
         #expect(result.evidence.flatMap(\.fieldValues).contains { field in
             if case .text("BINARY-CONTENT-MUST-STAY-UNREAD") = field.value {
@@ -191,7 +196,8 @@ struct GraphChatToolsTests {
         ).execute(
             GetNodeInput(
                 node: NodeRefKey(kind: .attribute, id: attribute.id),
-                relatedLimit: 0
+                relatedLimit: 0,
+                includeNotes: false
             ),
             context: context(graphID: graph.id)
         )
@@ -200,6 +206,20 @@ struct GraphChatToolsTests {
         #expect(zeroLimitOutput.detailValueWindow.totalCount == 1)
         #expect(zeroLimitOutput.detailValueWindow.returnedCount == 0)
         #expect(zeroLimitOutput.detailValueWindow.limitSources == [.tool])
+        #expect(zeroLimitOutput.notes.isEmpty)
+        #expect(zeroLimitOutput.hasNotes)
+        #expect(zeroLimitOutput.attachments.isEmpty)
+        #expect(zeroLimitOutput.attachmentMetadataCount == 1)
+        #expect(
+            zeroLimitResult.evidence
+                .flatMap(\.fieldValues)
+                .contains {
+                    if case .text("Current policy") = $0.value {
+                        return true
+                    }
+                    return false
+                } == false
+        )
     }
 
     @Test
@@ -407,6 +427,82 @@ struct GraphChatToolsTests {
         #expect(output.hubWindow.totalCount == 12)
         #expect(output.hubWindow.returnedCount == 10)
         #expect(output.hubWindow.limitSources == [.source])
+    }
+
+    @Test
+    func statsToolRejectsGraphTargetWithNonGraphChatContext()
+        async throws
+    {
+        let graphID = UUID()
+        let counts = GraphCounts(
+            entities: 1,
+            attributes: 0,
+            links: 0,
+            notes: 0,
+            images: 0,
+            attachments: 0,
+            attachmentBytes: 0
+        )
+        let snapshot = GraphChatStatsSnapshot(
+            counts: counts,
+            structure: GraphStructureSnapshot(
+                nodeCount: 1,
+                linkCount: 0,
+                isolatedNodeCount: 1,
+                topHubs: []
+            ),
+            health: GraphHealthSnapshot(
+                graphID: graphID,
+                counts: counts,
+                score: GraphHealthScore.make(
+                    counts: counts,
+                    issues: []
+                ),
+                issues: []
+            )
+        )
+        let reader = GraphChatStatsReaderSpy(value: snapshot)
+        let graphScope = GraphScope(graphID: graphID)
+        let node = NodeRefKey(
+            kind: .entity,
+            id: UUID()
+        )
+        let healthScope = try GraphChatScope.healthFinding(
+            id: "isolated",
+            affectedNodes: [],
+            in: graphScope
+        )
+        let restrictedScopes: [GraphChatScope] = [
+            .entity(node.id, in: graphScope),
+            .node(node, in: graphScope),
+            try .selection([node], in: graphScope),
+            healthScope,
+        ]
+
+        for scope in restrictedScopes {
+            do {
+                _ = try await GraphStatsTool(
+                    reader: reader,
+                    evidenceValidator:
+                        PassthroughGraphEvidenceValidator(),
+                    logger: NoOpGraphChatToolLogger()
+                ).execute(
+                    GraphStatsInput(hubLimit: 1),
+                    context:
+                        GraphChatToolContext(
+                            scope: scope,
+                            budget:
+                                GraphChatToolBudget()
+                        )
+                )
+                Issue.record(
+                    "Expected GraphStats to require the exact entire-graph chat scope."
+                )
+            } catch let error as GraphChatToolError {
+                #expect(error.code == .invalidInput)
+            }
+        }
+        #expect(await reader.callCount() == 0)
     }
 
     private func context(graphID: UUID) -> GraphChatToolContext {

@@ -509,6 +509,103 @@ nonisolated extension GraphChatConversationStateReducer {
         )
     }
 
+    func applyComparisonResult(
+        subjects:
+            [GraphChatConversationComparisonSubject],
+        evidence: [GraphEvidence],
+        technicalDescription: String,
+        eventID: UUID,
+        to state:
+            inout GraphChatConversationState
+    ) {
+        let validIDs = Set(evidence.map(\.id))
+        let validSubjects = subjects.filter {
+            $0.evidenceIDs.contains(
+                where: validIDs.contains
+            )
+        }
+        guard validSubjects.count >= 2 else {
+            return
+        }
+        let references =
+            validSubjects.enumerated().map {
+                index, subject in
+                let evidenceIDs =
+                    boundedEvidenceIDs(
+                        subject.evidenceIDs
+                            .filter(
+                                validIDs.contains
+                            )
+                    )
+                let nodeReference =
+                    GraphChatConversationNodeReference(
+                        node: subject.node,
+                        label:
+                            boundedLabel(
+                                subject.label
+                            ),
+                        ownerEntityID:
+                            subject.ownerEntityID,
+                        evidenceIDs:
+                            evidenceIDs
+                    )
+                upsertNode(
+                    nodeReference,
+                    in: &state
+                )
+                upsertEntityFromNode(
+                    nodeReference,
+                    in: &state
+                )
+                return GraphChatConversationResultReference(
+                    ordinal: index + 1,
+                    reference:
+                        .node(subject.node),
+                    label:
+                        boundedLabel(
+                            subject.label
+                        ),
+                    evidenceIDs:
+                        evidenceIDs
+                )
+            }
+        let entityIDs = Set(
+            validSubjects.compactMap(
+                \.ownerEntityID
+            )
+        )
+        appendResultContext(
+            GraphChatConversationResultContext(
+                id: eventID,
+                kind: .comparison,
+                state: .success,
+                entityID:
+                    entityIDs.count == 1
+                    ? entityIDs.first
+                    : nil,
+                references: references,
+                groupReferences: [],
+                evidenceIDs:
+                    boundedEvidenceIDs(
+                        evidence.map(\.id)
+                    ),
+                appliedFilters: [],
+                technicalDescription:
+                    boundedTechnicalDescription(
+                        technicalDescription
+                    )
+            ),
+            to: &state
+        )
+        applyComparison(
+            references:
+                references.map(\.reference),
+            technicalDescription:
+                technicalDescription,
+            to: &state
+        )
+    }
+
     func applyTurnCompletion(
         _ completion: GraphChatConversationTurnCompletion,
         to state: inout GraphChatConversationState

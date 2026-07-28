@@ -1664,8 +1664,9 @@ nonisolated struct GraphChatQueryIntentCompiler:
         case .entityList, .filteredCollection,
             .count, .groupCount, .refinement:
             return true
-        case .findNodes, .unrecognized,
-            .openEnded:
+        case .findNodes, .nodeDetails,
+            .compareNodes, .inspectGraphState,
+            .unrecognized, .openEnded:
             return false
         }
     }

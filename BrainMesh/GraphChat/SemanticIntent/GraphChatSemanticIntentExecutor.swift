@@ -31,6 +31,12 @@ nonisolated struct GraphChatSemanticIntentExecutor:
             any GraphChatLocalIntentQueryExecuting,
         searchExecutor:
             any GraphChatLocalIntentSearchExecuting,
+        nodeExecutor:
+            any GraphChatLocalIntentNodeExecuting =
+                GetNodeTool(),
+        statsExecutor:
+            any GraphChatLocalIntentStatsExecuting =
+                UnavailableGraphChatLocalStatsExecutor(),
         conversationStateReducer:
             GraphChatConversationStateReducer,
         calendar: Calendar,
@@ -48,6 +54,8 @@ nonisolated struct GraphChatSemanticIntentExecutor:
             GraphChatLocalIntentExecutionKernel(
                 queryExecutor: queryExecutor,
                 searchExecutor: searchExecutor,
+                nodeExecutor: nodeExecutor,
+                statsExecutor: statsExecutor,
                 conversationStateReducer:
                     conversationStateReducer,
                 calendar: calendar,

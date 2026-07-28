@@ -35,6 +35,47 @@ extension SearchGraphTool:
     GraphChatLocalIntentSearchExecuting
 {}
 
+nonisolated protocol GraphChatLocalIntentNodeExecuting:
+    Sendable
+{
+    func execute(
+        _ input: GetNodeInput,
+        context: GraphChatToolContext
+    ) async throws -> GraphChatToolResult<GetNodeOutput>
+}
+
+extension GetNodeTool:
+    GraphChatLocalIntentNodeExecuting
+{}
+
+nonisolated protocol GraphChatLocalIntentStatsExecuting:
+    Sendable
+{
+    func execute(
+        _ input: GraphStatsInput,
+        context: GraphChatToolContext
+    ) async throws -> GraphChatToolResult<GraphStatsOutput>
+}
+
+extension GraphStatsTool:
+    GraphChatLocalIntentStatsExecuting
+{}
+
+nonisolated struct UnavailableGraphChatLocalStatsExecutor:
+    GraphChatLocalIntentStatsExecuting
+{
+    func execute(
+        _ input: GraphStatsInput,
+        context: GraphChatToolContext
+    ) async throws -> GraphChatToolResult<GraphStatsOutput> {
+        throw GraphChatToolError(
+            code: .unavailable,
+            message:
+                "GraphStats ist für diese lokale Ausführungsumgebung nicht konfiguriert."
+        )
+    }
+}
+
 nonisolated enum GraphChatLocalQueryResultContract:
     Hashable,
     Sendable
@@ -48,6 +89,7 @@ nonisolated enum GraphChatLocalQueryResultContract:
     case count
     case groupCount
     case refinement
+    case comparison
 }
 
 nonisolated struct GraphChatLocalQueryAction: Hashable, Sendable {
@@ -95,9 +137,28 @@ nonisolated struct GraphChatLocalSearchAction:
     let entityID: UUID?
 }
 
+nonisolated struct GraphChatLocalNodeDetailsAction:
+    Hashable,
+    Sendable
+{
+    let node: GraphChatTypedNodeIdentity
+    let relatedLimit: Int
+}
+
+nonisolated struct GraphChatLocalGraphStateAction:
+    Hashable,
+    Sendable
+{
+    let aspect: GraphChatGraphStateAspect
+    let hubLimit: Int
+}
+
 nonisolated enum GraphChatLocalIntentAction: Hashable, Sendable {
     case queryDetailValues(GraphChatLocalQueryAction)
     case searchGraph(GraphChatLocalSearchAction)
+    case nodeDetails(GraphChatLocalNodeDetailsAction)
+    case compareNodes(GraphChatComparisonPlan)
+    case inspectGraphState(GraphChatLocalGraphStateAction)
 }
 
 nonisolated struct GraphChatTypedIntentAdaptation:
