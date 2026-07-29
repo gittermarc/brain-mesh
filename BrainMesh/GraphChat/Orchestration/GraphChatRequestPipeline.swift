@@ -58,6 +58,25 @@ nonisolated struct GraphChatRequestPipelineCompletion: Sendable {
     let usedProvider: Bool
 }
 
+/// Trusted input for a correction that has already been rebound to a fresh
+/// schema snapshot. This path deliberately contains no interpreter or answer
+/// provider dependency.
+nonisolated struct GraphChatInterpretationCorrectionPipelineInput:
+    Sendable
+{
+    let requestID: UUID
+    let requestedAt: Date
+    let question: String
+    let providerPlan: GraphChatProviderTurnPlan
+    let expectedCommittedState:
+        GraphChatConversationState
+    let adaptation:
+        GraphChatTypedIntentAdaptation
+    let schemaContext: GraphSchemaContext
+    let artifactIDsToReplace:
+        [GraphChatAnswerArtifactID]
+}
+
 nonisolated struct GraphChatRequestPipeline: Sendable {
     typealias SessionResourcesProvider = @Sendable (
         GraphChatProviderTurnPlan
@@ -228,6 +247,8 @@ nonisolated struct GraphChatRequestPipeline: Sendable {
                                                 self.referenceDate(),
                                             requestQuestion:
                                                 plan.providerQuestion,
+                                            correctionRequestQuestion:
+                                                input.question,
                                             expectedCommittedState:
                                                 plan.expectedCommittedState,
                                             execution: execution
@@ -344,6 +365,9 @@ nonisolated struct GraphChatRequestPipeline: Sendable {
                                                         self.referenceDate(),
                                                     requestQuestion:
                                                         plan.providerQuestion,
+                                                    correctionRequestQuestion:
+                                                        input
+                                                            .question,
                                                     expectedCommittedState:
                                                         plan.expectedCommittedState,
                                                     execution:
@@ -536,6 +560,134 @@ nonisolated struct GraphChatRequestPipeline: Sendable {
                 throw error
             }
         }
+    }
+
+    /// Re-executes a user-corrected, app-compiled intent. The caller supplies
+    /// the pre-turn provider plan only as deterministic conversation context;
+    /// neither semantic interpretation nor free answer generation is entered.
+    func executeCorrection(
+        _ input:
+            GraphChatInterpretationCorrectionPipelineInput,
+        artifactSession:
+            GraphChatArtifactSessionResources,
+        onActivity:
+            @escaping @Sendable (
+                GraphChatToolActivity
+            ) -> Void,
+        validateCurrentRequest:
+            @escaping CurrentRequestValidator,
+        commitFinalizedTurn:
+            @escaping TurnCommitHandler
+    ) async throws -> GraphChatFinalizedTurn {
+        try await validateCurrentRequest()
+        let finalizedTurn =
+            try await semanticExecutor.execute(
+                adaptation:
+                    input.adaptation,
+                schemaContext:
+                    input.schemaContext,
+                providerPlan:
+                    input.providerPlan,
+                requestID:
+                    input.requestID,
+                artifactSession:
+                    artifactSession,
+                onActivity:
+                    onActivity,
+                validateCurrentRequest:
+                    validateCurrentRequest,
+                finalize: { execution in
+                    await self.record(
+                        input.requestID,
+                        stage:
+                            .answerFinalization,
+                        phase: .started,
+                        usesProvider: false
+                    )
+                    let turn =
+                        try await self.finalizer
+                            .finalizeLocalIntentTurn(
+                                GraphChatLocalIntentAnswerFinalizationInput(
+                                    requestID:
+                                        input.requestID,
+                                    completedAt:
+                                        self.referenceDate(),
+                                    requestQuestion:
+                                        input.question,
+                                    correctionRequestQuestion:
+                                        input.question,
+                                    expectedCommittedState:
+                                        input
+                                            .expectedCommittedState,
+                                    execution:
+                                        execution,
+                                    artifactCommitBehavior:
+                                        .deferred,
+                                    artifactIDsToReplace:
+                                        input
+                                            .artifactIDsToReplace
+                                ),
+                                currentCommittedState:
+                                    input
+                                        .expectedCommittedState
+                            )
+                    guard
+                        let interpretation =
+                            turn.answer
+                                .interpretation,
+                        interpretation
+                            .isCorrectionEditable,
+                        interpretation
+                            .turnBinding
+                            .requestID
+                            == input.requestID,
+                        interpretation
+                            .correctionOrigin?
+                            .adaptation
+                            == input.adaptation,
+                        interpretation
+                            .correctionOrigin?
+                            .artifactSessionID
+                            == artifactSession
+                                .sessionID,
+                        turn.deferredArtifactCommit?
+                            .replacedArtifactIDs
+                            == input
+                                .artifactIDsToReplace
+                    else {
+                        throw GraphChatInterpretationCorrectionCompilationError
+                            .stale(
+                                .interpretationChanged
+                            )
+                    }
+                    await self.record(
+                        input.requestID,
+                        stage:
+                            .answerFinalization,
+                        phase: .completed,
+                        usesProvider: false
+                    )
+                    return turn
+                },
+                commit: { turn in
+                    await self.record(
+                        input.requestID,
+                        stage: .turnCommit,
+                        phase: .started,
+                        usesProvider: false
+                    )
+                    try await commitFinalizedTurn(
+                        turn
+                    )
+                }
+            )
+        await record(
+            input.requestID,
+            stage: .turnCommit,
+            phase: .completed,
+            usesProvider: false
+        )
+        return finalizedTurn
     }
 
     private func finalizeLocalPlan(

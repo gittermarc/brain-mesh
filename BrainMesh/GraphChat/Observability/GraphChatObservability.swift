@@ -202,6 +202,13 @@ nonisolated enum GraphChatIntentInterpretationLifecycleEvent:
     case created
     case displayed
     case discardedPresentationViolation
+    case correctionEditorOpened
+    case correctionCancelled
+    case correctionValidated
+    case correctionStale
+    case localCorrectionRerunStarted
+    case localCorrectionRerunCommitted
+    case localCorrectionRerunRolledBack
 }
 
 nonisolated struct GraphChatIntentInterpretationMetric:

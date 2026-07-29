@@ -41,6 +41,86 @@ struct GraphChatTurnCommitCoordinatorTests {
     }
 
     @Test
+    func deferredTurnSealsArtifactsWithoutPublishingThem() async throws {
+        let fixture = TurnCommitFixture()
+        let staged = try await fixture.makeStagedArtifact()
+        let replacedTransaction =
+            GraphChatAnswerArtifactTransactionID(
+                rawValue: fixture.uuid(12)
+            )
+        let replacedArtifactID =
+            try await staged.registry.stage(
+                fixture.artifactDraft(
+                    evidenceID:
+                        staged.evidence.id
+                ),
+                transactionID:
+                    replacedTransaction,
+                evidenceRegistry:
+                    staged.evidenceRegistry
+            )
+        try await staged.registry.commit(
+            transactionID: replacedTransaction,
+            retaining: [replacedArtifactID]
+        )
+        let answer = GraphChatAnswer(
+            directAnswer: "Prepared",
+            evidence: [staged.evidence],
+            artifactIDs: [staged.artifactID],
+            hasInsufficientEvidence: false
+        )
+
+        let turn = try await fixture.coordinator.commit(
+            fixture.input(
+                answer: answer,
+                artifactContext: staged.artifactContext,
+                artifactCommitBehavior: .deferred,
+                artifactIDsToReplace:
+                    [replacedArtifactID]
+            ),
+            conversationTransaction:
+                fixture.makeConversationTransaction(),
+            currentCommittedState: fixture.baseState,
+            artifactRegistry: staged.registry
+        )
+
+        #expect(
+            turn.deferredArtifactCommit
+                == GraphChatDeferredArtifactCommit(
+                    context: staged.artifactContext,
+                    artifactIDs: [staged.artifactID],
+                    replacedArtifactIDs:
+                        [replacedArtifactID]
+                )
+        )
+        #expect(turn.committedArtifactIDs == [staged.artifactID])
+        #expect(
+            await staged.registry
+                .snapshotForTesting()
+                .map(\.id)
+                == [replacedArtifactID]
+        )
+        #expect(
+            await staged.registry.deferredSnapshotForTesting(
+                transactionID:
+                    staged.artifactContext.transactionID
+            ).map(\.id) == [staged.artifactID]
+        )
+
+        let finalizedIDs =
+            await staged.registry.finalizeDeferredCommit(
+                transactionID:
+                    staged.artifactContext.transactionID
+            )
+
+        #expect(finalizedIDs == [staged.artifactID])
+        #expect(
+            await staged.registry.snapshotForTesting()
+                .map(\.id) == [staged.artifactID]
+        )
+    }
+
+    @Test
     func artifactCommitFailureCommitsNeitherStateNorArtifactsAndRollsBack() async throws {
         let fixture = TurnCommitFixture()
         let registry = TurnCommitRecordingArtifactRegistry(
@@ -383,6 +463,22 @@ private actor TurnCommitRecordingArtifactRegistry:
         }
     }
 
+    func commitDeferred(
+        transactionID:
+            GraphChatAnswerArtifactTransactionID,
+        retaining artifactIDs:
+            [GraphChatAnswerArtifactID],
+        replacing replacedArtifactIDs:
+            [GraphChatAnswerArtifactID]
+    ) async throws
+        -> [GraphChatAnswerArtifactID]
+    {
+        try await commit(
+            transactionID: transactionID,
+            retaining: artifactIDs
+        )
+    }
+
     func rollback(
         transactionID: GraphChatAnswerArtifactTransactionID
     ) async {
@@ -437,7 +533,11 @@ private struct TurnCommitFixture {
     func input(
         source: GraphChatFinalizedTurnSource = .provider,
         answer: GraphChatAnswer,
-        artifactContext: GraphChatArtifactCommitContext?
+        artifactContext: GraphChatArtifactCommitContext?,
+        artifactCommitBehavior:
+            GraphChatArtifactCommitBehavior = .immediate,
+        artifactIDsToReplace:
+            [GraphChatAnswerArtifactID] = []
     ) -> GraphChatTurnCommitInput {
         GraphChatTurnCommitInput(
             requestID: requestID,
@@ -445,7 +545,11 @@ private struct TurnCommitFixture {
             source: source,
             answer: answer,
             expectedCommittedState: baseState,
-            artifactContext: artifactContext
+            artifactContext: artifactContext,
+            artifactCommitBehavior:
+                artifactCommitBehavior,
+            artifactIDsToReplace:
+                artifactIDsToReplace
         )
     }
 

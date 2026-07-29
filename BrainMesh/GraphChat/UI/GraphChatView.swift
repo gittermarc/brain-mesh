@@ -62,6 +62,25 @@ struct GraphChatView: View {
                 "Der aktuelle Verlauf, Conversation State und das sessionlokale Feedback werden gelöscht. Graph und Scope bleiben erhalten."
             )
         }
+        .sheet(
+            item:
+                Binding(
+                    get: {
+                        viewModel
+                            .correctionEditorSession
+                    },
+                    set: { value in
+                        if value == nil {
+                            viewModel
+                                .cancelInterpretationCorrection()
+                        }
+                    }
+                )
+        ) { presentedSession in
+            correctionEditor(
+                presentedSession
+            )
+        }
         .task {
             await viewModel.load()
         }
@@ -173,7 +192,9 @@ struct GraphChatView: View {
                                 canOpenArtifactTarget: viewModel.canOpenArtifactTarget,
                                 onOpenArtifactTarget: viewModel.openArtifactTarget,
                                 onInterpretationEvent:
-                                    viewModel.recordInterpretationEvent
+                                    viewModel.recordInterpretationEvent,
+                                onEditInterpretation:
+                                    viewModel.openInterpretationCorrection
                             )
                             .id(message.id)
                         }
@@ -214,5 +235,49 @@ struct GraphChatView: View {
             }
             .shadow(radius: 8, y: 3)
             .accessibilityElement(children: .combine)
+    }
+
+    @ViewBuilder
+    private func correctionEditor(
+        _ presentedSession:
+            GraphChatInterpretationCorrectionEditorSession
+    ) -> some View {
+        let session =
+            viewModel
+                .correctionEditorSession
+            ?? presentedSession
+        GraphChatInterpretationCorrectionEditorView(
+            snapshot:
+                session.snapshot,
+            capabilities:
+                session.capabilities,
+            presentation:
+                session.presentation,
+            selection:
+                Binding(
+                    get: {
+                        viewModel
+                            .correctionEditorSession?
+                            .selection
+                        ?? session.selection
+                    },
+                    set: {
+                        viewModel
+                            .updateInterpretationCorrectionSelection(
+                                $0
+                            )
+                    }
+                ),
+            validationState:
+                session.validationState,
+            isApplying:
+                session.isApplying,
+            onCancel:
+                viewModel
+                    .cancelInterpretationCorrection,
+            onApply:
+                viewModel
+                    .applyInterpretationCorrection
+        )
     }
 }

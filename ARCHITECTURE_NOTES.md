@@ -18,6 +18,7 @@ BrainMesh besitzt bereits mehrere wichtige Schutzlinien:
 - Der Foundational Fast Path ist über einen verlustfreien Adapter von einer allgemeinen versionierten Typed-Intent-Domain getrennt; beide vorhandenen Foundational Actions laufen durch denselben lokalen Execution Kernel.
 - Freie Find-Nodes- und Entity-List-Formulierungen werden nach dem Foundational Fast Path durch einen toolfreien On-Device-Interpreter ausschließlich in einen begrenzten untrusted Semantic Draft klassifiziert. Identitäten, Scope, technische Action, Query, Limits, Evidence, Artifacts und sichtbare Antwort bleiben appseitig.
 - Node Details, Compare Nodes und Inspect Graph State werden nach semantischer Klassifikation vollständig appseitig kompiliert und providerfrei über denselben lokalen Execution Kernel abgeschlossen. Node-IDs, Tools, Comparison-Art/-Features, Related-/Hub-Limits und Artifact-Struktur bleiben app-owned.
+- Finalisierte lokale Typed-Intent-Interpretationen sind fachlich editierbar. Jede Korrektur wird an ursprünglichen Turn, Conversation, Scope, Checkpoints und Artifact-Session gebunden, gegen ein frisches vollständiges Schema revalidiert und als providerfreier lokaler Ersatzturn mit atomarem Conversation-/Artifact-Swap ausgeführt.
 
 Die höchsten Architektur-Risiken liegen trotzdem an drei Systemgrenzen:
 
@@ -916,7 +917,7 @@ Execution-Kernel:
 
 Bewusste Grenze:
 
-- Interpretation Editor, Rerun-Action, Schema-Picker, Writes, Multi-Hop-Analyse, Attachment-Inhaltsanalyse und eine allgemeine semantische Wahrheitsprüfung offener Providerantworten bleiben außerhalb dieses Stands. Minimum/Maximum werden weiterhin nicht durch den Semantic Query Compiler erzeugt.
+- Graph-Writes, gespeicherte Interpretationspräferenzen, allgemeine Undo-History, neue Intent-Familien, Multi-Hop-Analyse, Attachment-Inhaltsanalyse und eine allgemeine semantische Wahrheitsprüfung offener Providerantworten bleiben außerhalb dieses Stands. Minimum/Maximum werden weiterhin nicht durch den Semantic Query Compiler erzeugt.
 
 ### Graph Chat Intent Interpretation Presentation
 
@@ -933,7 +934,7 @@ Pfade:
 
 Domain und Ableitung:
 
-- `GraphChatIntentInterpretation` ist versioniert, value-only, `Hashable` und `Sendable`. Der Vertrag bindet Intent-Art, Graph-, Chat- und Query-Scope, Request, Conversation, Turn und optionalen Quell-Turn sowie Sprache, Entity-, Node- und Feldidentitäten, typisierte Filter, Sortierung, Gruppierung beziehungsweise Aggregation, Ergebnisumfang, Graph-State-Aspekt, Resolution Source/Origin/Quality und die künftig editierbaren Bestandteile.
+- `GraphChatIntentInterpretation` ist versioniert, value-only, `Hashable` und `Sendable`. Der Vertrag bindet Intent-Art, Graph-, Chat- und Query-Scope, Request, Conversation, Turn und optionalen Quell-Turn sowie Sprache, Entity-, Node- und Feldidentitäten, typisierte Filter, Sortierung, Gruppierung beziehungsweise Aggregation, Ergebnisumfang, Graph-State-Aspekt, Resolution Source/Origin/Quality und die für diese Intent-Art editierbaren Bestandteile.
 - IDs bleiben ausschließlich für Konsistenzprüfung und Revalidation im Wert gebunden. Der Renderer greift nur auf revalidierte Anzeigenamen, typisierte Fachwerte und feste lokalisierte Labels zu.
 - Der Finalizer erzeugt die Interpretation nur für einen erfolgreich vorbereiteten lokalen Intent. Query-basierte Familien verwenden den im Conversation-Transaction-State gehaltenen `ValidatedGraphQueryPlan`. Search, direkte Node Details, Structural Comparison und Graph State benötigen zusätzlich einen passenden revalidierten Result Context, Primary-Result-Tooltyp und bei Comparisons die exakt gebundene Node-Menge.
 - Semantic Draft, Provider-Text, Tool-Content-Strings, technische Aliasse und `GraphChatAnswerArtifactQuerySummary` sind keine Ableitungs- oder Fallbackquelle. Ein Legacy-Provider-Turn ohne lokalen Typed Intent behält `interpretation == nil`.
@@ -943,13 +944,52 @@ Presentation und Retention:
 - `GraphChatIntentInterpretationRenderer` erzeugt ausschließlich fachlich kompakte deutsche oder englische Titel. Technische Query-Zusammenfassungen, Toolnamen, Operator-Rohwerte, Scope-Namen, Limits, Aliasse und IDs werden nicht formatiert.
 - Die Presentation Firewall prüft zusätzlich Label und Titel sowie alle verwendeten Entity-, Node-, Feld-, Einheiten-, Filterwert-, Sortier- und Gruppierungsanzeigen. Bei einem Verstoß wird nur die optionale Interpretation entfernt; die ansonsten sichere validierte Antwort bleibt erhalten.
 - `GraphChatAnswer` trägt die optionale Interpretation rückwärtskompatibel. Message-State-Normalisierung, Artifact-Retention, Finalizer-Fallbacks, Regenerate, Edit-and-Resend und Transcript Checkpoints behalten den Wert, solange der zugehörige Answer erhalten bleibt; die UI revalidiert ihn unmittelbar vor der Darstellung erneut.
-- `GraphChatFinalAnswerView` zeigt die nicht interaktive Interpretation direkt oberhalb des direkten Antworttexts als kompakte Materialdarstellung. Dynamic Type besitzt kein Zeilenlimit; VoiceOver erhält genau ein kombiniertes lokalisiertes Label ohne technische Werte.
+- `GraphChatFinalAnswerView` zeigt die Interpretation direkt oberhalb des direkten Antworttexts als kompakte Materialdarstellung. Nur eine Interpretation mit konsistentem verborgenem Correction-Origin wird als Button präsentiert; Legacy- und Provider-Antworten bleiben passiv. Dynamic Type besitzt kein Zeilenlimit; VoiceOver erhält ein lokalisiertes Label und einen verständlichen Editor-Hinweis ohne technische Werte.
 - Standard-Copy bleibt auf den finalisierten autoritativen Antworttext und die bisherige Answer-Struktur begrenzt. Die Interpretation wird nicht ungefragt in den kopierten Fachwert aufgenommen.
-- Content-free Observability unterscheidet ausschließlich `created`, `displayed` und `discardedPresentationViolation`; Titel, Anzeigenamen, Werte, IDs und Antworttext werden nicht protokolliert.
+- Content-free Observability unterscheidet `created`, `displayed`, `discardedPresentationViolation` sowie die Correction-Lifecycle-Events; Titel, Anzeigenamen, Werte, IDs und Antworttext werden nicht protokolliert.
 
 Bewusste Grenze:
 
-- Die Darstellung ist in diesem Stand weder antippbar noch editierbar. Es gibt keinen Editor, keine Rerun-Action, keine Schema-Picker, keine neue Intent-Familie und keinen Write-Pfad.
+- Die Correction erweitert keine Intent-Familie und besitzt keinen Graph-Write-Pfad. Eine Interpretation ohne lokalen finalisierten Typed Intent und gültigen Correction-Origin wird nicht nachträglich editierbar gemacht.
+
+### Graph Chat Interpretation Correction
+
+Pfade:
+
+- `BrainMesh/GraphChat/Interpretation/GraphChatInterpretationCorrectionDomain.swift`
+- `BrainMesh/GraphChat/Interpretation/GraphChatInterpretationCorrectionSchema.swift`
+- `BrainMesh/GraphChat/Interpretation/GraphChatInterpretationCorrectionCompiler.swift`
+- `BrainMesh/GraphChat/UI/Correction/GraphChatInterpretationCorrectionPlanner.swift`
+- `BrainMesh/GraphChat/UI/Correction/GraphChatInterpretationCorrectionEditorSession.swift`
+- `BrainMesh/GraphChat/UI/Correction/GraphChatInterpretationCorrectionEditorView.swift`
+- `BrainMesh/GraphChat/UI/Correction/GraphChatInterpretationCorrectionFiltersEditor.swift`
+- `BrainMesh/GraphChat/UI/GraphChatMessageActionController.swift`
+- `BrainMesh/GraphChat/UI/GraphChatViewModel.swift`
+- `BrainMesh/GraphChat/Orchestration/GraphChatOrchestrator.swift`
+- `BrainMesh/GraphChat/Orchestration/GraphChatRequestPipeline.swift`
+- `BrainMesh/GraphChat/TypedIntent/GraphChatLocalIntentExecutionKernel.swift`
+
+Correction Binding:
+
+- `GraphChatInterpretationCorrectionOrigin` ist ein verborgener, nicht gerenderter Ausführungsnachweis im finalisierten Answer. Er bindet die vollständige validierte `GraphChatTypedIntentAdaptation`, die normalisierte ursprüngliche Request-Frage und die aktuelle Artifact-Session. Dadurch bleiben unter anderem Find-Suchbegriff und Refinement-Quelle verfügbar, ohne sie aus sichtbarem Text zurückzuinterpretieren oder einen nachträglich veränderten Transcript-Text als ursprünglichen Request zu akzeptieren.
+- `GraphChatInterpretationCorrectionBinding` bindet die ursprüngliche User- und Assistant-Message, den ursprünglichen Request und Turn, Conversation ID, Graph- und Chat-Scope, Intent-Domainversion, vollständige ursprüngliche Interpretation, Artifact-Session, Checkpoint vor dem ursprünglichen Turn, erwarteten aktuellen Checkpoint sowie die zu ersetzenden Artifact-IDs. Ein Binding wird nur aus einem finalisierten Assistant unmittelbar nach seiner User-Frage geplant.
+- Die editierbare Selection enthält Entity, Nodes beziehungsweise Auswahl, Felder, typisierte Filter samt Operator und Wert, Sortierung, Gruppierungsfeld, Ergebnisumfang, Find-Begriff/-Ziel und Graph-State-Aspekt. Diese IDs sind ausschließlich eine Nutzerabsicht und keine Ausführungsberechtigung.
+
+Schemaorientierter Editor und Revalidation:
+
+- Beim Öffnen lädt das ViewModel einen frischen vollständigen `GraphSchemaContext` mit `foundationalAliases` und prüft die gebundene Artifact-Session über die aktuelle Presentation-Auflösung. Das value-only Editor-Snapshot enthält ausschließlich autorisierte Entity-, Node-, Field-, Choice-, Operator- und feste Aspektoptionen mit revalidierten Anzeigenamen.
+- Sichtbar sind nur die zur Intent-Art passenden Controls: Find-Begriff/-Ziel, Collection-Entity/Filter/Sortierung/Umfang, Count-Filter, Group-Feld, Node Details, Refinement-Filter/-Sortierung, Comparison-Nodes/-Felder oder der Entire-Graph-Aspekt. Choice und Boolean verwenden Picker, Zahl und Datum lokalisierte Eingaben; UUIDs, Aliasse, Toolnamen und Operator-Rohwerte werden nie gerendert.
+- Apply lädt Schema, Artifact-Session und Transcript-Branch erneut. `GraphChatInterpretationCorrectionCompiler` prüft Binding, Graph-/Chat-/Query-Scope, Conversation, Domainversion, Entity-/Field-Zugehörigkeit, Node-Autorisierung, Operator-Kompatibilität und alle Werte. Entity-Wechsel bleiben im Chat-Scope; Node-/Selection-Scope wird nicht erweitert; Refinement bleibt eine Schnittmenge der revalidierten ursprünglichen Quell-Nodes; Graph State verlangt exakt Entire Graph.
+- Der Compiler baut einen neuen fachlichen Semantic Draft aus den ausgewählten value-only Werten, führt ihn erneut durch `GraphChatSemanticDraftValidator` und direkt durch den appseitigen `GraphChatSemanticIntentResolver`. Query-Familien laufen damit unverändert durch `GraphChatQueryIntentCompiler` und `GraphQueryPlanValidator`; es existiert kein UI-eigener Query Builder. Semantic Interpreter und freier Answer Provider sind in diesem Pfad nicht erreichbar.
+
+Rewind, Replacement und Artifact Cleanup:
+
+- Apply bricht eine aktive Generation zunächst kontrolliert ab. Der bisherige vollständige Conversation State, Transcript, Feedback und die committed Artifacts bleiben während Compilation und lokaler Ausführung autoritativ; der Rerun arbeitet spekulativ auf dem Checkpoint unmittelbar vor dem ursprünglichen Turn.
+- Der lokale Kernel erzeugt daraus einen Kandidaten mit exakt einem neuen Turn und einer frisch aus dem neuen Typed Intent rekonstruierten Interpretation. Der äußere Conversation-Commit ist ein Compare-and-set gegen den beim Öffnen beziehungsweise Anwenden erneut bestätigten vollständigen aktuellen State. Ein Graph-/Scope-/Lock-/Conversation-/Schema-/Node-/Field- oder Artifact-Session-Wechsel macht die Correction stale.
+- Der Branch-Plan behält die ursprüngliche Nutzerfrage und den Prefix bis einschließlich dieser Frage. Der alte Assistant sowie alle nachfolgenden Turns werden nach derselben Suffix-Policy wie Edit-and-Resend entfernt. Deren Feedbackzuordnungen und History-Einträge werden erst nach erfolgreichem Runtime-Commit ersetzt.
+- Artifact-Staging verwendet einen deferred Replacement-Commit: Vor dem Conversation-Compare-and-set werden neue Artifacts vollständig revalidiert und versiegelt, aber nicht veröffentlicht; alte Artifacts bleiben erreichbar. Nach erfolgreichem Compare-and-set entfernt die Registry in einer actor-isolierten, nicht fehlschlagenden Transition exakt die gebundenen Suffix-Artifacts, veröffentlicht die neuen und wendet das Session-Budget einmal an. Dadurch bleiben Prefix-Artifacts erhalten und `CURRENT` verweist ausschließlich auf das neue Resultset.
+- Failure oder Cancellation vor dem Compare-and-set rollt Conversation-Transaktion, Evidence, Presentation, Ledger und deferred Artifacts zurück und lässt den alten erfolgreichen Answer unverändert. Nach einem erfolgreichen Compare-and-set wird die nicht fehlschlagende Artifact-/Cleanup-Sequenz unabhängig von später Cancellation abgeschlossen. Der Stream-Controller emittiert genau ein terminales Event.
+- Content-free Observability umfasst `correctionEditorOpened`, `correctionCancelled`, `correctionValidated`, `correctionStale`, `localCorrectionRerunStarted`, `localCorrectionRerunCommitted` und `localCorrectionRerunRolledBack`.
 
 ### Graph Chat Authoritative Fact Trust Boundary
 
@@ -1510,6 +1550,7 @@ Die realistischen Obergrenzen sind **UNKNOWN U7** und müssen produktseitig fest
 - Structural Comparison über gemischte Node-Arten ausschließlich aus Node-Art, Owner, direkten Links, Attachment-Metadatenzahl, Notiz-Vorhandensein und autoritativer Detailwertzahl; Notiz-/Attachment-Inhalte bleiben ausgeschlossen.
 - Graph-State-Artifact-Auswahl für Overview, Counts, Structure und Health sowie End-to-End-Graph-Health mit Metric/Health Finding, appseitigem Hub-Limit und verhindertem Scope-Widening.
 - Zentrale Comparison-Plan-Limits für Nodes und Features sowie providerfreie lokale Finalisierung und genau ein terminales Event in den Advanced-Intent-End-to-End-Szenarien.
+- Interpretation-Correction-Verträge, intent-spezifische Editorfelder, vollständige Schema-/Scope-/Session-Revalidation, typisierte Choice-/Toggle-/Zahl-/Datum-Filter, Operator-Kompatibilität, Entity-/Node-/Comparison-/Refinement-/Graph-State-Sicherheitsgrenzen, Doppelbestätigungs-Latch, Checkpoint-/Suffix-/Feedback-Replacement, deferred Artifact-Swap, Cancellation-/Commit-Rollback und Single-Terminal-Vertrag. Der End-to-End-Pfad ersetzt „Offene Projekte, sortiert nach Name“ durch die lokal ausgeführte Fälligkeitsdatum-Sortierung; Interpreter bleibt bei einem Aufruf, Answer Provider bei null und `CURRENT` enthält nur das neue Resultset.
 
 ### Ergänzungen
 

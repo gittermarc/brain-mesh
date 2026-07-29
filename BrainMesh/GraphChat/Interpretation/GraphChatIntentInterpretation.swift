@@ -238,6 +238,8 @@ nonisolated struct GraphChatIntentInterpretation:
     let editableComponents:
         [GraphChatIntentInterpretationEditableComponent]
     let formattingTimeZoneIdentifier: String
+    let correctionOrigin:
+        GraphChatInterpretationCorrectionOrigin?
 
     var presentation: GraphChatIntentInterpretationPresentation {
         GraphChatIntentInterpretationRenderer()
@@ -257,7 +259,7 @@ nonisolated struct GraphChatIntentInterpretation:
               resultExtent.resultLimit
                 <= resultExtent.maximumResultLimit,
               resultExtent.subjectCount
-                .map { $0 > 0 } ?? true,
+                .map({ $0 > 0 }) ?? true,
               TimeZone(
                   identifier:
                       formattingTimeZoneIdentifier
@@ -309,8 +311,20 @@ nonisolated struct GraphChatIntentInterpretation:
             }
         }
         if intentKind == .inspectGraphState {
-            return graphStateAspect != nil
+            guard graphStateAspect != nil else {
+                return false
+            }
+        } else if graphStateAspect != nil {
+            return false
         }
-        return graphStateAspect == nil
+        if let correctionOrigin {
+            return correctionOrigin.matches(self)
+        }
+        return true
+    }
+
+    var isCorrectionEditable: Bool {
+        correctionOrigin?.matches(self) == true
+            && editableComponents.isEmpty == false
     }
 }

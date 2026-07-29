@@ -20,6 +20,7 @@ struct GraphChatFinalAnswerView: View {
     let onInterpretationEvent: (
         GraphChatIntentInterpretationLifecycleEvent
     ) -> Void
+    let onEditInterpretation: () -> Void
 
     @State private var resolution: GraphChatAnswerPresentationResolution?
     @State private var selectedEvidenceDrawer: GraphChatEvidenceDrawerPresentation?
@@ -56,7 +57,9 @@ struct GraphChatFinalAnswerView: View {
         onInterpretationEvent:
             @escaping (
                 GraphChatIntentInterpretationLifecycleEvent
-            ) -> Void = { _ in }
+            ) -> Void = { _ in },
+        onEditInterpretation:
+            @escaping () -> Void = {}
     ) {
         self.answer = answer
         self.language = language
@@ -74,6 +77,8 @@ struct GraphChatFinalAnswerView: View {
         self.onUseFollowUp = onUseFollowUp
         self.onInterpretationEvent =
             onInterpretationEvent
+        self.onEditInterpretation =
+            onEditInterpretation
     }
 
     private var taskKey: GraphChatFinalAnswerResolutionKey {
@@ -206,13 +211,47 @@ struct GraphChatFinalAnswerView: View {
         }
     }
 
+    @ViewBuilder
     private func interpretationView(
         _ interpretation:
             GraphChatIntentInterpretation
     ) -> some View {
         let presentation =
             interpretation.presentation
-        return HStack(
+        if interpretation.isCorrectionEditable {
+            Button(
+                action:
+                    onEditInterpretation
+            ) {
+                interpretationCard(
+                    presentation
+                )
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel(
+                presentation
+                    .accessibilityLabel
+            )
+            .accessibilityHint(
+                language == .german
+                    ? "Öffnet einen fachlichen Editor, um diese Interpretation sicher zu korrigieren."
+                    : "Opens an editor to safely correct this interpretation."
+            )
+            .accessibilityIdentifier(
+                "graph-chat-edit-intent-interpretation"
+            )
+        } else {
+            interpretationCard(
+                presentation
+            )
+        }
+    }
+
+    private func interpretationCard(
+        _ presentation:
+            GraphChatIntentInterpretationPresentation
+    ) -> some View {
+        HStack(
             alignment: .top,
             spacing: 9
         ) {

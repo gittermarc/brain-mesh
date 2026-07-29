@@ -48,6 +48,7 @@ nonisolated enum GraphChatLocalIntentExecutionError:
 }
 
 nonisolated struct GraphChatLocalIntentPreparedExecution: Sendable {
+    let adaptation: GraphChatTypedIntentAdaptation
     let intent: GraphChatTypedIntent
     let schemaContext: GraphSchemaContext
     let conversationContext: GraphChatConversationContextSnapshot
@@ -433,6 +434,7 @@ nonisolated struct GraphChatLocalIntentExecutionKernel: Sendable {
 
             let execution =
                 GraphChatLocalIntentPreparedExecution(
+                    adaptation: adaptation,
                     intent: intent,
                     schemaContext: schemaContext,
                     conversationContext:
@@ -462,9 +464,25 @@ nonisolated struct GraphChatLocalIntentExecutionKernel: Sendable {
                     actionExecution
                         .artifactIDs
             )
+            try validateDeferredArtifactCommit(
+                candidateTurn,
+                expectedContext: artifactContext
+            )
             try await validateCurrentRequest()
             try Task.checkCancellation()
             try await commit(candidateTurn)
+            if let deferredCommit =
+                    candidateTurn
+                        .deferredArtifactCommit
+            {
+                _ = await artifactSession.registry
+                    .finalizeDeferredCommit(
+                        transactionID:
+                            deferredCommit
+                                .context
+                                .transactionID
+                    )
+            }
             didCommit = true
 
             let cleanupReport = await cleanup(
@@ -505,13 +523,29 @@ nonisolated struct GraphChatLocalIntentExecutionKernel: Sendable {
                 )
             }
             if let finalizedTurn {
-                await artifactSession.registry
-                    .removeCommittedArtifacts(
+                if let deferredCommit =
                         finalizedTurn
-                            .committedArtifactIDs,
-                        sessionID:
-                            artifactSession.sessionID
-                    )
+                            .deferredArtifactCommit,
+                   deferredCommit.context
+                    == artifactContext
+                {
+                    await artifactSession.registry
+                        .rollbackDeferredCommit(
+                            transactionID:
+                                artifactContext
+                                    .transactionID
+                        )
+                } else if finalizedTurn
+                    .deferredArtifactCommit == nil
+                {
+                    await artifactSession.registry
+                        .removeCommittedArtifacts(
+                            finalizedTurn
+                                .committedArtifactIDs,
+                            sessionID:
+                                artifactSession.sessionID
+                        )
+                }
             }
             let cleanupReport = await cleanup(
                 evidenceRegistry: evidenceRegistry,
@@ -565,6 +599,25 @@ nonisolated struct GraphChatLocalIntentExecutionKernel: Sendable {
             }
         case .query, .search:
             break
+        }
+    }
+
+    private func validateDeferredArtifactCommit(
+        _ turn: GraphChatFinalizedTurn,
+        expectedContext:
+            GraphChatArtifactCommitContext
+    ) throws {
+        guard let deferredCommit =
+                turn.deferredArtifactCommit else {
+            return
+        }
+        guard deferredCommit.context
+                == expectedContext,
+              deferredCommit.artifactIDs
+                == turn.committedArtifactIDs
+        else {
+            throw GraphChatLocalIntentExecutionError
+                .invalidBinding
         }
     }
 
@@ -1730,7 +1783,7 @@ nonisolated struct GraphChatLocalIntentExecutionKernel: Sendable {
     ) async -> GraphChatLocalIntentCleanupReport {
         await evidenceRegistry.removeAll()
         await presentationRegistry.removeAll()
-        await artifactRegistry.rollback(
+        await artifactRegistry.rollbackDeferredCommit(
             transactionID: transactionID
         )
         if discardLedgerTransaction {

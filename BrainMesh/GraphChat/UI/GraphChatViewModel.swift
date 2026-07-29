@@ -22,6 +22,8 @@ final class GraphChatViewModel: ObservableObject {
     @Published private(set) var feedbackByMessageID: [UUID: GraphChatFeedbackCategory] = [:]
     @Published private(set) var actionNotice: GraphChatActionNotice?
     @Published private(set) var isPerformingSessionMutation = false
+    @Published private(set) var correctionEditorSession:
+        GraphChatInterpretationCorrectionEditorSession?
 
     let graphScope: GraphScope
     let chatScope: GraphChatScope
@@ -111,6 +113,12 @@ final class GraphChatViewModel: ObservableObject {
     )
     private var noticeTask: Task<Void, Never>?
     private var presentationCleanupTask: Task<Void, Never>?
+    private var correctionEditorTask:
+        Task<Void, Never>?
+    private var correctionApplyTask:
+        Task<Void, Never>?
+    private var correctionExecutionWasSubmitted =
+        false
     private var visiblePresentationIDs: Set<UUID> = []
     private var hasLoaded = false
     private var isLoadingSchema = false
@@ -177,6 +185,8 @@ final class GraphChatViewModel: ObservableObject {
     deinit {
         noticeTask?.cancel()
         presentationCleanupTask?.cancel()
+        correctionEditorTask?.cancel()
+        correctionApplyTask?.cancel()
     }
 
     var graphName: String {
@@ -202,14 +212,21 @@ final class GraphChatViewModel: ObservableObject {
     var canSend: Bool {
         composerState.canSend
             && isPerformingSessionMutation == false
+            && correctionEditorSession == nil
             && currentAccessDecision.canStartGeneration
     }
 
     var canStartNewChat: Bool {
-        messages.isEmpty == false
-            || composerState.normalizedText.isEmpty == false
-            || editingState != nil
-            || isGenerating
+        correctionEditorSession == nil
+            && (
+                messages.isEmpty == false
+                    || composerState
+                        .normalizedText
+                        .isEmpty
+                        == false
+                    || editingState != nil
+                    || isGenerating
+            )
     }
 
     func recordInterpretationEvent(
@@ -332,10 +349,37 @@ final class GraphChatViewModel: ObservableObject {
 
     func notifyGenerationAccessChanged() {
         objectWillChange.send()
+        guard
+            var session =
+                correctionEditorSession,
+            currentAccessDecision.route
+                != .ready
+        else {
+            return
+        }
+        session.validationState =
+            currentAccessDecision.route
+                == .graphLocked
+            ? .stale(.graphLocked)
+            : .stale(.scopeChanged)
+        session.isApplying = false
+        correctionEditorSession =
+            session
+        correctionApplyTask?.cancel()
+        correctionApplyTask = nil
+        if correctionExecutionWasSubmitted {
+            messageActionController
+                .cancelInterpretationCorrection()
+        }
+        recordInterpretationEvent(
+            .correctionStale
+        )
     }
 
     func applyPrefilledQuestion(_ question: String?) {
         guard isGenerating == false,
+              isPerformingSessionMutation == false,
+              correctionEditorSession == nil,
               editingState == nil,
               composerState.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
               let question = question?.trimmingCharacters(in: .whitespacesAndNewlines),
@@ -349,7 +393,8 @@ final class GraphChatViewModel: ObservableObject {
 
     func useSuggestion(_ suggestion: GraphChatEmptyStateSuggestion) {
         guard isGenerating == false,
-              isPerformingSessionMutation == false else {
+              isPerformingSessionMutation == false,
+              correctionEditorSession == nil else {
             return
         }
         cancelEditing(clearComposer: false)
@@ -359,7 +404,8 @@ final class GraphChatViewModel: ObservableObject {
 
     func useFollowUp(_ suggestion: GraphChatFollowUpSuggestion) {
         guard isGenerating == false,
-              isPerformingSessionMutation == false else {
+              isPerformingSessionMutation == false,
+              correctionEditorSession == nil else {
             return
         }
         cancelEditing(clearComposer: false)
@@ -368,6 +414,10 @@ final class GraphChatViewModel: ObservableObject {
     }
 
     func send() {
+        guard isPerformingSessionMutation == false,
+              correctionEditorSession == nil else {
+            return
+        }
         if editingState != nil {
             guard let question = composerState.submissionText() else {
                 return
@@ -381,7 +431,6 @@ final class GraphChatViewModel: ObservableObject {
 
         let decision = currentAccessDecision
         guard decision.canStartGeneration,
-              isPerformingSessionMutation == false,
               let question = composerState.submissionText() else {
             return
         }
@@ -418,6 +467,520 @@ final class GraphChatViewModel: ObservableObject {
         )
     }
 
+    func openInterpretationCorrection(
+        messageID: UUID
+    ) {
+        guard
+            correctionEditorSession == nil,
+            correctionEditorTask == nil,
+            correctionApplyTask == nil,
+            isPerformingSessionMutation
+                == false,
+            currentAccessDecision.route
+                == .ready,
+            let plan =
+                GraphChatInterpretationCorrectionPlanner
+                    .plan(
+                        messages: messages,
+                        assistantMessageID:
+                            messageID,
+                        graphScope:
+                            graphScope,
+                        chatScope:
+                            chatScope
+                    ),
+            let message =
+                messages.first(
+                    where: {
+                        $0.id == messageID
+                    }
+                ),
+            case .assistant(let state) =
+                message.state,
+            let answer = state.answer,
+            let interpretation =
+                answer.interpretation,
+            let origin =
+                interpretation
+                    .correctionOrigin
+        else {
+            return
+        }
+
+        let schemaProvider =
+            self.schemaProvider
+        let orchestrator =
+            self.orchestrator
+        let graphScope =
+            self.graphScope
+        let chatScope =
+            self.chatScope
+        let language =
+            interpretation
+                .responseLanguage
+
+        correctionEditorTask =
+            Task { @MainActor [weak self] in
+                do {
+                    async let freshContext =
+                        schemaProvider
+                            .makeSnapshot(
+                                in: graphScope,
+                                exampleFieldIDs:
+                                    []
+                            )
+                    async let resolution =
+                        orchestrator
+                            .resolveAnswerPresentation(
+                                artifactIDs:
+                                    answer
+                                        .artifactIDs
+                                    + answer
+                                        .sections
+                                        .flatMap(
+                                            \.artifactIDs
+                                        ),
+                                evidence:
+                                    answer.evidence,
+                                graphScope:
+                                    graphScope,
+                                chatScope:
+                                    chatScope
+                            )
+                    let (
+                        context,
+                        presentationResolution
+                    ) = try await (
+                        freshContext,
+                        resolution
+                    )
+                    guard
+                        let self,
+                        Task.isCancelled
+                            == false,
+                        self
+                            .correctionEditorSession
+                            == nil,
+                        self
+                            .currentAccessDecision
+                            .route
+                            == .ready,
+                        let currentPlan =
+                            GraphChatInterpretationCorrectionPlanner
+                                .plan(
+                                    messages:
+                                        self.messages,
+                                    assistantMessageID:
+                                        messageID,
+                                    graphScope:
+                                        graphScope,
+                                    chatScope:
+                                        chatScope
+                                ),
+                        currentPlan.binding
+                            == plan.binding
+                    else {
+                        self?
+                            .correctionEditorTask =
+                            nil
+                        return
+                    }
+
+                    let snapshot =
+                        GraphChatInterpretationCorrectionSchemaBuilder()
+                            .makeSnapshot(
+                                context:
+                                    context,
+                                chatScope:
+                                    chatScope,
+                                language:
+                                    language
+                            )
+                    let capabilities =
+                        GraphChatInterpretationCorrectionCapabilities
+                            .derive(
+                                from:
+                                    interpretation
+                            )
+                    let selection =
+                        snapshot
+                            .initialSelection(
+                                interpretation:
+                                    interpretation,
+                                origin:
+                                    origin
+                            )
+                    let request =
+                        GraphChatInterpretationCorrectionRequest(
+                            binding:
+                                plan.binding,
+                            selection:
+                                selection
+                        )
+                    let validationState:
+                        GraphChatInterpretationCorrectionValidationState
+                    if presentationResolution
+                        .artifactSessionID
+                        == origin
+                            .artifactSessionID,
+                       presentationResolution
+                        .hasUnavailableArtifacts
+                        == false
+                    {
+                        validationState =
+                            snapshot
+                                .validationState(
+                                    for:
+                                        request,
+                                    currentArtifactSessionID:
+                                        origin
+                                            .artifactSessionID,
+                                    currentCheckpoint:
+                                        plan
+                                            .binding
+                                            .expectedCurrentCheckpoint,
+                                    graphIsLocked:
+                                        false
+                                )
+                    } else {
+                        validationState =
+                            .stale(
+                                .artifactSessionChanged
+                            )
+                    }
+                    self.correctionEditorSession =
+                        GraphChatInterpretationCorrectionEditorSession(
+                            assistantMessageID:
+                                messageID,
+                            branchPlan:
+                                plan,
+                            snapshot:
+                                snapshot,
+                            capabilities:
+                                capabilities,
+                            presentation:
+                                self
+                                    .correctionEditorPresentation(
+                                        for:
+                                            interpretation
+                                    ),
+                            selection:
+                                selection,
+                            validationState:
+                                validationState
+                        )
+                    self
+                        .correctionEditorTask =
+                        nil
+                    self
+                        .correctionExecutionWasSubmitted =
+                        false
+                    self
+                        .recordInterpretationEvent(
+                            .correctionEditorOpened
+                        )
+                } catch is CancellationError {
+                    self?
+                        .correctionEditorTask =
+                        nil
+                } catch {
+                    guard let self else {
+                        return
+                    }
+                    self
+                        .correctionEditorTask =
+                        nil
+                    self.showNotice(
+                        message:
+                            language
+                                == .german
+                            ? "Die Interpretation kann gerade nicht bearbeitet werden."
+                            : "The interpretation cannot be edited right now.",
+                        systemImage:
+                            "exclamationmark.triangle"
+                    )
+                }
+            }
+    }
+
+    func updateInterpretationCorrectionSelection(
+        _ selection:
+            GraphChatInterpretationCorrectionSelection
+    ) {
+        guard
+            var session =
+                correctionEditorSession,
+            session.isApplying
+                == false
+        else {
+            return
+        }
+        session.selection =
+            selection
+        let request =
+            GraphChatInterpretationCorrectionRequest(
+                binding:
+                    session
+                        .branchPlan
+                        .binding,
+                selection:
+                    selection
+            )
+        session.validationState =
+            session.snapshot
+                .validationState(
+                    for: request,
+                    currentArtifactSessionID:
+                        session
+                            .branchPlan
+                            .binding
+                            .artifactSessionID,
+                    currentCheckpoint:
+                        session
+                            .branchPlan
+                            .binding
+                            .expectedCurrentCheckpoint,
+                    graphIsLocked:
+                        currentAccessDecision
+                            .route
+                            == .graphLocked
+                )
+        correctionEditorSession =
+            session
+    }
+
+    func applyInterpretationCorrection(
+        _ selection:
+            GraphChatInterpretationCorrectionSelection
+    ) {
+        guard
+            var session =
+                correctionEditorSession,
+            session.isApplying
+                == false,
+            correctionApplyTask == nil,
+            currentAccessDecision.route
+                == .ready
+        else {
+            return
+        }
+        session.selection =
+            selection
+        session.isApplying =
+            true
+        correctionEditorSession =
+            session
+
+        let schemaProvider =
+            self.schemaProvider
+        let orchestrator =
+            self.orchestrator
+        let graphScope =
+            self.graphScope
+        let chatScope =
+            self.chatScope
+        let assistantID =
+            session.assistantMessageID
+        let binding =
+            session.branchPlan.binding
+        let language =
+            binding
+                .originalInterpretation
+                .responseLanguage
+
+        correctionApplyTask =
+            Task { @MainActor [weak self] in
+                do {
+                    async let freshContext =
+                        schemaProvider
+                            .makeSnapshot(
+                                in: graphScope,
+                                exampleFieldIDs:
+                                    []
+                            )
+                    async let currentResolution =
+                        orchestrator
+                            .resolveAnswerPresentation(
+                                artifactIDs:
+                                    binding
+                                        .artifactIDsToReplace,
+                                evidence:
+                                    [],
+                                graphScope:
+                                    graphScope,
+                                chatScope:
+                                    chatScope
+                            )
+                    let (
+                        context,
+                        resolution
+                    ) = try await (
+                        freshContext,
+                        currentResolution
+                    )
+                    guard
+                        let self,
+                        Task.isCancelled
+                            == false,
+                        var currentSession =
+                            self
+                                .correctionEditorSession,
+                        currentSession.id
+                            == session.id,
+                        let currentPlan =
+                            GraphChatInterpretationCorrectionPlanner
+                                .plan(
+                                    messages:
+                                        self.messages,
+                                    assistantMessageID:
+                                        assistantID,
+                                    graphScope:
+                                        graphScope,
+                                    chatScope:
+                                        chatScope
+                                ),
+                        currentPlan.binding
+                            == binding
+                    else {
+                        self?
+                            .markCorrectionStale(
+                                .conversationChanged
+                            )
+                        return
+                    }
+
+                    let freshSnapshot =
+                        GraphChatInterpretationCorrectionSchemaBuilder()
+                            .makeSnapshot(
+                                context:
+                                    context,
+                                chatScope:
+                                    chatScope,
+                                language:
+                                    language,
+                                graphIsLocked:
+                                    self
+                                        .currentAccessDecision
+                                        .route
+                                        == .graphLocked
+                            )
+                    let request =
+                        GraphChatInterpretationCorrectionRequest(
+                            binding:
+                                binding,
+                            selection:
+                                selection
+                        )
+                    let validationState:
+                        GraphChatInterpretationCorrectionValidationState
+                    if resolution
+                        .artifactSessionID
+                        != binding
+                            .artifactSessionID
+                        || resolution
+                            .hasUnavailableArtifacts
+                    {
+                        validationState =
+                            .stale(
+                                .artifactSessionChanged
+                            )
+                    } else {
+                        validationState =
+                            freshSnapshot
+                                .validationState(
+                                    for:
+                                        request,
+                                    currentArtifactSessionID:
+                                        binding
+                                            .artifactSessionID,
+                                    currentCheckpoint:
+                                        currentPlan
+                                            .binding
+                                            .expectedCurrentCheckpoint,
+                                    graphIsLocked:
+                                        self
+                                            .currentAccessDecision
+                                            .route
+                                            == .graphLocked
+                                )
+                    }
+                    guard
+                        validationState
+                            == .ready
+                    else {
+                        currentSession
+                            .validationState =
+                            validationState
+                        currentSession
+                            .isApplying =
+                            false
+                        self
+                            .correctionEditorSession =
+                            currentSession
+                        self
+                            .correctionApplyTask =
+                            nil
+                        if case .stale =
+                                validationState {
+                            self
+                                .recordInterpretationEvent(
+                                    .correctionStale
+                                )
+                        }
+                        return
+                    }
+
+                    self
+                        .correctionApplyTask =
+                        nil
+                    self
+                        .correctionExecutionWasSubmitted =
+                        true
+                    self
+                        .messageActionController
+                        .applyInterpretationCorrection(
+                            request,
+                            snapshot:
+                                self
+                                    .messageActionSnapshot
+                        )
+                } catch is CancellationError {
+                    self?
+                        .correctionApplyTask =
+                        nil
+                } catch {
+                    self?
+                        .markCorrectionStale(
+                            .schemaChanged
+                        )
+                }
+            }
+    }
+
+    func cancelInterpretationCorrection() {
+        guard
+            correctionEditorSession
+                != nil
+        else {
+            correctionEditorTask?
+                .cancel()
+            correctionEditorTask =
+                nil
+            return
+        }
+        if correctionExecutionWasSubmitted {
+            messageActionController
+                .cancelInterpretationCorrection()
+            return
+        }
+        recordInterpretationEvent(
+            .correctionCancelled
+        )
+        correctionApplyTask?.cancel()
+        correctionApplyTask = nil
+        correctionEditorSession = nil
+    }
+
     func performMessageAction(
         _ action: GraphChatMessageAction,
         messageID: UUID
@@ -443,9 +1006,20 @@ final class GraphChatViewModel: ObservableObject {
     func messageActionAvailability(
         for messageID: UUID
     ) -> GraphChatMessageActionAvailability {
-        messageActionController.messageActionAvailability(
+        let availability =
+            messageActionController.messageActionAvailability(
             for: messageID,
             snapshot: messageActionSnapshot
+        )
+        guard correctionEditorSession != nil else {
+            return availability
+        }
+        return GraphChatMessageActionAvailability(
+            canCopy:
+                availability.canCopy,
+            canEditAndResend: false,
+            canRegenerate: false,
+            canGiveFeedback: false
         )
     }
 
@@ -507,6 +1081,7 @@ final class GraphChatViewModel: ObservableObject {
         presentationCleanupTask?.cancel()
         presentationCleanupTask = nil
         visiblePresentationIDs.removeAll()
+        cancelInterpretationCorrection()
         messageActionController.cancelGeneration(
             discardSession: true,
             showCancellationNotice: false
@@ -528,6 +1103,13 @@ final class GraphChatViewModel: ObservableObject {
         noticeTask = nil
         presentationCleanupTask?.cancel()
         presentationCleanupTask = nil
+        correctionEditorTask?.cancel()
+        correctionEditorTask = nil
+        correctionApplyTask?.cancel()
+        correctionApplyTask = nil
+        correctionExecutionWasSubmitted =
+            false
+        correctionEditorSession = nil
         visiblePresentationIDs.removeAll()
         actionNotice = nil
         composerState = GraphChatComposerState()
@@ -753,6 +1335,38 @@ final class GraphChatViewModel: ObservableObject {
             scrollAnchorToken = UUID()
             sessionDerivedStateDidClear()
 
+        case .interpretationCorrectionCommitted:
+            correctionApplyTask?.cancel()
+            correctionApplyTask = nil
+            correctionExecutionWasSubmitted =
+                false
+            correctionEditorSession = nil
+
+        case .interpretationCorrectionFailed(
+            let validationState,
+            let notice
+        ):
+            correctionExecutionWasSubmitted =
+                false
+            if var session =
+                    correctionEditorSession {
+                session.isApplying =
+                    false
+                session.validationState =
+                    validationState
+                correctionEditorSession =
+                    session
+            }
+            showNotice(notice)
+
+        case .interpretationCorrectionCancelled:
+            recordInterpretationEvent(
+                .correctionCancelled
+            )
+            correctionExecutionWasSubmitted =
+                false
+            correctionEditorSession = nil
+
         case .sessionMutationFinished(let notice):
             isPerformingSessionMutation = false
             if let notice {
@@ -838,6 +1452,49 @@ final class GraphChatViewModel: ObservableObject {
             return
         }
         await historyStore.save(messages, for: chatScope)
+    }
+
+    private func correctionEditorPresentation(
+        for interpretation:
+            GraphChatIntentInterpretation
+    ) -> GraphChatInterpretationCorrectionEditorPresentation {
+        GraphChatInterpretationCorrectionEditorPresentation(
+            entitySelectionIsOptional:
+                interpretation.intentKind
+                    == .findNodes,
+            minimumFieldCount: 0,
+            sourceResultDescription:
+                interpretation.intentKind
+                    == .narrowResultSet
+                ? interpretation
+                    .presentation
+                    .title
+                : nil
+        )
+    }
+
+    private func markCorrectionStale(
+        _ reason:
+            GraphChatInterpretationCorrectionStaleReason
+    ) {
+        correctionApplyTask = nil
+        correctionExecutionWasSubmitted =
+            false
+        guard
+            var session =
+                correctionEditorSession
+        else {
+            return
+        }
+        session.isApplying =
+            false
+        session.validationState =
+            .stale(reason)
+        correctionEditorSession =
+            session
+        recordInterpretationEvent(
+            .correctionStale
+        )
     }
 
 }

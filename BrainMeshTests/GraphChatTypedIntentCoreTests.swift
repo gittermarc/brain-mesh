@@ -376,7 +376,9 @@ struct GraphChatTypedIntentCoreTests {
                                     TimeZone(
                                         identifier:
                                             "Europe/Berlin"
-                                    )!
+                                    )!,
+                                requestQuestion:
+                                    "Offene Projekte"
                             )
                     #expect(
                         interpretation?
@@ -460,6 +462,281 @@ struct GraphChatTypedIntentCoreTests {
                 .executionStarted,
                 .executionRolledBack,
             ]
+        )
+    }
+
+    @Test
+    func deferredOuterCommitFailurePreservesEarlierBudgetArtifact()
+        async throws
+    {
+        let fixture = LocalKernelExecutionFixture()
+        let reportRecorder = CleanupReportRecorder()
+        let observability = LocalIntentObservabilityRecorder()
+        let transactionRecorder =
+            KernelArtifactTransactionRecorder()
+        let registry = GraphChatAnswerArtifactRegistry(
+            graphScope: fixture.graphScope,
+            scope: fixture.chatScope,
+            sessionID: fixture.artifactSessionID,
+            budget: GraphChatAnswerArtifactRegistryBudget(
+                maximumArtifactCount: 1,
+                maximumTotalByteCount: 256 * 1_024,
+                maximumArtifactByteCount: 64 * 1_024
+            )
+        )
+        let earlierEvidence =
+            GraphChatProviderTestSupport.makeEvidence(
+                graphID: fixture.graphScope.graphID,
+                sourceID:
+                    GraphChatTestSupport
+                        .projectAttributeID
+            )
+        let earlierEvidenceRegistry =
+            GraphChatEvidenceRegistry(
+                scope: fixture.chatScope
+            )
+        try await earlierEvidenceRegistry.register(
+            [earlierEvidence]
+        )
+        let earlierBinding =
+            GraphChatAnswerArtifactEvidenceBinding(
+                evidenceIDs: [earlierEvidence.id]
+            )
+        let earlierTransaction =
+            GraphChatAnswerArtifactTransactionID()
+        let earlierArtifactID =
+            try await registry.stage(
+                GraphChatAnswerArtifactDraft(
+                    graphScope: fixture.graphScope,
+                    title: "Earlier",
+                    payload: .metric(
+                        GraphChatAnswerArtifactMetricPayload(
+                            title: "Earlier",
+                            value: .integer(1),
+                            unit: nil,
+                            contextDescription: nil,
+                            evidence: earlierBinding
+                        )
+                    ),
+                    evidence: earlierBinding
+                ),
+                transactionID: earlierTransaction,
+                evidenceRegistry:
+                    earlierEvidenceRegistry
+            )
+        try await registry.commit(
+            transactionID: earlierTransaction,
+            retaining: [earlierArtifactID]
+        )
+        let artifactSession =
+            GraphChatArtifactSessionResources(
+                key: fixture.scopeKey,
+                sessionID: fixture.artifactSessionID,
+                registry: registry
+            )
+        let executor = fixture.executor(
+            observability: observability,
+            observer:
+                GraphChatLocalIntentExecutionKernelObserver {
+                    report in
+                    await reportRecorder.record(report)
+                }
+        )
+
+        await #expect(
+            throws: KernelTestError.expectedCommitFailure
+        ) {
+            _ = try await executor.execute(
+                intent: fixture.intent,
+                schemaContext: fixture.schemaContext,
+                providerPlan: fixture.providerPlan,
+                requestID: fixture.requestID,
+                artifactSession: artifactSession,
+                onActivity: { _ in },
+                validateCurrentRequest: {},
+                finalize: { execution in
+                    await transactionRecorder.record(
+                        execution.artifactContext
+                            .transactionID
+                    )
+                    let retained =
+                        try await execution.artifactRegistry
+                            .commitDeferred(
+                                transactionID:
+                                    execution.artifactContext
+                                        .transactionID,
+                                retaining:
+                                    execution.primaryResult
+                                        .artifactIDs
+                            )
+                    let answer = GraphChatAnswer(
+                        directAnswer: "Replacement",
+                        evidence:
+                            execution.primaryResult.evidence,
+                        artifactIDs: retained,
+                        hasInsufficientEvidence: false
+                    )
+                    let state =
+                        try await execution
+                            .conversationTransaction
+                            .finalizedState(
+                                requestID:
+                                    fixture.requestID,
+                                completedAt:
+                                    fixture.completedAt,
+                                validatedEvidenceIDs:
+                                    answer.evidenceIDs
+                            )
+                    return GraphChatFinalizedTurn(
+                        answer: answer,
+                        conversationState: state,
+                        committedArtifactIDs: retained,
+                        completion:
+                            GraphChatTurnCompletionInfo(
+                                requestID:
+                                    fixture.requestID,
+                                completedAt:
+                                    fixture.completedAt,
+                                source: .local,
+                                evidenceCount:
+                                    answer.evidence.count,
+                                requestedArtifactCount:
+                                    retained.count,
+                                committedArtifactCount:
+                                    retained.count
+                            ),
+                        deferredArtifactCommit:
+                            GraphChatDeferredArtifactCommit(
+                                context:
+                                    execution
+                                        .artifactContext,
+                                artifactIDs: retained
+                            )
+                    )
+                },
+                commit: { _ in
+                    throw KernelTestError
+                        .expectedCommitFailure
+                }
+            )
+        }
+        let report = try #require(
+            await reportRecorder.snapshot().last
+        )
+        let replacementTransaction = try #require(
+            await transactionRecorder.snapshot()
+        )
+
+        #expect(
+            await registry.snapshotForTesting()
+                .map(\.id) == [earlierArtifactID]
+        )
+        #expect(
+            await registry.deferredSnapshotForTesting(
+                transactionID:
+                    replacementTransaction
+            ).isEmpty
+        )
+        #expect(report.outcome == .rolledBack)
+        #expect(report.stagedArtifactCount == 0)
+        #expect(
+            await observability.lifecycleEvents()
+                == [
+                    .foundationalAdapted,
+                    .executionStarted,
+                    .executionRolledBack,
+                ]
+        )
+    }
+
+    @Test
+    func kernelPublishesDeferredArtifactsOnlyAfterOuterCommit()
+        async throws
+    {
+        let fixture = LocalKernelExecutionFixture()
+        let registry = GraphChatAnswerArtifactRegistry(
+            graphScope: fixture.graphScope,
+            scope: fixture.chatScope,
+            sessionID: fixture.artifactSessionID
+        )
+        let artifactSession =
+            GraphChatArtifactSessionResources(
+                key: fixture.scopeKey,
+                sessionID: fixture.artifactSessionID,
+                registry: registry
+            )
+        let executor = fixture.executor(
+            observability:
+                NoOpGraphChatObservabilityRecorder(),
+            observer: .disabled
+        )
+        let answerFinalizer =
+            GraphChatAnswerFinalizer(
+                timeZone:
+                    TimeZone(
+                        identifier: "Europe/Berlin"
+                    )!
+            )
+
+        let finalizedTurn = try await executor.execute(
+            intent: fixture.intent,
+            schemaContext: fixture.schemaContext,
+            providerPlan: fixture.providerPlan,
+            requestID: fixture.requestID,
+            artifactSession: artifactSession,
+            onActivity: { _ in },
+            validateCurrentRequest: {},
+            finalize: { execution in
+                try await answerFinalizer
+                    .finalizeLocalIntentTurn(
+                        GraphChatLocalIntentAnswerFinalizationInput(
+                            requestID:
+                                fixture.requestID,
+                            completedAt:
+                                fixture.completedAt,
+                            requestQuestion:
+                                "Liste Projekte",
+                            expectedCommittedState:
+                                fixture.baseState,
+                            execution: execution,
+                            artifactCommitBehavior:
+                                .deferred
+                        ),
+                        currentCommittedState:
+                            fixture.baseState
+                    )
+            },
+            commit: { turn in
+                let deferredCommit = try #require(
+                    turn.deferredArtifactCommit
+                )
+                #expect(
+                    await registry
+                        .snapshotForTesting()
+                        .isEmpty
+                )
+                #expect(
+                    await registry
+                        .deferredSnapshotForTesting(
+                            transactionID:
+                                deferredCommit
+                                    .context
+                                    .transactionID
+                        )
+                        .map(\.id)
+                        == turn.committedArtifactIDs
+                )
+            }
+        )
+
+        #expect(
+            await registry.snapshotForTesting()
+                .map(\.id)
+                == finalizedTurn.committedArtifactIDs
+        )
+        #expect(
+            finalizedTurn.committedArtifactIDs
+                .isEmpty == false
         )
     }
 
@@ -999,6 +1276,24 @@ private actor KernelCommitRecorder {
 
     func count() -> Int {
         value
+    }
+}
+
+private actor KernelArtifactTransactionRecorder {
+    private var transactionID:
+        GraphChatAnswerArtifactTransactionID?
+
+    func record(
+        _ transactionID:
+            GraphChatAnswerArtifactTransactionID
+    ) {
+        self.transactionID = transactionID
+    }
+
+    func snapshot()
+        -> GraphChatAnswerArtifactTransactionID?
+    {
+        transactionID
     }
 }
 

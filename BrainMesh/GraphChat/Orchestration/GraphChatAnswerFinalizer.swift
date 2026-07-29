@@ -85,8 +85,43 @@ nonisolated struct GraphChatLocalIntentAnswerFinalizationInput:
     let requestID: UUID
     let completedAt: Date
     let requestQuestion: String
+    let correctionRequestQuestion: String
     let expectedCommittedState: GraphChatConversationState
     let execution: GraphChatLocalIntentPreparedExecution
+    let artifactCommitBehavior:
+        GraphChatArtifactCommitBehavior
+    let artifactIDsToReplace:
+        [GraphChatAnswerArtifactID]
+
+    init(
+        requestID: UUID,
+        completedAt: Date,
+        requestQuestion: String,
+        correctionRequestQuestion:
+            String? = nil,
+        expectedCommittedState:
+            GraphChatConversationState,
+        execution:
+            GraphChatLocalIntentPreparedExecution,
+        artifactCommitBehavior:
+            GraphChatArtifactCommitBehavior = .immediate,
+        artifactIDsToReplace:
+            [GraphChatAnswerArtifactID] = []
+    ) {
+        self.requestID = requestID
+        self.completedAt = completedAt
+        self.requestQuestion = requestQuestion
+        self.correctionRequestQuestion =
+            correctionRequestQuestion
+            ?? requestQuestion
+        self.expectedCommittedState =
+            expectedCommittedState
+        self.execution = execution
+        self.artifactCommitBehavior =
+            artifactCommitBehavior
+        self.artifactIDsToReplace =
+            artifactIDsToReplace
+    }
 }
 
 nonisolated enum GraphChatAnswerFinalizationError:
@@ -257,7 +292,10 @@ nonisolated struct GraphChatAnswerFinalizer: Sendable {
         let interpretation =
             await execution
                 .resolvedIntentInterpretation(
-                    timeZone: timeZone
+                    timeZone: timeZone,
+                    requestQuestion:
+                        input
+                            .correctionRequestQuestion
                 )
         if interpretation != nil {
             await observability.record(
@@ -323,7 +361,11 @@ nonisolated struct GraphChatAnswerFinalizer: Sendable {
                 answer: answer,
                 expectedCommittedState:
                     input.expectedCommittedState,
-                artifactContext: execution.artifactContext
+                artifactContext: execution.artifactContext,
+                artifactCommitBehavior:
+                    input.artifactCommitBehavior,
+                artifactIDsToReplace:
+                    input.artifactIDsToReplace
             ),
             conversationTransaction: execution.conversationTransaction,
             currentCommittedState: currentCommittedState,

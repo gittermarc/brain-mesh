@@ -1826,11 +1826,507 @@ struct GraphChatSemanticIntentEndToEndTests {
         )
     }
 
+    @MainActor
+    @Test
+    func interpretationCorrectionReplacesNameSortWithDueDateLocally()
+        async throws
+    {
+        let store =
+            try BrainMeshTestContainer
+                .makeInMemoryStore()
+        let builder = BrainMeshFixtureBuilder(
+            context: store.context
+        )
+        let fixture =
+            makeQueryIntentFixture(builder)
+        try builder.save()
+
+        let interpreter =
+            FakeGraphChatIntentInterpreter(
+                steps: [
+                    .draft(
+                        GraphChatUntrustedSemanticIntentDraft(
+                            family:
+                                .filteredCollection,
+                            entityTerm:
+                                "Projekte",
+                            filters: [
+                                GraphChatSemanticFilterDraft(
+                                    fieldTerm:
+                                        "Status",
+                                    relation:
+                                        .equals,
+                                    values:
+                                        ["Offen"]
+                                ),
+                            ],
+                            sorting:
+                                GraphChatSemanticSortDraft(
+                                    target:
+                                        .nodeName,
+                                    fieldTerm: nil,
+                                    direction:
+                                        .ascending
+                                ),
+                            responseLanguage:
+                                .german
+                        )
+                    ),
+                ]
+            )
+        let runtime = makeRuntime(
+            store: store,
+            graphID: fixture.graph.id,
+            interpreter: interpreter,
+            candidates: []
+        )
+        let graphScope = GraphScope(
+            graphID: fixture.graph.id
+        )
+        let chatScope =
+            GraphChatScope.entireGraph(
+                graphScope
+            )
+        let question =
+            "Offene Projekte, sortiert nach Name"
+
+        let initialEvents =
+            await GraphChatProviderTestSupport
+                .collect(
+                    await runtime.orchestrator
+                        .streamAnswer(
+                            question: question,
+                            graphScope:
+                                graphScope,
+                            chatScope:
+                                chatScope
+                        )
+                )
+        let initialAnswer =
+            try completedAnswer(initialEvents)
+        let initialArtifact =
+            try await resolvedArtifact(
+                answer: initialAnswer,
+                runtime: runtime,
+                graphScope: graphScope,
+                chatScope: chatScope
+            )
+        guard
+            case .resultList(let initialList) =
+                initialArtifact.payload
+        else {
+            Issue.record(
+                "Expected the initial name-sorted result list."
+            )
+            return
+        }
+        let initialState = try #require(
+            await runtime.orchestrator
+                .conversationStateSnapshot()
+        )
+        let initialResultID = try #require(
+            initialState.resultContexts.last?.id
+        )
+        let interpretation = try #require(
+            initialAnswer.interpretation
+        )
+        let origin = try #require(
+            interpretation.correctionOrigin
+        )
+
+        #expect(interpretation.isCorrectionEditable)
+        #expect(
+            initialList.rows.map(\.primaryText)
+                == [
+                    "Apollo",
+                    "Borealis",
+                    "Carina",
+                ]
+        )
+        #expect(
+            initialState.lastValidatedQueryPlan?
+                .sorting == [
+                    GraphValidatedQuerySort(
+                        key: .nodeName,
+                        direction: .ascending
+                    ),
+                ]
+        )
+
+        let schemaContext =
+            try await runtime.schemaService
+                .makeSnapshot(
+                    in: graphScope,
+                    exampleFieldIDs: []
+                )
+        let editorSnapshot =
+            GraphChatInterpretationCorrectionSchemaBuilder()
+                .makeSnapshot(
+                    context: schemaContext,
+                    chatScope: chatScope,
+                    language: .german
+                )
+        var selection =
+            editorSnapshot.initialSelection(
+                interpretation:
+                    interpretation,
+                origin: origin
+            )
+        selection.sorting = [
+            GraphChatInterpretationCorrectionSort(
+                key: .field(
+                    fixture.dueField.id
+                ),
+                direction: .ascending
+            ),
+        ]
+
+        let userMessage = GraphChatMessage(
+            role: .user,
+            text: question
+        )
+        let assistantMessage =
+            GraphChatMessage(
+                role: .assistant,
+                text:
+                    initialAnswer.directAnswer,
+                evidenceIDs:
+                    initialAnswer.evidenceIDs
+            )
+        let currentCheckpoint =
+            GraphChatConversationCheckpoint
+                .committed(initialState)
+        let binding =
+            try GraphChatInterpretationCorrectionBinding(
+                originalUserMessage:
+                    userMessage,
+                originalAssistantMessage:
+                    assistantMessage,
+                originalRequest:
+                    GraphChatRequest(
+                        id:
+                            interpretation
+                                .turnBinding
+                                .requestID,
+                        scope: chatScope,
+                        messages: [userMessage]
+                    ),
+                originalTurnID:
+                    interpretation
+                        .turnBinding
+                        .turnID,
+                conversationID:
+                    interpretation
+                        .turnBinding
+                        .conversationID,
+                graphScope: graphScope,
+                chatScope: chatScope,
+                intentDomainVersion:
+                    origin.adaptation
+                        .intent.version,
+                originalInterpretation:
+                    interpretation,
+                artifactSessionID:
+                    origin.artifactSessionID,
+                checkpointBeforeOriginalTurn:
+                    .initial(
+                        graphScope:
+                            graphScope,
+                        chatScope:
+                            chatScope
+                    ),
+                expectedCurrentCheckpoint:
+                    currentCheckpoint,
+                artifactIDsToReplace:
+                    initialAnswer.artifactIDs
+            )
+        let correctionRequest =
+            GraphChatInterpretationCorrectionRequest(
+                binding: binding,
+                selection: selection
+            )
+
+        #expect(
+            editorSnapshot.validationState(
+                for: correctionRequest,
+                currentArtifactSessionID:
+                    origin.artifactSessionID,
+                currentCheckpoint:
+                    currentCheckpoint,
+                graphIsLocked: false
+            ) == .ready
+        )
+
+        let correctionEvents =
+            await GraphChatProviderTestSupport
+                .collect(
+                    await runtime.orchestrator
+                        .streamCorrectedIntent(
+                            correctionRequest
+                        )
+                )
+        let correctedAnswer =
+            try completedAnswer(
+                correctionEvents
+            )
+        let correctedInterpretation =
+            try #require(
+                correctedAnswer.interpretation
+            )
+        let correctedOrigin = try #require(
+            correctedInterpretation
+                .correctionOrigin
+        )
+        guard
+            case .field(let correctedSortField)? =
+                correctedInterpretation
+                    .sorting.first?.key
+        else {
+            Issue.record(
+                "Expected a freshly rebuilt field-sort interpretation."
+            )
+            return
+        }
+        let correctedArtifact =
+            try await resolvedArtifact(
+                answer: correctedAnswer,
+                runtime: runtime,
+                graphScope: graphScope,
+                chatScope: chatScope
+            )
+        guard
+            case .resultList(let correctedList) =
+                correctedArtifact.payload
+        else {
+            Issue.record(
+                "Expected the corrected due-date-sorted result list."
+            )
+            return
+        }
+
+        let oldPresentation =
+            await runtime.orchestrator
+                .resolveAnswerPresentation(
+                    artifactIDs:
+                        initialAnswer.artifactIDs,
+                    evidence:
+                        initialAnswer.evidence,
+                    graphScope: graphScope,
+                    chatScope: chatScope
+                )
+        let finalState = try #require(
+            await runtime.orchestrator
+                .conversationStateSnapshot()
+        )
+        let finalResult = try #require(
+            finalState.resultContexts.last
+        )
+        let finalNodes =
+            finalResult.references.compactMap {
+                reference
+                -> NodeRefKey? in
+                if case .node(let node) =
+                    reference.reference {
+                    return node
+                }
+                return nil
+            }
+
+        let contextWithoutCurrent =
+            GraphChatConversationContextBuilder()
+                .makeSnapshot(
+                    from: finalState.snapshot
+                )
+        let currentResolution =
+            try await runtime.referenceResolver
+                .resolveScope(
+                    .latestResults,
+                    in:
+                        contextWithoutCurrent,
+                    expectedGraphScope:
+                        graphScope,
+                    expectedChatScope:
+                        chatScope
+                )
+        guard
+            case .resolved(let currentScope) =
+                currentResolution
+        else {
+            Issue.record(
+                "Expected the replacement result set to resolve as CURRENT."
+            )
+            return
+        }
+        let contextWithCurrent =
+            GraphChatConversationContextBuilder()
+                .makeSnapshot(
+                    from: finalState.snapshot,
+                    currentResolvedScope:
+                        currentScope
+                )
+        let current = try #require(
+            contextWithCurrent.alias("CURRENT")
+        )
+        guard
+            case .resultSet(
+                let currentResultID,
+                let currentNodes,
+                _
+            ) = current.target
+        else {
+            Issue.record(
+                "Expected CURRENT to contain only the replacement result set."
+            )
+            return
+        }
+
+        let provider =
+            await runtime.provider.snapshot()
+        let interpreterSnapshot =
+            await interpreter.snapshot()
+        let semanticMetrics =
+            await runtime.observability
+                .semanticMetrics()
+        let interpretationMetrics =
+            await runtime.observability
+                .interpretationMetrics()
+        let interpretationEvents =
+            interpretationMetrics.map(\.event)
+        let correctionLifecycle =
+            interpretationEvents.filter {
+                [
+                    GraphChatIntentInterpretationLifecycleEvent
+                        .correctionValidated,
+                    .localCorrectionRerunStarted,
+                    .localCorrectionRerunCommitted,
+                    .localCorrectionRerunRolledBack,
+                ].contains($0)
+            }
+
+        #expect(
+            correctedList.rows.map(\.primaryText)
+                == [
+                    "Apollo",
+                    "Carina",
+                    "Borealis",
+                ]
+        )
+        #expect(correctedInterpretation != interpretation)
+        #expect(
+            correctedInterpretation
+                .turnBinding.requestID
+                != interpretation
+                    .turnBinding.requestID
+        )
+        #expect(
+            correctedSortField.id
+                == fixture.dueField.id
+        )
+        #expect(
+            correctedInterpretation.sorting
+                .first?.direction
+                == .ascending
+        )
+        #expect(
+            correctedOrigin.matches(
+                correctedInterpretation
+            )
+        )
+        #expect(
+            finalState.lastValidatedQueryPlan?
+                .sorting == [
+                    GraphValidatedQuerySort(
+                        key: .field(
+                            fixture.dueField.id
+                        ),
+                        direction: .ascending
+                    ),
+                ]
+        )
+        #expect(finalState.turnContexts.count == 1)
+        #expect(finalState.resultContexts.count == 1)
+        #expect(finalResult.id != initialResultID)
+        #expect(
+            correctedAnswer.artifactIDs.count
+                == 1
+        )
+        #expect(
+            correctedAnswer.artifactIDs
+                != initialAnswer.artifactIDs
+        )
+        #expect(oldPresentation.artifacts.isEmpty)
+        #expect(
+            initialAnswer.artifactIDs
+                .allSatisfy {
+                    oldPresentation
+                        .unavailableArtifactReasons[
+                            $0
+                        ] == .notRegisteredOrInvalidated
+                }
+        )
+        let apollo = try #require(
+            fixture.openNodesByName["Apollo"]
+        )
+        let carina = try #require(
+            fixture.openNodesByName["Carina"]
+        )
+        let borealis = try #require(
+            fixture.openNodesByName["Borealis"]
+        )
+
+        #expect(currentResultID == finalResult.id)
+        #expect(currentNodes == finalNodes)
+        #expect(
+            currentNodes == [
+                apollo,
+                carina,
+                borealis,
+            ]
+        )
+        #expect(
+            currentNodes != [
+                apollo,
+                borealis,
+                carina,
+            ]
+        )
+        #expect(interpreterSnapshot.requests.count == 1)
+        #expect(provider.createdSessions.isEmpty)
+        #expect(provider.streamedSessions.isEmpty)
+        #expect(
+            semanticMetrics.reduce(0) {
+                $0 + $1.interpreterCallCount
+            } == 1
+        )
+        #expect(
+            semanticMetrics.reduce(0) {
+                $0 + $1.answerProviderCallCount
+            } == 0
+        )
+        #expect(
+            correctionLifecycle == [
+                .correctionValidated,
+                .localCorrectionRerunStarted,
+                .localCorrectionRerunCommitted,
+            ]
+        )
+        #expect(
+            terminalEventCount(initialEvents)
+                == 1
+        )
+        #expect(
+            terminalEventCount(correctionEvents)
+                == 1
+        )
+    }
+
     private struct QueryIntentFixture {
         let graph: MetaGraph
         let entity: MetaEntity
         let dueField:
             MetaDetailFieldDefinition
+        let openNodesByName:
+            [String: NodeRefKey]
         let closedOverdueNode: NodeRefKey
         let foreignOverdueNode: NodeRefKey
     }
@@ -1982,6 +2478,24 @@ struct GraphChatSemanticIntentEndToEndTests {
             graph: graph,
             entity: entity,
             dueField: due,
+            openNodesByName:
+                Dictionary(
+                    uniqueKeysWithValues: [
+                        "Apollo",
+                        "Carina",
+                        "Borealis",
+                    ].map {
+                        (
+                            $0,
+                            NodeRefKey(
+                                kind: .attribute,
+                                id:
+                                    attributes[$0]!
+                                        .id
+                            )
+                        )
+                    }
+                ),
             closedOverdueNode:
                 NodeRefKey(
                     kind: .attribute,
@@ -2023,6 +2537,9 @@ struct GraphChatSemanticIntentEndToEndTests {
             SemanticRecordingSearchExecutor
         let observability:
             SemanticIntentObservabilityRecorder
+        let schemaService: GraphSchemaService
+        let referenceResolver:
+            GraphChatConversationReferenceResolver
     }
 
     @MainActor
@@ -2151,7 +2668,10 @@ struct GraphChatSemanticIntentEndToEndTests {
             orchestrator: orchestrator,
             provider: provider,
             searchExecutor: searchExecutor,
-            observability: observability
+            observability: observability,
+            schemaService: schemaService,
+            referenceResolver:
+                referenceResolver
         )
     }
 
@@ -2399,6 +2919,21 @@ private actor SemanticIntentObservabilityRecorder:
             guard case .localIntent(
                 let metric
             ) = $0 else {
+                return nil
+            }
+            return metric
+        }
+    }
+
+    func interpretationMetrics()
+        -> [GraphChatIntentInterpretationMetric]
+    {
+        events.compactMap {
+            guard
+                case .intentInterpretation(
+                    let metric
+                ) = $0
+            else {
                 return nil
             }
             return metric

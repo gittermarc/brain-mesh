@@ -10,7 +10,8 @@ import Foundation
 
 nonisolated extension GraphChatLocalIntentPreparedExecution {
     func resolvedIntentInterpretation(
-        timeZone: TimeZone
+        timeZone: TimeZone,
+        requestQuestion: String
     ) async -> GraphChatIntentInterpretation? {
         guard
             primaryResult.isEligibleAsPrimary,
@@ -194,7 +195,16 @@ nonisolated extension GraphChatLocalIntentPreparedExecution {
             timeZone: timeZone
         ).executionInterpretation(
             intent: intent,
-            witness: witness
+            witness: witness,
+            correctionOrigin:
+                GraphChatInterpretationCorrectionOrigin(
+                    adaptation: adaptation,
+                    artifactSessionID:
+                        artifactContext
+                            .sessionID,
+                    requestQuestion:
+                        requestQuestion
+                )
         )
     }
 

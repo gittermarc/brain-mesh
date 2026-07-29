@@ -34,6 +34,13 @@ nonisolated enum GraphChatMessageActionControllerResult: Hashable, Sendable {
         clearsEditing: Bool
     )
     case newChatBegan
+    case interpretationCorrectionCommitted
+    case interpretationCorrectionFailed(
+        validationState:
+            GraphChatInterpretationCorrectionValidationState,
+        notice: GraphChatActionNotice
+    )
+    case interpretationCorrectionCancelled
     case sessionMutationFinished(notice: GraphChatActionNotice?)
 }
 
@@ -141,8 +148,15 @@ final class GraphChatMessageActionController {
     private let resultHandler: ResultHandler
 
     private var sessionMutationTask: Task<Void, Never>?
+    private var interpretationCorrectionCancellationTask:
+        Task<Void, Never>?
     private var feedbackTask: Task<Void, Never>?
     private var activeSessionMutationID: UUID?
+    private var activeInterpretationCorrectionID: UUID?
+    private var activeInterpretationCorrectionStreamID:
+        UUID?
+    private var activeInterpretationCorrectionCancellationID:
+        UUID?
 
     init(
         graphScope: GraphScope,
@@ -179,6 +193,8 @@ final class GraphChatMessageActionController {
 
     deinit {
         sessionMutationTask?.cancel()
+        interpretationCorrectionCancellationTask?
+            .cancel()
         feedbackTask?.cancel()
     }
 
@@ -344,6 +360,463 @@ final class GraphChatMessageActionController {
         }
     }
 
+    /// Runs a schema-bound interpretation correction without changing the
+    /// visible transcript until the orchestrator has committed one complete
+    /// local replacement turn.
+    func applyInterpretationCorrection(
+        _ request:
+            GraphChatInterpretationCorrectionRequest,
+        snapshot:
+            GraphChatMessageActionSnapshot
+    ) {
+        let decision = accessDecisionProvider()
+        guard
+            decision.route == .ready,
+            snapshot
+                .isPerformingSessionMutation
+                == false,
+            activeInterpretationCorrectionID
+                == nil,
+            let plan =
+                GraphChatInterpretationCorrectionPlanner
+                    .plan(
+                        messages:
+                            snapshot.messages,
+                        assistantMessageID:
+                            request.binding
+                                .originalAssistantMessage
+                                .id,
+                        graphScope:
+                            graphScope,
+                        chatScope:
+                            chatScope
+                    ),
+            plan.binding == request.binding
+        else {
+            rejectInterpretationCorrection(
+                state:
+                    .stale(
+                        .conversationChanged
+                    ),
+                language:
+                    request.binding
+                        .originalInterpretation
+                        .responseLanguage,
+                finishesMutation: false
+            )
+            return
+        }
+
+        let mutationID = UUID()
+        activeSessionMutationID =
+            mutationID
+        activeInterpretationCorrectionID =
+            mutationID
+        resultHandler(.sessionMutationBegan)
+
+        let generationCleanupTask =
+            generation.cancel(
+                discardSession: false,
+                persistMessageSnapshot:
+                    false
+            )
+        let previousFeedbackTask =
+            feedbackTask
+        let orchestrator = self.orchestrator
+        let historyStore = self.historyStore
+        let feedbackStore = self.feedbackStore
+        let checkpointController =
+            self.checkpointController
+        let chatScope = self.chatScope
+
+        sessionMutationTask =
+            Task { [weak self] in
+                await generationCleanupTask?
+                    .value
+                await previousFeedbackTask?
+                    .value
+                guard
+                    let self,
+                    Task.isCancelled
+                        == false,
+                    self.isActiveSessionMutation(
+                        mutationID
+                    )
+                else {
+                    return
+                }
+
+                let stream =
+                    await orchestrator
+                        .streamCorrectedIntent(
+                            request
+                        )
+                guard
+                    Task.isCancelled == false,
+                    self.isActiveSessionMutation(
+                        mutationID
+                    )
+                else {
+                    return
+                }
+                self.activeInterpretationCorrectionStreamID =
+                    mutationID
+                var replacementState =
+                    GraphChatAssistantMessageState(
+                        question:
+                            request.binding
+                                .originalQuestion
+                    )
+                var terminalEvent:
+                    GraphChatStreamEvent?
+                var terminalCount = 0
+
+                for await event in stream {
+                    guard
+                        self.isActiveSessionMutation(
+                            mutationID
+                        )
+                    else {
+                        return
+                    }
+                    switch event {
+                    case .started,
+                        .toolActivity,
+                        .partialAnswer:
+                        replacementState
+                            .apply(event)
+                    case .completed,
+                        .cancelled,
+                        .failure:
+                        terminalCount += 1
+                        if terminalEvent == nil {
+                            terminalEvent =
+                                event
+                        }
+                    }
+                }
+
+                if self
+                    .activeInterpretationCorrectionCancellationID
+                    == mutationID {
+                    await self
+                        .interpretationCorrectionCancellationTask?
+                        .value
+                }
+                guard
+                    self.isActiveSessionMutation(
+                        mutationID
+                    )
+                else {
+                    return
+                }
+                guard
+                    terminalCount == 1,
+                    let terminalEvent
+                else {
+                    self.rejectInterpretationCorrection(
+                        state:
+                            .stale(
+                                .conversationChanged
+                            ),
+                        language:
+                            request.binding
+                                .originalInterpretation
+                                .responseLanguage
+                    )
+                    self.finishSessionMutation(
+                        mutationID
+                    )
+                    return
+                }
+
+                switch terminalEvent {
+                case .completed(
+                    let answer
+                ):
+                    guard
+                        let interpretation =
+                            answer.interpretation,
+                        interpretation
+                            .isCorrectionEditable,
+                        interpretation
+                            .turnBinding
+                            .conversationID
+                            == request
+                                .binding
+                                .conversationID,
+                        interpretation
+                            .scopeBinding
+                            .graphScope
+                            == request
+                                .binding
+                                .graphScope,
+                        interpretation
+                            .scopeBinding
+                            .chatScope
+                            == request
+                                .binding
+                                .chatScope,
+                        interpretation
+                            .intentKind
+                            == request
+                                .capabilities
+                                .intentKind,
+                        interpretation
+                            .correctionOrigin?
+                            .artifactSessionID
+                            == request
+                                .binding
+                                .artifactSessionID,
+                        interpretation
+                            .turnBinding
+                            .requestID
+                            != request
+                                .binding
+                                .originalRequest
+                                .id,
+                        let state =
+                            await orchestrator
+                                .conversationStateSnapshot(),
+                        let checkpoint =
+                            checkpointController
+                                .captureCommittedCheckpoint(
+                                    state:
+                                        state,
+                                    outcome:
+                                        .completed
+                                )
+                    else {
+                        self.rejectInterpretationCorrection(
+                            state:
+                                .stale(
+                                    .conversationChanged
+                                ),
+                            language:
+                                request.binding
+                                    .originalInterpretation
+                                    .responseLanguage
+                        )
+                        self.finishSessionMutation(
+                            mutationID
+                        )
+                        return
+                    }
+
+                    replacementState.apply(
+                        terminalEvent
+                    )
+                    guard
+                        replacementState
+                            .isTerminal,
+                        replacementState
+                            .answer != nil
+                    else {
+                        self.rejectInterpretationCorrection(
+                            state:
+                                .stale(
+                                    .conversationChanged
+                                ),
+                            language:
+                                request.binding
+                                    .originalInterpretation
+                                    .responseLanguage
+                        )
+                        self.finishSessionMutation(
+                            mutationID
+                        )
+                        return
+                    }
+
+                    let assistantMessage =
+                        GraphChatTranscriptMessage(
+                            state:
+                                .assistant(
+                                    replacementState
+                                ),
+                            conversationCheckpointBeforeTurn:
+                                request
+                                    .binding
+                                    .checkpointBeforeOriginalTurn,
+                            conversationCheckpointAfterTurn:
+                                checkpoint
+                        )
+                    let replacementMessages =
+                        plan.retainedMessages
+                        + [
+                            assistantMessage
+                        ]
+                    let replacementFeedback =
+                        snapshot
+                            .feedbackByMessageID
+                            .filter {
+                                plan
+                                    .removedMessageIDs
+                                    .contains(
+                                        $0.key
+                                    )
+                                    == false
+                            }
+
+                    await feedbackStore.remove(
+                        messageIDs:
+                            plan.removedMessageIDs,
+                        for: chatScope
+                    )
+                    await historyStore.save(
+                        replacementMessages,
+                        for: chatScope
+                    )
+                    self.resultHandler(
+                        .branchCommitted(
+                            messages:
+                                replacementMessages,
+                            feedbackByMessageID:
+                                replacementFeedback,
+                            composerText:
+                                snapshot
+                                    .composerText,
+                            clearsEditing:
+                                false
+                        )
+                    )
+                    self.resultHandler(
+                        .interpretationCorrectionCommitted
+                    )
+                    self.resultHandler(
+                        .sessionMutationFinished(
+                            notice: nil
+                        )
+                    )
+                    self.finishSessionMutation(
+                        mutationID
+                    )
+
+                case .cancelled:
+                    self.resultHandler(
+                        .interpretationCorrectionCancelled
+                    )
+                    self.resultHandler(
+                        .sessionMutationFinished(
+                            notice: nil
+                        )
+                    )
+                    self.finishSessionMutation(
+                        mutationID
+                    )
+
+                case .failure(
+                    let failure
+                ):
+                    self.rejectInterpretationCorrection(
+                        state:
+                            failure.code
+                                == .unavailable
+                            ? .stale(
+                                .graphLocked
+                            )
+                            : .stale(
+                                .schemaChanged
+                            ),
+                        language:
+                            request.binding
+                                .originalInterpretation
+                                .responseLanguage,
+                        errorCode:
+                            failure.code
+                    )
+                    self.finishSessionMutation(
+                        mutationID
+                    )
+
+                case .started,
+                    .toolActivity,
+                    .partialAnswer:
+                    self.rejectInterpretationCorrection(
+                        state:
+                            .stale(
+                                .conversationChanged
+                            ),
+                        language:
+                            request.binding
+                                .originalInterpretation
+                                .responseLanguage
+                    )
+                    self.finishSessionMutation(
+                        mutationID
+                    )
+                }
+            }
+    }
+
+    func cancelInterpretationCorrection() {
+        guard
+            let mutationID =
+                activeInterpretationCorrectionID,
+            activeSessionMutationID
+                == mutationID
+        else {
+            return
+        }
+        let orchestrator = self.orchestrator
+        if activeInterpretationCorrectionStreamID
+            != mutationID {
+            guard
+                activeInterpretationCorrectionCancellationID
+                    != mutationID
+            else {
+                return
+            }
+            activeInterpretationCorrectionCancellationID =
+                mutationID
+            let pendingTask =
+                sessionMutationTask
+            pendingTask?.cancel()
+            sessionMutationTask =
+                Task { [weak self] in
+                    await pendingTask?.value
+                    await orchestrator
+                        .cancelCurrentGeneration()
+                    guard
+                        let self,
+                        self.isActiveSessionMutation(
+                            mutationID
+                        ),
+                        self
+                            .activeInterpretationCorrectionCancellationID
+                            == mutationID
+                    else {
+                        return
+                    }
+                    self.resultHandler(
+                        .interpretationCorrectionCancelled
+                    )
+                    self.resultHandler(
+                        .sessionMutationFinished(
+                            notice: nil
+                        )
+                    )
+                    self.finishSessionMutation(
+                        mutationID
+                    )
+                }
+            return
+        }
+        guard
+            activeInterpretationCorrectionCancellationID
+                != mutationID
+        else {
+            return
+        }
+        activeInterpretationCorrectionCancellationID =
+            mutationID
+        interpretationCorrectionCancellationTask =
+            Task {
+                await orchestrator
+                    .cancelCurrentGeneration()
+            }
+    }
+
     func messageActionAvailability(
         for messageID: UUID,
         snapshot: GraphChatMessageActionSnapshot
@@ -395,6 +868,11 @@ final class GraphChatMessageActionController {
         discardSession: Bool,
         showCancellationNotice: Bool
     ) {
+        if activeInterpretationCorrectionID
+            != nil {
+            cancelInterpretationCorrection()
+            return
+        }
         let generationCleanupTask = generation.cancel(
             discardSession: discardSession
         )
@@ -438,15 +916,36 @@ final class GraphChatMessageActionController {
             discardSession: false,
             persistMessageSnapshot: false
         )
+        let correctionCleanupTask:
+            Task<Void, Never>? =
+                activeInterpretationCorrectionID
+                == nil
+                ? nil
+                : Task { [orchestrator] in
+                    await orchestrator
+                        .cancelCurrentGeneration()
+                }
         sessionMutationTask?.cancel()
+        interpretationCorrectionCancellationTask?
+            .cancel()
         feedbackTask?.cancel()
         let pendingTasks = [
             generationCleanupTask,
+            correctionCleanupTask,
             sessionMutationTask,
+            interpretationCorrectionCancellationTask,
             feedbackTask,
         ].compactMap { $0 }
         activeSessionMutationID = nil
+        activeInterpretationCorrectionID =
+            nil
+        activeInterpretationCorrectionStreamID =
+            nil
+        activeInterpretationCorrectionCancellationID =
+            nil
         sessionMutationTask = nil
+        interpretationCorrectionCancellationTask =
+            nil
         feedbackTask = nil
         checkpointController.reset()
         return pendingTasks
@@ -822,8 +1321,63 @@ final class GraphChatMessageActionController {
         guard activeSessionMutationID == mutationID else {
             return
         }
+        if activeInterpretationCorrectionID
+            == mutationID {
+            activeInterpretationCorrectionID =
+                nil
+        }
+        if activeInterpretationCorrectionStreamID
+            == mutationID {
+            activeInterpretationCorrectionStreamID =
+                nil
+        }
+        if activeInterpretationCorrectionCancellationID
+            == mutationID {
+            activeInterpretationCorrectionCancellationID =
+                nil
+        }
         activeSessionMutationID = nil
         sessionMutationTask = nil
+        interpretationCorrectionCancellationTask =
+            nil
+    }
+
+    private func rejectInterpretationCorrection(
+        state:
+            GraphChatInterpretationCorrectionValidationState,
+        language:
+            GraphChatResponseLanguage,
+        errorCode:
+            GraphChatErrorCode =
+                .invalidRequest,
+        finishesMutation: Bool = true
+    ) {
+        let localizer =
+            GraphChatResponseLocalizer(
+                language: language
+            )
+        resultHandler(
+            .interpretationCorrectionFailed(
+                validationState: state,
+                notice:
+                    GraphChatActionNotice(
+                        message:
+                            localizer
+                                .userFacingFailure(
+                                    errorCode
+                                ),
+                        systemImage:
+                            "exclamationmark.triangle"
+                    )
+            )
+        )
+        if finishesMutation {
+            resultHandler(
+                .sessionMutationFinished(
+                    notice: nil
+                )
+            )
+        }
     }
 
     private func isActiveSessionMutation(

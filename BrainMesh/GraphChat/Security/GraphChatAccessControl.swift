@@ -97,6 +97,46 @@ actor AccessControlledGraphChatOrchestrator: GraphChatOrchestrating {
         )
     }
 
+    func streamCorrectedIntent(
+        _ request:
+            GraphChatInterpretationCorrectionRequest
+    ) async -> GraphChatEventStream {
+        guard await gate.permits(
+            graphScope:
+                request.binding
+                    .graphScope,
+            chatScope:
+                request.binding
+                    .chatScope
+        ) else {
+            let pair =
+                GraphChatEventStream.makeStream()
+            let localizer =
+                GraphChatResponseLocalizer(
+                    language:
+                        request.binding
+                            .originalInterpretation
+                            .responseLanguage
+                )
+            pair.continuation.yield(
+                .failure(
+                    GraphChatError(
+                        code: .unavailable,
+                        message:
+                            localizer
+                                .userFacingFailure(
+                                    .unavailable
+                                )
+                    )
+                )
+            )
+            pair.continuation.finish()
+            return pair.stream
+        }
+        return await base
+            .streamCorrectedIntent(request)
+    }
+
     func cancelCurrentGeneration() async {
         await base.cancelCurrentGeneration()
     }

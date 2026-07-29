@@ -23,6 +23,7 @@ struct GraphChatMessageView: View {
     let onInterpretationEvent: (
         GraphChatIntentInterpretationLifecycleEvent
     ) -> Void
+    let onEditInterpretation: (UUID) -> Void
 
     init(
         message: GraphChatTranscriptMessage,
@@ -53,7 +54,9 @@ struct GraphChatMessageView: View {
         onInterpretationEvent:
             @escaping (
                 GraphChatIntentInterpretationLifecycleEvent
-            ) -> Void = { _ in }
+            ) -> Void = { _ in },
+        onEditInterpretation:
+            @escaping (UUID) -> Void = { _ in }
     ) {
         self.message = message
         self.actionAvailability = actionAvailability
@@ -69,6 +72,8 @@ struct GraphChatMessageView: View {
         self.onOpenArtifactTarget = onOpenArtifactTarget
         self.onInterpretationEvent =
             onInterpretationEvent
+        self.onEditInterpretation =
+            onEditInterpretation
     }
 
     var body: some View {
@@ -312,7 +317,12 @@ struct GraphChatMessageView: View {
             onShowEvidenceInGraph: onShowEvidenceInGraph,
             onUseFollowUp: onUseFollowUp,
             onInterpretationEvent:
-                onInterpretationEvent
+                onInterpretationEvent,
+            onEditInterpretation: {
+                onEditInterpretation(
+                    message.id
+                )
+            }
         )
     }
 

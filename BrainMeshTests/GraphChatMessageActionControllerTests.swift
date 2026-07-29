@@ -109,7 +109,7 @@ private actor GraphChatActionOrderedFeedbackStore: GraphChatFeedbackStoring {
 }
 
 @MainActor
-private final class GraphChatMessageActionControllerHarness {
+final class GraphChatMessageActionControllerHarness {
     let graphScope: GraphScope
     let chatScope: GraphChatScope
     let orchestrator: any GraphChatOrchestrating
@@ -283,6 +283,15 @@ private final class GraphChatMessageActionControllerHarness {
             feedbackByMessageID = [:]
             isPerformingSessionMutation = true
             sessionDerivedStateClearCount += 1
+        case .interpretationCorrectionCommitted:
+            break
+        case .interpretationCorrectionFailed(
+            _,
+            let notice
+        ):
+            notices.append(notice)
+        case .interpretationCorrectionCancelled:
+            break
         case .sessionMutationFinished(let notice):
             isPerformingSessionMutation = false
             if let notice {

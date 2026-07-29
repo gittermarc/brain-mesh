@@ -17,9 +17,13 @@ actor GraphChatOrchestrator {
     private let conversationContextBuilder: GraphChatConversationContextBuilder
     private let requestPreflight: GraphChatRequestPreflight
     private let responseLanguageSelector: GraphChatResponseLanguageSelector
+    private let schemaProvider: any GraphSchemaSnapshotProviding
     private let artifactRevalidator: any GraphChatAnswerArtifactRevalidating
+    private let observability: any GraphChatObservabilityRecording
     private let sessionFactory: GraphChatProviderSessionFactory
     private let requestPipeline: GraphChatRequestPipeline
+    private let correctionCompiler:
+        GraphChatInterpretationCorrectionCompiler
     private let errorMapper: GraphChatProviderErrorMapper
     private let presentationResolver: GraphChatAnswerPresentationResolver
     private let referenceDate: @Sendable () -> Date
@@ -97,9 +101,16 @@ actor GraphChatOrchestrator {
         self.conversationContextBuilder = composition.conversationContextBuilder
         self.requestPreflight = composition.requestPreflight
         self.responseLanguageSelector = composition.responseLanguageSelector
+        self.schemaProvider = schemaProvider
         self.artifactRevalidator = composition.artifactRevalidator
+        self.observability = observability
         self.sessionFactory = composition.sessionFactory
         self.requestPipeline = composition.requestPipeline
+        self.correctionCompiler =
+            GraphChatInterpretationCorrectionCompiler(
+                calendar: calendar,
+                timeZone: timeZone
+            )
         self.errorMapper = composition.errorMapper
         self.presentationResolver = composition.presentationResolver
         self.referenceDate = composition.referenceDate
@@ -244,6 +255,123 @@ actor GraphChatOrchestrator {
         return pair.stream
     }
 
+    /// Executes a correction from a trusted, finalized interpretation. The
+    /// old committed state remains authoritative until the local kernel has
+    /// produced and atomically committed the replacement turn.
+    func streamCorrectedIntent(
+        _ request:
+            GraphChatInterpretationCorrectionRequest
+    ) async -> GraphChatEventStream {
+        let requestID = UUID()
+        let generation =
+            GraphChatGenerationIdentity(
+                requestID: requestID
+            )
+        let pair =
+            GraphChatEventStream.makeStream()
+        let streamController =
+            GraphChatRequestStreamController(
+                requestID: requestID,
+                continuation:
+                    pair.continuation
+            )
+
+        do {
+            try await cancelActiveGenerationForNewRequest()
+            let key = try requestPreflight
+                .validatedKey(
+                    graphScope:
+                        request.binding
+                            .graphScope,
+                    chatScope:
+                        request.binding
+                            .chatScope
+                )
+            let state = try validatedCorrectionState(
+                request,
+                key: key
+            )
+            let task = Task { [weak self] in
+                guard let self else {
+                    await streamController.start()
+                    await streamController.fail(
+                        GraphChatError(
+                            code: .unexpected,
+                            message:
+                                "Der Graph-Chat-Orchestrator wurde verworfen."
+                        )
+                    )
+                    await streamController.finish()
+                    return
+                }
+                await self.runCorrection(
+                    request,
+                    requestID: requestID,
+                    generation: generation,
+                    key: key,
+                    baseState:
+                        state.baseState,
+                    expectedCommittedState:
+                        state
+                            .expectedCommittedState,
+                    artifactSession:
+                        state.artifactSession,
+                    streamController:
+                        streamController,
+                    continuation:
+                        pair.continuation
+                )
+            }
+            let transition =
+                stateMachine.transition(
+                    .requestStarted(
+                        key: key,
+                        generation: generation
+                    )
+                )
+            guard transition.wasApplied else {
+                task.cancel()
+                throw GraphChatError(
+                    code: .concurrentRequest,
+                    message:
+                        "Eine andere Graph-Chat-Anfrage ist noch aktiv."
+                )
+            }
+            resources.installActiveGeneration(
+                identity: generation,
+                task: task
+            )
+            pair.continuation.onTermination = {
+                @Sendable [weak self] _ in
+                Task {
+                    await self?.cancel(
+                        requestID: requestID
+                    )
+                }
+            }
+        } catch {
+            if (error as? GraphChatError)?
+                .code != .concurrentRequest
+            {
+                await recordInterpretation(
+                    .correctionStale
+                )
+            }
+            await streamController.start()
+            await streamController.fail(
+                mapError(
+                    error,
+                    language:
+                        request.binding
+                            .originalInterpretation
+                            .responseLanguage
+                )
+            )
+            await streamController.finish()
+        }
+        return pair.stream
+    }
+
     func cancelCurrentGeneration() async {
         guard let activeGeneration = resources.activeGeneration else {
             return
@@ -350,6 +478,499 @@ actor GraphChatOrchestrator {
 
     func stateSnapshotForTesting() -> GraphChatOrchestratorState {
         stateMachine.state
+    }
+
+    private struct ValidatedCorrectionState:
+        Sendable
+    {
+        let baseState:
+            GraphChatConversationState
+        let expectedCommittedState:
+            GraphChatConversationState
+        let artifactSession:
+            GraphChatArtifactSessionResources
+    }
+
+    private func validatedCorrectionState(
+        _ request:
+            GraphChatInterpretationCorrectionRequest,
+        key:
+            GraphChatOrchestrationScopeKey
+    ) throws -> ValidatedCorrectionState {
+        let binding = request.binding
+        guard
+            binding.version == .v1,
+            binding.graphScope == key.graphScope,
+            binding.chatScope == key.chatScope,
+            binding.originalInterpretation
+                .isCorrectionEditable,
+            let origin =
+                binding.originalInterpretation
+                    .correctionOrigin,
+            origin.matches(
+                binding.originalInterpretation
+            ),
+            origin.artifactSessionID
+                == binding.artifactSessionID,
+            origin.adaptation.intent.version
+                == binding.intentDomainVersion,
+            let expected =
+                binding.expectedCurrentCheckpoint
+                    .state,
+            expected.conversationID
+                == binding.conversationID,
+            expected.graphScope
+                == key.graphScope,
+            expected.chatScope
+                == key.chatScope,
+            conversationRuntime.snapshot()
+                == expected,
+            expected.turnContexts.contains(
+                where: {
+                    $0.id
+                        == binding
+                            .originalTurnID
+                }
+            ),
+            let artifactSession =
+                resources.artifactSession,
+            artifactSession.key == key,
+            artifactSession.sessionID
+                == binding.artifactSessionID
+        else {
+            throw GraphChatError(
+                code: .invalidRequest,
+                message:
+                    "Die Interpretation gehört nicht mehr zum aktuellen Graph-Chat-Zustand."
+            )
+        }
+
+        let baseState:
+            GraphChatConversationState
+        if let checkpointState =
+                binding
+                    .checkpointBeforeOriginalTurn
+                    .state
+        {
+            baseState = checkpointState
+        } else {
+            baseState =
+                GraphChatConversationState.initial(
+                    graphScope:
+                        key.graphScope,
+                    chatScope:
+                        key.chatScope,
+                    conversationID:
+                        binding
+                            .conversationID
+                )
+        }
+        let originalTurnIndex =
+            expected.turnContexts.firstIndex {
+                $0.id
+                    == binding
+                        .originalTurnID
+            }
+        guard
+            let originalTurnIndex,
+            baseState.conversationID
+                == binding.conversationID,
+            baseState.graphScope
+                == key.graphScope,
+            baseState.chatScope
+                == key.chatScope,
+            baseState.turnContexts.contains(
+                where: {
+                    $0.id
+                        == binding
+                            .originalTurnID
+                }
+            ) == false,
+            Array(
+                expected.turnContexts.prefix(
+                    upTo:
+                        originalTurnIndex
+                )
+            ) == baseState.turnContexts
+        else {
+            throw GraphChatError(
+                code: .invalidRequest,
+                message:
+                    "Der Checkpoint vor dem zu ersetzenden Turn ist nicht mehr gültig."
+            )
+        }
+        return ValidatedCorrectionState(
+            baseState: baseState,
+            expectedCommittedState:
+                expected,
+            artifactSession:
+                artifactSession
+        )
+    }
+
+    private func runCorrection(
+        _ request:
+            GraphChatInterpretationCorrectionRequest,
+        requestID: UUID,
+        generation:
+            GraphChatGenerationIdentity,
+        key:
+            GraphChatOrchestrationScopeKey,
+        baseState:
+            GraphChatConversationState,
+        expectedCommittedState:
+            GraphChatConversationState,
+        artifactSession:
+            GraphChatArtifactSessionResources,
+        streamController:
+            GraphChatRequestStreamController,
+        continuation:
+            GraphChatEventStream.Continuation
+    ) async {
+        await streamController.start()
+        let outcome: GraphChatRequestOutcome
+        var localRerunStarted = false
+
+        do {
+            try validateCurrentCorrection(
+                generation,
+                request: request,
+                expectedCommittedState:
+                    expectedCommittedState,
+                artifactSession:
+                    artifactSession
+            )
+            let preflightResult =
+                try await requestPreflight.evaluate(
+                    GraphChatRequestPreflightInput(
+                        requestID: requestID,
+                        requestedAt:
+                            referenceDate(),
+                        question:
+                            request.binding
+                                .originalQuestion,
+                        graphScope:
+                            key.graphScope,
+                        chatScope:
+                            key.chatScope,
+                        conversationState:
+                            baseState
+                    )
+                )
+            guard case .provider(let providerPlan) =
+                    preflightResult,
+                  providerPlan.requestBaseState
+                    == baseState
+            else {
+                throw GraphChatInterpretationCorrectionCompilationError
+                    .stale(
+                        .conversationChanged
+                    )
+            }
+            try validateCurrentCorrection(
+                generation,
+                request: request,
+                expectedCommittedState:
+                    expectedCommittedState,
+                artifactSession:
+                    artifactSession
+            )
+
+            let schemaContext =
+                try await schemaProvider
+                    .makeSnapshot(
+                        in: key.graphScope,
+                        exampleFieldIDs: []
+                    )
+            try validateCurrentCorrection(
+                generation,
+                request: request,
+                expectedCommittedState:
+                    expectedCommittedState,
+                artifactSession:
+                    artifactSession
+            )
+
+            let compilation =
+                try correctionCompiler.compile(
+                    request: request,
+                    providerPlan:
+                        providerPlan,
+                    schemaContext:
+                        schemaContext,
+                    requestID:
+                        requestID,
+                    requestedAt:
+                        referenceDate()
+                )
+            await recordInterpretation(
+                .correctionValidated
+            )
+            try validateCurrentCorrection(
+                generation,
+                request: request,
+                expectedCommittedState:
+                    expectedCommittedState,
+                artifactSession:
+                    artifactSession
+            )
+
+            localRerunStarted = true
+            await recordInterpretation(
+                .localCorrectionRerunStarted
+            )
+            let finalizedTurn =
+                try await requestPipeline
+                    .executeCorrection(
+                        GraphChatInterpretationCorrectionPipelineInput(
+                            requestID:
+                                requestID,
+                            requestedAt:
+                                referenceDate(),
+                            question:
+                                request.binding
+                                    .originalQuestion,
+                            providerPlan:
+                                providerPlan,
+                            expectedCommittedState:
+                                expectedCommittedState,
+                            adaptation:
+                                compilation
+                                    .adaptation,
+                            schemaContext:
+                                compilation
+                                    .schemaContext,
+                            artifactIDsToReplace:
+                                request.binding
+                                    .artifactIDsToReplace
+                        ),
+                        artifactSession:
+                            artifactSession,
+                        onActivity: {
+                            continuation.yield(
+                                .toolActivity($0)
+                            )
+                        },
+                        validateCurrentRequest: {
+                            [weak self] in
+                            guard let self else {
+                                throw CancellationError()
+                            }
+                            try await self
+                                .validateCurrentCorrection(
+                                    generation,
+                                    request:
+                                        request,
+                                    expectedCommittedState:
+                                        expectedCommittedState,
+                                    artifactSession:
+                                        artifactSession
+                                )
+                        },
+                        commitFinalizedTurn: {
+                            [weak self] turn in
+                            guard let self else {
+                                throw CancellationError()
+                            }
+                            try await self.commit(
+                                turn,
+                                generation:
+                                    generation,
+                                expectedCommittedState:
+                                    expectedCommittedState
+                            )
+                        }
+                    )
+
+            await discardPreparedSession()
+            await recordInterpretation(
+                .localCorrectionRerunCommitted
+            )
+            outcome = .completed
+            await streamController.complete(
+                finalizedTurn.answer
+            )
+        } catch is CancellationError {
+            if localRerunStarted {
+                await recordInterpretation(
+                    .localCorrectionRerunRolledBack
+                )
+            }
+            outcome = .cancelled
+            await streamController.cancel()
+        } catch let error as GraphChatProviderError
+        where error.code == .cancelled {
+            if localRerunStarted {
+                await recordInterpretation(
+                    .localCorrectionRerunRolledBack
+                )
+            }
+            outcome = .cancelled
+            await streamController.cancel()
+        } catch let error as GraphChatToolError
+        where error.code == .cancelled {
+            if localRerunStarted {
+                await recordInterpretation(
+                    .localCorrectionRerunRolledBack
+                )
+            }
+            outcome = .cancelled
+            await streamController.cancel()
+        } catch {
+            if isStaleCorrectionError(error) {
+                await recordInterpretation(
+                    .correctionStale
+                )
+            }
+            if localRerunStarted {
+                await recordInterpretation(
+                    .localCorrectionRerunRolledBack
+                )
+            }
+            outcome = .failed
+            await streamController.fail(
+                mapCorrectionError(
+                    error,
+                    language:
+                        request.binding
+                            .originalInterpretation
+                            .responseLanguage
+                )
+            )
+        }
+
+        finishRequest(
+            requestID: requestID,
+            outcome: outcome
+        )
+        await streamController.finish()
+    }
+
+    private func validateCurrentCorrection(
+        _ generation:
+            GraphChatGenerationIdentity,
+        request:
+            GraphChatInterpretationCorrectionRequest,
+        expectedCommittedState:
+            GraphChatConversationState,
+        artifactSession:
+            GraphChatArtifactSessionResources
+    ) throws {
+        try validateCurrentGeneration(
+            generation
+        )
+        guard
+            conversationRuntime.snapshot()
+                == expectedCommittedState
+        else {
+            throw GraphChatInterpretationCorrectionCompilationError
+                .stale(
+                    .checkpointChanged
+                )
+        }
+        guard
+            resources.artifactSession?
+                .sessionID
+                == artifactSession.sessionID,
+            resources.artifactSession?
+                .key
+                == artifactSession.key
+        else {
+            throw GraphChatInterpretationCorrectionCompilationError
+                .stale(
+                    .artifactSessionChanged
+                )
+        }
+        guard
+            request.binding
+                .expectedCurrentCheckpoint
+                .state
+                == expectedCommittedState
+        else {
+            throw GraphChatInterpretationCorrectionCompilationError
+                .stale(
+                    .checkpointChanged
+                )
+        }
+        guard
+            request.binding
+                .artifactSessionID
+                == artifactSession.sessionID
+        else {
+            throw GraphChatInterpretationCorrectionCompilationError
+                .stale(
+                    .artifactSessionChanged
+                )
+        }
+    }
+
+    private func mapCorrectionError(
+        _ error: Error,
+        language:
+            GraphChatResponseLanguage
+    ) -> GraphChatError {
+        if error
+            is GraphChatInterpretationCorrectionCompilationError {
+            let localizer =
+                GraphChatResponseLocalizer(
+                    language: language
+                )
+            return GraphChatError(
+                code: .invalidRequest,
+                message:
+                    localizer.userFacingFailure(
+                        .invalidRequest
+                    )
+            )
+        }
+        return mapError(
+            error,
+            language: language
+        )
+    }
+
+    private func isStaleCorrectionError(
+        _ error: Error
+    ) -> Bool {
+        if let compilationError =
+                error
+                    as? GraphChatInterpretationCorrectionCompilationError
+        {
+            if case .stale = compilationError {
+                return true
+            }
+            return false
+        }
+        if let executionError =
+                error
+                    as? GraphChatLocalIntentExecutionError
+        {
+            return executionError
+                == .staleSchemaIdentity
+                || executionError
+                    == .staleResultSet
+        }
+        if let artifactError =
+                error
+                    as? GraphChatAnswerArtifactRegistryError
+        {
+            return artifactError
+                == .artifactInvalidated
+        }
+        return false
+    }
+
+    private func recordInterpretation(
+        _ event:
+            GraphChatIntentInterpretationLifecycleEvent
+    ) async {
+        await observability.record(
+            .intentInterpretation(
+                GraphChatIntentInterpretationMetric(
+                    event: event
+                )
+            )
+        )
     }
 
     private func runRequest(

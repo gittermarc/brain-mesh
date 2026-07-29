@@ -46,6 +46,165 @@ nonisolated struct GraphChatQueryIntentValueParser:
         self.timeZone = timeZone
     }
 
+    /// Shared localized integer grammar used by both the correction editor's
+    /// value-only prevalidation and the authoritative query compiler.
+    static func parseLocalizedInteger(
+        _ source: String,
+        language: GraphChatResponseLanguage,
+        allowsGrouping: Bool = true
+    ) -> Int? {
+        let trimmed = source.trimmingCharacters(
+            in: .whitespacesAndNewlines
+        )
+        guard trimmed.isEmpty == false else {
+            return nil
+        }
+        let value = trimmed
+            .replacingOccurrences(
+                of: "\u{00A0}",
+                with: ""
+            )
+            .replacingOccurrences(
+                of: "\u{202F}",
+                with: ""
+            )
+            .replacingOccurrences(
+                of: " ",
+                with: ""
+            )
+        let grouping =
+            language == .german
+            ? "."
+            : ","
+        let escapedGrouping =
+            NSRegularExpression
+                .escapedPattern(
+                    for: grouping
+                )
+        let pattern: String
+        if allowsGrouping {
+            pattern =
+                #"^[+-]?(?:[0-9]+|[0-9]{1,3}(?:"# +
+                escapedGrouping +
+                #"[0-9]{3})+)$"#
+        } else {
+            pattern =
+                #"^[+-]?[0-9]+$"#
+        }
+        guard
+            let expression =
+                try? NSRegularExpression(
+                    pattern: pattern
+                )
+        else {
+            return nil
+        }
+        let range = NSRange(
+            value.startIndex..<value.endIndex,
+            in: value
+        )
+        guard
+            expression.firstMatch(
+                in: value,
+                range: range
+            )?.range == range
+        else {
+            return nil
+        }
+        return Int(
+            value.replacingOccurrences(
+                of: grouping,
+                with: ""
+            )
+        )
+    }
+
+    /// Shared localized finite-decimal grammar for editor and compiler.
+    static func parseLocalizedDecimal(
+        _ source: String,
+        language: GraphChatResponseLanguage
+    ) -> Double? {
+        let trimmed = source.trimmingCharacters(
+            in: .whitespacesAndNewlines
+        )
+        guard trimmed.isEmpty == false else {
+            return nil
+        }
+        let value = trimmed
+            .replacingOccurrences(
+                of: "\u{00A0}",
+                with: ""
+            )
+            .replacingOccurrences(
+                of: "\u{202F}",
+                with: ""
+            )
+            .replacingOccurrences(
+                of: " ",
+                with: ""
+            )
+        let grouping =
+            language == .german
+            ? "."
+            : ","
+        let decimal =
+            language == .german
+            ? ","
+            : "."
+        let escapedGrouping =
+            NSRegularExpression
+                .escapedPattern(
+                    for: grouping
+                )
+        let escapedDecimal =
+            NSRegularExpression
+                .escapedPattern(
+                    for: decimal
+                )
+        let pattern =
+            #"^[+-]?(?:[0-9]+|[0-9]{1,3}(?:"# +
+            escapedGrouping +
+            #"[0-9]{3})+)(?:"# +
+            escapedDecimal +
+            #"[0-9]+)?$"#
+        guard
+            let expression =
+                try? NSRegularExpression(
+                    pattern: pattern
+                )
+        else {
+            return nil
+        }
+        let range = NSRange(
+            value.startIndex..<value.endIndex,
+            in: value
+        )
+        guard
+            expression.firstMatch(
+                in: value,
+                range: range
+            )?.range == range
+        else {
+            return nil
+        }
+        let canonical = value
+            .replacingOccurrences(
+                of: grouping,
+                with: ""
+            )
+            .replacingOccurrences(
+                of: decimal,
+                with: "."
+            )
+        guard
+            let result = Double(canonical),
+            result.isFinite
+        else {
+            return nil
+        }
+        return result
+    }
+
     func filter(
         _ draft: GraphChatSemanticFilterDraft,
         field: GraphSchemaFieldResolution,
@@ -410,29 +569,10 @@ nonisolated struct GraphChatQueryIntentValueParser:
         language: GraphChatResponseLanguage,
         allowsGrouping: Bool = true
     ) -> Int? {
-        guard let value = normalizedNumeric(source) else {
-            return nil
-        }
-        let grouping = language == .german ? "." : ","
-        let escapedGrouping = NSRegularExpression
-            .escapedPattern(for: grouping)
-        let pattern: String
-        if allowsGrouping {
-            pattern =
-                #"^[+-]?(?:[0-9]+|[0-9]{1,3}(?:"# +
-                escapedGrouping +
-                #"[0-9]{3})+)$"#
-        } else {
-            pattern = #"^[+-]?[0-9]+$"#
-        }
-        guard matches(value, pattern: pattern) else {
-            return nil
-        }
-        return Int(
-            value.replacingOccurrences(
-                of: grouping,
-                with: ""
-            )
+        Self.parseLocalizedInteger(
+            source,
+            language: language,
+            allowsGrouping: allowsGrouping
         )
     }
 
@@ -440,32 +580,10 @@ nonisolated struct GraphChatQueryIntentValueParser:
         _ source: String,
         language: GraphChatResponseLanguage
     ) -> Double? {
-        guard let value = normalizedNumeric(source) else {
-            return nil
-        }
-        let grouping = language == .german ? "." : ","
-        let decimal = language == .german ? "," : "."
-        let escapedGrouping = NSRegularExpression
-            .escapedPattern(for: grouping)
-        let escapedDecimal = NSRegularExpression
-            .escapedPattern(for: decimal)
-        let pattern =
-            #"^[+-]?(?:[0-9]+|[0-9]{1,3}(?:"# +
-            escapedGrouping +
-            #"[0-9]{3})+)(?:"# +
-            escapedDecimal +
-            #"[0-9]+)?$"#
-        guard matches(value, pattern: pattern) else {
-            return nil
-        }
-        let canonical = value
-            .replacingOccurrences(of: grouping, with: "")
-            .replacingOccurrences(of: decimal, with: ".")
-        guard let result = Double(canonical),
-              result.isFinite else {
-            return nil
-        }
-        return result
+        Self.parseLocalizedDecimal(
+            source,
+            language: language
+        )
     }
 
     private func boolean(

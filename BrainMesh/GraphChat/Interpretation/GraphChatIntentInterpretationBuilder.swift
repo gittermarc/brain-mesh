@@ -30,20 +30,26 @@ nonisolated struct GraphChatIntentInterpretationBuilder:
     func executionInterpretation(
         intent: GraphChatTypedIntent,
         witness:
-            GraphChatIntentInterpretationExecutionWitness
+            GraphChatIntentInterpretationExecutionWitness,
+        correctionOrigin:
+            GraphChatInterpretationCorrectionOrigin? = nil
     ) -> GraphChatIntentInterpretation? {
         switch witness {
         case .query(let plan):
             return queryInterpretation(
                 intent: intent,
-                plan: plan
+                plan: plan,
+                correctionOrigin:
+                    correctionOrigin
             )
         case .search:
             guard intent.kind == .findNodes else {
                 return nil
             }
             return makeSearchInterpretation(
-                intent: intent
+                intent: intent,
+                correctionOrigin:
+                    correctionOrigin
             )
         case .node(let node):
             guard
@@ -67,7 +73,9 @@ nonisolated struct GraphChatIntentInterpretationBuilder:
             }
             return makeNodeInterpretation(
                 intent: intent,
-                details: details
+                details: details,
+                correctionOrigin:
+                    correctionOrigin
             )
         case .comparison(let nodes):
             guard
@@ -91,7 +99,9 @@ nonisolated struct GraphChatIntentInterpretationBuilder:
             }
             return makeComparisonInterpretation(
                 intent: intent,
-                comparison: comparison
+                comparison: comparison,
+                correctionOrigin:
+                    correctionOrigin
             )
         case .graphState(let aspect):
             guard
@@ -124,14 +134,18 @@ nonisolated struct GraphChatIntentInterpretationBuilder:
             return makeGraphStateInterpretation(
                 intent: intent,
                 graphState: graphState,
-                aspect: aspect
+                aspect: aspect,
+                correctionOrigin:
+                    correctionOrigin
             )
         }
     }
 
     func queryInterpretation(
         intent: GraphChatTypedIntent,
-        plan: ValidatedGraphQueryPlan
+        plan: ValidatedGraphQueryPlan,
+        correctionOrigin:
+            GraphChatInterpretationCorrectionOrigin? = nil
     ) -> GraphChatIntentInterpretation? {
         guard
             plan.version
@@ -334,7 +348,9 @@ nonisolated struct GraphChatIntentInterpretationBuilder:
                             grouping != nil
                     ),
                 formattingTimeZoneIdentifier:
-                    timeZone.identifier
+                    timeZone.identifier,
+                correctionOrigin:
+                    correctionOrigin
             )
         return interpretation
             .isInternallyConsistent
@@ -344,7 +360,9 @@ nonisolated struct GraphChatIntentInterpretationBuilder:
 
     func searchInterpretation(
         intent: GraphChatTypedIntent,
-        action: GraphChatLocalSearchAction
+        action: GraphChatLocalSearchAction,
+        correctionOrigin:
+            GraphChatInterpretationCorrectionOrigin? = nil
     ) -> GraphChatIntentInterpretation? {
         guard
             intent.kind == .findNodes,
@@ -358,13 +376,17 @@ nonisolated struct GraphChatIntentInterpretationBuilder:
             return nil
         }
         return makeSearchInterpretation(
-            intent: intent
+            intent: intent,
+            correctionOrigin:
+                correctionOrigin
         )
     }
 
     func nodeInterpretation(
         intent: GraphChatTypedIntent,
-        action: GraphChatLocalNodeDetailsAction
+        action: GraphChatLocalNodeDetailsAction,
+        correctionOrigin:
+            GraphChatInterpretationCorrectionOrigin? = nil
     ) -> GraphChatIntentInterpretation? {
         guard
             intent.kind == .nodeDetails,
@@ -387,13 +409,17 @@ nonisolated struct GraphChatIntentInterpretationBuilder:
         }
         return makeNodeInterpretation(
             intent: intent,
-            details: details
+            details: details,
+            correctionOrigin:
+                correctionOrigin
         )
     }
 
     func comparisonInterpretation(
         intent: GraphChatTypedIntent,
-        plan: GraphChatComparisonPlan
+        plan: GraphChatComparisonPlan,
+        correctionOrigin:
+            GraphChatInterpretationCorrectionOrigin? = nil
     ) -> GraphChatIntentInterpretation? {
         guard
             intent.kind == .compareNodes,
@@ -447,13 +473,17 @@ nonisolated struct GraphChatIntentInterpretationBuilder:
         }
         return makeComparisonInterpretation(
             intent: intent,
-            comparison: comparison
+            comparison: comparison,
+            correctionOrigin:
+                correctionOrigin
         )
     }
 
     func graphStateInterpretation(
         intent: GraphChatTypedIntent,
-        action: GraphChatLocalGraphStateAction
+        action: GraphChatLocalGraphStateAction,
+        correctionOrigin:
+            GraphChatInterpretationCorrectionOrigin? = nil
     ) -> GraphChatIntentInterpretation? {
         guard
             intent.kind == .inspectGraphState,
@@ -482,12 +512,16 @@ nonisolated struct GraphChatIntentInterpretationBuilder:
         return makeGraphStateInterpretation(
             intent: intent,
             graphState: graphState,
-            aspect: action.aspect
+            aspect: action.aspect,
+            correctionOrigin:
+                correctionOrigin
         )
     }
 
     private func makeSearchInterpretation(
-        intent: GraphChatTypedIntent
+        intent: GraphChatTypedIntent,
+        correctionOrigin:
+            GraphChatInterpretationCorrectionOrigin?
     ) -> GraphChatIntentInterpretation? {
         let interpretation =
             GraphChatIntentInterpretation(
@@ -534,14 +568,18 @@ nonisolated struct GraphChatIntentInterpretationBuilder:
                     .resultExtent,
                 ],
                 formattingTimeZoneIdentifier:
-                    timeZone.identifier
+                    timeZone.identifier,
+                correctionOrigin:
+                    correctionOrigin
             )
         return valid(interpretation)
     }
 
     private func makeNodeInterpretation(
         intent: GraphChatTypedIntent,
-        details: GraphChatTypedNodeDetailsIntent
+        details: GraphChatTypedNodeDetailsIntent,
+        correctionOrigin:
+            GraphChatInterpretationCorrectionOrigin?
     ) -> GraphChatIntentInterpretation? {
         let fields = uniqueFields(
             details.fields
@@ -591,14 +629,18 @@ nonisolated struct GraphChatIntentInterpretationBuilder:
                     .fields,
                 ],
                 formattingTimeZoneIdentifier:
-                    timeZone.identifier
+                    timeZone.identifier,
+                correctionOrigin:
+                    correctionOrigin
             )
         return valid(interpretation)
     }
 
     private func makeComparisonInterpretation(
         intent: GraphChatTypedIntent,
-        comparison: GraphChatTypedCompareNodesIntent
+        comparison: GraphChatTypedCompareNodesIntent,
+        correctionOrigin:
+            GraphChatInterpretationCorrectionOrigin?
     ) -> GraphChatIntentInterpretation? {
         let fields = uniqueFields(
             comparison.fields
@@ -647,7 +689,9 @@ nonisolated struct GraphChatIntentInterpretationBuilder:
                     .fields,
                 ],
                 formattingTimeZoneIdentifier:
-                    timeZone.identifier
+                    timeZone.identifier,
+                correctionOrigin:
+                    correctionOrigin
             )
         return valid(interpretation)
     }
@@ -656,7 +700,9 @@ nonisolated struct GraphChatIntentInterpretationBuilder:
         intent: GraphChatTypedIntent,
         graphState:
             GraphChatTypedInspectGraphStateIntent,
-        aspect: GraphChatGraphStateAspect
+        aspect: GraphChatGraphStateAspect,
+        correctionOrigin:
+            GraphChatInterpretationCorrectionOrigin?
     ) -> GraphChatIntentInterpretation? {
         let interpretation =
             GraphChatIntentInterpretation(
@@ -700,7 +746,9 @@ nonisolated struct GraphChatIntentInterpretationBuilder:
                     .graphStateAspect,
                 ],
                 formattingTimeZoneIdentifier:
-                    timeZone.identifier
+                    timeZone.identifier,
+                correctionOrigin:
+                    correctionOrigin
             )
         return valid(interpretation)
     }

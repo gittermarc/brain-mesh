@@ -49,6 +49,7 @@ nonisolated enum GraphChatAnswerArtifactRegistryError: Error, LocalizedError, Ha
     case sessionMismatch
     case artifactTooLarge(maximumByteCount: Int)
     case transactionBudgetExceeded
+    case transactionAlreadyDeferred
     case evidenceUnavailable
     case invalidNavigationTarget
     case artifactInvalidated
@@ -63,6 +64,8 @@ nonisolated enum GraphChatAnswerArtifactRegistryError: Error, LocalizedError, Ha
             return "Das Answer Artifact überschreitet das Größenlimit von \(maximumByteCount) Byte."
         case .transactionBudgetExceeded:
             return "Die noch nicht abgeschlossenen Answer Artifacts überschreiten das Session-Budget."
+        case .transactionAlreadyDeferred:
+            return "Die Artifact-Transaktion wartet bereits auf ihren abschließenden Commit."
         case .evidenceUnavailable:
             return "Das Answer Artifact referenziert keine vollständig revalidierte Evidence."
         case .invalidNavigationTarget:
@@ -81,6 +84,13 @@ actor GraphChatAnswerArtifactRegistry {
         let byteCount: Int
     }
 
+    private struct DeferredCommit: Sendable {
+        let entries: [GraphChatAnswerArtifactID: Entry]
+        let requestedArtifactIDs: Set<GraphChatAnswerArtifactID>
+        let replacedArtifactIDs:
+            Set<GraphChatAnswerArtifactID>
+    }
+
     private let graphScope: GraphScope
     private let scope: GraphChatScope
     private let sessionID: GraphChatAnswerArtifactSessionID
@@ -90,6 +100,10 @@ actor GraphChatAnswerArtifactRegistry {
 
     private var committedByID: [GraphChatAnswerArtifactID: Entry] = [:]
     private var stagedByTransaction: [GraphChatAnswerArtifactTransactionID: [GraphChatAnswerArtifactID: Entry]] = [:]
+    private var deferredByTransaction:
+        [GraphChatAnswerArtifactTransactionID: DeferredCommit] = [:]
+    private var activeTransactions:
+        Set<GraphChatAnswerArtifactTransactionID> = []
     private var nextSequence: UInt64 = 0
     private var revision: UInt64 = 0
     private var lastClearReason: GraphChatAnswerArtifactRegistryClearReason?
@@ -122,6 +136,14 @@ actor GraphChatAnswerArtifactRegistry {
         evidenceRegistry: GraphChatEvidenceRegistry
     ) async throws -> GraphChatAnswerArtifactID {
         try Task.checkCancellation()
+        guard deferredByTransaction[transactionID] == nil else {
+            throw GraphChatAnswerArtifactRegistryError
+                .transactionAlreadyDeferred
+        }
+        try beginTransactionOperation(transactionID)
+        defer {
+            endTransactionOperation(transactionID)
+        }
         try validateScope(draft.graphScope)
         try validateNavigationTargets(draft.allNavigationTargets)
 
@@ -141,16 +163,15 @@ actor GraphChatAnswerArtifactRegistry {
         )
         try Task.checkCancellation()
 
-        let existingStaged = stagedByTransaction.values.reduce(0) { partial, entries in
-            partial + entries.count
-        }
-        guard existingStaged < budget.maximumArtifactCount else {
+        guard pendingArtifactCount
+                < budget.maximumArtifactCount
+        else {
             throw GraphChatAnswerArtifactRegistryError.transactionBudgetExceeded
         }
-        let stagedBytes = stagedByTransaction.values.reduce(0) { partial, entries in
-            partial + entries.values.reduce(0) { $0 + $1.byteCount }
-        }
-        guard stagedBytes + entry.byteCount <= budget.maximumTotalByteCount else {
+        guard pendingArtifactByteCount
+                + entry.byteCount
+                <= budget.maximumTotalByteCount
+        else {
             throw GraphChatAnswerArtifactRegistryError.transactionBudgetExceeded
         }
         stagedByTransaction[transactionID, default: [:]][entry.artifact.id] = entry
@@ -234,6 +255,15 @@ actor GraphChatAnswerArtifactRegistry {
         sessionID expectedSessionID: GraphChatAnswerArtifactSessionID,
         transactionID: GraphChatAnswerArtifactTransactionID
     ) async throws -> [GraphChatAnswerArtifact] {
+        guard deferredByTransaction[transactionID] == nil else {
+            throw GraphChatAnswerArtifactRegistryError
+                .transactionAlreadyDeferred
+        }
+        try beginTransactionOperation(transactionID)
+        defer {
+            endTransactionOperation(transactionID)
+        }
+        let validationRevision = revision
         try validateAccess(
             graphScope: expectedGraphScope,
             sessionID: expectedSessionID
@@ -269,6 +299,10 @@ actor GraphChatAnswerArtifactRegistry {
             )
             result.append(artifact)
         }
+        guard validationRevision == revision else {
+            throw GraphChatAnswerArtifactRegistryError
+                .artifactInvalidated
+        }
         stagedByTransaction[transactionID] = staged
         return result
     }
@@ -279,7 +313,20 @@ actor GraphChatAnswerArtifactRegistry {
         retaining artifactIDs: [GraphChatAnswerArtifactID]
     ) async throws -> [GraphChatAnswerArtifactID] {
         try Task.checkCancellation()
-        guard let staged = stagedByTransaction[transactionID] else {
+        guard deferredByTransaction[transactionID] == nil else {
+            throw GraphChatAnswerArtifactRegistryError
+                .transactionAlreadyDeferred
+        }
+        try beginTransactionOperation(transactionID)
+        defer {
+            endTransactionOperation(transactionID)
+        }
+        let validationRevision = revision
+        guard let staged =
+                stagedByTransaction[
+                    transactionID
+                ]
+        else {
             return []
         }
         let retained = Set(artifactIDs)
@@ -304,6 +351,10 @@ actor GraphChatAnswerArtifactRegistry {
             )
         }
         try Task.checkCancellation()
+        guard validationRevision == revision else {
+            throw GraphChatAnswerArtifactRegistryError
+                .artifactInvalidated
+        }
         stagedByTransaction.removeValue(forKey: transactionID)
         for entry in validatedEntries {
             committedByID[entry.artifact.id] = entry
@@ -312,8 +363,189 @@ actor GraphChatAnswerArtifactRegistry {
         return validatedEntries.map { $0.artifact.id }
     }
 
+    /// Revalidates and seals one transaction without publishing it into the
+    /// committed registry. This keeps the currently committed artifact set,
+    /// including artifacts that would otherwise be budget-evicted, untouched
+    /// until the owning conversation commit succeeds.
+    func commitDeferred(
+        transactionID: GraphChatAnswerArtifactTransactionID,
+        retaining artifactIDs: [GraphChatAnswerArtifactID]
+    ) async throws -> [GraphChatAnswerArtifactID] {
+        try await commitDeferred(
+            transactionID: transactionID,
+            retaining: artifactIDs,
+            replacing: []
+        )
+    }
+
+    /// Revalidates and seals a replacement transaction without publishing it.
+    /// The old IDs are checked and bound here, but are removed only by the
+    /// non-throwing finalization step after the conversation CAS succeeds.
+    func commitDeferred(
+        transactionID: GraphChatAnswerArtifactTransactionID,
+        retaining artifactIDs: [GraphChatAnswerArtifactID],
+        replacing replacedArtifactIDs:
+            [GraphChatAnswerArtifactID]
+    ) async throws -> [GraphChatAnswerArtifactID] {
+        try Task.checkCancellation()
+        try beginTransactionOperation(transactionID)
+        defer {
+            endTransactionOperation(transactionID)
+        }
+        let validationRevision = revision
+        let requestedArtifactIDs = Set(artifactIDs)
+        let replacements =
+            Set(replacedArtifactIDs)
+        guard
+            replacements.count
+                == replacedArtifactIDs.count,
+            replacements.isDisjoint(
+                with: requestedArtifactIDs
+            )
+        else {
+            throw GraphChatAnswerArtifactRegistryError
+                .artifactInvalidated
+        }
+        if let deferred = deferredByTransaction[transactionID] {
+            guard
+                deferred.requestedArtifactIDs
+                    == requestedArtifactIDs,
+                deferred.replacedArtifactIDs
+                    == replacements
+            else {
+                throw GraphChatAnswerArtifactRegistryError
+                    .transactionAlreadyDeferred
+            }
+            return deferred.entries.values
+                .sorted { $0.sequence < $1.sequence }
+                .map(\.artifact.id)
+        }
+        let staged =
+            stagedByTransaction[transactionID]
+            ?? [:]
+
+        var validatedEntries:
+            [GraphChatAnswerArtifactID: Entry] = [:]
+        for entry in staged.values.sorted(
+            by: { $0.sequence < $1.sequence }
+        )
+        where requestedArtifactIDs.contains(
+            entry.artifact.id
+        ) {
+            try Task.checkCancellation()
+            guard let artifact =
+                    try await revalidator
+                        .revalidatedArtifact(
+                            entry.artifact,
+                            evidence: entry.evidence,
+                            in: scope
+                        )
+            else {
+                continue
+            }
+            try validateNavigationTargets(
+                artifact.allNavigationTargets
+            )
+            let validated = makeEntry(
+                for: artifact,
+                evidence: entry.evidence,
+                sequence: entry.sequence
+            )
+            validatedEntries[artifact.id] =
+                validated
+        }
+        try Task.checkCancellation()
+        guard validationRevision == revision else {
+            throw GraphChatAnswerArtifactRegistryError
+                .artifactInvalidated
+        }
+        guard replacements.isSubset(
+            of: Set(committedByID.keys)
+        ) else {
+            throw GraphChatAnswerArtifactRegistryError
+                .artifactInvalidated
+        }
+
+        stagedByTransaction.removeValue(
+            forKey: transactionID
+        )
+        deferredByTransaction[transactionID] =
+            DeferredCommit(
+                entries: validatedEntries,
+                requestedArtifactIDs:
+                    requestedArtifactIDs,
+                replacedArtifactIDs:
+                    replacements
+            )
+        return validatedEntries.values
+            .sorted { $0.sequence < $1.sequence }
+            .map(\.artifact.id)
+    }
+
+    /// Publishes a transaction that has already passed every fallible
+    /// validation step in `commitDeferred`. This operation deliberately does
+    /// not observe task cancellation: after the outer conversation commit,
+    /// artifact publication must finish as one non-throwing state transition.
+    @discardableResult
+    func finalizeDeferredCommit(
+        transactionID: GraphChatAnswerArtifactTransactionID
+    ) -> [GraphChatAnswerArtifactID] {
+        guard let deferred =
+                deferredByTransaction.removeValue(
+                    forKey: transactionID
+                )
+        else {
+            return []
+        }
+        let entries = deferred.entries.values
+            .sorted { $0.sequence < $1.sequence }
+        for artifactID in
+            deferred.replacedArtifactIDs
+        {
+            committedByID.removeValue(
+                forKey: artifactID
+            )
+        }
+        for entry in entries {
+            committedByID[entry.artifact.id] =
+                entry
+        }
+        evictCommittedArtifactsIfNeeded()
+        if entries.isEmpty == false
+            || deferred.replacedArtifactIDs
+                .isEmpty == false
+        {
+            revision &+= 1
+        }
+        return entries.map(\.artifact.id)
+    }
+
+    /// Drops either an unsealed transaction or a sealed deferred transaction
+    /// without touching any artifact committed by an earlier turn.
+    func rollbackDeferredCommit(
+        transactionID: GraphChatAnswerArtifactTransactionID
+    ) {
+        let removedStaged =
+            stagedByTransaction.removeValue(
+                forKey: transactionID
+            )
+        let removedDeferred =
+            deferredByTransaction.removeValue(
+                forKey: transactionID
+            )
+        if removedStaged != nil
+            || removedDeferred != nil
+        {
+            revision &+= 1
+        }
+    }
+
     func rollback(transactionID: GraphChatAnswerArtifactTransactionID) {
-        stagedByTransaction.removeValue(forKey: transactionID)
+        if stagedByTransaction.removeValue(
+            forKey: transactionID
+        ) != nil {
+            revision &+= 1
+        }
     }
 
     func removeCommittedArtifacts(
@@ -337,6 +569,9 @@ actor GraphChatAnswerArtifactRegistry {
     func removeAll(reason: GraphChatAnswerArtifactRegistryClearReason) {
         committedByID.removeAll(keepingCapacity: false)
         stagedByTransaction.removeAll(keepingCapacity: false)
+        deferredByTransaction.removeAll(
+            keepingCapacity: false
+        )
         revision &+= 1
         lastClearReason = reason
     }
@@ -353,6 +588,17 @@ actor GraphChatAnswerArtifactRegistry {
         (stagedByTransaction[transactionID] ?? [:]).values
             .sorted { $0.sequence < $1.sequence }
             .map(\.artifact)
+    }
+
+    func deferredSnapshotForTesting(
+        transactionID:
+            GraphChatAnswerArtifactTransactionID
+    ) -> [GraphChatAnswerArtifact] {
+        deferredByTransaction[transactionID]?
+            .entries.values
+            .sorted { $0.sequence < $1.sequence }
+            .map(\.artifact)
+            ?? []
     }
 
     func lastClearReasonForTesting() -> GraphChatAnswerArtifactRegistryClearReason? {
@@ -422,10 +668,32 @@ actor GraphChatAnswerArtifactRegistry {
         var candidate = idGenerator()
         while committedByID[candidate] != nil
             || stagedByTransaction.values.contains(where: { $0[candidate] != nil })
+            || deferredByTransaction.values
+                .contains(where: {
+                    $0.entries[candidate] != nil
+                })
         {
             candidate = GraphChatAnswerArtifactID()
         }
         return candidate
+    }
+
+    private func beginTransactionOperation(
+        _ transactionID:
+            GraphChatAnswerArtifactTransactionID
+    ) throws {
+        guard activeTransactions
+            .insert(transactionID).inserted else {
+            throw GraphChatAnswerArtifactRegistryError
+                .transactionAlreadyDeferred
+        }
+    }
+
+    private func endTransactionOperation(
+        _ transactionID:
+            GraphChatAnswerArtifactTransactionID
+    ) {
+        activeTransactions.remove(transactionID)
     }
 
     private func makeEntry(
@@ -458,5 +726,39 @@ actor GraphChatAnswerArtifactRegistry {
 
     private var committedByteCount: Int {
         committedByID.values.reduce(0) { $0 + $1.byteCount }
+    }
+
+    private var pendingArtifactCount: Int {
+        let stagedCount =
+            stagedByTransaction.values.reduce(0) {
+                $0 + $1.count
+            }
+        let deferredCount =
+            deferredByTransaction.values.reduce(0) {
+                $0 + $1.entries.count
+            }
+        return stagedCount + deferredCount
+    }
+
+    private var pendingArtifactByteCount: Int {
+        let stagedBytes =
+            stagedByTransaction.values.reduce(0) {
+                partial,
+                entries in
+                partial
+                    + entries.values.reduce(0) {
+                        $0 + $1.byteCount
+                    }
+            }
+        let deferredBytes =
+            deferredByTransaction.values.reduce(0) {
+                partial,
+                deferred in
+                partial
+                    + deferred.entries.values.reduce(0) {
+                        $0 + $1.byteCount
+                    }
+            }
+        return stagedBytes + deferredBytes
     }
 }

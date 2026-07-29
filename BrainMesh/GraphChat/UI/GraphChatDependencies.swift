@@ -14,6 +14,11 @@ nonisolated protocol GraphChatOrchestrating: Sendable {
         chatScope: GraphChatScope
     ) async -> GraphChatEventStream
 
+    func streamCorrectedIntent(
+        _ request:
+            GraphChatInterpretationCorrectionRequest
+    ) async -> GraphChatEventStream
+
     func cancelCurrentGeneration() async
     func discardSession() async
     func discardSession(reason: GraphChatConversationResetReason) async
@@ -32,6 +37,35 @@ nonisolated protocol GraphChatOrchestrating: Sendable {
 extension GraphChatOrchestrator: GraphChatOrchestrating {}
 
 nonisolated extension GraphChatOrchestrating {
+    func streamCorrectedIntent(
+        _ request:
+            GraphChatInterpretationCorrectionRequest
+    ) async -> GraphChatEventStream {
+        let pair =
+            GraphChatEventStream.makeStream()
+        let localizer =
+            GraphChatResponseLocalizer(
+                language:
+                    request.binding
+                        .originalInterpretation
+                        .responseLanguage
+            )
+        pair.continuation.yield(
+            .failure(
+                GraphChatError(
+                    code: .unavailable,
+                    message:
+                        localizer
+                            .userFacingFailure(
+                                .unavailable
+                            )
+                )
+            )
+        )
+        pair.continuation.finish()
+        return pair.stream
+    }
+
     func discardSession(reason: GraphChatConversationResetReason) async {
         await discardSession()
     }

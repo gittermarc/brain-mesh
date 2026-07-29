@@ -256,6 +256,328 @@ struct GraphChatAnswerArtifactRegistryTests {
     }
 
     @Test
+    func deferredCommitDoesNotEvictEarlierArtifactsBeforeFinalization() async throws {
+        let fixture = ArtifactRegistryFixture()
+        let evidenceRegistry =
+            GraphChatEvidenceRegistry(scope: fixture.chatScope)
+        let evidence =
+            fixture.makeEvidence(sourceID: fixture.uuid(101))
+        try await evidenceRegistry.register([evidence])
+        let registry = GraphChatAnswerArtifactRegistry(
+            graphScope: fixture.graphScope,
+            sessionID: fixture.sessionID,
+            budget: GraphChatAnswerArtifactRegistryBudget(
+                maximumArtifactCount: 1,
+                maximumTotalByteCount: 256 * 1_024,
+                maximumArtifactByteCount: 64 * 1_024
+            )
+        )
+        let earlierTransaction =
+            GraphChatAnswerArtifactTransactionID(
+                rawValue: fixture.uuid(102)
+            )
+        let earlierID = try await registry.stage(
+            fixture.draft(
+                title: "Earlier",
+                evidenceID: evidence.id
+            ),
+            transactionID: earlierTransaction,
+            evidenceRegistry: evidenceRegistry
+        )
+        try await registry.commit(
+            transactionID: earlierTransaction,
+            retaining: [earlierID]
+        )
+
+        let replacementTransaction =
+            GraphChatAnswerArtifactTransactionID(
+                rawValue: fixture.uuid(103)
+            )
+        let replacementID = try await registry.stage(
+            fixture.draft(
+                title: "Replacement",
+                evidenceID: evidence.id
+            ),
+            transactionID: replacementTransaction,
+            evidenceRegistry: evidenceRegistry
+        )
+        let preparedIDs =
+            try await registry.commitDeferred(
+                transactionID: replacementTransaction,
+                retaining: [replacementID],
+                replacing: [earlierID]
+            )
+
+        #expect(preparedIDs == [replacementID])
+        #expect(
+            await registry.snapshotForTesting()
+                .map(\.id) == [earlierID]
+        )
+        #expect(
+            await registry.deferredSnapshotForTesting(
+                transactionID: replacementTransaction
+            ).map(\.id) == [replacementID]
+        )
+
+        await registry.rollbackDeferredCommit(
+            transactionID: replacementTransaction
+        )
+
+        #expect(
+            await registry.snapshotForTesting()
+                .map(\.id) == [earlierID]
+        )
+        #expect(
+            await registry.deferredSnapshotForTesting(
+                transactionID: replacementTransaction
+            ).isEmpty
+        )
+    }
+
+    @Test
+    func deferredCommitAppliesBudgetEvictionOnlyWhenFinalized() async throws {
+        let fixture = ArtifactRegistryFixture()
+        let evidenceRegistry =
+            GraphChatEvidenceRegistry(scope: fixture.chatScope)
+        let evidence =
+            fixture.makeEvidence(sourceID: fixture.uuid(111))
+        try await evidenceRegistry.register([evidence])
+        let registry = GraphChatAnswerArtifactRegistry(
+            graphScope: fixture.graphScope,
+            sessionID: fixture.sessionID,
+            budget: GraphChatAnswerArtifactRegistryBudget(
+                maximumArtifactCount: 1,
+                maximumTotalByteCount: 256 * 1_024,
+                maximumArtifactByteCount: 64 * 1_024
+            )
+        )
+        let earlierTransaction =
+            GraphChatAnswerArtifactTransactionID(
+                rawValue: fixture.uuid(112)
+            )
+        let earlierID = try await registry.stage(
+            fixture.draft(
+                title: "Earlier",
+                evidenceID: evidence.id
+            ),
+            transactionID: earlierTransaction,
+            evidenceRegistry: evidenceRegistry
+        )
+        try await registry.commit(
+            transactionID: earlierTransaction,
+            retaining: [earlierID]
+        )
+        let replacementTransaction =
+            GraphChatAnswerArtifactTransactionID(
+                rawValue: fixture.uuid(113)
+            )
+        let replacementID = try await registry.stage(
+            fixture.draft(
+                title: "Replacement",
+                evidenceID: evidence.id
+            ),
+            transactionID: replacementTransaction,
+            evidenceRegistry: evidenceRegistry
+        )
+        try await registry.commitDeferred(
+            transactionID: replacementTransaction,
+            retaining: [replacementID]
+        )
+
+        let finalizedIDs =
+            await registry.finalizeDeferredCommit(
+                transactionID: replacementTransaction
+            )
+
+        #expect(finalizedIDs == [replacementID])
+        #expect(
+            await registry.snapshotForTesting()
+                .map(\.id) == [replacementID]
+        )
+        #expect(
+            try await registry.artifact(
+                for: earlierID,
+                graphScope: fixture.graphScope,
+                sessionID: fixture.sessionID
+            ) == nil
+        )
+    }
+
+    @Test
+    func deferredReplacementRemovesSuffixBeforeApplyingBudget()
+        async throws
+    {
+        let fixture = ArtifactRegistryFixture()
+        let evidenceRegistry =
+            GraphChatEvidenceRegistry(
+                scope: fixture.chatScope
+            )
+        let evidence =
+            fixture.makeEvidence(
+                sourceID: fixture.uuid(121)
+            )
+        try await evidenceRegistry.register(
+            [evidence]
+        )
+        let registry =
+            GraphChatAnswerArtifactRegistry(
+                graphScope:
+                    fixture.graphScope,
+                sessionID:
+                    fixture.sessionID,
+                budget:
+                    GraphChatAnswerArtifactRegistryBudget(
+                        maximumArtifactCount: 2,
+                        maximumTotalByteCount:
+                            256 * 1_024,
+                        maximumArtifactByteCount:
+                            64 * 1_024
+                    )
+            )
+
+        let prefixTransaction =
+            GraphChatAnswerArtifactTransactionID(
+                rawValue: fixture.uuid(122)
+            )
+        let prefixID = try await registry.stage(
+            fixture.draft(
+                title: "Prefix",
+                evidenceID: evidence.id
+            ),
+            transactionID: prefixTransaction,
+            evidenceRegistry: evidenceRegistry
+        )
+        try await registry.commit(
+            transactionID: prefixTransaction,
+            retaining: [prefixID]
+        )
+
+        let suffixTransaction =
+            GraphChatAnswerArtifactTransactionID(
+                rawValue: fixture.uuid(123)
+            )
+        let suffixID = try await registry.stage(
+            fixture.draft(
+                title: "Suffix",
+                evidenceID: evidence.id
+            ),
+            transactionID: suffixTransaction,
+            evidenceRegistry: evidenceRegistry
+        )
+        try await registry.commit(
+            transactionID: suffixTransaction,
+            retaining: [suffixID]
+        )
+
+        let replacementTransaction =
+            GraphChatAnswerArtifactTransactionID(
+                rawValue: fixture.uuid(124)
+            )
+        let replacementID =
+            try await registry.stage(
+                fixture.draft(
+                    title: "Replacement",
+                    evidenceID: evidence.id
+                ),
+                transactionID:
+                    replacementTransaction,
+                evidenceRegistry:
+                    evidenceRegistry
+            )
+        try await registry.commitDeferred(
+            transactionID:
+                replacementTransaction,
+            retaining: [replacementID],
+            replacing: [suffixID]
+        )
+
+        #expect(
+            await registry.snapshotForTesting()
+                .map(\.id)
+                == [prefixID, suffixID]
+        )
+
+        let finalizedIDs =
+            await registry.finalizeDeferredCommit(
+                transactionID:
+                    replacementTransaction
+            )
+
+        #expect(finalizedIDs == [replacementID])
+        #expect(
+            await registry.snapshotForTesting()
+                .map(\.id)
+                == [prefixID, replacementID]
+        )
+        #expect(
+            try await registry.artifact(
+                for: suffixID,
+                graphScope:
+                    fixture.graphScope,
+                sessionID:
+                    fixture.sessionID
+            ) == nil
+        )
+    }
+
+    @Test
+    func deferredReplacementCanAtomicallyRemoveOldArtifactsWithoutNewOnes()
+        async throws
+    {
+        let fixture = ArtifactRegistryFixture()
+        let context = try await fixture.makeContext()
+        let oldTransaction =
+            GraphChatAnswerArtifactTransactionID(
+                rawValue: fixture.uuid(131)
+            )
+        let oldID = try await context.registry.stage(
+            fixture.draft(
+                evidenceID:
+                    context.evidence.id
+            ),
+            transactionID: oldTransaction,
+            evidenceRegistry:
+                context.evidenceRegistry
+        )
+        try await context.registry.commit(
+            transactionID: oldTransaction,
+            retaining: [oldID]
+        )
+
+        let replacementTransaction =
+            GraphChatAnswerArtifactTransactionID(
+                rawValue: fixture.uuid(132)
+            )
+        let prepared =
+            try await context.registry
+                .commitDeferred(
+                    transactionID:
+                        replacementTransaction,
+                    retaining: [],
+                    replacing: [oldID]
+                )
+
+        #expect(prepared.isEmpty)
+        #expect(
+            await context.registry
+                .snapshotForTesting()
+                .map(\.id) == [oldID]
+        )
+
+        _ = await context.registry
+            .finalizeDeferredCommit(
+                transactionID:
+                    replacementTransaction
+            )
+
+        #expect(
+            await context.registry
+                .snapshotForTesting()
+                .isEmpty
+        )
+    }
+
+    @Test
     func everySecurityLifecycleClearReasonRemovesCommittedArtifacts() async throws {
         let fixture = ArtifactRegistryFixture()
         let reasons: [GraphChatAnswerArtifactRegistryClearReason] = [
