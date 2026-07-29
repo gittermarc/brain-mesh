@@ -753,7 +753,7 @@ struct GraphChatInterpretationCorrectionLifecycleTests {
                 includesSuffix: false
             )
         let trusted =
-            await makeSetup(
+            await Self.makeSetup(
                 fixture: fixture,
                 history: trustedHistory
             )
@@ -764,7 +764,7 @@ struct GraphChatInterpretationCorrectionLifecycleTests {
                     trustedHistory
                         .originalAssistantID
             )
-        await waitForEditor(
+        await Self.waitForEditor(
             trusted.viewModel
         )
 
@@ -790,7 +790,7 @@ struct GraphChatInterpretationCorrectionLifecycleTests {
                 includesSuffix: false
             )
         let legacy =
-            await makeSetup(
+            await Self.makeSetup(
                 fixture: fixture,
                 history: legacyHistory
             )
@@ -822,7 +822,7 @@ struct GraphChatInterpretationCorrectionLifecycleTests {
                 includesSuffix: true
             )
         let setup =
-            await makeSetup(
+            await Self.makeSetup(
                 fixture: fixture,
                 history: history
             )
@@ -838,7 +838,7 @@ struct GraphChatInterpretationCorrectionLifecycleTests {
                 messageID:
                     history.originalAssistantID
             )
-        await waitForEditor(
+        await Self.waitForEditor(
             setup.viewModel
         )
         setup.viewModel
@@ -949,7 +949,7 @@ struct GraphChatInterpretationCorrectionLifecycleTests {
                 includesSuffix: false
             )
         let setup =
-            await makeSetup(
+            await Self.makeSetup(
                 fixture: fixture,
                 history: history,
                 scripts: [
@@ -964,7 +964,7 @@ struct GraphChatInterpretationCorrectionLifecycleTests {
                 messageID:
                     history.originalAssistantID
             )
-        await waitForEditor(
+        await Self.waitForEditor(
             setup.viewModel
         )
         let selection =
@@ -989,7 +989,7 @@ struct GraphChatInterpretationCorrectionLifecycleTests {
                     .correctionEditorSession?
                     .isApplying == true
             }
-        await waitForCorrectionRequest(
+        await Self.waitForCorrectionRequest(
             setup.orchestrator
         )
 
@@ -1019,7 +1019,7 @@ struct GraphChatInterpretationCorrectionLifecycleTests {
                 == history.messages
         )
         #expect(
-            answerText(
+            Self.answerText(
                 in: setup.viewModel.messages,
                 messageID:
                     history.originalAssistantID
@@ -1044,7 +1044,7 @@ struct GraphChatInterpretationCorrectionLifecycleTests {
                 includesSuffix: false
             )
         let setup =
-            await makeSetup(
+            await Self.makeSetup(
                 fixture: fixture,
                 history: history,
                 correctionStreamStartDelayNanoseconds:
@@ -1055,7 +1055,7 @@ struct GraphChatInterpretationCorrectionLifecycleTests {
                 messageID:
                     history.originalAssistantID
             )
-        await waitForEditor(
+        await Self.waitForEditor(
             setup.viewModel
         )
         let selection =
@@ -1120,7 +1120,7 @@ struct GraphChatInterpretationCorrectionLifecycleTests {
                 includesSuffix: false
             )
         let setup =
-            await makeSetup(
+            await Self.makeSetup(
                 fixture: fixture,
                 history: history,
                 scripts: [
@@ -1143,7 +1143,7 @@ struct GraphChatInterpretationCorrectionLifecycleTests {
                 messageID:
                     history.originalAssistantID
             )
-        await waitForEditor(
+        await Self.waitForEditor(
             setup.viewModel
         )
         let selection =
@@ -1176,7 +1176,7 @@ struct GraphChatInterpretationCorrectionLifecycleTests {
                 == history.messages
         )
         #expect(
-            answerText(
+            Self.answerText(
                 in: setup.viewModel.messages,
                 messageID:
                     history.originalAssistantID
@@ -1214,10 +1214,10 @@ struct GraphChatInterpretationCorrectionLifecycleTests {
         let access =
             GraphChatCorrectionLifecycleAccessDecisionBox(
                 decision:
-                    readyAccessDecision
+                    Self.readyAccessDecision
             )
         let setup =
-            await makeSetup(
+            await Self.makeSetup(
                 fixture: fixture,
                 history: history,
                 accessDecisionBox: access
@@ -1230,7 +1230,7 @@ struct GraphChatInterpretationCorrectionLifecycleTests {
                 messageID:
                     history.originalAssistantID
             )
-        await waitForEditor(
+        await Self.waitForEditor(
             setup.viewModel
         )
 
@@ -1315,7 +1315,7 @@ struct GraphChatInterpretationCorrectionLifecycleTests {
             suffixAssistantID,
         ]
         let setup =
-            await makeSetup(
+            await Self.makeSetup(
                 fixture: fixture,
                 history: history,
                 scripts: [
@@ -1348,7 +1348,7 @@ struct GraphChatInterpretationCorrectionLifecycleTests {
                 messageID:
                     history.originalAssistantID
             )
-        await waitForEditor(
+        await Self.waitForEditor(
             setup.viewModel
         )
         var selection =
@@ -1405,7 +1405,7 @@ struct GraphChatInterpretationCorrectionLifecycleTests {
                 } == false
         )
         #expect(
-            answerText(
+            Self.answerText(
                 in: setup.viewModel.messages,
                 messageID:
                     setup.viewModel.messages[1]

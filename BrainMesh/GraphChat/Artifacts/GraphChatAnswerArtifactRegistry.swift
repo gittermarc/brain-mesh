@@ -367,6 +367,7 @@ actor GraphChatAnswerArtifactRegistry {
     /// committed registry. This keeps the currently committed artifact set,
     /// including artifacts that would otherwise be budget-evicted, untouched
     /// until the owning conversation commit succeeds.
+    @discardableResult
     func commitDeferred(
         transactionID: GraphChatAnswerArtifactTransactionID,
         retaining artifactIDs: [GraphChatAnswerArtifactID]
@@ -381,6 +382,7 @@ actor GraphChatAnswerArtifactRegistry {
     /// Revalidates and seals a replacement transaction without publishing it.
     /// The old IDs are checked and bound here, but are removed only by the
     /// non-throwing finalization step after the conversation CAS succeeds.
+    @discardableResult
     func commitDeferred(
         transactionID: GraphChatAnswerArtifactTransactionID,
         retaining artifactIDs: [GraphChatAnswerArtifactID],
@@ -489,7 +491,7 @@ actor GraphChatAnswerArtifactRegistry {
     @discardableResult
     func finalizeDeferredCommit(
         transactionID: GraphChatAnswerArtifactTransactionID
-    ) -> [GraphChatAnswerArtifactID] {
+    ) async -> [GraphChatAnswerArtifactID] {
         guard let deferred =
                 deferredByTransaction.removeValue(
                     forKey: transactionID
@@ -524,7 +526,7 @@ actor GraphChatAnswerArtifactRegistry {
     /// without touching any artifact committed by an earlier turn.
     func rollbackDeferredCommit(
         transactionID: GraphChatAnswerArtifactTransactionID
-    ) {
+    ) async {
         let removedStaged =
             stagedByTransaction.removeValue(
                 forKey: transactionID
@@ -540,7 +542,9 @@ actor GraphChatAnswerArtifactRegistry {
         }
     }
 
-    func rollback(transactionID: GraphChatAnswerArtifactTransactionID) {
+    func rollback(
+        transactionID: GraphChatAnswerArtifactTransactionID
+    ) async {
         if stagedByTransaction.removeValue(
             forKey: transactionID
         ) != nil {

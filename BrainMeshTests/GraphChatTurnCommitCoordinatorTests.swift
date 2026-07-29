@@ -479,6 +479,22 @@ private actor TurnCommitRecordingArtifactRegistry:
         )
     }
 
+    func finalizeDeferredCommit(
+        transactionID:
+            GraphChatAnswerArtifactTransactionID
+    ) async -> [GraphChatAnswerArtifactID] {
+        []
+    }
+
+    func rollbackDeferredCommit(
+        transactionID:
+            GraphChatAnswerArtifactTransactionID
+    ) async {
+        await rollback(
+            transactionID: transactionID
+        )
+    }
+
     func rollback(
         transactionID: GraphChatAnswerArtifactTransactionID
     ) async {

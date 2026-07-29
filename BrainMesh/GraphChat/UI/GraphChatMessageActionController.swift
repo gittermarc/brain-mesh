@@ -534,6 +534,9 @@ final class GraphChatMessageActionController {
                 case .completed(
                     let answer
                 ):
+                    // The original artifact session authorizes the request
+                    // before execution. A completed replacement may carry the
+                    // runtime's newly committed session in its fresh origin.
                     guard
                         let interpretation =
                             answer.interpretation,
@@ -562,12 +565,6 @@ final class GraphChatMessageActionController {
                             == request
                                 .capabilities
                                 .intentKind,
-                        interpretation
-                            .correctionOrigin?
-                            .artifactSessionID
-                            == request
-                                .binding
-                                .artifactSessionID,
                         interpretation
                             .turnBinding
                             .requestID

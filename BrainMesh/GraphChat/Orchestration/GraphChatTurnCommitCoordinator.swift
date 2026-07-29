@@ -22,11 +22,6 @@ nonisolated protocol GraphChatAnswerArtifactFinalizationRegistry: Sendable {
 
     func commitDeferred(
         transactionID: GraphChatAnswerArtifactTransactionID,
-        retaining artifactIDs: [GraphChatAnswerArtifactID]
-    ) async throws -> [GraphChatAnswerArtifactID]
-
-    func commitDeferred(
-        transactionID: GraphChatAnswerArtifactTransactionID,
         retaining artifactIDs: [GraphChatAnswerArtifactID],
         replacing replacedArtifactIDs:
             [GraphChatAnswerArtifactID]
@@ -43,30 +38,6 @@ nonisolated protocol GraphChatAnswerArtifactFinalizationRegistry: Sendable {
     func rollback(
         transactionID: GraphChatAnswerArtifactTransactionID
     ) async
-}
-
-extension GraphChatAnswerArtifactFinalizationRegistry {
-    func commitDeferred(
-        transactionID: GraphChatAnswerArtifactTransactionID,
-        retaining artifactIDs: [GraphChatAnswerArtifactID]
-    ) async throws -> [GraphChatAnswerArtifactID] {
-        try await commit(
-            transactionID: transactionID,
-            retaining: artifactIDs
-        )
-    }
-
-    func finalizeDeferredCommit(
-        transactionID: GraphChatAnswerArtifactTransactionID
-    ) async -> [GraphChatAnswerArtifactID] {
-        []
-    }
-
-    func rollbackDeferredCommit(
-        transactionID: GraphChatAnswerArtifactTransactionID
-    ) async {
-        await rollback(transactionID: transactionID)
-    }
 }
 
 extension GraphChatAnswerArtifactRegistry: GraphChatAnswerArtifactFinalizationRegistry {}
