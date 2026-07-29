@@ -171,7 +171,10 @@ nonisolated struct GraphChatLocalAnswerBuilder: Hashable, Sendable {
                 GraphChatClarification(
                     id: pending.id,
                     question: question,
-                    options: pending.options.prefix(8).map {
+                    options: pending.options.prefix(
+                        GraphChatIntentLimitPolicy
+                            .default.maximumClarificationOptionCount
+                    ).map {
                         GraphChatClarificationOption(id: $0.id, title: $0.title)
                     }
                 )
@@ -235,7 +238,12 @@ nonisolated struct GraphChatLocalAnswerBuilder: Hashable, Sendable {
             )
 
         case .clarification(let clarification):
-            let options = Array(clarification.options.prefix(8))
+            let options = Array(
+                clarification.options.prefix(
+                    GraphChatIntentLimitPolicy
+                        .default.maximumClarificationOptionCount
+                )
+            )
             let question =
                 clarification.issue == .mixedEntities
                 ? localizer.mixedEntityClarification(
@@ -282,7 +290,12 @@ nonisolated struct GraphChatLocalAnswerBuilder: Hashable, Sendable {
         continuationQuestion: String,
         referenceDate: Date
     ) -> GraphChatPendingClarification? {
-        let boundedOptions = Array(options.prefix(8))
+        let boundedOptions = Array(
+            options.prefix(
+                GraphChatIntentLimitPolicy
+                    .default.maximumClarificationOptionCount
+            )
+        )
         guard boundedOptions.isEmpty == false else {
             return nil
         }
@@ -296,7 +309,10 @@ nonisolated struct GraphChatLocalAnswerBuilder: Hashable, Sendable {
             continuationOperation: operation,
             continuationQuestion: bounded(continuationQuestion, limit: 500),
             createdAt: referenceDate,
-            expiresAt: referenceDate.addingTimeInterval(10 * 60)
+            expiresAt: referenceDate.addingTimeInterval(
+                GraphChatIntentLimitPolicy
+                    .default.pendingClarificationLifetime
+            )
         )
     }
 
@@ -882,7 +898,12 @@ nonisolated struct GraphChatRequestPreflight: Sendable {
                 message: "Die Graph-Chat-Frage darf nicht leer sein."
             )
         }
-        return String(normalized.prefix(4_000))
+        return String(
+            normalized.prefix(
+                GraphChatIntentLimitPolicy
+                    .default.maximumQuestionLength
+            )
+        )
     }
 
     private func clearedClarification(

@@ -60,7 +60,11 @@ nonisolated struct GraphStatsServiceReader: GraphChatStatsReading {
 nonisolated struct GraphStatsInput: Sendable {
     let hubLimit: Int
 
-    init(hubLimit: Int = 10) {
+    init(
+        hubLimit: Int =
+            GraphChatIntentLimitPolicy
+                .default.graphHubCount
+    ) {
         self.hubLimit = hubLimit
     }
 }
@@ -122,7 +126,9 @@ nonisolated struct GraphStatsOutput: Sendable {
 
 nonisolated struct GraphStatsTool: GraphChatTool {
     let kind = GraphChatToolKind.graphStats
-    static let maximumHubCount = 25
+    static let maximumHubCount =
+        GraphChatIntentLimitPolicy
+            .default.maximumGraphHubCount
 
     private let reader: any GraphChatStatsReading
     private let evidenceValidator: any GraphEvidenceValidating

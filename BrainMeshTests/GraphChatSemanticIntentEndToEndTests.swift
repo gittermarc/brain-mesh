@@ -903,6 +903,400 @@ struct GraphChatSemanticIntentEndToEndTests {
 
     @MainActor
     @Test
+    func contextWindowRetryUsesOneCompactRequestAndStillRunsLocally()
+        async throws
+    {
+        let store =
+            try BrainMeshTestContainer
+                .makeInMemoryStore()
+        let fixtures =
+            BrainMeshFixtureBuilder(
+                context: store.context
+            )
+        let graph = fixtures.makeGraph(
+            name: "Portfolio"
+        )
+        let projects = fixtures.makeEntity(
+            name: "A Projekte",
+            in: graph
+        )
+        fixtures.makeAttribute(
+            name: "Atlas",
+            owner: projects
+        )
+        for index in 0..<30 {
+            let entity = fixtures.makeEntity(
+                name: "Bereich \(index)",
+                in: graph
+            )
+            for fieldIndex in 0..<14 {
+                fixtures.makeDetailField(
+                    owner: entity,
+                    name:
+                        "Feld \(fieldIndex)",
+                    type: .singleLineText,
+                    sortIndex: fieldIndex
+                )
+            }
+        }
+        try fixtures.save()
+
+        let interpreter =
+            FakeGraphChatIntentInterpreter(
+                steps: [
+                    .failure(
+                        GraphChatIntentInterpreterError(
+                            code:
+                                .contextWindowExceeded,
+                            message:
+                                "Injected standard profile overflow."
+                        )
+                    ),
+                    .draft(
+                        GraphChatUntrustedSemanticIntentDraft(
+                            family: .entityList,
+                            entityTerm:
+                                "A Projekte",
+                            resultAmount:
+                                .standard,
+                            responseLanguage:
+                                .german
+                        )
+                    ),
+                ]
+            )
+        let runtime = makeRuntime(
+            store: store,
+            graphID: graph.id,
+            interpreter: interpreter,
+            candidates: []
+        )
+        let graphScope =
+            GraphScope(graphID: graph.id)
+        let events =
+            await GraphChatProviderTestSupport
+                .collect(
+                    await runtime.orchestrator
+                        .streamAnswer(
+                            question:
+                                "Zeige mir die Projekte.",
+                            graphScope:
+                                graphScope,
+                            chatScope:
+                                .entireGraph(
+                                    graphScope
+                                )
+                        )
+                )
+        let requests =
+            await interpreter.snapshot()
+                .requests
+        let plannerMetrics =
+            await runtime.observability
+                .plannerMetrics()
+
+        #expect(requests.count == 2)
+        #expect(
+            requests[0].schemaEntities.count
+                == GraphChatIntentLimitPolicy
+                    .default
+                    .standardInterpreterContext
+                    .maximumEntities
+        )
+        #expect(
+            requests[1].schemaEntities.count
+                == GraphChatIntentLimitPolicy
+                    .default
+                    .compactInterpreterContext
+                    .maximumEntities
+        )
+        #expect(
+            requests[0].schemaEntities
+                .allSatisfy {
+                    $0.fieldDisplayNames.count
+                        <= GraphChatIntentLimitPolicy
+                            .default
+                            .standardInterpreterContext
+                            .maximumFieldsPerEntity
+                }
+        )
+        #expect(
+            requests[1].schemaEntities
+                .allSatisfy {
+                    $0.fieldDisplayNames.count
+                        <= GraphChatIntentLimitPolicy
+                            .default
+                            .compactInterpreterContext
+                            .maximumFieldsPerEntity
+                }
+        )
+        #expect(
+            plannerMetrics.contains(
+                GraphChatTypedPlannerMetric(
+                    event: .interpreterRetry
+                )
+            )
+        )
+        #expect(
+            plannerMetrics.filter {
+                $0.event == .interpreterRetry
+            }.count == 1
+        )
+        #expect(
+            plannerMetrics.filter {
+                if case .terminalOutcome =
+                    $0.event
+                {
+                    return true
+                }
+                return false
+            }.count == 1
+        )
+        #expect(
+            await runtime.provider.snapshot()
+                .createdSessions.isEmpty
+        )
+        #expect(
+            try completedAnswer(events)
+                .artifactIDs.count == 1
+        )
+        #expect(terminalEventCount(events) == 1)
+    }
+
+    @MainActor
+    @Test
+    func compactRetryFailureFallsBackOnceWithoutRepairLoop()
+        async throws
+    {
+        let store =
+            try BrainMeshTestContainer
+                .makeInMemoryStore()
+        let fixtures =
+            BrainMeshFixtureBuilder(
+                context: store.context
+            )
+        let graph = fixtures.makeGraph(
+            name: "Wissen"
+        )
+        try fixtures.save()
+        let contextFailure =
+            GraphChatIntentInterpreterError(
+                code: .contextWindowExceeded,
+                message:
+                    "Injected context overflow."
+            )
+        let interpreter =
+            FakeGraphChatIntentInterpreter(
+                steps: [
+                    .failure(contextFailure),
+                    .failure(contextFailure),
+                    .draft(
+                        GraphChatUntrustedSemanticIntentDraft(
+                            family: .findNodes,
+                            searchTerm: "Must not run",
+                            responseLanguage:
+                                .german
+                        )
+                    ),
+                ]
+            )
+        let runtime = makeRuntime(
+            store: store,
+            graphID: graph.id,
+            interpreter: interpreter,
+            candidates: []
+        )
+        await runtime.provider.enqueue(
+            FakeGraphChatProviderScript(
+                steps: [
+                    .event(
+                        .completed(
+                            GraphChatProviderTestSupport
+                                .makeFinalAnswer(
+                                    directAnswer:
+                                        "Freie Antwort."
+                                )
+                        )
+                    )
+                ]
+            )
+        )
+        let graphScope =
+            GraphScope(graphID: graph.id)
+        let events =
+            await GraphChatProviderTestSupport
+                .collect(
+                    await runtime.orchestrator
+                        .streamAnswer(
+                            question:
+                                "Erkläre den Graphen frei.",
+                            graphScope:
+                                graphScope,
+                            chatScope:
+                                .entireGraph(
+                                    graphScope
+                                )
+                        )
+                )
+        let provider =
+            await runtime.provider.snapshot()
+        let plannerMetrics =
+            await runtime.observability
+                .plannerMetrics()
+
+        #expect(
+            await interpreter.snapshot()
+                .requests.count == 2
+        )
+        #expect(provider.createdSessions.count == 1)
+        #expect(provider.streamedSessions.count == 1)
+        #expect(
+            plannerMetrics.filter {
+                $0.event == .interpreterRetry
+            }.count == 1
+        )
+        #expect(
+            plannerMetrics.filter {
+                if case
+                    .legacyProviderFallback(
+                        .interpreterUnavailable
+                    ) = $0.event
+                {
+                    return true
+                }
+                return false
+            }.count == 1
+        )
+        #expect(
+            try completedAnswer(events)
+                .directAnswer
+                == "Freie Antwort."
+        )
+        #expect(terminalEventCount(events) == 1)
+    }
+
+    @MainActor
+    @Test
+    func manipulatedRecognizedDraftFailsClosedWithoutProvider()
+        async throws
+    {
+        let store =
+            try BrainMeshTestContainer
+                .makeInMemoryStore()
+        let fixtures =
+            BrainMeshFixtureBuilder(
+                context: store.context
+            )
+        let graph = fixtures.makeGraph(
+            name: "Portfolio"
+        )
+        _ = fixtures.makeEntity(
+            name: "Projekte",
+            in: graph
+        )
+        try fixtures.save()
+        let injectedID = UUID()
+        let interpreter =
+            FakeGraphChatIntentInterpreter(
+                steps: [
+                    .draft(
+                        GraphChatUntrustedSemanticIntentDraft(
+                            family:
+                                .filteredCollection,
+                            entityTerm:
+                                "Projekte",
+                            filters: [
+                                GraphChatSemanticFilterDraft(
+                                    fieldTerm:
+                                        injectedID
+                                            .uuidString,
+                                    relation:
+                                        .equals,
+                                    values:
+                                        ["offen"]
+                                )
+                            ],
+                            responseLanguage:
+                                .german
+                        )
+                    )
+                ]
+            )
+        let runtime = makeRuntime(
+            store: store,
+            graphID: graph.id,
+            interpreter: interpreter,
+            candidates: []
+        )
+        let graphScope =
+            GraphScope(graphID: graph.id)
+        let events =
+            await GraphChatProviderTestSupport
+                .collect(
+                    await runtime.orchestrator
+                        .streamAnswer(
+                            question:
+                                "Zeige offene Projekte.",
+                            graphScope:
+                                graphScope,
+                            chatScope:
+                                .entireGraph(
+                                    graphScope
+                                )
+                        )
+                )
+        let plannerMetrics =
+            await runtime.observability
+                .plannerMetrics()
+
+        #expect(
+            events.contains {
+                if case .failure = $0 {
+                    return true
+                }
+                return false
+            }
+        )
+        #expect(
+            await interpreter.snapshot()
+                .requests.count == 1
+        )
+        #expect(
+            await runtime.provider.snapshot()
+                .createdSessions.isEmpty
+        )
+        #expect(
+            plannerMetrics.contains {
+                if case
+                    .legacyProviderFallback =
+                        $0.event
+                {
+                    return true
+                }
+                return false
+            } == false
+        )
+        #expect(
+            plannerMetrics.filter {
+                if case .terminalOutcome =
+                    $0.event
+                {
+                    return true
+                }
+                return false
+            }.count == 1
+        )
+        #expect(
+            visibleText(events)
+                .contains(
+                    injectedID.uuidString
+                ) == false
+        )
+        #expect(terminalEventCount(events) == 1)
+    }
+
+    @MainActor
+    @Test
     func openProjectsSortedByDueDateThenRefineOnlyTheValidatedResultSet()
         async throws
     {
@@ -2744,8 +3138,10 @@ struct GraphChatSemanticIntentEndToEndTests {
                 return text
             case .completed(let answer):
                 return answer.directAnswer
+            case .failure(let error):
+                return error.message
             case .started, .toolActivity,
-                .cancelled, .failure:
+                .cancelled:
                 return nil
             }
         }.joined(separator: "\n")
@@ -2931,6 +3327,21 @@ private actor SemanticIntentObservabilityRecorder:
         events.compactMap {
             guard
                 case .intentInterpretation(
+                    let metric
+                ) = $0
+            else {
+                return nil
+            }
+            return metric
+        }
+    }
+
+    func plannerMetrics()
+        -> [GraphChatTypedPlannerMetric]
+    {
+        events.compactMap {
+            guard
+                case .typedPlanner(
                     let metric
                 ) = $0
             else {

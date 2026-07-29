@@ -15,16 +15,25 @@ nonisolated struct GraphChatSemanticIntentLimitPolicy:
     let maximumFindLimit: Int
     let defaultEntityListLimit: Int
     let maximumEntityListLimit: Int
+    let maximumGroupCount: Int
 
     static let `default` =
         GraphChatSemanticIntentLimitPolicy(
-            defaultFindLimit: 20,
+            defaultFindLimit:
+                GraphChatIntentLimitPolicy
+                    .default.defaultSearchResultCount,
             maximumFindLimit:
-                SearchGraphTool.maximumResultCount,
+                GraphChatIntentLimitPolicy
+                    .default.maximumSearchResultCount,
             defaultEntityListLimit:
-                GraphQueryPlanLimits.defaultResultLimit,
+                GraphChatIntentLimitPolicy
+                    .default.defaultQueryResultCount,
             maximumEntityListLimit:
-                GraphQueryPlanLimits.maximumResultLimit
+                GraphChatIntentLimitPolicy
+                    .default.completeCollectionResultCount,
+            maximumGroupCount:
+                GraphChatIntentLimitPolicy
+                    .default.maximumGroupCount
         )
 
     func findLimit(
@@ -44,6 +53,19 @@ nonisolated struct GraphChatSemanticIntentLimitPolicy:
             amount,
             defaultLimit: defaultEntityListLimit,
             maximumLimit: maximumEntityListLimit
+        )
+    }
+
+    func groupCountLimit(
+        for amount: GraphChatSemanticResultAmount
+    ) -> Int {
+        resolvedLimit(
+            amount,
+            defaultLimit: min(
+                defaultEntityListLimit,
+                maximumGroupCount
+            ),
+            maximumLimit: maximumGroupCount
         )
     }
 

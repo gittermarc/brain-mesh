@@ -172,7 +172,14 @@ private nonisolated struct FoundationSearchGraphTool: Tool {
         @Guide(description: "Short search text for labels, notes, details, links, or attachment metadata.")
         var query: String
 
-        @Guide(description: "Maximum number of results.", .range(1...20))
+        @Guide(
+            description: "Maximum number of results.",
+            .range(
+                1
+                    ... GraphChatIntentLimitPolicy
+                        .default.defaultSearchResultCount
+            )
+        )
         var limit: Int
     }
 
@@ -239,7 +246,14 @@ private nonisolated struct FoundationQueryDetailValuesTool: Tool {
         @Guide(description: "F alias for groupCount, minimum, or maximum. Use an empty string otherwise.")
         var aggregationFieldAlias: String
 
-        @Guide(description: "Maximum number of rows.", .range(1...50))
+        @Guide(
+            description: "Maximum number of rows.",
+            .range(
+                1
+                    ... GraphChatIntentLimitPolicy
+                        .default.defaultQueryResultCount
+            )
+        )
         var limit: Int
     }
 
@@ -284,7 +298,15 @@ private nonisolated struct FoundationGetNodeTool: Tool {
         @Guide(description: "E or N alias previously supplied by a tool.")
         var nodeAlias: String
 
-        @Guide(description: "Maximum number of related detail, link, and attachment metadata records.", .range(0...30))
+        @Guide(
+            description:
+                "Maximum number of related detail, link, and attachment metadata records.",
+            .range(
+                0
+                    ... GraphChatIntentLimitPolicy
+                        .default.maximumNodeRelatedItemCount
+            )
+        )
         var relatedLimit: Int
     }
 
@@ -312,7 +334,14 @@ private nonisolated struct FoundationGetNeighborsTool: Tool {
         @Guide(description: "E or N alias previously supplied by a tool.")
         var nodeAlias: String
 
-        @Guide(description: "Maximum number of direct neighbors.", .range(0...30))
+        @Guide(
+            description: "Maximum number of direct neighbors.",
+            .range(
+                0
+                    ... GraphChatIntentLimitPolicy
+                        .default.maximumNeighborCount
+            )
+        )
         var limit: Int
     }
 
@@ -337,7 +366,14 @@ private nonisolated struct FoundationGraphStatsTool: Tool {
 
     @Generable
     nonisolated struct Arguments {
-        @Guide(description: "Maximum number of high-degree nodes.", .range(0...25))
+        @Guide(
+            description: "Maximum number of high-degree nodes.",
+            .range(
+                0
+                    ... GraphChatIntentLimitPolicy
+                        .default.maximumGraphHubCount
+            )
+        )
         var hubLimit: Int
     }
 

@@ -25,7 +25,9 @@ nonisolated struct GetNodeInput: Sendable {
 
     init(
         node: NodeRefKey,
-        relatedLimit: Int = 20,
+        relatedLimit: Int =
+            GraphChatIntentLimitPolicy
+                .default.nodeDetailRelatedItemCount,
         includeNotes: Bool = true
     ) {
         self.node = node
@@ -141,7 +143,9 @@ nonisolated struct GetNodeOutput: Sendable {
 
 nonisolated struct GetNodeTool: GraphChatTool {
     let kind = GraphChatToolKind.getNode
-    static let maximumRelatedItemCount = 30
+    static let maximumRelatedItemCount =
+        GraphChatIntentLimitPolicy
+            .default.maximumNodeRelatedItemCount
 
     private struct PreparedOutput: Sendable {
         let output: GetNodeOutput

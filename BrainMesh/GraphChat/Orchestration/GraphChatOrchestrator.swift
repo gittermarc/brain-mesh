@@ -181,6 +181,7 @@ actor GraphChatOrchestrator {
             requestID: requestID,
             continuation: pair.continuation
         )
+        var executionTaskCreated = false
 
         do {
             try await cancelActiveGenerationForNewRequest()
@@ -194,6 +195,18 @@ actor GraphChatOrchestrator {
                 reducer: conversationStateReducer
             )
 
+            let transition = stateMachine.transition(
+                .requestStarted(
+                    key: key,
+                    generation: generation
+                )
+            )
+            guard transition.wasApplied else {
+                throw GraphChatError(
+                    code: .concurrentRequest,
+                    message: "Eine andere Graph-Chat-Anfrage ist noch aktiv."
+                )
+            }
             let task = Task { [weak self] in
                 guard let self else {
                     await streamController.start()
@@ -216,20 +229,7 @@ actor GraphChatOrchestrator {
                     continuation: pair.continuation
                 )
             }
-
-            let transition = stateMachine.transition(
-                .requestStarted(
-                    key: key,
-                    generation: generation
-                )
-            )
-            guard transition.wasApplied else {
-                task.cancel()
-                throw GraphChatError(
-                    code: .concurrentRequest,
-                    message: "Eine andere Graph-Chat-Anfrage ist noch aktiv."
-                )
-            }
+            executionTaskCreated = true
             resources.installActiveGeneration(
                 identity: generation,
                 task: task
@@ -240,6 +240,11 @@ actor GraphChatOrchestrator {
                 }
             }
         } catch {
+            if executionTaskCreated == false {
+                await recordPlanner(
+                    .terminalOutcome(.failed)
+                )
+            }
             await streamController.start()
             await streamController.fail(
                 mapError(
@@ -275,6 +280,7 @@ actor GraphChatOrchestrator {
                 continuation:
                     pair.continuation
             )
+        var executionTaskCreated = false
 
         do {
             try await cancelActiveGenerationForNewRequest()
@@ -291,6 +297,20 @@ actor GraphChatOrchestrator {
                 request,
                 key: key
             )
+            let transition =
+                stateMachine.transition(
+                    .requestStarted(
+                        key: key,
+                        generation: generation
+                    )
+                )
+            guard transition.wasApplied else {
+                throw GraphChatError(
+                    code: .concurrentRequest,
+                    message:
+                        "Eine andere Graph-Chat-Anfrage ist noch aktiv."
+                )
+            }
             let task = Task { [weak self] in
                 guard let self else {
                     await streamController.start()
@@ -322,21 +342,7 @@ actor GraphChatOrchestrator {
                         pair.continuation
                 )
             }
-            let transition =
-                stateMachine.transition(
-                    .requestStarted(
-                        key: key,
-                        generation: generation
-                    )
-                )
-            guard transition.wasApplied else {
-                task.cancel()
-                throw GraphChatError(
-                    code: .concurrentRequest,
-                    message:
-                        "Eine andere Graph-Chat-Anfrage ist noch aktiv."
-                )
-            }
+            executionTaskCreated = true
             resources.installActiveGeneration(
                 identity: generation,
                 task: task
@@ -355,6 +361,11 @@ actor GraphChatOrchestrator {
             {
                 await recordInterpretation(
                     .correctionStale
+                )
+            }
+            if executionTaskCreated == false {
+                await recordPlanner(
+                    .terminalOutcome(.failed)
                 )
             }
             await streamController.start()
@@ -839,6 +850,14 @@ actor GraphChatOrchestrator {
             )
         }
 
+        if outcome == .cancelled {
+            await recordPlanner(
+                .cancellation(.correction)
+            )
+        }
+        await recordPlanner(
+            .terminalOutcome(outcome)
+        )
         finishRequest(
             requestID: requestID,
             outcome: outcome
@@ -973,6 +992,18 @@ actor GraphChatOrchestrator {
         )
     }
 
+    private func recordPlanner(
+        _ event: GraphChatTypedPlannerEvent
+    ) async {
+        await observability.record(
+            .typedPlanner(
+                GraphChatTypedPlannerMetric(
+                    event: event
+                )
+            )
+        )
+    }
+
     private func runRequest(
         generation: GraphChatGenerationIdentity,
         question: String,
@@ -984,9 +1015,11 @@ actor GraphChatOrchestrator {
     ) async {
         await streamController.start()
         let outcome: GraphChatRequestOutcome
+        var pipelineStarted = false
 
         do {
             try validateCurrentGeneration(generation)
+            pipelineStarted = true
             let completion = try await requestPipeline.execute(
                 GraphChatRequestPipelineInput(
                     requestID: generation.requestID,
@@ -1071,6 +1104,15 @@ actor GraphChatOrchestrator {
             )
         }
 
+        if outcome == .cancelled,
+           pipelineStarted == false {
+            await recordPlanner(
+                .cancellation(.unknown)
+            )
+        }
+        await recordPlanner(
+            .terminalOutcome(outcome)
+        )
         finishRequest(
             requestID: generation.requestID,
             outcome: outcome

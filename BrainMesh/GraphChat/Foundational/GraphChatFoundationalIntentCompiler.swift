@@ -689,7 +689,10 @@ nonisolated struct GraphChatFoundationalIntentCompiler: Sendable {
         }
         return GraphChatFoundationalClarification(
             question: question,
-            options: candidates.prefix(8).enumerated().map { index, candidate in
+            options: candidates.prefix(
+                GraphChatIntentLimitPolicy
+                    .default.maximumClarificationOptionCount
+            ).enumerated().map { index, candidate in
                 GraphChatFoundationalClarificationOption(
                     id: "FOUNDATIONAL_\(index + 1)",
                     title: title(candidate, index),

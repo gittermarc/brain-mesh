@@ -12,8 +12,13 @@ nonisolated struct GraphChatAnswerArtifactFactoryBudget: Hashable, Sendable {
     let maximumColumns: Int
 
     static let `default` = GraphChatAnswerArtifactFactoryBudget(
-        maximumRows: 50,
-        maximumColumns: 12
+        maximumRows:
+            GraphChatIntentLimitPolicy
+                .default.defaultQueryResultCount,
+        maximumColumns:
+            GraphChatIntentLimitPolicy
+                .default.maximumProjectionFieldCount
+                + 1
     )
 
     init(maximumRows: Int, maximumColumns: Int) {

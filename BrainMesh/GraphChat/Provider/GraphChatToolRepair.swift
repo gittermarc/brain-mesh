@@ -442,7 +442,12 @@ nonisolated struct GraphChatToolRepairHintBuilder: Sendable {
             expectedCategory: .entityAlias,
             expectedDataType: nil,
             allowedCandidates: similar.isEmpty
-                ? Array(allCandidates.prefix(8))
+                ? Array(
+                    allCandidates.prefix(
+                        GraphChatIntentLimitPolicy
+                            .default.maximumClarificationOptionCount
+                    )
+                )
                 : similar,
             allowedOperators: [],
             validatedCurrent: nil

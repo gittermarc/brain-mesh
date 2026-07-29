@@ -14,7 +14,9 @@ nonisolated struct GraphChatToolBudgetPolicy: Hashable, Sendable {
 
     static let `default` = GraphChatToolBudgetPolicy(
         maximumCalls: 8,
-        maximumResultCountPerTool: 50,
+        maximumResultCountPerTool:
+            GraphChatIntentLimitPolicy
+                .default.defaultQueryResultCount,
         maximumEvidenceCount: 200
     )
 

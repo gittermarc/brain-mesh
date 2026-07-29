@@ -11,7 +11,12 @@ nonisolated struct SearchGraphInput: Sendable {
     let query: String
     let limit: Int
 
-    init(query: String, limit: Int = 20) {
+    init(
+        query: String,
+        limit: Int =
+            GraphChatIntentLimitPolicy
+                .default.defaultSearchResultCount
+    ) {
         self.query = query
         self.limit = limit
     }
@@ -48,7 +53,9 @@ nonisolated struct SearchGraphOutput: Sendable {
 
 nonisolated struct SearchGraphTool: GraphChatTool {
     let kind = GraphChatToolKind.searchGraph
-    static let maximumResultCount = 50
+    static let maximumResultCount =
+        GraphChatIntentLimitPolicy
+            .default.maximumSearchResultCount
 
     private struct ResolvedSource: Sendable {
         let reference: GraphSourceReference

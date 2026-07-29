@@ -7,6 +7,17 @@
 
 import Foundation
 
+nonisolated enum GraphChatLegacyProviderFallbackReason:
+    String,
+    CaseIterable,
+    Hashable,
+    Sendable
+{
+    case unrecognized
+    case openEnded
+    case interpreterUnavailable
+}
+
 nonisolated enum GraphChatSemanticIntentCoordinatorResolution:
     Sendable
 {
@@ -15,7 +26,9 @@ nonisolated enum GraphChatSemanticIntentCoordinatorResolution:
         adaptation: GraphChatTypedIntentAdaptation,
         schemaContext: GraphSchemaContext
     )
-    case legacyProviderFallback
+    case legacyProviderFallback(
+        GraphChatLegacyProviderFallbackReason
+    )
 }
 
 nonisolated struct GraphChatSemanticIntentCoordinator:
@@ -25,6 +38,8 @@ nonisolated struct GraphChatSemanticIntentCoordinator:
         any GraphChatIntentInterpreting
     private let requestBuilder:
         GraphChatIntentInterpreterRequestBuilder
+    private let compactRetryRequestBuilder:
+        GraphChatIntentInterpreterRequestBuilder
     private let draftValidator:
         GraphChatSemanticDraftValidator
     private let resolver:
@@ -33,6 +48,8 @@ nonisolated struct GraphChatSemanticIntentCoordinator:
         GraphChatConversationReferenceResolver
     private let localAnswerBuilder:
         GraphChatLocalAnswerBuilder
+    private let cutoverPolicy:
+        GraphChatTypedPlannerCutoverPolicy
     private let observability:
         any GraphChatObservabilityRecording
 
@@ -42,6 +59,11 @@ nonisolated struct GraphChatSemanticIntentCoordinator:
         requestBuilder:
             GraphChatIntentInterpreterRequestBuilder =
                 GraphChatIntentInterpreterRequestBuilder(),
+        compactRetryRequestBuilder:
+            GraphChatIntentInterpreterRequestBuilder =
+                GraphChatIntentInterpreterRequestBuilder(
+                    limits: .compactRetry
+                ),
         draftValidator:
             GraphChatSemanticDraftValidator =
                 GraphChatSemanticDraftValidator(),
@@ -54,16 +76,22 @@ nonisolated struct GraphChatSemanticIntentCoordinator:
         localAnswerBuilder:
             GraphChatLocalAnswerBuilder =
                 GraphChatLocalAnswerBuilder(),
+        cutoverPolicy:
+            GraphChatTypedPlannerCutoverPolicy =
+                .default,
         observability:
             any GraphChatObservabilityRecording =
                 NoOpGraphChatObservabilityRecorder()
     ) {
         self.interpreter = interpreter
         self.requestBuilder = requestBuilder
+        self.compactRetryRequestBuilder =
+            compactRetryRequestBuilder
         self.draftValidator = draftValidator
         self.resolver = resolver
         self.referenceResolver = referenceResolver
         self.localAnswerBuilder = localAnswerBuilder
+        self.cutoverPolicy = cutoverPolicy
         self.observability = observability
     }
 
@@ -106,8 +134,8 @@ nonisolated struct GraphChatSemanticIntentCoordinator:
             [GraphChatSemanticSelectedField]
         let selectedNodes:
             [GraphChatSemanticSelectedNode]
-        do {
-            if let continuation {
+        if let continuation {
+            do {
                 draft = try draftValidator.validate(
                     continuation.selection.draft,
                     for: request
@@ -121,50 +149,137 @@ nonisolated struct GraphChatSemanticIntentCoordinator:
                 selectedNodes =
                     continuation.selection
                         .selectedNodes
-            } else {
+            } catch {
+                if isCancellation(error) {
+                    await record(
+                        .cancellation,
+                        family: nil
+                    )
+                    throw CancellationError()
+                }
                 await record(
-                    .interpreterStarted,
-                    family: nil,
-                    interpreterCallCount: 1
+                    .draftRejected,
+                    family: nil
                 )
-                let untrusted = try await interpreter
-                    .interpret(request)
-                try Task.checkCancellation()
-                draft = try draftValidator.validate(
-                    untrusted,
-                    for: request
+                await recordPlanner(
+                    .draftOutcome(
+                        .rejected,
+                        nil
+                    )
                 )
+                throw mappedInterpreterError(error)
+            }
+        } else {
+            let recovery: InterpreterRecoveryResolution
+            do {
+                recovery = try await interpretWithRecovery(
+                    request,
+                    providerPlan: providerPlan,
+                    schemaContext: schemaContext
+                )
+            } catch {
+                if isCancellation(error) {
+                    await record(
+                        .cancellation,
+                        family: nil
+                    )
+                    throw CancellationError()
+                }
+                await record(
+                    .draftRejected,
+                    family: nil
+                )
+                await recordPlanner(
+                    .draftOutcome(
+                        .rejected,
+                        nil
+                    )
+                )
+                throw mappedInterpreterError(error)
+            }
+            switch recovery {
+            case .interpreterUnavailable:
+                await record(
+                    .legacyProviderFallback,
+                    family: nil
+                )
+                await recordPlanner(
+                    .draftOutcome(
+                        .interpreterUnavailable,
+                        nil
+                    )
+                )
+                await recordPlanner(
+                    .legacyProviderFallback(
+                        .interpreterUnavailable
+                    )
+                )
+                return .legacyProviderFallback(
+                    .interpreterUnavailable
+                )
+            case .draft(let untrusted):
+                do {
+                    try Task.checkCancellation()
+                    draft = try draftValidator.validate(
+                        untrusted,
+                        for: request
+                    )
+                } catch {
+                    if isCancellation(error) {
+                        await record(
+                            .cancellation,
+                            family: nil
+                        )
+                        throw CancellationError()
+                    }
+                    await record(
+                        .draftRejected,
+                        family: nil
+                    )
+                    await recordPlanner(
+                        .draftOutcome(
+                            .rejected,
+                            nil
+                        )
+                    )
+                    throw mappedInterpreterError(error)
+                }
                 selectedEntityID = nil
                 selectedFields = []
                 selectedNodes = []
             }
-            await record(
-                .draftAccepted,
-                family: draft.family
-            )
-        } catch {
-            if isCancellation(error) {
-                await record(
-                    .cancellation,
-                    family: nil
-                )
-                throw CancellationError()
-            }
-            await record(
-                .draftRejected,
-                family: nil
-            )
-            throw mappedInterpreterError(error)
         }
 
-        if draft.family == .unrecognized
-            || draft.family == .openEnded
+        await record(
+            .draftAccepted,
+            family: draft.family
+        )
+        await recordPlanner(
+            .draftOutcome(
+                plannerDraftOutcome(
+                    for: draft.family
+                ),
+                draft.family
+            )
+        )
+
+        if let fallbackReason =
+            legacyFallbackReason(
+                for: draft.family
+            )
         {
             await record(
                 .legacyProviderFallback,
                 family: draft.family
             )
-            return .legacyProviderFallback
+            await recordPlanner(
+                .legacyProviderFallback(
+                    fallbackReason
+                )
+            )
+            return .legacyProviderFallback(
+                fallbackReason
+            )
         }
 
         let currentScopeResolution:
@@ -197,6 +312,12 @@ nonisolated struct GraphChatSemanticIntentCoordinator:
                 .draftRejected,
                 family: draft.family
             )
+            await recordPlanner(
+                .draftOutcome(
+                    .rejected,
+                    draft.family
+                )
+            )
             throw GraphChatError(
                 code: .invalidRequest,
                 message:
@@ -207,6 +328,15 @@ nonisolated struct GraphChatSemanticIntentCoordinator:
         }
         switch currentScopeResolution {
         case .local(let local):
+            if case .clarification =
+                local.answer.state
+            {
+                await recordPlanner(
+                    .clarification(
+                        draft.family
+                    )
+                )
+            }
             return .local(local)
         case .resolved(let currentResolvedScope):
             do {
@@ -233,16 +363,41 @@ nonisolated struct GraphChatSemanticIntentCoordinator:
                 )
                 switch resolution {
                 case .legacyProviderFallback:
+                    guard
+                        let fallbackReason =
+                            legacyFallbackReason(
+                                for:
+                                    draft.family
+                            )
+                    else {
+                        throw GraphChatError(
+                            code: .invalidRequest,
+                            message:
+                                "Ein erkannter Semantic Intent darf nicht auf die freie Provider-Ausführung zurückfallen."
+                        )
+                    }
                     await record(
                         .legacyProviderFallback,
                         family: draft.family
                     )
-                    return .legacyProviderFallback
+                    await recordPlanner(
+                        .legacyProviderFallback(
+                            fallbackReason
+                        )
+                    )
+                    return .legacyProviderFallback(
+                        fallbackReason
+                    )
 
                 case .clarification(let clarification):
                     await record(
                         .clarificationRequired,
                         family: draft.family
+                    )
+                    await recordPlanner(
+                        .clarification(
+                            draft.family
+                        )
                     )
                     return .local(
                         localEntityClarification(
@@ -262,6 +417,12 @@ nonisolated struct GraphChatSemanticIntentCoordinator:
                             adaptation: adaptation
                         ),
                         family: draft.family
+                    )
+                    await recordPlanner(
+                        .localIntent(
+                            adaptation
+                                .intent.kind
+                        )
                     )
                     let executionContext =
                         GraphSchemaContext(
@@ -304,6 +465,12 @@ nonisolated struct GraphChatSemanticIntentCoordinator:
                     .draftRejected,
                     family: draft.family
                 )
+                await recordPlanner(
+                    .draftOutcome(
+                        .rejected,
+                        draft.family
+                    )
+                )
                 throw GraphChatError(
                     code: .invalidRequest,
                     message:
@@ -313,6 +480,120 @@ nonisolated struct GraphChatSemanticIntentCoordinator:
                 )
             }
         }
+    }
+
+    private enum InterpreterRecoveryResolution {
+        case draft(
+            GraphChatUntrustedSemanticIntentDraft
+        )
+        case interpreterUnavailable
+    }
+
+    private func interpretWithRecovery(
+        _ standardRequest:
+            GraphChatIntentInterpreterRequest,
+        providerPlan: GraphChatProviderTurnPlan,
+        schemaContext: GraphSchemaContext
+    ) async throws -> InterpreterRecoveryResolution {
+        await recordPlanner(
+            .semanticInterpreter
+        )
+        await record(
+            .interpreterStarted,
+            family: nil,
+            interpreterCallCount: 1
+        )
+        do {
+            let draft = try await interpreter
+                .interpret(standardRequest)
+            try Task.checkCancellation()
+            return .draft(draft)
+        } catch {
+            if isCancellation(error) {
+                throw CancellationError()
+            }
+            guard isContextWindowExceeded(error) else {
+                if isTechnicalInterpreterUnavailable(
+                    error
+                ) {
+                    return .interpreterUnavailable
+                }
+                throw error
+            }
+        }
+
+        try Task.checkCancellation()
+        let compactRequest =
+            try compactRetryRequestBuilder
+                .makeRequest(
+                    providerPlan: providerPlan,
+                    schemaContext: schemaContext
+                )
+        try Task.checkCancellation()
+        await record(
+            .interpreterRetry,
+            family: nil,
+            interpreterCallCount: 1
+        )
+        await recordPlanner(
+            .interpreterRetry
+        )
+        do {
+            let draft = try await interpreter
+                .interpret(compactRequest)
+            try Task.checkCancellation()
+            return .draft(draft)
+        } catch {
+            if isCancellation(error) {
+                throw CancellationError()
+            }
+            if isTechnicalInterpreterUnavailable(
+                error
+            ) {
+                return .interpreterUnavailable
+            }
+            throw error
+        }
+    }
+
+    private func legacyFallbackReason(
+        for family: GraphChatSemanticIntentFamily
+    ) -> GraphChatLegacyProviderFallbackReason? {
+        cutoverPolicy.legacyFallbackReason(
+            for: family
+        )
+    }
+
+    private func plannerDraftOutcome(
+        for family: GraphChatSemanticIntentFamily
+    ) -> GraphChatTypedPlannerDraftOutcome {
+        cutoverPolicy.draftOutcome(
+            for: family
+        )
+    }
+
+    private func isContextWindowExceeded(
+        _ error: Error
+    ) -> Bool {
+        (
+            error
+                as? GraphChatIntentInterpreterError
+        )?.code == .contextWindowExceeded
+    }
+
+    private func isTechnicalInterpreterUnavailable(
+        _ error: Error
+    ) -> Bool {
+        guard
+            let code = (
+                error
+                    as? GraphChatIntentInterpreterError
+            )?.code
+        else {
+            return false
+        }
+        return code == .unavailable
+            || code == .contextWindowExceeded
     }
 
     private enum CurrentScopeResolution {
@@ -472,7 +753,10 @@ nonisolated struct GraphChatSemanticIntentCoordinator:
         requestedAt: Date
     ) -> GraphChatLocalTurnPlan {
         let options = clarification.candidates
-            .prefix(8)
+            .prefix(
+                GraphChatIntentLimitPolicy
+                    .default.maximumClarificationOptionCount
+            )
             .enumerated()
             .map { index, candidate in
                 GraphChatPendingClarificationOption(
@@ -513,7 +797,10 @@ nonisolated struct GraphChatSemanticIntentCoordinator:
             createdAt: requestedAt,
             expiresAt:
                 requestedAt
-                    .addingTimeInterval(10 * 60)
+                    .addingTimeInterval(
+                        GraphChatIntentLimitPolicy
+                            .default.pendingClarificationLifetime
+                    )
         )
         return GraphChatLocalTurnPlan(
             scopeKey: providerPlan.scopeKey,
@@ -626,6 +913,18 @@ nonisolated struct GraphChatSemanticIntentCoordinator:
                         interpreterCallCount,
                     answerProviderCallCount:
                         answerProviderCallCount
+                )
+            )
+        )
+    }
+
+    private func recordPlanner(
+        _ event: GraphChatTypedPlannerEvent
+    ) async {
+        await observability.record(
+            .typedPlanner(
+                GraphChatTypedPlannerMetric(
+                    event: event
                 )
             )
         )

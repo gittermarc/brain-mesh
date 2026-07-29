@@ -20,7 +20,12 @@ nonisolated struct GetNeighborsInput: Sendable {
     let node: NodeRefKey
     let limit: Int
 
-    init(node: NodeRefKey, limit: Int = 20) {
+    init(
+        node: NodeRefKey,
+        limit: Int =
+            GraphChatIntentLimitPolicy
+                .default.nodeDetailRelatedItemCount
+    ) {
         self.node = node
         self.limit = limit
     }
@@ -56,7 +61,9 @@ nonisolated struct GetNeighborsOutput: Sendable {
 
 nonisolated struct GetNeighborsTool: GraphChatTool {
     let kind = GraphChatToolKind.getNeighbors
-    static let maximumNeighborCount = 30
+    static let maximumNeighborCount =
+        GraphChatIntentLimitPolicy
+            .default.maximumNeighborCount
 
     private let repository: any GraphChatNeighborhoodReading
     private let evidenceValidator: any GraphEvidenceValidating

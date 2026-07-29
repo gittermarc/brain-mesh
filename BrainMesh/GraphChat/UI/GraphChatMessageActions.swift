@@ -411,7 +411,12 @@ nonisolated enum GraphChatMessageActionPlanner {
         return GraphChatEditResendPlan(
             originalMessageID: userMessageID,
             originalQuestion: originalQuestion,
-            replacementQuestion: String(normalizedQuestion.prefix(4_000)),
+            replacementQuestion: String(
+                normalizedQuestion.prefix(
+                    GraphChatIntentLimitPolicy
+                        .default.maximumQuestionLength
+                )
+            ),
             restoreCheckpoint: checkpoint,
             retainedMessages: Array(messages.prefix(index)),
             removedMessageIDs: messages[index...].map(\.id)

@@ -17,7 +17,9 @@ nonisolated struct QueryDetailValuesOutput: Sendable {
 
 nonisolated struct QueryDetailValuesTool: GraphChatTool {
     let kind = GraphChatToolKind.queryDetailValues
-    static let maximumResultCount = 50
+    static let maximumResultCount =
+        GraphChatIntentLimitPolicy
+            .default.defaultQueryResultCount
 
     private let queryEngine: GraphChatQueryEngine
     private let logger: any GraphChatToolLogging

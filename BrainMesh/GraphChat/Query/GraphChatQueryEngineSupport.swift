@@ -17,8 +17,12 @@ nonisolated struct GraphChatQueryEngineLimits: Hashable, Sendable {
     let maximumEvidenceCount: Int
 
     static let `default` = GraphChatQueryEngineLimits(
-        maximumResultCount: GraphQueryPlanLimits.maximumResultLimit,
-        maximumEvidenceCount: 512
+        maximumResultCount:
+            GraphChatIntentLimitPolicy
+                .default.maximumQueryResultCount,
+        maximumEvidenceCount:
+            GraphChatIntentLimitPolicy
+                .default.maximumQueryEvidenceCount
     )
 
     init(maximumResultCount: Int, maximumEvidenceCount: Int) {

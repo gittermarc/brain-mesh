@@ -15,14 +15,75 @@ nonisolated struct GraphChatIntentInterpreterContextLimits:
     let maximumFieldsPerEntity: Int
     let maximumConversationDescriptions: Int
     let maximumDescriptionLength: Int
+    let maximumReferencesPerResult: Int
+    let maximumSelectionDescriptions: Int
 
-    static let `default` =
-        GraphChatIntentInterpreterContextLimits(
-            maximumEntities: 24,
-            maximumFieldsPerEntity: 12,
-            maximumConversationDescriptions: 8,
-            maximumDescriptionLength: 160
+    static let `default`: GraphChatIntentInterpreterContextLimits = {
+        make(
+            GraphChatIntentLimitPolicy
+                .default.standardInterpreterContext
         )
+    }()
+
+    static let compactRetry:
+        GraphChatIntentInterpreterContextLimits =
+            make(
+                GraphChatIntentLimitPolicy
+                    .default.compactInterpreterContext
+            )
+
+    init(
+        maximumEntities: Int,
+        maximumFieldsPerEntity: Int,
+        maximumConversationDescriptions: Int,
+        maximumDescriptionLength: Int,
+        maximumReferencesPerResult: Int =
+            GraphChatIntentLimitPolicy
+                .default.standardInterpreterContext
+                .maximumReferencesPerResult,
+        maximumSelectionDescriptions: Int =
+            GraphChatIntentLimitPolicy
+                .default.standardInterpreterContext
+                .maximumSelectionDescriptions
+    ) {
+        precondition(maximumEntities > 0)
+        precondition(maximumFieldsPerEntity > 0)
+        precondition(maximumConversationDescriptions >= 0)
+        precondition(maximumDescriptionLength > 0)
+        precondition(maximumReferencesPerResult > 0)
+        precondition(maximumSelectionDescriptions > 0)
+
+        self.maximumEntities = maximumEntities
+        self.maximumFieldsPerEntity =
+            maximumFieldsPerEntity
+        self.maximumConversationDescriptions =
+            maximumConversationDescriptions
+        self.maximumDescriptionLength =
+            maximumDescriptionLength
+        self.maximumReferencesPerResult =
+            maximumReferencesPerResult
+        self.maximumSelectionDescriptions =
+            maximumSelectionDescriptions
+    }
+
+    private static func make(
+        _ budget:
+            GraphChatIntentInterpreterContextBudget
+    ) -> GraphChatIntentInterpreterContextLimits {
+        GraphChatIntentInterpreterContextLimits(
+            maximumEntities: budget.maximumEntities,
+            maximumFieldsPerEntity:
+                budget.maximumFieldsPerEntity,
+            maximumConversationDescriptions:
+                budget.maximumConversationDescriptions,
+            maximumDescriptionLength:
+                budget.maximumDescriptionLength,
+            maximumReferencesPerResult:
+                budget.maximumReferencesPerResult,
+            maximumSelectionDescriptions:
+                budget.maximumSelectionDescriptions
+        )
+    }
 }
 
 nonisolated struct GraphChatIntentInterpreterRequestBuilder:
@@ -94,7 +155,9 @@ nonisolated struct GraphChatIntentInterpreterRequestBuilder:
         let descriptions = state.resultContexts
             .reversed()
             .flatMap { result in
-                result.references.prefix(3).map {
+                result.references.prefix(
+                    limits.maximumReferencesPerResult
+                ).map {
                     $0.label
                 }
             }
@@ -155,7 +218,9 @@ nonisolated struct GraphChatIntentInterpreterRequestBuilder:
                 aliases.nodesByKey[$0]?.displayName
             }
             .filter { isSafeVisible($0) }
-            .prefix(8)
+            .prefix(
+                limits.maximumSelectionDescriptions
+            )
             .map { boundedVisible($0) }
             .joined(separator: ", ")
             let visible = names.isEmpty

@@ -140,6 +140,7 @@ nonisolated enum GraphChatSemanticIntentLifecycleEvent:
     Sendable
 {
     case interpreterStarted
+    case interpreterRetry
     case draftAccepted
     case draftRejected
     case findIntentCompiled
@@ -193,6 +194,71 @@ nonisolated struct GraphChatSemanticIntentMetric:
     }
 }
 
+nonisolated enum GraphChatTypedPlannerDraftOutcome:
+    String,
+    CaseIterable,
+    Hashable,
+    Sendable
+{
+    case accepted
+    case rejected
+    case unrecognized
+    case openEnded
+    case interpreterUnavailable
+}
+
+nonisolated enum GraphChatTypedPlannerCancellationStage:
+    String,
+    CaseIterable,
+    Hashable,
+    Sendable
+{
+    case preflight
+    case foundationalFastPath
+    case semanticInterpreter
+    case localExecution
+    case providerResources
+    case legacyProvider
+    case finalization
+    case commit
+    case correction
+    case unknown
+}
+
+nonisolated enum GraphChatTypedPlannerEvent:
+    Hashable,
+    Sendable
+{
+    case foundationalFastPath(
+        GraphChatFoundationalIntentKind
+    )
+    case semanticInterpreter
+    case draftOutcome(
+        GraphChatTypedPlannerDraftOutcome,
+        GraphChatSemanticIntentFamily?
+    )
+    case localIntent(GraphChatTypedIntentKind)
+    case legacyProviderFallback(
+        GraphChatLegacyProviderFallbackReason
+    )
+    case interpreterRetry
+    case clarification(
+        GraphChatSemanticIntentFamily?
+    )
+    case correctionRerun
+    case terminalOutcome(GraphChatRequestOutcome)
+    case cancellation(
+        GraphChatTypedPlannerCancellationStage
+    )
+}
+
+nonisolated struct GraphChatTypedPlannerMetric:
+    Hashable,
+    Sendable
+{
+    let event: GraphChatTypedPlannerEvent
+}
+
 nonisolated enum GraphChatIntentInterpretationLifecycleEvent:
     String,
     CaseIterable,
@@ -226,6 +292,7 @@ nonisolated enum GraphChatObservabilityEvent: Hashable, Sendable {
     case authoritativeFact(GraphChatAuthoritativeFactMetric)
     case localIntent(GraphChatLocalIntentMetric)
     case semanticIntent(GraphChatSemanticIntentMetric)
+    case typedPlanner(GraphChatTypedPlannerMetric)
     case intentInterpretation(
         GraphChatIntentInterpretationMetric
     )
@@ -272,9 +339,76 @@ actor GraphChatTechnicalObservabilityRecorder: GraphChatObservabilityRecording {
             BMLog.chat.info(
                 "Semantic intent event=\(metric.event.rawValue, privacy: .public) family=\(family, privacy: .public) interpreterCalls=\(metric.interpreterCallCount) answerProviderCalls=\(metric.answerProviderCallCount)"
             )
+        case .typedPlanner(let metric):
+            let values = typedPlannerLogValues(
+                metric.event
+            )
+            BMLog.chat.info(
+                "Typed planner event=\(values.event, privacy: .public) detail=\(values.detail, privacy: .public)"
+            )
         case .intentInterpretation(let metric):
             BMLog.chat.info(
                 "Intent interpretation event=\(metric.event.rawValue, privacy: .public)"
+            )
+        }
+    }
+
+    private func typedPlannerLogValues(
+        _ event: GraphChatTypedPlannerEvent
+    ) -> (event: String, detail: String) {
+        switch event {
+        case .foundationalFastPath(let kind):
+            return (
+                "foundationalFastPath",
+                kind.rawValue
+            )
+        case .semanticInterpreter:
+            return (
+                "semanticInterpreter",
+                "none"
+            )
+        case .draftOutcome(
+            let outcome,
+            let family
+        ):
+            return (
+                "draftOutcome",
+                "\(outcome.rawValue):\(family?.rawValue ?? "none")"
+            )
+        case .localIntent(let kind):
+            return (
+                "localIntent",
+                kind.rawValue
+            )
+        case .legacyProviderFallback(let reason):
+            return (
+                "legacyProviderFallback",
+                reason.rawValue
+            )
+        case .interpreterRetry:
+            return (
+                "interpreterRetry",
+                "compact"
+            )
+        case .clarification(let family):
+            return (
+                "clarification",
+                family?.rawValue ?? "none"
+            )
+        case .correctionRerun:
+            return (
+                "correctionRerun",
+                "local"
+            )
+        case .terminalOutcome(let outcome):
+            return (
+                "terminalOutcome",
+                outcome.rawValue
+            )
+        case .cancellation(let stage):
+            return (
+                "cancellation",
+                stage.rawValue
             )
         }
     }

@@ -72,11 +72,11 @@ nonisolated struct GraphChatQueryIntentCompilationPolicy:
     static let `default` =
         GraphChatQueryIntentCompilationPolicy(
             maximumProjectedFields:
-                GraphChatAnswerArtifactFactoryBudget
-                    .default.maximumColumns - 1,
+                GraphChatIntentLimitPolicy
+                    .default.maximumProjectionFieldCount,
             maximumEvidenceCount:
-                GraphChatQueryEngineLimits
-                    .default.maximumEvidenceCount
+                GraphChatIntentLimitPolicy
+                    .default.maximumQueryEvidenceCount
         )
 
     init(
@@ -723,6 +723,11 @@ nonisolated struct GraphChatQueryIntentCompiler:
             requestedLimit =
                 GraphQueryPlanLimits
                     .maximumResultLimit
+        } else if isGroup {
+            requestedLimit =
+                limitPolicy.groupCountLimit(
+                    for: draft.resultAmount
+                )
         } else if let source,
                   draft.resultAmount == .standard {
             requestedLimit = source.plan.limit

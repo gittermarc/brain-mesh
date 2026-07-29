@@ -152,7 +152,12 @@ nonisolated struct GraphChatResponseLocalizer: Sendable {
     }
 
     func mixedEntityClarification(optionTitles: [String]) -> String {
-        let titles = Array(optionTitles.prefix(8))
+        let titles = Array(
+            optionTitles.prefix(
+                GraphChatIntentLimitPolicy
+                    .default.maximumClarificationOptionCount
+            )
+        )
         guard titles.isEmpty == false else {
             return clarificationQuestion(reason: .mixedEntities)
         }

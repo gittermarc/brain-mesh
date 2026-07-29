@@ -1,6 +1,6 @@
 # BrainMesh – Project Context
 
-> Start Here für neue Entwickler:innen. Stand: INTENT-COMPILER-6 mit einer editierbaren, schemaorientierten Intent-Interpretation und providerfreier lokaler Ersatzturn-Ausführung für alle erfolgreich kompilierten Intent-Familien aus INTENT-COMPILER-5.
+> Start Here für neue Entwickler:innen. Stand: INTENT-COMPILER-7 und abgeschlossene Graph-Chat-Ausbaustufe 2 mit produktivem Typed-Planner-Cutover, gebündelter Limit-Policy, begrenzter Interpreter-Recovery und providerfreier lokaler Ausführung aller unterstützten Intent-Familien.
 
 ## TL;DR
 
@@ -36,11 +36,15 @@ BrainMesh ist eine native SwiftUI-App für iPhone und iPad, in der Nutzer:innen 
 - **Graph Chat**: On-Device-LLM-Flow mit sechs read-only Tools und graphgebundener Evidenz.
 - **Typed Conversation Scope**: Appseitig revalidierte, an Graph, Chat-Scope und Conversation gebundene Auflösung von `CURRENT` und gleichwertigen Conversation-Referenzen; enthält eine konkrete Entity sowie die zulässigen Nodes und wird vor der Query-Ausführung erneut geprüft.
 - **Presentation Firewall**: Turn-gebundene Trust Boundary, die interne Chat-Aliase und technische IDs vor Streaming, finaler UI-Ausgabe und Copy deterministisch auf validierte Anzeigenamen abbildet oder durch eine lokalisierte Ersatzantwort ersetzt.
-- **Bounded Tool Repair**: Request-gebundene, explizit klassifizierte Korrektur eines semantisch ungültigen Modell-Tool-Calls. Der Provider erhält nur validierte Schema-/Scope-Hinweise und genau einen vollständigen Retry; Sicherheits-, Scope-, Repository-, Cancellation- und Budgetfehler bleiben harte Abbrüche.
+- **Bounded Tool Repair**: Ausschließlich im echten offenen Legacy-Providerpfad verfügbare, request-gebundene Korrektur eines semantisch ungültigen Modell-Tool-Calls. Unterstützte Typed Intents erreichen diesen Pfad nie. Der Legacy-Provider erhält nur validierte Schema-/Scope-Hinweise und genau einen vollständigen Retry; Sicherheits-, Scope-, Repository-, Cancellation- und Budgetfehler bleiben harte Abbrüche.
 - **Primary Result Ledger**: Request-lokale, value-only Erfassung validierter erfolgreicher Tool-Ergebnisse. Eine deterministische App-Policy wählt das autoritative primäre Ergebnis und übergibt dessen Evidence und Artifacts unabhängig von Modell-IDs an den Finalizer.
 - **Deterministic Answer Fallback**: Lokalisierte, begrenzte Mindestantwort, die ausschließlich aus dem nach Live-Revalidierung verbliebenen primären Tool-Ergebnis gerendert wird. Sie ersetzt nur leeren, technischen, widersprüchlichen oder presentation-unsicheren Modelltext und behält dessen Evidence beziehungsweise Result-Artefakt.
 - **Foundational Intent Compiler**: Schemaorientierte, providerfreie Trust Boundary für exakt erkannte Fragen nach einem Detailfeld eines eindeutigen Attributes sowie nach der vollständigen Attributliste einer eindeutigen Entity. App-Daten bestimmen Entity, Feld, Node-Scope, Query-Plan und Limit; nur `.notRecognized` erreicht die nachgelagerte semantische Interpreter-Stufe.
 - **Semantic Intent Interpreter**: Nachgelagerte On-Device-Foundation-Models-Stufe für Find Nodes, Node Details, Compare Nodes und Inspect Graph State sowie fachliche Collection-, Filter-, Sortier-, Projektions-, Count-, Group- und Refinement-Bedeutung. Das Modell erhält weder Tools noch technische Identitäten und erzeugt nur einen begrenzten, untrusted und value-only Draft aus Anzeigenamen, fachlichen Relationen, Nutzerwerten, Graph-State-Aspekt und Conversation-Bezug.
+- **Two-Stage Typed Planner**: Verbindliche Reihenfolge aus Foundational Fast Path und anschließendem toolfreien Semantic Interpreter. Nach der Draft-Validierung besitzt ausschließlich die App Identitäten, Scope, Tool, Query, Operator, typisierte Werte, Projektion, Aggregation, Sortierung, Limits, Evidence, Artifacts, Interpretation und finalen Fachtext.
+- **Typed Planner Cutover Policy**: `GraphChatTypedPlannerCutoverPolicy` klassifiziert Find Nodes, Entity List, Filtered List, Count, Group Count, Refinement, Node Details, Compare Nodes und Inspect Graph State als vollständig lokale Familien. Ein teilweise akzeptierter Draft darf nie in freie Tool- oder Query-Improvisation fallen.
+- **Intent Limit Policy**: `GraphChatIntentLimitPolicy` ist die gemeinsame appseitige Quelle für Search-/Query-/Collection-/Group-Limits, Filter, Projektion, Comparison, Related Items, Graph Hubs, Clarification, Interpreter-Strings/-Arrays sowie Standard- und Compact-Kontextprofile.
+- **Bounded Interpreter Recovery**: Ein normaler begrenzter Interpreter-Request erhält ausschließlich bei `contextWindowExceeded` genau einen noch kompakteren Retry im selben Request-/Cancellation-Lifecycle. Nach einem gelieferten Draft gibt es keinen Retry. Schemawidrige oder manipulierte Drafts scheitern geschlossen; technische Nichtverfügbarkeit darf deterministisch den Legacy-Provider öffnen.
 - **Query Intent Compiler**: Zentrale appseitige Trust Boundary nach der Draft-Validierung. Sie löst Entity und Felder gegen das vollständige aktive Schema auf, wählt ausschließlich typkompatible Operatoren, parst lokalisierte Werte deterministisch und erzeugt Scope, Projektion, Aggregation, Limits, Kardinalität und stabile Sortierung. Jeder Plan durchläuft anschließend erneut `GraphQueryPlanValidator` und `GraphChatScopeAuthorization`.
 - **Advanced Intent Compiler**: Appseitige Trust Boundary für Node Details, Compare Nodes und Inspect Graph State. Sie löst und revalidiert Nodes aus Anzeigenamen, `CURRENT`, Ordinal, Last Node, Last Compared oder Clarification, bestimmt `GetNodeTool` beziehungsweise `GraphStatsTool`, Comparison-Art, Features, Selection Query, Limits, Artifact-Typ und Trusted Events. Das Modell kann keine Node-ID, Toolwahl, technische Comparison-Feature-ID oder Limits setzen.
 - **Comparison Plan**: Zentraler value-only Vertrag für mindestens zwei revalidierte Nodes. `GraphChatComparisonPlan` bindet Graph, Chat-Scope, Request, Conversation und Turn sowie appseitig gewählte Comparison-Art, Features, Selection Query, gemeinsame Limits, Sprache und erwartete Kardinalität.
@@ -116,7 +120,7 @@ BrainMesh ist eine native SwiftUI-App für iPhone und iPad, in der Nutzer:innen 
 - Nach erfolgreicher lokaler Revalidation rekonstruiert der Finalizer eine `GraphChatIntentInterpretation` aus dem Typed Intent und dem validierten Query-Plan beziehungsweise dem revalidierten Search-/Node-/Comparison-/Stats-Execution-Nachweis. Der lokalisierte Titel wird unmittelbar oberhalb des direkten Antworttexts gezeigt; eine Interpretation ohne kompilierten Intent wird nicht erfunden.
 - Tap auf eine editierbare Interpretation → aktueller value-only Schema-/Scope-Snapshot und Live-Prüfung der gebundenen Artifact-Session → intent-spezifischer fachlicher Sheet-Editor. Apply lädt Schema und Conversation-Checkpoint erneut, kompiliert die Korrektur direkt appseitig und führt die neue Action über den Local Intent Execution Kernel aus; Semantic Interpreter und freier Answer Provider werden nicht aufgerufen.
 - Erfolgreicher Correction-Rerun → Compare-and-set gegen den unveränderten aktuellen Conversation State → Kandidat aus dem Checkpoint vor dem ursprünglichen Turn plus neuem Turn → Entfernung des alten Assistant-Turns und aller nachfolgenden Turns nach derselben Suffix-Policy wie Edit-and-Resend → Feedback-, Evidence-Presentation- und Artifact-Cleanup → neuer finalisierter Answer und neues `CURRENT`. Failure oder Cancellation lassen den alten erfolgreichen Transcript- und Runtime-Zustand autoritativ.
-- Nur explizite `.unrecognized`-/`.openEnded`-Drafts erreichen die unveränderte freie Provider-Pipeline. Ein erkannter, aber nicht sicher auflösbarer Draft wird geklärt oder abgelehnt und niemals als freie Tool-Improvisation fortgesetzt.
+- Nur explizite `.unrecognized`-/`.openEnded`-Drafts oder eine eindeutig technische Interpreter-Nichtverfügbarkeit nach höchstens einem Compact-Retry erreichen die unveränderte freie Provider-Pipeline. Ein erkannter, aber nicht sicher auflösbarer, schemawidriger oder manipulierter Draft wird geklärt oder abgelehnt und niemals als freie Tool-Improvisation fortgesetzt.
 - Foundational Single-Field → exakt ein graph-/chat-gescopter Attribute-Node, Node Identity plus exakt ein validiertes Feld, appseitiges Limit `1`, erneute Query-Plan-/Scope-Validierung und Ausführung über die bestehende Query Engine. Der Erfolg wird als typisierte einzeilige Table-Artefaktprojektion transportiert. Ein Suchtreffer allein ist nie Detailwert-Autorität.
 - Foundational Entity Collection → unveränderter autorisierter Entity-/Node-/Selection-Scope, Node-Identity-Projektion, stabile Namenssortierung und `GraphQueryPlanLimits.maximumResultLimit`. „Alle“ bedeutet alle autorisierten Ergebnisse bis zu diesem gemeinsamen Sicherheitslimit; Truncation bleibt im Result-Artefakt und in der lokalisierten Mindestantwort sichtbar.
 - Mehrdeutiger Foundational Intent → bestehende graph-/session-/turngebundene Pending Clarification mit ausschließlich fachlichen Anzeigenamen. Die Auswahl setzt dieselbe Originalfrage fort und wird gegen Schema, Scope und Quell-Turn erneut validiert.
@@ -127,6 +131,32 @@ BrainMesh ist eine native SwiftUI-App für iPhone und iPad, in der Nutzer:innen 
 - Andere Modellantwort → `GraphChatPresentationFirewall` → Konsistenzprüfung gegen das revalidierte Primärergebnis → gegebenenfalls deterministischer Answer Fallback → typisierter Answer-State → UI/Copy.
 - Erfolgreiche normale `.answer` → nicht leerer presentation-sicherer Text plus mindestens validierte Evidence oder ein Result-Artefakt. Clarification, No Results, Unsupported und Failure bleiben eigene typisierte Zustände.
 - Öffentlicher Fehlercode → lokalisierter, codebasierter UI-Text; rohe Tool-, Resolver-, Provider-, Repository- und Validierungsdetails bleiben außerhalb von UI und Copy.
+
+### Graph Chat Ausbaustufe 2 – produktiver Cutover
+
+Die produktive Routing-Reihenfolge ist fest und darf nicht durch einen Adapter oder Repair-Pfad umgangen werden:
+
+1. Request Preflight;
+2. Unsupported- und bestehende Clarification-Prüfung;
+3. Foundational Fast Path;
+4. toolfreier Semantic Intent Interpreter;
+5. Draft Validation;
+6. appseitige Schema-, Scope- und Conversation-Auflösung;
+7. fachliche Clarification oder vollständig gebundener Compiled Intent;
+8. lokale Tool-/Query-Ausführung, Evidence-/Artifact-Commit und Finalisierung;
+9. Legacy Provider ausschließlich für `unrecognized`, `openEnded` oder eindeutige technische Interpreter-Nichtverfügbarkeit.
+
+Für Find Nodes, Entity List, Filtered List, Count, Group Count, Node Details, Refinement, Compare Nodes und Inspect Graph State gilt damit: höchstens ein Semantic-Interpreter-Kontakt, kein Answer Provider, kein modellbestimmter Tool Call oder `GraphQueryPlan`, keine technischen Modell-Aliasse, kein modellbestimmtes Ergebnislimit und kein modellgenerierter finaler Fachtext. Der Foundational Fast Path besitzt null Modellkontakte. Interpretation Correction kompiliert aus der vertrauenswürdigen gebundenen Interpretation neu und verwendet weder Interpreter noch Provider.
+
+Jeder erfolgreiche Typed-Intent-Turn besitzt nicht leeren lokalisierten App-Text, eine sichere appseitig rekonstruierte „Verstanden als“-Interpretation und validierte Evidence oder mindestens ein Result-Artefakt. Derselbe finalisierte `GraphChatAnswer.directAnswer` ist die Quelle für UI und Copy. UUIDs, interne Aliasse, Drafttext und rohe Tool-, Query-, Resolver-, Repository- oder Integrity-Fehler sind presentation-seitig verboten.
+
+Cancellation, Graph-/Scope-/Lock-Wechsel, Regenerate, Edit-and-Resend und Correction werden über Generation, Request, Conversation, Turn und Artifact-Session revalidiert. Ein Request erzeugt genau ein Terminal Event; verspätete Interpreter-, Query-, Comparison- oder Correction-Ergebnisse können weder Conversation noch Artifact Session, Ledger oder UI committen. Pending Clarifications laufen nach der zentralen Policy ab.
+
+Content-free Planner-Observability unterscheidet Foundational Fast Path, Semantic Interpreter, Draft Outcome, lokale Intent-Familie, Legacy-Fallback-Grund, Compact-Retry, Clarification, Correction Rerun, Terminal Outcome und Cancellation Stage. Es werden keine Fragen, Namen, Filter- oder Fachwerte, Aliasse oder IDs erfasst.
+
+Bewusst frei beziehungsweise nicht als Typed Intent unterstützt bleiben allgemeine Erklärungen, Synthesen und Bewertungen, Multi-Hop-Analysen, Minimum/Maximum und andere nicht definierte Aggregationen, Attachment-Inhaltsanalyse sowie Schreib- oder Mutationswünsche. Echte offene read-only Fragen dürfen weiterhin die bestehende evidenz- und presentation-gesicherte Legacy-Pipeline verwenden; Graph-Writes bleiben grundsätzlich ausgeschlossen.
+
+Die gebündelte `GraphChatTypedIntentPlannerAcceptanceTests`-Suite verknüpft 18 reale In-Memory-Szenarien für alle Familien, Fast Path, Clarification, Interpretation, Correction, Draft-Manipulation, Legacy-Fallback, Sicherheitsbindungen, Cancellation und große Schemas/Compact-Retry. Die filesystem-synchronisierten Xcode-Gruppen ordnen neue Produktions- und Testdateien automatisch dem korrekten Target zu.
 
 ## Folder Map
 
@@ -427,6 +457,7 @@ Duplicate-Resolution:
 - [ ] App auf einem iOS-26-Simulator ohne iCloud starten.
 - [ ] App auf einem physischen iOS-26-Gerät mit iCloud starten.
 - [ ] `BrainMeshTests` ausführen.
+- [ ] `GraphChatTypedIntentPlannerAcceptanceTests` sowie `GraphChatFoundationalAccuracyAcceptanceTests` separat ausführen und auf null neue Swift-/Concurrency-Warnungen prüfen.
 - [ ] `BrainMeshUITests` für die kritischen Root-Flows ausführen.
 - [ ] `.bmgraph`- und `.bmbackup`-Roundtrip mit Testdaten prüfen.
 - [ ] Multi-Device-Sync mit separaten Änderungen und Offline-Phasen prüfen.

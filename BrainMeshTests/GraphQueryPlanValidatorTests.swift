@@ -332,10 +332,47 @@ struct GraphQueryPlanValidatorTests {
             version: GraphQueryPlan.currentVersion + 1,
             entityAlias: GraphEntityAlias("E1")
         )
+        let tooManyFilters = GraphQueryPlan(
+            entityAlias: GraphEntityAlias("E1"),
+            filters: Array(
+                repeating:
+                    GraphQueryFilter(
+                        fieldAlias:
+                            GraphFieldAlias("F1"),
+                        operation: .contains,
+                        value: .text("x")
+                    ),
+                count:
+                    GraphChatIntentLimitPolicy
+                        .default.maximumFilterCount
+                        + 1
+            )
+        )
+        let tooManyProjectionItems =
+            GraphQueryPlan(
+                entityAlias:
+                    GraphEntityAlias("E1"),
+                projection: Array(
+                    repeating:
+                        .nodeIdentity,
+                    count:
+                        GraphChatIntentLimitPolicy
+                            .default.maximumProjectionFieldCount
+                            + 2
+                )
+            )
 
         #expect(codes(for: tooSmall) == [.invalidLimit])
         #expect(codes(for: tooLarge) == [.invalidLimit])
         #expect(codes(for: unsupported) == [.unsupportedVersion])
+        #expect(
+            codes(for: tooManyFilters)
+                .contains(.invalidFilterCount)
+        )
+        #expect(
+            codes(for: tooManyProjectionItems)
+                .contains(.invalidProjectionCount)
+        )
     }
 
     @Test

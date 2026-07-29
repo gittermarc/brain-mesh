@@ -288,19 +288,27 @@ nonisolated enum GraphChatSemanticDraftValidationError:
 }
 
 nonisolated enum GraphChatSemanticSafety {
-    static let maximumEntityTermLength = 160
-    static let maximumSearchTermLength = 240
-    static let maximumFieldTermLength = 160
-    static let maximumFilterValueLength = 240
-    static let maximumFilters = 8
-    static let maximumValuesPerFilter = 8
+    private static let limits =
+        GraphChatIntentLimitPolicy.default
+
+    static let maximumEntityTermLength =
+        limits.maximumEntityTermLength
+    static let maximumSearchTermLength =
+        limits.maximumSearchTermLength
+    static let maximumFieldTermLength =
+        limits.maximumFieldTermLength
+    static let maximumFilterValueLength =
+        limits.maximumFilterValueLength
+    static let maximumFilters =
+        limits.maximumFilterCount
+    static let maximumValuesPerFilter =
+        limits.maximumValuesPerFilter
     static let maximumProjectionTerms =
-        GraphChatAnswerArtifactFactoryBudget
-            .default.maximumColumns - 1
+        limits.maximumProjectionFieldCount
     static let maximumNodeTerms =
-        GraphChatAdvancedIntentPolicy
-            .default.maximumComparisonNodeCount
-    static let maximumRequestedCount = 10_000
+        limits.maximumComparisonNodeCount
+    static let maximumRequestedCount =
+        limits.maximumRequestedResultCount
 
     private static let forbiddenTechnicalWords: Set<String> = [
         "alias",

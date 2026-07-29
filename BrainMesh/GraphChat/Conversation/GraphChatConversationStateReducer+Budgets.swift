@@ -236,7 +236,12 @@ nonisolated extension GraphChatConversationStateReducer {
     func sanitizedClarification(
         _ clarification: GraphChatPendingClarification
     ) -> GraphChatPendingClarification {
-        let options = Array(clarification.options.prefix(8)).map { option in
+        let options = Array(
+            clarification.options.prefix(
+                GraphChatIntentLimitPolicy
+                    .default.maximumClarificationOptionCount
+            )
+        ).map { option in
             GraphChatPendingClarificationOption(
                 id: bounded(option.id, limit: 64),
                 title: boundedLabel(option.title),

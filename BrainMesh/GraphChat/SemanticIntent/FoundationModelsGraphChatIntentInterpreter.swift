@@ -72,7 +72,11 @@ private nonisolated struct FoundationGraphChatGeneratedIntentDraft {
     @Guide(
         description:
             "Requested count for first, otherwise zero.",
-        .range(0...10_000)
+        .range(
+            0
+                ... GraphChatIntentLimitPolicy
+                    .default.maximumRequestedResultCount
+        )
     )
     var firstCount: Int
 

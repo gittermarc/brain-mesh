@@ -42,7 +42,12 @@ nonisolated struct GraphChatLaunchRequest: Identifiable, Hashable, Sendable {
         guard trimmed.isEmpty == false else {
             return nil
         }
-        return String(trimmed.prefix(4_000))
+        return String(
+            trimmed.prefix(
+                GraphChatIntentLimitPolicy
+                    .default.maximumQuestionLength
+            )
+        )
     }
 }
 
@@ -111,7 +116,12 @@ final class GraphChatLaunchCoordinator: ObservableObject {
             return
         }
         draftScope = scope
-        draftText = String(text.prefix(4_000))
+        draftText = String(
+            text.prefix(
+                GraphChatIntentLimitPolicy
+                    .default.maximumQuestionLength
+            )
+        )
     }
 
     func draft(for scope: GraphChatScope) -> String? {

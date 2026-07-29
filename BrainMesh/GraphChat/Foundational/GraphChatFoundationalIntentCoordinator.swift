@@ -177,7 +177,10 @@ nonisolated struct GraphChatFoundationalIntentCoordinator: Sendable {
             continuationOperation: .answerAboutReference,
             continuationQuestion: providerPlan.providerQuestion,
             createdAt: requestedAt,
-            expiresAt: requestedAt.addingTimeInterval(10 * 60)
+            expiresAt: requestedAt.addingTimeInterval(
+                GraphChatIntentLimitPolicy
+                    .default.pendingClarificationLifetime
+            )
         )
     }
 

@@ -837,6 +837,8 @@ actor GraphChatModelToolRuntime: GraphChatModelToolRunning {
             .unknownFieldAlias,
             .fieldEntityMismatch,
             .invalidLimit,
+            .invalidFilterCount,
+            .invalidProjectionCount,
             .graphScopeMismatch,
             .unknownScopeEntity,
             .unknownScopeNode,

@@ -342,7 +342,12 @@ final class GraphChatViewModel: ObservableObject {
     }
 
     func setComposerText(_ text: String) {
-        let bounded = String(text.prefix(4_000))
+        let bounded = String(
+            text.prefix(
+                GraphChatIntentLimitPolicy
+                    .default.maximumQuestionLength
+            )
+        )
         composerState.text = bounded
         draftChangeHandler(bounded)
     }
@@ -386,7 +391,12 @@ final class GraphChatViewModel: ObservableObject {
               question.isEmpty == false else {
             return
         }
-        let bounded = String(question.prefix(4_000))
+        let bounded = String(
+            question.prefix(
+                GraphChatIntentLimitPolicy
+                    .default.maximumQuestionLength
+            )
+        )
         composerState.text = bounded
         draftChangeHandler(bounded)
     }

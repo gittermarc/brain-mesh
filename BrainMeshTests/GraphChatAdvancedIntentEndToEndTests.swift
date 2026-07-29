@@ -867,6 +867,116 @@ struct GraphChatAdvancedIntentEndToEndTests {
         #expect(terminalEventCount(healthEvents) == 1)
     }
 
+    @MainActor
+    @Test
+    func comparisonCancellationCannotPublishAResultOrSecondTerminal()
+        async throws
+    {
+        let store =
+            try BrainMeshTestContainer
+                .makeInMemoryStore()
+        let fixtures =
+            BrainMeshFixtureBuilder(
+                context: store.context
+            )
+        let graph = fixtures.makeGraph(
+            name: "Portfolio"
+        )
+        let projects = fixtures.makeEntity(
+            name: "Projekte",
+            in: graph
+        )
+        fixtures.makeAttribute(
+            name: "Atlas",
+            owner: projects
+        )
+        fixtures.makeAttribute(
+            name: "Apollo",
+            owner: projects
+        )
+        fixtures.makeDetailField(
+            owner: projects,
+            name: "Status",
+            type: .singleChoice,
+            sortIndex: 0,
+            options: ["Offen", "Erledigt"],
+            isPinned: true
+        )
+        try fixtures.save()
+        let interpreter =
+            FakeGraphChatIntentInterpreter(
+                steps: [
+                    .draft(
+                        GraphChatUntrustedSemanticIntentDraft(
+                            family:
+                                .compareNodes,
+                            entityTerm:
+                                "Projekte",
+                            nodeTerms: [
+                                "Atlas",
+                                "Apollo",
+                            ],
+                            projectionTerms: [
+                                "Status",
+                            ],
+                            responseLanguage:
+                                .german
+                        )
+                    )
+                ]
+            )
+        let blocker =
+            AdvancedBlockingQueryExecutor()
+        let runtime = makeRuntime(
+            store: store,
+            graphID: graph.id,
+            interpreter: interpreter,
+            queryExecutorBase: blocker
+        )
+        let graphScope =
+            GraphScope(graphID: graph.id)
+        let stream =
+            await runtime.orchestrator
+                .streamAnswer(
+                    question:
+                        "Vergleiche Atlas und Apollo.",
+                    graphScope: graphScope,
+                    chatScope:
+                        .entireGraph(
+                            graphScope
+                        )
+                )
+        let collector = Task {
+            await collect(stream)
+        }
+        await blocker.waitUntilStarted()
+        await runtime.orchestrator
+            .cancelCurrentGeneration()
+        let events = await collector.value
+        let state =
+            await runtime.orchestrator
+                .conversationStateSnapshot()
+
+        #expect(events.last == .cancelled)
+        #expect(terminalEventCount(events) == 1)
+        #expect(
+            state?.turnContexts.isEmpty
+                != false
+        )
+        #expect(
+            state?.resultContexts.isEmpty
+                != false
+        )
+        #expect(
+            state?.lastValidatedQueryPlan
+                == nil
+        )
+        #expect(
+            await runtime.provider.snapshot()
+                .createdSessions.isEmpty
+        )
+    }
+
     private struct Runtime {
         let orchestrator: GraphChatOrchestrator
         let provider: FakeGraphChatModelProvider
@@ -879,7 +989,10 @@ struct GraphChatAdvancedIntentEndToEndTests {
     private func makeRuntime(
         store: BrainMeshTestStore,
         graphID: UUID,
-        interpreter: FakeGraphChatIntentInterpreter
+        interpreter: FakeGraphChatIntentInterpreter,
+        queryExecutorBase:
+            (any GraphChatLocalIntentQueryExecuting)? =
+                nil
     ) -> Runtime {
         let repository = GraphReadRepository(
             container: AnyModelContainer(store.container)
@@ -922,7 +1035,9 @@ struct GraphChatAdvancedIntentEndToEndTests {
             schemaProvider: GraphSchemaService(
                 repository: repository
             ),
-            foundationalQueryExecutor: queryEngine,
+            foundationalQueryExecutor:
+                queryExecutorBase
+                ?? queryEngine,
             semanticNodeExecutor: nodeExecutor,
             semanticStatsExecutor: statsExecutor,
             toolRunnerFactory:
@@ -1025,6 +1140,39 @@ struct GraphChatAdvancedIntentEndToEndTests {
                 return nil
             }
         }.joined(separator: "\n")
+    }
+}
+
+private actor AdvancedBlockingQueryExecutor:
+    GraphChatLocalIntentQueryExecuting
+{
+    private var started = false
+    private var waiters:
+        [CheckedContinuation<Void, Never>] = []
+
+    func execute(
+        _ plan: ValidatedGraphQueryPlan
+    ) async throws -> GraphChatQueryResult {
+        _ = plan
+        started = true
+        let pending = waiters
+        waiters.removeAll()
+        pending.forEach {
+            $0.resume()
+        }
+        try await Task.sleep(
+            nanoseconds: UInt64.max
+        )
+        throw CancellationError()
+    }
+
+    func waitUntilStarted() async {
+        guard started == false else {
+            return
+        }
+        await withCheckedContinuation {
+            waiters.append($0)
+        }
     }
 }
 

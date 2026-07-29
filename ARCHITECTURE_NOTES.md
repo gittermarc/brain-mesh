@@ -19,6 +19,8 @@ BrainMesh besitzt bereits mehrere wichtige Schutzlinien:
 - Freie Find-Nodes- und Entity-List-Formulierungen werden nach dem Foundational Fast Path durch einen toolfreien On-Device-Interpreter ausschließlich in einen begrenzten untrusted Semantic Draft klassifiziert. Identitäten, Scope, technische Action, Query, Limits, Evidence, Artifacts und sichtbare Antwort bleiben appseitig.
 - Node Details, Compare Nodes und Inspect Graph State werden nach semantischer Klassifikation vollständig appseitig kompiliert und providerfrei über denselben lokalen Execution Kernel abgeschlossen. Node-IDs, Tools, Comparison-Art/-Features, Related-/Hub-Limits und Artifact-Struktur bleiben app-owned.
 - Finalisierte lokale Typed-Intent-Interpretationen sind fachlich editierbar. Jede Korrektur wird an ursprünglichen Turn, Conversation, Scope, Checkpoints und Artifact-Session gebunden, gegen ein frisches vollständiges Schema revalidiert und als providerfreier lokaler Ersatzturn mit atomarem Conversation-/Artifact-Swap ausgeführt.
+- INTENT-COMPILER-7 schließt Ausbaustufe 2 mit einer expliziten Cutover-Policy ab: Alle neun unterstützten Familien enden lokal oder in einer fachlichen Clarification. Freie Provider-Toolwahl, modellbestimmte Query-Pläne, Limits und finaler Fachtext sind in diesem Pfad nicht mehr erreichbar.
+- Eine gemeinsame `GraphChatIntentLimitPolicy` besitzt die fachlich gleichen Grenzen. Der Interpreter verwendet ein begrenztes Standardprofil und ausschließlich bei Context-Window-Überlauf genau einen Compact-Retry; manipulierte oder schemawidrige Drafts scheitern ohne Tool-Repair oder Provider-Rettung.
 
 Die höchsten Architektur-Risiken liegen trotzdem an drei Systemgrenzen:
 
@@ -883,6 +885,66 @@ Observability:
 - Content-free Events unterscheiden Interpreter-Start, Draft akzeptiert/abgelehnt, Find/List/Filtered Collection/Count/Group/Refinement/Node Details kompiliert, Same-Entity- und Structural Comparison, Comparison-Ablehnung, Graph Overview, Graph Health, Typkonflikt, abgelehntes Value Parsing, verhinderte Scope-Erweiterung, verworfenen stale Node, abgelehntes stale Resultset, Clarification, Legacy-Provider-Fallback und Cancellation.
 - Request-Metriken zählen Interpreter- und Answer-Provider-Aufrufe getrennt. Fragen, Draftwerte, Anzeigenamen, Aliasse, IDs, Suchbegriffe und Antworttext werden nicht protokolliert.
 
+### Graph Chat Typed Planner Cutover (INTENT-COMPILER-7)
+
+Pfade:
+
+- `BrainMesh/GraphChat/TypedIntent/GraphChatIntentLimitPolicy.swift`
+- `BrainMesh/GraphChat/TypedIntent/GraphChatTypedPlannerCutoverPolicy.swift`
+- `BrainMesh/GraphChat/SemanticIntent/GraphChatIntentInterpreterRequestBuilder.swift`
+- `BrainMesh/GraphChat/SemanticIntent/GraphChatSemanticIntentCoordinator.swift`
+- `BrainMesh/GraphChat/Orchestration/GraphChatRequestPipeline.swift`
+- `BrainMesh/GraphChat/Orchestration/GraphChatOrchestrator.swift`
+- `BrainMesh/GraphChat/Observability/GraphChatObservability.swift`
+- `BrainMeshTests/GraphChatTypedIntentPlannerAcceptanceTests.swift`
+
+Verbindliche Planner-Reihenfolge:
+
+1. `GraphChatRequestPreflight` normalisiert und validiert Graph-/Chat-/Conversation-Bindung und behandelt Unsupported beziehungsweise bestehende Clarifications.
+2. `GraphChatFoundationalIntentCoordinator` prüft die exakten providerfreien Fast-Path-Familien.
+3. Nur `.notRecognized` startet `GraphChatIntentInterpreting`; der Interpreter besitzt keine Tools und antwortet nicht fachlich.
+4. `GraphChatSemanticDraftValidator` prüft den untrusted Draft vollständig, bevor irgendeine Identität aufgelöst oder lokal ausgeführt wird.
+5. Conversation Reference Resolver, Semantic Resolver, Query Intent Compiler und Advanced Intent Compiler binden ausschließlich gegen frisches vollständiges App-Schema und aktuellen Scope.
+6. Mehrdeutigkeit erzeugt eine fachliche Clarification; andernfalls entsteht ein versionierter `GraphChatTypedIntent` mit einer vollständig bestimmten lokalen Action.
+7. `GraphChatLocalIntentExecutionKernel` revalidiert und führt Query, Search, Get Node oder Graph Stats lokal aus; Finalizer, Presentation Firewall, Evidence, Artifact, Ledger und Conversation Commit bleiben app-owned.
+8. Erst ein Draft der Familie `.unrecognized`/`.openEnded` oder die eindeutig technische Nichtverfügbarkeit des Interpreters öffnet die vorhandene Legacy-Provider-Pipeline.
+
+Harte Cutover-Regel:
+
+- `GraphChatTypedPlannerCutoverPolicy.supportedFamilies` enthält exakt Find Nodes, Entity List, Filtered Collection, Count, Group Count, Refinement, Node Details, Compare Nodes und Inspect Graph State.
+- Für diese Familien kann `legacyFallbackReason(for:)` keinen Grund liefern. Ein Resolver-Rückfall aus einer unterstützten Familie ist ein `invalidRequest` und kein Übergang zur Provider-Toolwahl.
+- Ein teilweise valider Draft wird nicht „best effort“ ausgeführt: UUID, technischer Alias, graphfremde Auswahl, inkompatibles Feld, falscher Operator, stale `CURRENT` oder Scope-Konflikt führen zu Clarification oder harter Ablehnung.
+- Nach einem akzeptierten Draft gibt es weder Interpreter-Retry noch Tool-Repair noch Answer Provider. Eine erfolgreiche freie unterstützte Frage besitzt höchstens einen Interpreter-Aufruf; der Foundational Fast Path besitzt null Modellaufrufe.
+- Der Legacy-Provider und seine sechs Tools bleiben für echte offene read-only Fragen vorhanden. Legacy Tool Repair und Provider Context Retry gelten ausschließlich in diesem offenen Pfad.
+
+Interpreter-Recovery:
+
+- `GraphChatIntentInterpreterContextLimits.default` wird aus dem Standardprofil der gemeinsamen Limit-Policy abgeleitet. Entitäten, Felder, Conversation-Beschreibungen, References, Selection Labels und sichtbare Stringlängen sind vor dem Prompt begrenzt; der vollständige App-Katalog bleibt ausschließlich beim Resolver.
+- Nur `GraphChatIntentInterpreterErrorCode.contextWindowExceeded` löst genau einen Request mit `.compactRetry` aus. Das Compact-Profil reduziert alle promptwirksamen Schema-/Conversation-Budgets deterministisch.
+- Beide Aufrufe leben im selben strukturierten Request-Task und Cancellation-Budget. Es gibt keine Repair-Schleife und keinen dritten Aufruf.
+- `.unavailable` beziehungsweise ein erneutes Context-Window-Problem nach dem Compact-Retry gelten als technische Nichtverfügbarkeit. `invalidOutput`, Guardrail-/Sprachfehler, unerwartete Fehler sowie jede Draft- oder Resolver-Ablehnung fallen geschlossen aus.
+
+Gemeinsame Limit-Policy:
+
+- `GraphChatIntentLimitPolicy` besitzt Default/Maximum für Search, Query Results und vollständige Collections, Group Count, Filter, Projection Fields, Comparison Nodes/Features, Node Related Items, Neighbors, Graph Hubs, Clarification Options und Expiry, Interpreter-Strings/-Arrays, Evidence und Artifact-Anzahl.
+- `GraphQueryPlanLimits`, `GraphChatSemanticIntentLimitPolicy`, `GraphChatAdvancedIntentPolicy`, Tool-Inputs/-Maxima, Query Engine, Artifact Factory und Foundation-Models-Guides leiten fachlich gleiche Grenzen von dieser Policy ab. Die Modelldrafts transportieren weiterhin keine technischen Limits.
+- `ResultWindow` transportiert jede Begrenzung und Truncation bis in App-Text und Artifact. Vollständige Collection bedeutet vollständig nur innerhalb des autorisierten Scopes und des appseitigen Maximums.
+
+Lifecycle und Präsentation:
+
+- Pipeline-Stages erfassen Preflight, Fast Path, Interpreter, lokale Ausführung, Provider-Ressourcen, Finalisierung und Commit. Cancellation wird content-free der aktiven Stage zugeordnet.
+- `GraphChatRequestStreamController`, Generation State Machine und Compare-and-set-Commit verhindern verspätete lokale beziehungsweise Interpreter-Ergebnisse und garantieren genau ein Terminal Event. Graph-/Scope-/Lock-Wechsel, Regenerate, Edit-and-Resend und Correction invalidieren alte Bindings.
+- Failure/Cancellation reinigen Conversation-Transaction, Evidence-/Presentation-Registry, Artifact-Staging/Session und Primary-Result-Ledger. Pending Clarifications verwenden die zentrale Expiry- und Optionsgrenze.
+- Jeder erfolgreiche Typed Intent besitzt sicheren nicht leeren lokalen Fachtext, appseitig rekonstruierte Interpretation und Evidence oder Result-Artefakt. UI und Copy lesen denselben finalisierten Text; UUID, Alias, Drafttext und rohe Tool-/Query-/Resolver-/Repository-/Integrity-Fehler werden nicht gerendert.
+
+Bewusst offene Frageformen:
+
+- allgemeine Erklärungen, Synthesen, Bewertungen und Begründungen ohne eine unterstützte lokale Familie;
+- Multi-Hop- und freie Zusammenhangsanalyse;
+- Minimum, Maximum und nicht definierte Aggregationen;
+- semantische Analyse von Attachment-Inhalten;
+- Schreib-, Änderungs- und Mutationswünsche, da Graph Chat read-only bleibt.
+
 ### Graph Chat Typed-Intent- und Local-Execution-Trust-Boundary
 
 Pfade:
@@ -1438,6 +1500,7 @@ Pfad: `BrainMesh/Observability/BMObservability.swift`
   - Fact wegen fehlendem Wert, Mehrdeutigkeit, Integrity-Konflikt oder Revalidation verworfen.
 - Lokale Typed-Intent-Observability protokolliert ausschließlich Intent-Art und Lifecycle-Outcome: Foundational-Adaption, Start, Commit, Rollback, Revalidation-Ablehnung, verhinderte Scope-Erweiterung, verworfenen stale Node und Cancellation vor Commit. Fragen, Anzeigenamen, Werte, Aliasse, IDs und Antworttexte sind ausgeschlossen.
 - Semantic-Intent-Observability protokolliert ausschließlich Interpreter-Start, Draft akzeptiert/abgelehnt, Find/List/Query/Node Details kompiliert, Same-Entity-/Structural-Comparison, Comparison-Ablehnung, Graph Overview/Health, Scope-/Stale-Ablehnung, Clarification, Legacy-Provider-Fallback und Cancellation sowie getrennte Interpreter-/Answer-Provider-Aufrufzähler. Draftinhalt, Fragen, Suchbegriffe, Anzeigenamen, Aliasse, IDs und Antworttexte sind ausgeschlossen.
+- Typed-Planner-Observability protokolliert ausschließlich Foundational Fast Path, Semantic Interpreter, Draft Outcome, lokale Intent-Familie, Legacy-Fallback-Grund, Compact-Retry, Clarification, Correction Rerun, Terminal Outcome und Cancellation Stage. Associated Values sind nur geschlossene Enum-Kategorien; Fragen, Namen, Filter-/Fachwerte, Aliasse und IDs sind im Vertrag nicht darstellbar.
 - Authoritative-Fact-Metriken enthalten ausschließlich die technische Outcome-Kategorie. Fragen, Antworten, Namen, Fachwerte, Aliasse und IDs werden nicht protokolliert.
 - Settings zeigt Storage-Modus, iCloud-Accountstatus und Cachegrößen.
 
@@ -1551,6 +1614,7 @@ Die realistischen Obergrenzen sind **UNKNOWN U7** und müssen produktseitig fest
 - Graph-State-Artifact-Auswahl für Overview, Counts, Structure und Health sowie End-to-End-Graph-Health mit Metric/Health Finding, appseitigem Hub-Limit und verhindertem Scope-Widening.
 - Zentrale Comparison-Plan-Limits für Nodes und Features sowie providerfreie lokale Finalisierung und genau ein terminales Event in den Advanced-Intent-End-to-End-Szenarien.
 - Interpretation-Correction-Verträge, intent-spezifische Editorfelder, vollständige Schema-/Scope-/Session-Revalidation, typisierte Choice-/Toggle-/Zahl-/Datum-Filter, Operator-Kompatibilität, Entity-/Node-/Comparison-/Refinement-/Graph-State-Sicherheitsgrenzen, Doppelbestätigungs-Latch, Checkpoint-/Suffix-/Feedback-Replacement, deferred Artifact-Swap, Cancellation-/Commit-Rollback und Single-Terminal-Vertrag. Der End-to-End-Pfad ersetzt „Offene Projekte, sortiert nach Name“ durch die lokal ausgeführte Fälligkeitsdatum-Sortierung; Interpreter bleibt bei einem Aufruf, Answer Provider bei null und `CURRENT` enthält nur das neue Resultset.
+- `GraphChatTypedIntentPlannerAcceptanceTests` bündelt 18 benannte In-Memory-Akzeptanzszenarien: Foundational Single Fact, Natural Find/List, Filter/Sort, Count, Group, Refinement, Node Details, Comparison, Graph State, Clarification, Interpretation/Copy, Correction, Draft-Manipulation, Open-Ended-Fallback, Sicherheitsbindungen, Cancellation und große Schemas mit Standard-/Compact-Recovery. Zusätzliche End-to-End-Tests belegen genau zwei Interpreter-Aufrufe beim Compact-Retry, keinen Retry nach Draft, keinen Provider bei Draft-Manipulation sowie keinen verspäteten Comparison-Commit.
 
 ### Ergänzungen
 

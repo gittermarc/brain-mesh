@@ -51,7 +51,7 @@ nonisolated enum GraphChatComparisonFeature:
     case structure(GraphChatStructuralComparisonFeature)
 }
 
-/// Every execution and presentation limit for INTENT-COMPILER-4 lives here.
+/// Compatibility view over the shared typed-planner limit policy.
 /// The semantic model neither sees nor chooses any of these values.
 nonisolated struct GraphChatAdvancedIntentPolicy:
     Hashable,
@@ -66,16 +66,27 @@ nonisolated struct GraphChatAdvancedIntentPolicy:
     let maximumEvidenceCount: Int
     let maximumArtifactCount: Int
 
-    static let `default` = GraphChatAdvancedIntentPolicy(
-        maximumComparisonNodeCount: 8,
-        maximumComparisonFeatureCount: 8,
-        defaultComparisonFeatureCount: 6,
-        nodeDetailRelatedLimit: 20,
-        structuralRelatedLimit: 0,
-        graphHubLimit: 10,
-        maximumEvidenceCount: 96,
-        maximumArtifactCount: 4
-    )
+    static let `default`: GraphChatAdvancedIntentPolicy = {
+        let limits = GraphChatIntentLimitPolicy.default
+        return GraphChatAdvancedIntentPolicy(
+            maximumComparisonNodeCount:
+                limits.maximumComparisonNodeCount,
+            maximumComparisonFeatureCount:
+                limits.maximumComparisonFeatureCount,
+            defaultComparisonFeatureCount:
+                limits.defaultComparisonFeatureCount,
+            nodeDetailRelatedLimit:
+                limits.nodeDetailRelatedItemCount,
+            structuralRelatedLimit:
+                limits.structuralRelatedItemCount,
+            graphHubLimit:
+                limits.graphHubCount,
+            maximumEvidenceCount:
+                limits.maximumAdvancedEvidenceCount,
+            maximumArtifactCount:
+                limits.maximumAdvancedArtifactCount
+        )
+    }()
 
     init(
         maximumComparisonNodeCount: Int,

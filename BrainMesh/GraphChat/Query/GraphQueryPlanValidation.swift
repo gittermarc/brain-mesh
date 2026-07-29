@@ -19,6 +19,8 @@ nonisolated enum GraphQueryPlanValidationIssueCode: String, CaseIterable, Hashab
     case invalidChoiceValue
     case ambiguousChoiceValue
     case invalidLimit
+    case invalidFilterCount
+    case invalidProjectionCount
     case graphScopeMismatch
     case unknownScopeEntity
     case unknownScopeNode
@@ -49,16 +51,26 @@ nonisolated struct GraphQueryPlanValidator: Sendable {
     private let dateInterpreter: GraphChatDateInterpreter
     private let defaultLimit: Int
     private let maximumLimit: Int
+    private let maximumFilterCount: Int
+    private let maximumProjectionFieldCount: Int
 
     init(
         calendar: Calendar,
         timeZone: TimeZone,
         referenceDate: Date,
         defaultLimit: Int = GraphQueryPlanLimits.defaultResultLimit,
-        maximumLimit: Int = GraphQueryPlanLimits.maximumResultLimit
+        maximumLimit: Int = GraphQueryPlanLimits.maximumResultLimit,
+        maximumFilterCount: Int =
+            GraphChatIntentLimitPolicy
+                .default.maximumFilterCount,
+        maximumProjectionFieldCount: Int =
+            GraphChatIntentLimitPolicy
+                .default.maximumProjectionFieldCount
     ) {
         precondition(defaultLimit > 0)
         precondition(maximumLimit >= defaultLimit)
+        precondition(maximumFilterCount > 0)
+        precondition(maximumProjectionFieldCount > 0)
         self.dateInterpreter = GraphChatDateInterpreter(
             calendar: calendar,
             timeZone: timeZone,
@@ -66,6 +78,10 @@ nonisolated struct GraphQueryPlanValidator: Sendable {
         )
         self.defaultLimit = defaultLimit
         self.maximumLimit = maximumLimit
+        self.maximumFilterCount =
+            maximumFilterCount
+        self.maximumProjectionFieldCount =
+            maximumProjectionFieldCount
     }
 
     func validate(
@@ -119,9 +135,27 @@ nonisolated struct GraphQueryPlanValidator: Sendable {
         )
 
         var resolvedFilters: [GraphValidatedQueryFilter] = []
-        resolvedFilters.reserveCapacity(plan.filters.count)
+        if plan.filters.count > maximumFilterCount {
+            issues.append(
+                issue(
+                    .invalidFilterCount,
+                    path: "filters",
+                    message:
+                        "Der Query-Plan enthält zu viele Filter."
+                )
+            )
+        }
+        resolvedFilters.reserveCapacity(
+            min(
+                plan.filters.count,
+                maximumFilterCount
+            )
+        )
         if let entityResolution {
-            for (index, filter) in plan.filters.enumerated() {
+            for (index, filter) in plan.filters
+                .prefix(maximumFilterCount)
+                .enumerated()
+            {
                 let path = "filters[\(index)]"
                 if let resolved = resolveFilter(
                     filter,
@@ -168,10 +202,48 @@ nonisolated struct GraphQueryPlanValidator: Sendable {
         }
 
         var resolvedProjection: [GraphValidatedProjection] = []
-        resolvedProjection.reserveCapacity(plan.projection.count)
+        let maximumProjectionItemCount =
+            maximumProjectionFieldCount + 1
+        let hasTooManyProjectionItems =
+            plan.projection.count
+                > maximumProjectionItemCount
+        let projectionFieldCount =
+            hasTooManyProjectionItems
+            ? maximumProjectionFieldCount + 1
+            : plan.projection.reduce(
+                into: 0
+            ) { count, projection in
+                if case .field = projection {
+                    count += 1
+                }
+            }
+        if hasTooManyProjectionItems
+            || projectionFieldCount
+                > maximumProjectionFieldCount
+        {
+            issues.append(
+                issue(
+                    .invalidProjectionCount,
+                    path: "projection",
+                    message:
+                        "Der Query-Plan enthält zu viele Projektionsfelder."
+                )
+            )
+        }
+        resolvedProjection.reserveCapacity(
+            min(
+                plan.projection.count,
+                maximumProjectionItemCount
+            )
+        )
         var seenProjection = Set<GraphQueryProjection>()
         if let entityResolution {
-            for (index, projection) in plan.projection.enumerated() {
+            for (index, projection) in plan.projection
+                .prefix(
+                    maximumProjectionItemCount
+                )
+                .enumerated()
+            {
                 let path = "projection[\(index)]"
                 guard seenProjection.insert(projection).inserted else {
                     issues.append(

@@ -1102,7 +1102,12 @@ nonisolated struct GraphChatConversationReferenceResolver: Sendable {
     private func clarificationOptions(
         from aliases: [GraphChatConversationContextAlias]
     ) -> [GraphChatPendingClarificationOption] {
-        Array(aliases.prefix(8)).map(option)
+        Array(
+            aliases.prefix(
+                GraphChatIntentLimitPolicy
+                    .default.maximumClarificationOptionCount
+            )
+        ).map(option)
     }
 
     private func ordinalOptions(

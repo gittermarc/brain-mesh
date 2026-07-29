@@ -211,6 +211,10 @@ nonisolated struct ValidatedGraphQueryPlan: Hashable, Sendable {
 }
 
 nonisolated enum GraphQueryPlanLimits {
-    static let defaultResultLimit = 50
-    static let maximumResultLimit = 200
+    static let defaultResultLimit =
+        GraphChatIntentLimitPolicy
+            .default.defaultQueryResultCount
+    static let maximumResultLimit =
+        GraphChatIntentLimitPolicy
+            .default.maximumQueryResultCount
 }

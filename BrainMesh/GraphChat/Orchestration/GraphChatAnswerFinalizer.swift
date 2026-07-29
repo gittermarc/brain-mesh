@@ -1190,7 +1190,9 @@ nonisolated struct GraphChatAnswerFinalizer: Sendable {
         var seen = Set<String>()
 
         for rawAlias in providerAnswer.clarificationOptionAliases {
-            guard options.count < 8,
+            guard options.count
+                    < GraphChatIntentLimitPolicy
+                        .default.maximumClarificationOptionCount,
                   let alias = context.alias(rawAlias) else {
                 continue
             }
@@ -1227,7 +1229,12 @@ nonisolated struct GraphChatAnswerFinalizer: Sendable {
                 )
             }
         }
-        return Array(options.prefix(8))
+        return Array(
+            options.prefix(
+                GraphChatIntentLimitPolicy
+                    .default.maximumClarificationOptionCount
+            )
+        )
     }
 
     private func revalidatedClarificationOptions(
@@ -1237,7 +1244,9 @@ nonisolated struct GraphChatAnswerFinalizer: Sendable {
         var result: [GraphChatPendingClarificationOption] = []
         var seen = Set<String>()
         for candidate in candidates {
-            guard result.count < 8,
+            guard result.count
+                    < GraphChatIntentLimitPolicy
+                        .default.maximumClarificationOptionCount,
                   seen.insert(candidate.id).inserted else {
                 continue
             }
