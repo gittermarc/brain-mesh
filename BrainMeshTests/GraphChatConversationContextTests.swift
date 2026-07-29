@@ -194,6 +194,113 @@ struct GraphChatConversationContextTests {
     }
 
     @Test
+    func currentResultScopePreservesAuthoritativeResultContextID()
+        throws
+    {
+        let graphScope = GraphScope(
+            graphID: UUID()
+        )
+        let chatScope =
+            GraphChatScope.entireGraph(
+                graphScope
+            )
+        let entityID = UUID()
+        let node = NodeRefKey(
+            kind: .attribute,
+            id: UUID()
+        )
+        let result = resultContext(
+            nodes: [node],
+            entityID: entityID,
+            description: "Current result"
+        )
+        var state =
+            GraphChatConversationState.initial(
+                graphScope: graphScope,
+                chatScope: chatScope
+            )
+        state.nodeReferences = [
+            GraphChatConversationNodeReference(
+                node: node,
+                label: "Phoenix",
+                ownerEntityID: entityID,
+                evidenceIDs: []
+            ),
+        ]
+        state.resultContexts = [result]
+
+        let builder =
+            GraphChatConversationContextBuilder()
+        let preliminary =
+            builder.makeSnapshot(
+                from: state.snapshot
+            )
+        let resultAlias = try #require(
+            preliminary.results.last?.alias
+        )
+        let reference =
+            GraphChatResolvedConversationReference(
+                kind: .resultSet,
+                alias: resultAlias,
+                nodes: [node],
+                entityID: entityID,
+                fieldID: nil,
+                groupID: nil,
+                label: "Current result"
+            )
+        let resolvedScope =
+            GraphChatResolvedConversationScope(
+                graphScope: graphScope,
+                chatScope: chatScope,
+                conversationID:
+                    state.conversationID,
+                entityID: entityID,
+                nodes: [node],
+                origin: .latestResults,
+                revision:
+                    GraphChatResolvedConversationScopeRevision(
+                        sourceAlias:
+                            resultAlias,
+                        sourceResultID:
+                            result.id,
+                        sourceTurnID: nil,
+                        sourceTurnCompletedAt:
+                            nil,
+                        sourceReferenceCount:
+                            1,
+                        validatedQueryPlan:
+                            nil
+                    ),
+                reference: reference
+            )
+        let snapshot =
+            builder.makeSnapshot(
+                from: state.snapshot,
+                currentResolvedScope:
+                    resolvedScope
+            )
+        let current = try #require(
+            snapshot.alias("CURRENT")
+        )
+
+        guard
+            case .resultSet(
+                let currentResultID,
+                let currentNodes,
+                let currentEntityID
+            ) = current.target
+        else {
+            Issue.record(
+                "Expected CURRENT to remain a result set."
+            )
+            return
+        }
+        #expect(currentResultID == result.id)
+        #expect(currentNodes == [node])
+        #expect(currentEntityID == entityID)
+    }
+
+    @Test
     func oldEvictedReferencesAreNotFormattedOrAvailableAsAliases() {
         let graphScope = GraphScope(graphID: UUID())
         let chatScope = GraphChatScope.entireGraph(graphScope)

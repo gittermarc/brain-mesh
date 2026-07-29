@@ -672,6 +672,8 @@ struct GraphChatTypedIntentCoreTests {
         )
         let answerFinalizer =
             GraphChatAnswerFinalizer(
+                evidenceValidator:
+                    PassthroughGraphEvidenceValidator(),
                 timeZone:
                     TimeZone(
                         identifier: "Europe/Berlin"

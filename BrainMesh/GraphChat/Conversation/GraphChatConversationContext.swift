@@ -360,7 +360,13 @@ nonisolated struct GraphChatConversationContextBuilder: Sendable {
             currentResolvedScope?.reference
             ?? currentReference
         if let resolvedCurrentReference,
-            let currentTarget = target(from: resolvedCurrentReference)
+            let currentTarget = target(
+                from: resolvedCurrentReference,
+                sourceResultID:
+                    currentResolvedScope?
+                        .revision
+                        .sourceResultID
+            )
         {
             currentAlias = appendAlias(
                 preferredAlias: "CURRENT",
@@ -500,7 +506,8 @@ nonisolated struct GraphChatConversationContextBuilder: Sendable {
     }
 
     private func target(
-        from reference: GraphChatResolvedConversationReference
+        from reference: GraphChatResolvedConversationReference,
+        sourceResultID: UUID? = nil
     ) -> GraphChatConversationContextAliasTarget? {
         switch reference.kind {
         case .node:
@@ -534,7 +541,10 @@ nonisolated struct GraphChatConversationContextBuilder: Sendable {
             return .comparison(reference.nodes.map(GraphChatConversationReference.node))
         case .resultSet, .resultSubset:
             return .resultSet(
-                Self.stableUUID(reference.alias),
+                sourceResultID
+                    ?? Self.stableUUID(
+                        reference.alias
+                    ),
                 nodes: Array(reference.nodes.prefix(budget.maximumResultItems)),
                 entityID: reference.entityID
             )
