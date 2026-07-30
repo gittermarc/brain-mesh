@@ -79,7 +79,9 @@ nonisolated struct GraphChatProviderErrorMapper: Hashable, Sendable {
             message: localizer.userFacingFailure(mapped.code),
             recoverySuggestion: localizer.userFacingRecoverySuggestion(
                 mapped.code
-            )
+            ),
+            bindingDiagnosticReason:
+                mapped.bindingDiagnosticReason
         )
     }
 

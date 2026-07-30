@@ -167,7 +167,12 @@ nonisolated struct GraphChatSemanticIntentCoordinator:
                         nil
                     )
                 )
-                throw mappedInterpreterError(error)
+                let mapped =
+                    mappedInterpreterError(error)
+                await recordBindingDiagnostic(
+                    mapped.bindingDiagnosticReason
+                )
+                throw mapped
             }
         } else {
             let recovery: InterpreterRecoveryResolution
@@ -195,7 +200,12 @@ nonisolated struct GraphChatSemanticIntentCoordinator:
                         nil
                     )
                 )
-                throw mappedInterpreterError(error)
+                let mapped =
+                    mappedInterpreterError(error)
+                await recordBindingDiagnostic(
+                    mapped.bindingDiagnosticReason
+                )
+                throw mapped
             }
             switch recovery {
             case .interpreterUnavailable:
@@ -242,7 +252,12 @@ nonisolated struct GraphChatSemanticIntentCoordinator:
                             nil
                         )
                     )
-                    throw mappedInterpreterError(error)
+                    let mapped =
+                        mappedInterpreterError(error)
+                    await recordBindingDiagnostic(
+                        mapped.bindingDiagnosticReason
+                    )
+                    throw mapped
                 }
                 selectedEntityID = nil
                 selectedFields = []
@@ -390,6 +405,9 @@ nonisolated struct GraphChatSemanticIntentCoordinator:
                     )
 
                 case .clarification(let clarification):
+                    await recordBindingDiagnostic(
+                        .multiplePlausibleCandidates
+                    )
                     await record(
                         .clarificationRequired,
                         family: draft.family
@@ -471,12 +489,23 @@ nonisolated struct GraphChatSemanticIntentCoordinator:
                         draft.family
                     )
                 )
+                let diagnostic =
+                    bindingDiagnosticReason(
+                        for: error
+                    )
+                await recordBindingDiagnostic(
+                    diagnostic
+                )
                 throw GraphChatError(
-                    code: .invalidRequest,
+                    code: diagnostic == nil
+                        ? .invalidRequest
+                        : .groundingFailure,
                     message:
                         (error as? LocalizedError)?
                             .errorDescription
-                        ?? "Der Semantic Draft konnte nicht sicher gegen Schema und Scope aufgelöst werden."
+                        ?? "Der Semantic Draft konnte nicht sicher gegen Schema und Scope aufgelöst werden.",
+                    bindingDiagnosticReason:
+                        diagnostic
                 )
             }
         }
@@ -868,6 +897,17 @@ nonisolated struct GraphChatSemanticIntentCoordinator:
             error
                 as? GraphChatSemanticDraftValidationError
         {
+            if validationError == .invalidCombination {
+                return GraphChatError(
+                    code: .groundingFailure,
+                    message:
+                        validationError
+                            .errorDescription
+                        ?? "Der Semantic Draft enthält eine ungültige Kombination.",
+                    bindingDiagnosticReason:
+                        .invalidDraftCombination
+                )
+            }
             return GraphChatError(
                 code: .invalidRequest,
                 message:
@@ -928,6 +968,80 @@ nonisolated struct GraphChatSemanticIntentCoordinator:
                 )
             )
         )
+    }
+
+    private func recordBindingDiagnostic(
+        _ reason:
+            GraphChatBindingDiagnosticReason?
+    ) async {
+        guard let reason else {
+            return
+        }
+        await observability.record(
+            .bindingDiagnostic(
+                GraphChatBindingDiagnosticMetric(
+                    reason: reason
+                )
+            )
+        )
+    }
+
+    private func bindingDiagnosticReason(
+        for error: Error
+    ) -> GraphChatBindingDiagnosticReason? {
+        if let queryError =
+            error
+                as? GraphChatQueryIntentCompilationError {
+            switch queryError {
+            case .entityNotFound:
+                return .entityNotBound
+            case .fieldNotFound,
+                .fieldEntityMismatch:
+                return .fieldNotBound
+            case .unsupportedFamily,
+                .typeConflict,
+                .valueParsingRejected,
+                .projectionLimitExceeded:
+                return .invalidDraftCombination
+            case .staleSelection,
+                .scopeExpansionPrevented,
+                .staleResultSet,
+                .invalidCompiledPlan:
+                return nil
+            }
+        }
+        if let semanticError =
+            error
+                as? GraphChatSemanticIntentResolutionError {
+            switch semanticError {
+            case .entityNotFound:
+                return .entityNotBound
+            case .nodeNotFound:
+                return .nodeNotBound
+            case .fieldNotFound:
+                return .fieldNotBound
+            case .unsupportedCombination:
+                return .invalidDraftCombination
+            case .staleEntitySelection,
+                .scopeViolation,
+                .conversationSelectionUnavailable,
+                .conversationSelectionMismatch,
+                .invalidSchemaIdentity,
+                .staleNodeSelection,
+                .comparisonLimitExceeded,
+                .featureLimitExceeded,
+                .unsupportedComparison,
+                .graphStateRequiresEntireGraph:
+                return nil
+            }
+        }
+        if let validationError =
+            error
+                as? GraphChatSemanticDraftValidationError,
+           validationError == .invalidCombination {
+            return .invalidDraftCombination
+        }
+        return nil
     }
 
     private func compilationEvent(
@@ -1016,7 +1130,8 @@ nonisolated struct GraphChatSemanticIntentCoordinator:
                 .unsupportedComparison:
                 return .comparisonRejected
             case .unsupportedCombination,
-                .nodeNotFound:
+                .nodeNotFound,
+                .fieldNotFound:
                 return family == .compareNodes
                     ? .comparisonRejected
                     : nil

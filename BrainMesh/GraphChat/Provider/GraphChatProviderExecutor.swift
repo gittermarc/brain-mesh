@@ -224,7 +224,9 @@ nonisolated struct GraphChatProviderExecutor: Sendable {
         return GraphChatError(
             code: error.code,
             message: safeMessage(error.message),
-            recoverySuggestion: error.recoverySuggestion.map(safeMessage)
+            recoverySuggestion: error.recoverySuggestion.map(safeMessage),
+            bindingDiagnosticReason:
+                error.bindingDiagnosticReason
         )
     }
 

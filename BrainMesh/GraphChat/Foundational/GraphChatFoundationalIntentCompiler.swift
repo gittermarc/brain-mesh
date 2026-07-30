@@ -8,23 +8,35 @@
 import Foundation
 
 nonisolated struct GraphChatFoundationalIntentCompiler: Sendable {
-    private struct FieldMatch: Hashable, Sendable {
-        let field: GraphSchemaFieldResolution
-        let usedSynonym: Bool
-    }
-
     private struct SingleCandidate: Hashable, Sendable {
         let entity: GraphSchemaEntityResolution
         let node: GraphSchemaNodeResolution
         let field: GraphSchemaFieldResolution
-        let usedSynonym: Bool
+        let aliasOrigin: GraphMentionAliasOrigin
+        let quality: GraphMentionResolutionQuality
+    }
+
+    private let mentionResolver: GraphMentionResolver
+    private let shellExtractor: GraphMentionShellExtractor
+
+    init(
+        mentionResolver: GraphMentionResolver =
+            GraphMentionResolver(),
+        shellExtractor: GraphMentionShellExtractor =
+            GraphMentionShellExtractor()
+    ) {
+        self.mentionResolver = mentionResolver
+        self.shellExtractor = shellExtractor
     }
 
     func compile(
         _ input: GraphChatFoundationalIntentCompilerInput
     ) -> GraphChatFoundationalIntentCompilation {
         guard input.graphScope == input.schemaContext.graphScope,
-              input.schemaContext.aliases.graphScope == input.graphScope else {
+              input.schemaContext.aliases.graphScope == input.graphScope,
+              input.schemaContext.foundationalAliases
+                .graphScope == input.graphScope
+        else {
             return .rejected(.graphScopeMismatch)
         }
         guard input.chatScope.graphScope == input.graphScope,
@@ -41,21 +53,31 @@ nonisolated struct GraphChatFoundationalIntentCompiler: Sendable {
             return .notRecognized
         }
 
-        if isCollectionShell(
-            normalizedQuestion,
+        if let extraction = shellExtractor.extract(
+            from: input.question,
+            family: .entityCollection,
             language: input.responseLanguage
-        ),
-            containsUnsupportedCollectionModifier(
-                normalizedQuestion,
-                language: input.responseLanguage
-            ) == false
-        {
+        ) {
             let collection = compileCollection(
                 input,
-                normalizedQuestion: normalizedQuestion
+                entityMention: extraction.mention
             )
             if collection != .notRecognized {
                 return collection
+            }
+        }
+
+        if let extraction = shellExtractor.extract(
+            from: input.question,
+            family: .nodeDetails,
+            language: input.responseLanguage
+        ) {
+            let nodeDetails = compileNodeDetails(
+                input,
+                nodeMention: extraction.mention
+            )
+            if nodeDetails != .notRecognized {
+                return nodeDetails
             }
         }
 
@@ -75,45 +97,45 @@ nonisolated struct GraphChatFoundationalIntentCompiler: Sendable {
 
     private func compileCollection(
         _ input: GraphChatFoundationalIntentCompilerInput,
-        normalizedQuestion: String
+        entityMention: String
     ) -> GraphChatFoundationalIntentCompilation {
-        let selectedEntityID = input.selectedCandidate?.entityID
-        let namedCandidates =
-            input.schemaContext.aliases.entitiesByAlias.values
-            .filter { resolution in
-                selectedEntityID.map { $0 == resolution.entityID } ?? true
-            }
-            .filter {
-                Self.containsPhrase(
-                    Self.normalized($0.name),
-                    in: normalizedQuestion
-                )
-            }
-            .filter {
-                Self.hasSafeCollectionRemainder(
-                    normalizedQuestion,
-                    entityName: $0.name,
-                    language: input.responseLanguage
-                )
-            }
-            .sorted(by: Self.entitySort)
-        let candidates = namedCandidates.filter {
-            queryScope(
-                for: $0.entityID,
-                within: input.chatScope,
-                schemaContext: input.schemaContext
-            ) != nil
+        if input.selectedCandidate?.node != nil
+            || input.selectedCandidate?.fieldID != nil {
+            return .rejected(.staleClarification)
         }
-
-        if candidates.isEmpty, namedCandidates.isEmpty == false {
-            return .rejected(.unauthorizedSelection)
-        }
-        guard candidates.isEmpty == false else {
-            return input.selectedCandidate == nil
-                ? .notRecognized
-                : .rejected(.staleClarification)
-        }
-        guard candidates.count == 1, let entity = candidates.first else {
+        let result = mentionResolver.resolve(
+            GraphMentionResolverInput(
+                mention: entityMention,
+                kind: .entity,
+                language: input.responseLanguage,
+                graphScope: input.graphScope,
+                catalog: GraphMentionCatalog(
+                    schemaContext: input.schemaContext
+                ),
+                constraints:
+                    GraphMentionResolutionConstraints(
+                        chatScope: input.chatScope,
+                        allowedEntityIDs:
+                            input.selectedCandidate.map {
+                                Set([$0.entityID])
+                            }
+                    )
+            )
+        )
+        let resolution: GraphMentionResolution
+        switch result {
+        case .success(let value):
+            resolution = value
+        case .failure(.ambiguous(let alternatives)):
+            let candidates = alternatives.compactMap {
+                alternative
+                    -> GraphSchemaEntityResolution? in
+                guard case .entity(let value) =
+                        alternative.candidate.identity else {
+                    return nil
+                }
+                return value
+            }
             return .clarification(
                 clarification(
                     candidates: candidates,
@@ -133,6 +155,23 @@ nonisolated struct GraphChatFoundationalIntentCompiler: Sendable {
                     }
                 )
             )
+        case .failure(.scopeViolation),
+            .failure(.ownerEntityMismatch):
+            return .rejected(.unauthorizedSelection)
+        case .failure(.staleSelection):
+            return .rejected(.staleClarification)
+        case .failure(.graphScopeMismatch):
+            return .rejected(.graphScopeMismatch)
+        case .failure(.noCandidates),
+            .failure(.emptyMention),
+            .failure(.notFound):
+            return input.selectedCandidate == nil
+                ? .notRecognized
+                : .rejected(.staleClarification)
+        }
+        guard case .entity(let entity) =
+                resolution.candidate.identity else {
+            return .rejected(.schemaIntegrityViolation)
         }
         guard let scope = queryScope(
             for: entity.entityID,
@@ -159,10 +198,144 @@ nonisolated struct GraphChatFoundationalIntentCompiler: Sendable {
                 expectedCardinality: .zeroOrMore,
                 resultLimit: GraphQueryPlanLimits.maximumResultLimit,
                 origin: input.selectedCandidate == nil
-                    ? .schemaDisplayName
+                    ? foundationalOrigin(resolution)
                     : .clarificationSelection,
                 confidence: input.selectedCandidate == nil
-                    ? .exact
+                    ? foundationalConfidence(resolution)
+                    : .revalidatedClarification,
+                binding: binding(input)
+            )
+        )
+    }
+
+    private func compileNodeDetails(
+        _ input: GraphChatFoundationalIntentCompilerInput,
+        nodeMention: String
+    ) -> GraphChatFoundationalIntentCompilation {
+        if input.selectedCandidate?.fieldID != nil {
+            return .rejected(.staleClarification)
+        }
+        let selected = input.selectedCandidate
+        let result = mentionResolver.resolve(
+            GraphMentionResolverInput(
+                mention: nodeMention,
+                kind: .node,
+                language: input.responseLanguage,
+                graphScope: input.graphScope,
+                catalog: GraphMentionCatalog(
+                    schemaContext: input.schemaContext
+                ),
+                constraints:
+                    GraphMentionResolutionConstraints(
+                        chatScope: input.chatScope,
+                        ownerEntityID:
+                            selected?.entityID,
+                        allowedNodes:
+                            selected?.node.map {
+                                Set([$0])
+                            }
+                    )
+            )
+        )
+        let resolution: GraphMentionResolution
+        switch result {
+        case .success(let value):
+            resolution = value
+        case .failure(.ambiguous(let alternatives)):
+            let candidates = alternatives.compactMap {
+                alternative
+                    -> GraphSchemaNodeResolution? in
+                guard case .node(let value) =
+                        alternative.candidate.identity else {
+                    return nil
+                }
+                return value
+            }
+            return .clarification(
+                clarification(
+                    candidates: candidates,
+                    language: input.responseLanguage,
+                    selection: {
+                        GraphChatFoundationalIntentSelection(
+                            entityID: $0.ownerEntityID,
+                            node: $0.node
+                        )
+                    },
+                    title: { candidate, index in
+                        let owner =
+                            input.schemaContext.foundationalAliases
+                                .entity(
+                                    id:
+                                        candidate
+                                            .ownerEntityID
+                                )?.name
+                        return disambiguatedTitle(
+                            candidate.displayName,
+                            detail: owner,
+                            index: index,
+                            duplicateCount:
+                                candidates.count
+                        )
+                    }
+                )
+            )
+        case .failure(.scopeViolation),
+            .failure(.ownerEntityMismatch):
+            return .rejected(.unauthorizedSelection)
+        case .failure(.staleSelection):
+            return .rejected(.staleClarification)
+        case .failure(.graphScopeMismatch):
+            return .rejected(.graphScopeMismatch)
+        case .failure(.noCandidates),
+            .failure(.emptyMention),
+            .failure(.notFound):
+            return selected == nil
+                ? .notRecognized
+                : .rejected(.staleClarification)
+        }
+        guard case .node(let node) =
+                resolution.candidate.identity,
+              let entity =
+                input.schemaContext.foundationalAliases.entity(
+                    id: node.ownerEntityID
+                ) else {
+            return .rejected(.schemaIntegrityViolation)
+        }
+        return .compiled(
+            GraphChatFoundationalIntent(
+                kind: .nodeDetails,
+                graphScope: input.graphScope,
+                chatScope: input.chatScope,
+                queryScope: .node(
+                    node.node,
+                    in: input.graphScope
+                ),
+                responseLanguage:
+                    input.responseLanguage,
+                entity:
+                    GraphChatFoundationalEntityIdentity(
+                        id: entity.entityID,
+                        alias: entity.alias,
+                        displayName: entity.name
+                    ),
+                field: nil,
+                node:
+                    GraphChatFoundationalNodeIdentity(
+                        node: node.node,
+                        displayName:
+                            node.displayName,
+                        ownerEntityID:
+                            node.ownerEntityID
+                    ),
+                expectedCardinality: .zeroOrOne,
+                resultLimit: 1,
+                origin: selected == nil
+                    ? foundationalOrigin(resolution)
+                    : .clarificationSelection,
+                confidence: selected == nil
+                    ? foundationalConfidence(
+                        resolution
+                    )
                     : .revalidatedClarification,
                 binding: binding(input)
             )
@@ -173,91 +346,163 @@ nonisolated struct GraphChatFoundationalIntentCompiler: Sendable {
         _ input: GraphChatFoundationalIntentCompilerInput,
         normalizedQuestion: String
     ) -> GraphChatFoundationalIntentCompilation {
-        let allowedNodes = allowedAttributeNodes(
-            in: input.chatScope,
+        _ = normalizedQuestion
+        let selected = input.selectedCandidate
+        let catalog = GraphMentionCatalog(
             schemaContext: input.schemaContext
         )
-        let selected = input.selectedCandidate
-        let namedNodes = input.schemaContext.aliases.nodesByKey.values
-            .filter { $0.node.kind == .attribute }
-            .filter { candidate in
-                selected?.node.map { $0 == candidate.node } ?? true
-            }
-            .filter {
-                matchesNodeName(
-                    $0.displayName,
-                    in: normalizedQuestion,
-                    language: input.responseLanguage
-                )
-            }
-        let strongestNodes = Self.strongestNodeMatches(
-            namedNodes.filter { allowedNodes.contains($0.node) }
+        let attributeNodes = Set(
+            input.schemaContext.foundationalAliases
+                .nodesByKey.values
+                .filter {
+                    $0.node.kind == .attribute
+                }
+                .map(\.node)
+        )
+        let nodeResult = mentionResolver.resolve(
+            GraphMentionResolverInput(
+                mention: input.question,
+                kind: .node,
+                language: input.responseLanguage,
+                graphScope: input.graphScope,
+                catalog: catalog,
+                constraints:
+                    GraphMentionResolutionConstraints(
+                        chatScope: input.chatScope,
+                        ownerEntityID:
+                            selected?.entityID,
+                        allowedNodes:
+                            selected?.node.map {
+                                Set([$0])
+                            } ?? attributeNodes
+                    ),
+                matchingMode: .containedPhrase
+            )
+        )
+        let fieldResult = mentionResolver.resolve(
+            GraphMentionResolverInput(
+                mention: input.question,
+                kind: .field,
+                language: input.responseLanguage,
+                graphScope: input.graphScope,
+                catalog: catalog,
+                constraints:
+                    GraphMentionResolutionConstraints(
+                        chatScope: input.chatScope,
+                        ownerEntityID:
+                            selected?.entityID,
+                        allowedFieldIDs:
+                            selected?.fieldID.map {
+                                Set([$0])
+                            }
+                    ),
+                matchingMode: .containedPhrase
+            )
         )
 
-        let fieldMatches = input.schemaContext.aliases.fieldsByAlias.values
-            .compactMap {
-                fieldMatch(
-                    $0,
-                    in: normalizedQuestion,
-                    language: input.responseLanguage
+        let nodeMatches: [GraphMentionResolution]
+        switch nodeResult {
+        case .success(let value):
+            nodeMatches = [value]
+        case .failure(.ambiguous(let alternatives)):
+            nodeMatches = alternatives.map(
+                resolution(from:)
+            )
+        case .failure(.scopeViolation),
+            .failure(.ownerEntityMismatch):
+            return .rejected(.unauthorizedSelection)
+        case .failure(.graphScopeMismatch):
+            return .rejected(.graphScopeMismatch)
+        case .failure(.noCandidates),
+            .failure(.staleSelection):
+            return selected == nil
+                ? .notRecognized
+                : .rejected(.staleClarification)
+        case .failure(.emptyMention),
+            .failure(.notFound):
+            return selected == nil
+                ? .notRecognized
+                : .rejected(.staleClarification)
+        }
+
+        let fieldMatches: [GraphMentionResolution]
+        switch fieldResult {
+        case .success(let value):
+            fieldMatches = [value]
+        case .failure(.ambiguous(let alternatives)):
+            fieldMatches = alternatives.map(
+                resolution(from:)
+            )
+        case .failure(.scopeViolation),
+            .failure(.ownerEntityMismatch):
+            return .rejected(.unauthorizedSelection)
+        case .failure(.graphScopeMismatch):
+            return .rejected(.graphScopeMismatch)
+        case .failure(.noCandidates),
+            .failure(.staleSelection):
+            return selected == nil
+                ? .notRecognized
+                : .rejected(.staleClarification)
+        case .failure(.emptyMention),
+            .failure(.notFound):
+            return selected == nil
+                ? .notRecognized
+                : .rejected(.staleClarification)
+        }
+
+        let candidates = nodeMatches.flatMap {
+            nodeMatch -> [SingleCandidate] in
+            guard case .node(let node) =
+                    nodeMatch.candidate.identity else {
+                return []
+            }
+            return fieldMatches.compactMap {
+                fieldMatch -> SingleCandidate? in
+                guard case .field(let field) =
+                        fieldMatch.candidate.identity,
+                      node.ownerEntityID
+                        == field.entityID,
+                      let entity =
+                        input.schemaContext.foundationalAliases
+                            .entity(
+                                id:
+                                    node
+                                        .ownerEntityID
+                            ),
+                      hasSafeSingleRemainder(
+                        input.question,
+                        nodeRange:
+                            nodeMatch.matchedRange,
+                        fieldRange:
+                            fieldMatch.matchedRange,
+                        language:
+                            input.responseLanguage
+                      )
+                else {
+                    return nil
+                }
+                let quality =
+                    nodeMatch.quality.rawValue
+                        >= fieldMatch.quality.rawValue
+                    ? nodeMatch.quality
+                    : fieldMatch.quality
+                let aliasOrigin:
+                    GraphMentionAliasOrigin =
+                    fieldMatch.aliasOrigin
+                        != .displayName
+                    ? fieldMatch.aliasOrigin
+                    : nodeMatch.aliasOrigin
+                return SingleCandidate(
+                    entity: entity,
+                    node: node,
+                    field: field,
+                    aliasOrigin: aliasOrigin,
+                    quality: quality
                 )
             }
-        let exactFieldMatches = fieldMatches.filter { $0.usedSynonym == false }
-        let strongestFields = exactFieldMatches.isEmpty
-            ? fieldMatches
-            : exactFieldMatches
-
-        func makeCandidates(
-            for nodes: [GraphSchemaNodeResolution]
-        ) -> [SingleCandidate] {
-            nodes.flatMap { node in
-                strongestFields.compactMap {
-                    fieldMatch -> SingleCandidate? in
-                    guard
-                        node.ownerEntityID
-                            == fieldMatch.field.entityID,
-                        selected?.entityID == nil
-                            || selected?.entityID
-                                == node.ownerEntityID,
-                        selected?.node == nil
-                            || selected?.node == node.node,
-                        selected?.fieldID == nil
-                            || selected?.fieldID
-                                == fieldMatch.field.fieldID,
-                        let entity =
-                            input.schemaContext.aliases.entity(
-                                id: node.ownerEntityID
-                            ),
-                        hasSafeSingleRemainder(
-                            normalizedQuestion,
-                            nodeName: node.displayName,
-                            field: fieldMatch.field,
-                            language: input.responseLanguage
-                        )
-                    else {
-                        return nil
-                    }
-                    return SingleCandidate(
-                        entity: entity,
-                        node: node,
-                        field: fieldMatch.field,
-                        usedSynonym: fieldMatch.usedSynonym
-                    )
-                }
-            }
-            .sorted(by: Self.singleCandidateSort)
-        }
-        let candidates = makeCandidates(for: strongestNodes)
+        }.sorted(by: Self.singleCandidateSort)
 
         guard candidates.isEmpty == false else {
-            let unauthorizedNodes = Self.strongestNodeMatches(
-                namedNodes.filter {
-                    allowedNodes.contains($0.node) == false
-                }
-            )
-            if makeCandidates(for: unauthorizedNodes).isEmpty == false {
-                return .rejected(.unauthorizedSelection)
-            }
             return selected == nil
                 ? .notRecognized
                 : .rejected(.staleClarification)
@@ -296,12 +541,18 @@ nonisolated struct GraphChatFoundationalIntentCompiler: Sendable {
         if selected != nil {
             origin = .clarificationSelection
             confidence = .revalidatedClarification
-        } else if candidate.usedSynonym {
+        } else if candidate.aliasOrigin
+            == .localizedFieldSynonym {
             origin = .localizedFieldSynonym
             confidence = .constrainedSynonym
         } else {
             origin = .schemaDisplayName
-            confidence = .exact
+            confidence =
+                candidate.quality == .exact
+                    || candidate.quality
+                        == .canonical
+                ? .exact
+                : .constrainedSynonym
         }
 
         return .compiled(
@@ -337,79 +588,39 @@ nonisolated struct GraphChatFoundationalIntentCompiler: Sendable {
         )
     }
 
-    private func fieldMatch(
-        _ field: GraphSchemaFieldResolution,
-        in normalizedQuestion: String,
-        language: GraphChatResponseLanguage
-    ) -> FieldMatch? {
-        let normalizedName = Self.normalized(field.name)
-        if Self.containsPhrase(normalizedName, in: normalizedQuestion) {
-            return FieldMatch(field: field, usedSynonym: false)
-        }
-
-        let synonyms = localizedSynonyms(
-            forCanonicalFieldName: normalizedName,
-            language: language
-        )
-        guard synonyms.contains(where: {
-            Self.containsPhrase($0, in: normalizedQuestion)
-        }) else {
-            return nil
-        }
-        return FieldMatch(field: field, usedSynonym: true)
-    }
-
-    private func localizedSynonyms(
-        forCanonicalFieldName fieldName: String,
-        language: GraphChatResponseLanguage
-    ) -> [String] {
-        let birthdayFieldNames = [
-            "geburtsdatum",
-            "geburtstag",
-            "birth date",
-            "date of birth",
-            "birthday",
-        ]
-        guard birthdayFieldNames.contains(fieldName) else {
-            return []
-        }
-        switch language {
-        case .german:
-            return ["geburtstag", "geburtsdatum"]
-        case .english:
-            return ["birthday", "birth date", "date of birth"]
-        }
-    }
-
     private func hasSafeSingleRemainder(
         _ question: String,
-        nodeName: String,
-        field: GraphSchemaFieldResolution,
+        nodeRange: GraphMentionTextRange,
+        fieldRange: GraphMentionTextRange,
         language: GraphChatResponseLanguage
     ) -> Bool {
-        var tokens = question.split(separator: " ").map(String.init)
-        guard let matchedNodePhrase = nodeMatchPhrases(
-            for: nodeName,
-            language: language
-        ).first(where: {
-            Self.containsPhrase($0, in: question)
-        }),
-            Self.removePhrase(matchedNodePhrase, from: &tokens)
-        else {
+        let tokens =
+            GraphMentionTextNormalization.tokens(
+                question
+            )
+        let nodeEndToken =
+            nodeRange.startToken
+            + nodeRange.tokenCount
+        let nodeIndices = Set<Int>(
+            nodeRange.startToken..<nodeEndToken
+        )
+        let fieldEndToken =
+            fieldRange.startToken
+            + fieldRange.tokenCount
+        let fieldIndices = Set<Int>(
+            fieldRange.startToken..<fieldEndToken
+        )
+        guard nodeIndices.isDisjoint(
+            with: fieldIndices
+        ) else {
             return false
         }
-        let fieldName = Self.normalized(field.name)
-        if Self.removePhrase(fieldName, from: &tokens) == false {
-            let synonym = localizedSynonyms(
-                forCanonicalFieldName: fieldName,
-                language: language
-            ).first {
-                Self.containsPhrase($0, in: tokens.joined(separator: " "))
-            }
-            guard let synonym,
-                  Self.removePhrase(synonym, from: &tokens) else {
-                return false
-            }
+        let remainder = tokens.indices.compactMap {
+            index -> String? in
+            nodeIndices.contains(index)
+                || fieldIndices.contains(index)
+                ? nil
+                : tokens[index]
         }
 
         let allowed: Set<String>
@@ -447,78 +658,9 @@ nonisolated struct GraphChatFoundationalIntentCompiler: Sendable {
                 "which",
             ]
         }
-        return tokens.allSatisfy(allowed.contains)
-    }
-
-    private func matchesNodeName(
-        _ nodeName: String,
-        in normalizedQuestion: String,
-        language: GraphChatResponseLanguage
-    ) -> Bool {
-        nodeMatchPhrases(
-            for: nodeName,
-            language: language
-        ).contains {
-            Self.containsPhrase($0, in: normalizedQuestion)
-        }
-    }
-
-    private func nodeMatchPhrases(
-        for nodeName: String,
-        language: GraphChatResponseLanguage
-    ) -> [String] {
-        let normalizedName = Self.normalized(nodeName)
-        var phrases = [normalizedName]
-        let prefixTranslation: (source: String, target: String)?
-        switch language {
-        case .german:
-            prefixTranslation = ("project", "projekt")
-        case .english:
-            prefixTranslation = ("projekt", "project")
-        }
-        if let prefixTranslation,
-           normalizedName == prefixTranslation.source
-            || normalizedName.hasPrefix("\(prefixTranslation.source) ") {
-            let suffix = normalizedName.dropFirst(
-                prefixTranslation.source.count
-            )
-            phrases.append(prefixTranslation.target + String(suffix))
-        }
-        return phrases
-    }
-
-    private func isCollectionShell(
-        _ question: String,
-        language: GraphChatResponseLanguage
-    ) -> Bool {
-        switch language {
-        case .german:
-            return Self.startsWithAny(
-                question,
-                phrases: [
-                    "welche ",
-                    "zeige mir alle ",
-                    "zeig mir alle ",
-                    "liste alle ",
-                    "alle ",
-                ]
-            )
-        case .english:
-            return Self.startsWithAny(
-                question,
-                phrases: [
-                    "which ",
-                    "show me all ",
-                    "list all ",
-                    "what ",
-                ]
-            ) && (
-                question.contains(" all ")
-                    || question.hasPrefix("which ")
-                    || question.contains(" have i ")
-                    || question.contains(" are there")
-            )
-        }
+        return remainder.allSatisfy(
+            allowed.contains
+        )
     }
 
     private func isSingleFieldShell(
@@ -552,96 +694,34 @@ nonisolated struct GraphChatFoundationalIntentCompiler: Sendable {
         }
     }
 
-    private func containsUnsupportedCollectionModifier(
-        _ question: String,
-        language: GraphChatResponseLanguage
-    ) -> Bool {
-        let phrases: [String]
-        switch language {
-        case .german:
-            phrases = [
-                " durchschnitt ",
-                " durchschnittlich ",
-                " hochste ",
-                " niedrigste ",
-                " summe ",
-                " gruppier",
-                " sortier",
-                " filter",
-                " mit status ",
-                " deren ",
-                " pro ",
-                " je ",
-                " warum ",
-            ]
-        case .english:
-            phrases = [
-                " average ",
-                " highest ",
-                " lowest ",
-                " sum ",
-                " group",
-                " sort",
-                " filter",
-                " with status ",
-                " whose ",
-                " per ",
-                " why ",
-            ]
-        }
-        let padded = " \(question) "
-        return phrases.contains { padded.contains($0) }
-    }
-
-    private func allowedAttributeNodes(
-        in scope: GraphChatScope,
-        schemaContext: GraphSchemaContext
-    ) -> Set<NodeRefKey> {
-        let allAttributes = schemaContext.aliases.nodesByKey.values
-            .filter { $0.node.kind == .attribute }
-        switch scope.target {
-        case .graph:
-            return Set(allAttributes.map(\.node))
-        case .entity(let entityID):
-            return Set(
-                allAttributes
-                    .filter { $0.ownerEntityID == entityID }
-                    .map(\.node)
-            )
-        case .node(let node):
-            return node.kind == .attribute ? [node] : []
-        case .selection(let nodes):
-            return Set(nodes.filter { $0.kind == .attribute })
-        }
-    }
-
     private func schemaIsInternallyConsistent(
         _ context: GraphSchemaContext
     ) -> Bool {
-        let entities = Array(context.aliases.entitiesByAlias.values)
+        let aliases = context.foundationalAliases
+        let entities = Array(aliases.entitiesByAlias.values)
         let entityIDs = Set(entities.map(\.entityID))
         guard entityIDs.count == entities.count else {
             return false
         }
-        let fields = Array(context.aliases.fieldsByAlias.values)
+        let fields = Array(aliases.fieldsByAlias.values)
         guard Set(fields.map(\.fieldID)).count == fields.count,
               fields.allSatisfy({ field in
-                context.aliases.entity(for: field.entityAlias)?
+                aliases.entity(for: field.entityAlias)?
                     .entityID == field.entityID
                     && entityIDs.contains(field.entityID)
               }) else {
             return false
         }
-        return context.aliases.nodesByKey.allSatisfy {
+        return aliases.nodesByKey.allSatisfy {
             node, resolution in
             node == resolution.node
                 && entityIDs.contains(resolution.ownerEntityID)
                 && (
-                    context.aliases.nodeEntityIDs[node].map {
+                    aliases.nodeEntityIDs[node].map {
                         $0 == resolution.ownerEntityID
                     } ?? true
                 )
-                && context.aliases.owningEntityID(for: node)
+                && aliases.owningEntityID(for: node)
                     == resolution.ownerEntityID
         }
     }
@@ -657,12 +737,14 @@ nonisolated struct GraphChatFoundationalIntentCompiler: Sendable {
         case .entity(let scopedEntityID):
             return scopedEntityID == entityID ? scope : nil
         case .node(let node):
-            return schemaContext.aliases.owningEntityID(for: node) == entityID
+            return schemaContext.foundationalAliases
+                .owningEntityID(for: node) == entityID
                 ? scope
                 : nil
         case .selection(let nodes):
             let matchingNodes = nodes.filter {
-                schemaContext.aliases.owningEntityID(for: $0) == entityID
+                schemaContext.foundationalAliases
+                    .owningEntityID(for: $0) == entityID
             }
             guard matchingNodes.isEmpty == false else {
                 return nil
@@ -718,6 +800,50 @@ nonisolated struct GraphChatFoundationalIntentCompiler: Sendable {
         return value
     }
 
+    private func resolution(
+        from alternative:
+            GraphMentionResolutionAlternative
+    ) -> GraphMentionResolution {
+        GraphMentionResolution(
+            version: .v1,
+            candidate: alternative.candidate,
+            aliasOrigin:
+                alternative.aliasOrigin,
+            quality: alternative.quality,
+            matchedRange:
+                alternative.matchedRange,
+            editDistance:
+                alternative.editDistance
+        )
+    }
+
+    private func foundationalOrigin(
+        _ resolution: GraphMentionResolution
+    ) -> GraphChatFoundationalResolutionOrigin {
+        switch resolution.aliasOrigin {
+        case .localizedFieldSynonym:
+            return .localizedFieldSynonym
+        case .displayName, .appOwnedAlias:
+            return .schemaDisplayName
+        }
+    }
+
+    private func foundationalConfidence(
+        _ resolution: GraphMentionResolution
+    ) -> GraphChatFoundationalResolutionConfidence {
+        switch resolution.quality {
+        case .exact, .canonical:
+            return resolution.aliasOrigin
+                == .displayName
+                ? .exact
+                : .constrainedSynonym
+        case .umlautEquivalent,
+            .languageVariant,
+            .conservativeTypo:
+            return .constrainedSynonym
+        }
+    }
+
     private func binding(
         _ input: GraphChatFoundationalIntentCompilerInput
     ) -> GraphChatFoundationalIntentBinding {
@@ -729,20 +855,6 @@ nonisolated struct GraphChatFoundationalIntentCompiler: Sendable {
         )
     }
 
-    private static func strongestNodeMatches(
-        _ values: [GraphSchemaNodeResolution]
-    ) -> [GraphSchemaNodeResolution] {
-        guard let maximumTokenCount = values.map({
-            normalized($0.displayName).split(separator: " ").count
-        }).max() else {
-            return []
-        }
-        return values.filter {
-            normalized($0.displayName).split(separator: " ").count
-                == maximumTokenCount
-        }
-    }
-
     private static func normalized(_ value: String) -> String {
         BMSearch.fold(value)
             .components(
@@ -752,123 +864,11 @@ nonisolated struct GraphChatFoundationalIntentCompiler: Sendable {
             .joined(separator: " ")
     }
 
-    private static func containsPhrase(
-        _ phrase: String,
-        in value: String
-    ) -> Bool {
-        let phraseTokens = phrase.split(separator: " ")
-        let valueTokens = value.split(separator: " ")
-        guard phraseTokens.isEmpty == false,
-              phraseTokens.count <= valueTokens.count else {
-            return false
-        }
-        if phraseTokens.count == 1 {
-            return valueTokens.contains(phraseTokens[0])
-        }
-        for start in 0...(valueTokens.count - phraseTokens.count) {
-            let end = start + phraseTokens.count
-            if Array(valueTokens[start..<end]) == phraseTokens {
-                return true
-            }
-        }
-        return false
-    }
-
-    private static func hasSafeCollectionRemainder(
-        _ question: String,
-        entityName: String,
-        language: GraphChatResponseLanguage
-    ) -> Bool {
-        var questionTokens = question.split(separator: " ").map(String.init)
-        let entityTokens = normalized(entityName)
-            .split(separator: " ")
-            .map(String.init)
-        guard entityTokens.isEmpty == false,
-              entityTokens.count <= questionTokens.count else {
-            return false
-        }
-        var matchRange: Range<Int>?
-        for start in 0...(questionTokens.count - entityTokens.count) {
-            let end = start + entityTokens.count
-            if Array(questionTokens[start..<end]) == entityTokens {
-                matchRange = start..<end
-                break
-            }
-        }
-        guard let matchRange else {
-            return false
-        }
-        questionTokens.removeSubrange(matchRange)
-        let allowed: Set<String>
-        switch language {
-        case .german:
-            allowed = [
-                "alle",
-                "es",
-                "gemacht",
-                "gibt",
-                "habe",
-                "ich",
-                "liste",
-                "mir",
-                "auf",
-                "welche",
-                "zeig",
-                "zeige",
-            ]
-        case .english:
-            allowed = [
-                "all",
-                "are",
-                "do",
-                "exist",
-                "have",
-                "i",
-                "list",
-                "me",
-                "show",
-                "taken",
-                "there",
-                "which",
-            ]
-        }
-        return questionTokens.allSatisfy(allowed.contains)
-    }
-
-    private static func removePhrase(
-        _ phrase: String,
-        from tokens: inout [String]
-    ) -> Bool {
-        let phraseTokens = phrase.split(separator: " ").map(String.init)
-        guard phraseTokens.isEmpty == false,
-              phraseTokens.count <= tokens.count else {
-            return false
-        }
-        for start in 0...(tokens.count - phraseTokens.count) {
-            let end = start + phraseTokens.count
-            if Array(tokens[start..<end]) == phraseTokens {
-                tokens.removeSubrange(start..<end)
-                return true
-            }
-        }
-        return false
-    }
-
     private static func startsWithAny(
         _ value: String,
         phrases: [String]
     ) -> Bool {
         phrases.contains { value.hasPrefix($0) }
-    }
-
-    private static func entitySort(
-        _ lhs: GraphSchemaEntityResolution,
-        _ rhs: GraphSchemaEntityResolution
-    ) -> Bool {
-        if normalized(lhs.name) != normalized(rhs.name) {
-            return normalized(lhs.name) < normalized(rhs.name)
-        }
-        return lhs.entityID.uuidString < rhs.entityID.uuidString
     }
 
     private static func singleCandidateSort(

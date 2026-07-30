@@ -76,11 +76,13 @@ nonisolated struct GraphChatOrchestratorComposition: Sendable {
         )
         let foundationalCoordinator =
             GraphChatFoundationalIntentCoordinator(
-                schemaProvider: schemaProvider
+                schemaProvider: schemaProvider,
+                observability: observability
             )
         let foundationalExecutor =
             GraphChatFoundationalIntentExecutor(
                 queryExecutor: foundationalQueryExecutor,
+                nodeExecutor: semanticNodeExecutor,
                 conversationStateReducer: stateReducer,
                 calendar: calendar,
                 timeZone: timeZone,

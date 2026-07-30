@@ -10,6 +10,7 @@ import Foundation
 nonisolated enum GraphChatFoundationalIntentKind: String, CaseIterable, Hashable, Sendable {
     case singleNodeFieldValue
     case entityAttributeCollection
+    case nodeDetails
 }
 
 nonisolated enum GraphChatFoundationalExpectedCardinality:
@@ -156,4 +157,3 @@ nonisolated struct GraphChatFoundationalIntentContinuation: Hashable, Sendable {
     let sourceTurnID: UUID?
     let clarificationID: UUID
 }
-

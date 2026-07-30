@@ -859,12 +859,19 @@ nonisolated struct GraphChatInterpretationCorrectionCompiler:
                 }
         case .compareNodes:
             // The selected-node bindings carry the authoritative IDs.
-            // Unique value-only terms keep identically named nodes distinct
-            // through semantic-draft normalization.
-            return nodes.indices.map {
-                language == .german
-                    ? "Ausgewählter Eintrag \($0 + 1)"
-                    : "Selected entry \($0 + 1)"
+            // The visible display phrase keeps correction rebinding on the
+            // central mention resolver; the ordinal only preserves duplicate
+            // names through semantic-draft normalization.
+            return nodes.enumerated().compactMap {
+                index, node in
+                guard let displayName =
+                        nodesByKey[node]?
+                            .displayName else {
+                    return nil
+                }
+                return language == .german
+                    ? "\(displayName) Auswahlposition \(index + 1)"
+                    : "\(displayName) selection position \(index + 1)"
             }
         case .findNodes,
             .entityList,
@@ -1297,7 +1304,8 @@ nonisolated struct GraphChatInterpretationCorrectionCompiler:
         case .comparisonLimitExceeded,
             .featureLimitExceeded,
             .unsupportedComparison,
-            .unsupportedCombination:
+            .unsupportedCombination,
+            .fieldNotFound:
             return invalid(
                 .invalidFieldSelection
             )

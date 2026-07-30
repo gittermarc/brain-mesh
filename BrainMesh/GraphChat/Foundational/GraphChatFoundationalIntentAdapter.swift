@@ -17,6 +17,7 @@ nonisolated enum GraphChatFoundationalIntentAdapterError:
     case invalidScope
     case invalidSingleFieldContract
     case invalidCollectionContract
+    case invalidNodeDetailsContract
 
     var errorDescription: String? {
         switch self {
@@ -26,6 +27,8 @@ nonisolated enum GraphChatFoundationalIntentAdapterError:
             return "Der Foundational Single-Field-Intent ist nicht vollständig gebunden."
         case .invalidCollectionContract:
             return "Der Foundational Collection-Intent ist nicht vollständig gebunden."
+        case .invalidNodeDetailsContract:
+            return "Der Foundational Node-Details-Intent ist nicht vollständig gebunden."
         }
     }
 }
@@ -193,6 +196,62 @@ nonisolated struct GraphChatFoundationalIntentAdapter:
                             limit: source.resultLimit
                         ),
                         resultContract: .entityCollection
+                    )
+                )
+            )
+
+        case .nodeDetails:
+            guard source.expectedCardinality == .zeroOrOne,
+                  source.resultLimit == 1,
+                  source.field == nil,
+                  let sourceNode = source.node,
+                  sourceNode.ownerEntityID == source.entity.id,
+                  source.queryScope == .node(
+                    sourceNode.node,
+                    in: source.graphScope
+                  ) else {
+                throw GraphChatFoundationalIntentAdapterError
+                    .invalidNodeDetailsContract
+            }
+            let node = GraphChatTypedNodeIdentity(
+                node: sourceNode.node,
+                displayName: sourceNode.displayName,
+                ownerEntityID: sourceNode.ownerEntityID
+            )
+            let policy = GraphChatAdvancedIntentPolicy.default
+            let intent = try GraphChatTypedIntent(
+                version: .v1,
+                scope: scope,
+                responseLanguage: source.responseLanguage,
+                binding: binding,
+                resolution: resolution,
+                expectedCardinality: .zeroOrOne,
+                factExpectation: .none,
+                limits: GraphChatTypedIntentLimits(
+                    resultLimit: 1,
+                    maximumResultLimit:
+                        GraphQueryPlanLimits
+                            .maximumResultLimit,
+                    maximumEvidenceCount:
+                        policy.maximumEvidenceCount,
+                    maximumArtifactCount:
+                        policy.maximumArtifactCount
+                ),
+                payload: .nodeDetails(
+                    GraphChatTypedNodeDetailsIntent(
+                        entity: entity,
+                        node: node,
+                        fields: []
+                    )
+                )
+            )
+            return GraphChatTypedIntentAdaptation(
+                intent: intent,
+                action: .nodeDetails(
+                    GraphChatLocalNodeDetailsAction(
+                        node: node,
+                        relatedLimit:
+                            policy.nodeDetailRelatedLimit
                     )
                 )
             )

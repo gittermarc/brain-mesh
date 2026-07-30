@@ -131,6 +131,7 @@ nonisolated enum GraphChatSemanticIntentResolutionError:
     case invalidSchemaIdentity
     case unsupportedCombination
     case nodeNotFound
+    case fieldNotFound
     case staleNodeSelection
     case comparisonLimitExceeded
     case featureLimitExceeded
@@ -157,6 +158,8 @@ nonisolated enum GraphChatSemanticIntentResolutionError:
             return "Die erkannte Intent-Kombination wird lokal nicht unterstützt."
         case .nodeNotFound:
             return "Der gemeinte Node konnte im autorisierten Chat-Scope nicht eindeutig gefunden werden."
+        case .fieldNotFound:
+            return "Das gemeinte Feld konnte im autorisierten Chat-Scope nicht eindeutig gefunden werden."
         case .staleNodeSelection:
             return "Ein ausgewählter oder referenzierter Node ist nicht mehr aktuell."
         case .comparisonLimitExceeded:
@@ -179,6 +182,8 @@ nonisolated struct GraphChatSemanticIntentResolver:
 {
     private let limitPolicy:
         GraphChatSemanticIntentLimitPolicy
+    private let mentionResolver:
+        GraphMentionResolver
     private let queryCompiler:
         GraphChatQueryIntentCompiler
     private let advancedCompiler:
@@ -187,6 +192,9 @@ nonisolated struct GraphChatSemanticIntentResolver:
     init(
         limitPolicy:
             GraphChatSemanticIntentLimitPolicy = .default,
+        mentionResolver:
+            GraphMentionResolver =
+                GraphMentionResolver(),
         queryCompiler:
             GraphChatQueryIntentCompiler =
                 GraphChatQueryIntentCompiler(
@@ -203,6 +211,7 @@ nonisolated struct GraphChatSemanticIntentResolver:
                 GraphChatAdvancedIntentCompiler()
     ) {
         self.limitPolicy = limitPolicy
+        self.mentionResolver = mentionResolver
         self.queryCompiler = queryCompiler
         self.advancedCompiler = advancedCompiler
     }
@@ -291,6 +300,8 @@ nonisolated struct GraphChatSemanticIntentResolver:
             .inspectGraphState:
             return try advancedCompiler.compile(
                 draft: draft,
+                selectedEntityID:
+                    selectedEntityID,
                 selectedFields: selectedFields,
                 selectedNodes: selectedNodes,
                 currentResolvedScope:
@@ -309,12 +320,21 @@ nonisolated struct GraphChatSemanticIntentResolver:
             term: draft.entityTerm,
             selectedEntityID: selectedEntityID,
             draft: draft,
+            chatScope: providerPlan.scopeKey.chatScope,
+            conversationEntityID:
+                draft.conversationReference
+                    == .currentSelection
+                ? currentResolvedScope?.entityID
+                : nil,
             schemaContext: schemaContext
         )
         switch entityResolution {
         case .clarification(let clarification):
             return .clarification(clarification)
-        case .resolved(let entity):
+        case .resolved(
+            let entity,
+            let mentionResolution
+        ):
             let effectiveScope = try effectiveScope(
                 entityID: entity?.entityID,
                 conversationReference:
@@ -338,6 +358,8 @@ nonisolated struct GraphChatSemanticIntentResolver:
             let adaptation = try adaptation(
                 draft: draft,
                 entity: entity,
+                mentionResolution:
+                    mentionResolution,
                 effectiveScope: effectiveScope,
                 usesConversationSelection:
                     currentResolvedScope != nil,
@@ -352,7 +374,10 @@ nonisolated struct GraphChatSemanticIntentResolver:
     }
 
     private enum EntityResolution {
-        case resolved(GraphSchemaEntityResolution?)
+        case resolved(
+            GraphSchemaEntityResolution?,
+            GraphMentionResolution?
+        )
         case clarification(
             GraphChatSemanticEntityClarification
         )
@@ -362,6 +387,8 @@ nonisolated struct GraphChatSemanticIntentResolver:
         term: String?,
         selectedEntityID: UUID?,
         draft: GraphChatUntrustedSemanticIntentDraft,
+        chatScope: GraphChatScope,
+        conversationEntityID: UUID?,
         schemaContext: GraphSchemaContext
     ) throws -> EntityResolution {
         guard let term else {
@@ -369,42 +396,55 @@ nonisolated struct GraphChatSemanticIntentResolver:
                 throw GraphChatSemanticIntentResolutionError
                     .staleEntitySelection
             }
-            return .resolved(nil)
+            return .resolved(nil, nil)
         }
-        let folded = BMSearch.fold(term)
-        let candidates = schemaContext
-            .foundationalAliases
-            .entitiesByAlias
-            .values
-            .filter { BMSearch.fold($0.name) == folded }
-            .sorted {
-                if $0.name != $1.name {
-                    return $0.name < $1.name
-                }
-                return $0.entityID.uuidString < $1.entityID.uuidString
-            }
-        guard candidates.isEmpty == false else {
-            throw GraphChatSemanticIntentResolutionError
-                .entityNotFound
-        }
-        if let selectedEntityID {
-            guard
-                let selected = candidates.first(
-                    where: {
-                        $0.entityID == selectedEntityID
-                    }
-                )
-            else {
+        let result = mentionResolver.resolve(
+            GraphMentionResolverInput(
+                mention: term,
+                kind: .entity,
+                language: draft.responseLanguage,
+                graphScope: schemaContext.graphScope,
+                catalog: GraphMentionCatalog(
+                    schemaContext: schemaContext
+                ),
+                constraints:
+                    GraphMentionResolutionConstraints(
+                        chatScope: chatScope,
+                        allowedEntityIDs:
+                            selectedEntityID.map {
+                                Set([$0])
+                            },
+                        conversationEntityID:
+                            conversationEntityID
+                    )
+            )
+        )
+        switch result {
+        case .success(let resolution):
+            guard case .entity(let entity) =
+                    resolution.candidate.identity else {
                 throw GraphChatSemanticIntentResolutionError
-                    .staleEntitySelection
+                    .invalidSchemaIdentity
             }
-            return .resolved(selected)
-        }
-        guard candidates.count == 1 else {
+            return .resolved(entity, resolution)
+        case .failure(.ambiguous(let alternatives)):
+            let candidates = alternatives.compactMap {
+                alternative
+                    -> GraphSchemaEntityResolution? in
+                guard case .entity(let entity) =
+                        alternative.candidate.identity else {
+                    return nil
+                }
+                return entity
+            }
+            guard candidates.isEmpty == false else {
+                throw GraphChatSemanticIntentResolutionError
+                    .invalidSchemaIdentity
+            }
             let question =
                 draft.responseLanguage == .german
-                ? "Welche Entity mit dem Namen „\(term)“ meinst du?"
-                : "Which entity named “\(term)” do you mean?"
+                ? "Welchen fachlichen Eintrag meinst du?"
+                : "Which domain item do you mean?"
             return .clarification(
                 GraphChatSemanticEntityClarification(
                     question: question,
@@ -417,8 +457,22 @@ nonisolated struct GraphChatSemanticIntentResolver:
                     draft: draft
                 )
             )
+        case .failure(.staleSelection):
+            throw GraphChatSemanticIntentResolutionError
+                .staleEntitySelection
+        case .failure(.scopeViolation),
+            .failure(.ownerEntityMismatch):
+            throw GraphChatSemanticIntentResolutionError
+                .scopeViolation
+        case .failure(.graphScopeMismatch):
+            throw GraphChatSemanticIntentResolutionError
+                .invalidSchemaIdentity
+        case .failure(.noCandidates),
+            .failure(.emptyMention),
+            .failure(.notFound):
+            throw GraphChatSemanticIntentResolutionError
+                .entityNotFound
         }
-        return .resolved(candidates[0])
     }
 
     private func effectiveScope(
@@ -523,6 +577,8 @@ nonisolated struct GraphChatSemanticIntentResolver:
     private func adaptation(
         draft: GraphChatUntrustedSemanticIntentDraft,
         entity: GraphSchemaEntityResolution?,
+        mentionResolution:
+            GraphMentionResolution?,
         effectiveScope: GraphChatScope,
         usesConversationSelection: Bool,
         providerPlan: GraphChatProviderTurnPlan,
@@ -556,17 +612,27 @@ nonisolated struct GraphChatSemanticIntentResolver:
         } else {
             origin = .appRule
         }
+        let resolutionQuality:
+            GraphChatTypedIntentResolutionQuality
+        if clarificationID != nil {
+            resolutionQuality =
+                .revalidatedClarification
+        } else if usesConversationSelection {
+            resolutionQuality =
+                .revalidatedConversationReference
+        } else if let mentionResolution {
+            resolutionQuality =
+                mentionResolution
+                    .isDirectDisplayBinding
+                ? .exact
+                : .constrainedSynonym
+        } else {
+            resolutionQuality = .exact
+        }
         let resolution = GraphChatTypedIntentResolution(
             source: source,
             origin: origin,
-            quality:
-                clarificationID == nil
-                ? (
-                    usesConversationSelection
-                    ? .revalidatedConversationReference
-                    : .exact
-                )
-                : .revalidatedClarification
+            quality: resolutionQuality
         )
         let scope = GraphChatTypedIntentScope(
             graphScope:

@@ -253,6 +253,10 @@ nonisolated struct GraphChatResponseLocalizer: Sendable {
             return "Die Anfrage konnte nicht sicher validiert werden."
         case (.english, .invalidRequest):
             return "The request could not be validated safely."
+        case (.german, .groundingFailure):
+            return "Die fachliche Bezeichnung konnte nicht eindeutig mit dem aktuellen Graphen verbunden werden."
+        case (.english, .groundingFailure):
+            return "The domain term could not be bound unambiguously to the current graph."
         case (.german, .schemaUnavailable):
             return "Das Schema des aktiven Graphen ist derzeit nicht verfügbar."
         case (.english, .schemaUnavailable):
@@ -312,6 +316,10 @@ nonisolated struct GraphChatResponseLocalizer: Sendable {
             return "Formuliere die Frage fachlich eindeutiger und versuche es erneut."
         case (.english, .invalidQueryPlan):
             return "Make the question more specific and try again."
+        case (.german, .groundingFailure):
+            return "Verwende den sichtbaren Namen der Entity, des Eintrags oder des Feldes."
+        case (.english, .groundingFailure):
+            return "Use the visible name of the entity, entry, or field."
         case (.german, .schemaUnavailable), (.german, .toolFailure),
             (.german, .unexpected):
             return "Versuche es erneut."

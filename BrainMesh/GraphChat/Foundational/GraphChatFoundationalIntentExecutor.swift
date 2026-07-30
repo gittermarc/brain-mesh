@@ -31,6 +31,9 @@ nonisolated struct GraphChatFoundationalIntentExecutor:
     init(
         queryExecutor:
             any GraphChatFoundationalQueryExecuting,
+        nodeExecutor:
+            any GraphChatLocalIntentNodeExecuting =
+                GetNodeTool(),
         conversationStateReducer:
             GraphChatConversationStateReducer,
         calendar: Calendar,
@@ -51,6 +54,7 @@ nonisolated struct GraphChatFoundationalIntentExecutor:
         self.observability = observability
         self.kernel = GraphChatLocalIntentExecutionKernel(
             queryExecutor: queryExecutor,
+            nodeExecutor: nodeExecutor,
             conversationStateReducer:
                 conversationStateReducer,
             calendar: calendar,

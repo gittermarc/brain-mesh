@@ -975,6 +975,8 @@ nonisolated struct GraphChatRequestPipeline: Sendable {
             return .nodeDetails
         case .entityAttributeCollection:
             return .entityCollection
+        case .nodeDetails:
+            return .nodeDetails
         }
     }
 

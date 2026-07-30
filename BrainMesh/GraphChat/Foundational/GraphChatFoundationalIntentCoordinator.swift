@@ -21,14 +21,20 @@ nonisolated enum GraphChatFoundationalIntentResolution: Sendable {
 nonisolated struct GraphChatFoundationalIntentCoordinator: Sendable {
     private let schemaProvider: any GraphSchemaSnapshotProviding
     private let compiler: GraphChatFoundationalIntentCompiler
+    private let observability:
+        any GraphChatObservabilityRecording
 
     init(
         schemaProvider: any GraphSchemaSnapshotProviding,
         compiler: GraphChatFoundationalIntentCompiler =
-            GraphChatFoundationalIntentCompiler()
+            GraphChatFoundationalIntentCompiler(),
+        observability:
+            any GraphChatObservabilityRecording =
+                NoOpGraphChatObservabilityRecorder()
     ) {
         self.schemaProvider = schemaProvider
         self.compiler = compiler
+        self.observability = observability
     }
 
     func resolve(
@@ -117,6 +123,14 @@ nonisolated struct GraphChatFoundationalIntentCoordinator: Sendable {
                 message: rejectionMessage(rejection)
             )
         case .clarification(let clarification):
+            await observability.record(
+                .bindingDiagnostic(
+                    GraphChatBindingDiagnosticMetric(
+                        reason:
+                            .multiplePlausibleCandidates
+                    )
+                )
+            )
             let pending = pendingClarification(
                 clarification,
                 providerPlan: providerPlan,

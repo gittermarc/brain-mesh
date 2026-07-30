@@ -102,6 +102,8 @@ nonisolated struct GraphChatQueryIntentCompiler:
         GraphChatSemanticIntentLimitPolicy
     private let compilationPolicy:
         GraphChatQueryIntentCompilationPolicy
+    private let mentionResolver:
+        GraphMentionResolver
     private let valueParser:
         GraphChatQueryIntentValueParser
 
@@ -111,7 +113,10 @@ nonisolated struct GraphChatQueryIntentCompiler:
         limitPolicy:
             GraphChatSemanticIntentLimitPolicy = .default,
         compilationPolicy:
-            GraphChatQueryIntentCompilationPolicy = .default
+            GraphChatQueryIntentCompilationPolicy = .default,
+        mentionResolver:
+            GraphMentionResolver =
+                GraphMentionResolver()
     ) {
         var configuredCalendar = calendar
         configuredCalendar.timeZone = timeZone
@@ -120,6 +125,7 @@ nonisolated struct GraphChatQueryIntentCompiler:
         self.limitPolicy = limitPolicy
         self.compilationPolicy =
             compilationPolicy
+        self.mentionResolver = mentionResolver
         self.valueParser =
             GraphChatQueryIntentValueParser(
                 calendar: configuredCalendar,
@@ -149,11 +155,27 @@ nonisolated struct GraphChatQueryIntentCompiler:
             schemaContext.graphScope
                 == providerPlan.scopeKey.graphScope,
             schemaContext.aliases.graphScope
+                == schemaContext.graphScope,
+            schemaContext.foundationalAliases
+                .graphScope
                 == schemaContext.graphScope
         else {
             throw GraphChatQueryIntentCompilationError
                 .invalidCompiledPlan
         }
+        let executionSchemaContext =
+            GraphSchemaContext(
+                graphScope:
+                    schemaContext.graphScope,
+                snapshot:
+                    schemaContext.snapshot,
+                aliases:
+                    schemaContext
+                        .foundationalAliases,
+                foundationalAliases:
+                    schemaContext
+                        .foundationalAliases
+            )
         guard Set(selectedFields.map(\.role)).count
                 == selectedFields.count else {
             throw GraphChatQueryIntentCompilationError
@@ -165,7 +187,8 @@ nonisolated struct GraphChatQueryIntentCompiler:
             draft: draft,
             selectedEntityID: selectedEntityID,
             providerPlan: providerPlan,
-            schemaContext: schemaContext
+            schemaContext:
+                executionSchemaContext
         )
         let entityResolution = try resolveEntity(
             term: draft.entityTerm,
@@ -174,19 +197,26 @@ nonisolated struct GraphChatQueryIntentCompiler:
             source: source,
             draft: draft,
             providerPlan: providerPlan,
-            schemaContext: schemaContext
+            schemaContext:
+                executionSchemaContext
         )
         switch entityResolution {
         case .clarification(let clarification):
             return .clarification(clarification)
-        case .resolved(let entity):
+        case .resolved(
+            let entity,
+            let entityMentionResolution
+        ):
             return try compile(
                 draft: draft,
                 entity: entity,
+                entityMentionResolution:
+                    entityMentionResolution,
                 selectedFields: selectedFields,
                 source: source,
                 providerPlan: providerPlan,
-                schemaContext: schemaContext,
+                schemaContext:
+                    executionSchemaContext,
                 requestID: requestID,
                 sourceTurnID: sourceTurnID,
                 clarificationID: clarificationID,
@@ -201,14 +231,20 @@ nonisolated struct GraphChatQueryIntentCompiler:
     }
 
     private enum EntityResolution {
-        case resolved(GraphSchemaEntityResolution)
+        case resolved(
+            GraphSchemaEntityResolution,
+            GraphMentionResolution?
+        )
         case clarification(
             GraphChatSemanticEntityClarification
         )
     }
 
     private enum FieldResolution {
-        case resolved(GraphSchemaFieldResolution)
+        case resolved(
+            GraphSchemaFieldResolution,
+            GraphMentionResolution
+        )
         case clarification(
             GraphChatSemanticEntityClarification
         )
@@ -361,52 +397,103 @@ nonisolated struct GraphChatQueryIntentCompiler:
                 throw GraphChatQueryIntentCompilationError
                     .scopeExpansionPrevented
             }
+            var mentionResolution:
+                GraphMentionResolution?
             if let term {
-                let candidates = matchingEntities(
-                    term,
-                    schemaContext: schemaContext
+                let result = mentionResolver.resolve(
+                    GraphMentionResolverInput(
+                        mention: term,
+                        kind: .entity,
+                        language:
+                            draft.responseLanguage,
+                        graphScope:
+                            schemaContext.graphScope,
+                        catalog: GraphMentionCatalog(
+                            schemaContext:
+                                schemaContext
+                        ),
+                        constraints:
+                            GraphMentionResolutionConstraints(
+                                chatScope:
+                                    providerPlan
+                                        .scopeKey
+                                        .chatScope,
+                                allowedEntityIDs:
+                                    Set([
+                                        entity.entityID,
+                                    ])
+                            )
+                    )
                 )
-                guard candidates.contains(
-                    where: {
-                        $0.entityID
-                            == entity.entityID
-                    }
-                ) else {
+                guard case .success(let resolution) = result,
+                      case .entity(let resolved) =
+                        resolution.candidate.identity,
+                      resolved.entityID
+                        == entity.entityID else {
                     throw GraphChatQueryIntentCompilationError
                         .scopeExpansionPrevented
                 }
+                mentionResolution = resolution
             }
-            return .resolved(entity)
+            return .resolved(
+                entity,
+                mentionResolution
+            )
         }
 
         if let term {
-            let candidates = matchingEntities(
-                term,
-                schemaContext: schemaContext
+            let result = mentionResolver.resolve(
+                GraphMentionResolverInput(
+                    mention: term,
+                    kind: .entity,
+                    language:
+                        draft.responseLanguage,
+                    graphScope:
+                        schemaContext.graphScope,
+                    catalog: GraphMentionCatalog(
+                        schemaContext: schemaContext
+                    ),
+                    constraints:
+                        GraphMentionResolutionConstraints(
+                            chatScope:
+                                providerPlan.scopeKey
+                                    .chatScope,
+                            allowedEntityIDs:
+                                selectedEntityID.map {
+                                    Set([$0])
+                                }
+                        )
+                )
             )
-            guard candidates.isEmpty == false else {
-                throw GraphChatQueryIntentCompilationError
-                    .entityNotFound
-            }
-            if let selectedEntityID {
-                guard
-                    let selected = candidates.first(
-                        where: {
-                            $0.entityID
-                                == selectedEntityID
-                        }
-                    )
-                else {
+            switch result {
+            case .success(let resolution):
+                guard case .entity(let entity) =
+                        resolution.candidate.identity else {
                     throw GraphChatQueryIntentCompilationError
-                        .staleSelection
+                        .invalidCompiledPlan
                 }
-                return .resolved(selected)
-            }
-            guard candidates.count == 1 else {
+                return .resolved(
+                    entity,
+                    resolution
+                )
+            case .failure(.ambiguous(let alternatives)):
+                let candidates = alternatives.compactMap {
+                    alternative
+                        -> GraphSchemaEntityResolution? in
+                    guard case .entity(let entity) =
+                            alternative.candidate.identity else {
+                        return nil
+                    }
+                    return entity
+                }
+                guard candidates.isEmpty == false else {
+                    throw GraphChatQueryIntentCompilationError
+                        .invalidCompiledPlan
+                }
                 let question =
                     draft.responseLanguage == .german
-                    ? "Welche Entity mit dem Namen „\(term)“ meinst du?"
-                    : "Which entity named “\(term)” do you mean?"
+                    ? "Welchen fachlichen Eintrag meinst du?"
+                    : "Which domain item do you mean?"
                 return .clarification(
                     GraphChatSemanticEntityClarification(
                         question: question,
@@ -421,8 +508,22 @@ nonisolated struct GraphChatQueryIntentCompiler:
                         draft: draft
                     )
                 )
+            case .failure(.staleSelection):
+                throw GraphChatQueryIntentCompilationError
+                    .staleSelection
+            case .failure(.scopeViolation),
+                .failure(.ownerEntityMismatch):
+                throw GraphChatQueryIntentCompilationError
+                    .scopeExpansionPrevented
+            case .failure(.graphScopeMismatch):
+                throw GraphChatQueryIntentCompilationError
+                    .invalidCompiledPlan
+            case .failure(.noCandidates),
+                .failure(.emptyMention),
+                .failure(.notFound):
+                throw GraphChatQueryIntentCompilationError
+                    .entityNotFound
             }
-            return .resolved(candidates[0])
         }
 
         guard
@@ -442,12 +543,14 @@ nonisolated struct GraphChatQueryIntentCompiler:
             throw GraphChatQueryIntentCompilationError
                 .staleSelection
         }
-        return .resolved(entity)
+        return .resolved(entity, nil)
     }
 
     private func compile(
         draft: GraphChatUntrustedSemanticIntentDraft,
         entity: GraphSchemaEntityResolution,
+        entityMentionResolution:
+            GraphMentionResolution?,
         selectedFields:
             [GraphChatSemanticSelectedField],
         source: ValidatedSource?,
@@ -461,6 +564,10 @@ nonisolated struct GraphChatQueryIntentCompiler:
         var resolvedFields:
             [GraphChatSemanticFieldSelectionRole:
                 GraphSchemaFieldResolution] = [:]
+        var requiresConstrainedGrounding =
+            entityMentionResolution.map {
+                $0.isDirectDisplayBinding == false
+            } ?? false
         var usedRoles =
             Set<GraphChatSemanticFieldSelectionRole>()
 
@@ -475,6 +582,9 @@ nonisolated struct GraphChatQueryIntentCompiler:
                 entity: entity,
                 selectedFields: selectedFields,
                 draft: draft,
+                chatScope:
+                    providerPlan.scopeKey
+                        .chatScope,
                 schemaContext: schemaContext
             )
         }
@@ -489,8 +599,16 @@ nonisolated struct GraphChatQueryIntentCompiler:
                 term: filter.fieldTerm,
                 role: role
             ) {
-            case .resolved(let value):
+            case .resolved(
+                let value,
+                let mentionResolution
+            ):
                 resolvedFields[role] = value
+                requiresConstrainedGrounding =
+                    requiresConstrainedGrounding
+                    || mentionResolution
+                        .isDirectDisplayBinding
+                        == false
             case .clarification(let clarification):
                 return .clarification(clarification)
             }
@@ -502,8 +620,16 @@ nonisolated struct GraphChatQueryIntentCompiler:
                 term: term,
                 role: .sorting
             ) {
-            case .resolved(let value):
+            case .resolved(
+                let value,
+                let mentionResolution
+            ):
                 resolvedFields[.sorting] = value
+                requiresConstrainedGrounding =
+                    requiresConstrainedGrounding
+                    || mentionResolution
+                        .isDirectDisplayBinding
+                        == false
             case .clarification(let clarification):
                 return .clarification(clarification)
             }
@@ -518,8 +644,16 @@ nonisolated struct GraphChatQueryIntentCompiler:
                 term: term,
                 role: role
             ) {
-            case .resolved(let value):
+            case .resolved(
+                let value,
+                let mentionResolution
+            ):
                 resolvedFields[role] = value
+                requiresConstrainedGrounding =
+                    requiresConstrainedGrounding
+                    || mentionResolution
+                        .isDirectDisplayBinding
+                        == false
             case .clarification(let clarification):
                 return .clarification(clarification)
             }
@@ -529,8 +663,16 @@ nonisolated struct GraphChatQueryIntentCompiler:
                 term: term,
                 role: .grouping
             ) {
-            case .resolved(let value):
+            case .resolved(
+                let value,
+                let mentionResolution
+            ):
                 resolvedFields[.grouping] = value
+                requiresConstrainedGrounding =
+                    requiresConstrainedGrounding
+                    || mentionResolution
+                        .isDirectDisplayBinding
+                        == false
             case .clarification(let clarification):
                 return .clarification(clarification)
             }
@@ -1001,7 +1143,11 @@ nonisolated struct GraphChatQueryIntentCompiler:
                     : (
                         source != nil
                         ? .revalidatedConversationReference
-                        : .exact
+                        : (
+                            requiresConstrainedGrounding
+                            ? .constrainedSynonym
+                            : .exact
+                        )
                     )
             )
         let maximumEvidenceCount: Int
@@ -1078,49 +1224,64 @@ nonisolated struct GraphChatQueryIntentCompiler:
         selectedFields:
             [GraphChatSemanticSelectedField],
         draft: GraphChatUntrustedSemanticIntentDraft,
+        chatScope: GraphChatScope,
         schemaContext: GraphSchemaContext
     ) throws -> FieldResolution {
-        let folded = BMSearch.fold(term)
-        let allMatches = schemaContext.aliases
-            .fieldsByAlias.values
-            .filter {
-                BMSearch.fold($0.name) == folded
-            }
-            .sorted(by: fieldSort)
-        let candidates = allMatches.filter {
-            $0.entityID == entity.entityID
-        }
-        guard candidates.isEmpty == false else {
-            throw allMatches.isEmpty
-                ? GraphChatQueryIntentCompilationError
-                    .fieldNotFound
-                : GraphChatQueryIntentCompilationError
-                    .fieldEntityMismatch
-        }
-
-        if let selected =
+        let selected =
             selectedFields.first(
                 where: { $0.role == role }
             )
-        {
-            guard
-                let field = candidates.first(
-                    where: {
-                        $0.fieldID
-                            == selected.fieldID
-                    }
-                )
-            else {
+        let result = mentionResolver.resolve(
+            GraphMentionResolverInput(
+                mention: term,
+                kind: .field,
+                language: draft.responseLanguage,
+                graphScope: schemaContext.graphScope,
+                catalog: GraphMentionCatalog(
+                    schemaContext: schemaContext
+                ),
+                constraints:
+                    GraphMentionResolutionConstraints(
+                        chatScope:
+                            chatScope,
+                        ownerEntityID:
+                            entity.entityID,
+                        allowedFieldIDs:
+                            selected.map {
+                                Set([$0.fieldID])
+                            }
+                    )
+            )
+        )
+        switch result {
+        case .success(let resolution):
+            guard case .field(let field) =
+                    resolution.candidate.identity else {
                 throw GraphChatQueryIntentCompilationError
-                    .staleSelection
+                    .invalidCompiledPlan
             }
-            return .resolved(field)
-        }
-        guard candidates.count == 1 else {
+            return .resolved(
+                field,
+                resolution
+            )
+        case .failure(.ambiguous(let alternatives)):
+            let candidates = alternatives.compactMap {
+                alternative
+                    -> GraphSchemaFieldResolution? in
+                guard case .field(let field) =
+                        alternative.candidate.identity else {
+                    return nil
+                }
+                return field
+            }
+            guard candidates.isEmpty == false else {
+                throw GraphChatQueryIntentCompilationError
+                    .invalidCompiledPlan
+            }
             let question =
                 draft.responseLanguage == .german
-                ? "Welches Feld „\(term)“ meinst du?"
-                : "Which “\(term)” field do you mean?"
+                ? "Welches fachliche Feld meinst du?"
+                : "Which domain field do you mean?"
             return .clarification(
                 GraphChatSemanticEntityClarification(
                     question: question,
@@ -1156,26 +1317,24 @@ nonisolated struct GraphChatQueryIntentCompiler:
                     draft: draft
                 )
             )
+        case .failure(.staleSelection):
+            throw GraphChatQueryIntentCompilationError
+                .staleSelection
+        case .failure(.ownerEntityMismatch):
+            throw GraphChatQueryIntentCompilationError
+                .fieldEntityMismatch
+        case .failure(.scopeViolation):
+            throw GraphChatQueryIntentCompilationError
+                .scopeExpansionPrevented
+        case .failure(.graphScopeMismatch):
+            throw GraphChatQueryIntentCompilationError
+                .invalidCompiledPlan
+        case .failure(.noCandidates),
+            .failure(.emptyMention),
+            .failure(.notFound):
+            throw GraphChatQueryIntentCompilationError
+                .fieldNotFound
         }
-        return .resolved(candidates[0])
-    }
-
-    private func matchingEntities(
-        _ term: String,
-        schemaContext: GraphSchemaContext
-    ) -> [GraphSchemaEntityResolution] {
-        let folded = BMSearch.fold(term)
-        return schemaContext.aliases
-            .entitiesByAlias.values
-            .filter {
-                BMSearch.fold($0.name) == folded
-            }
-            .sorted { lhs, rhs in
-                if lhs.name != rhs.name {
-                    return lhs.name < rhs.name
-                }
-                return lhs.entityID.uuidString < rhs.entityID.uuidString
-            }
     }
 
     private func scopedEntityID(
@@ -1602,19 +1761,6 @@ nonisolated struct GraphChatQueryIntentCompiler:
         return source.filter {
             seen.insert($0.fieldID).inserted
         }
-    }
-
-    private func fieldSort(
-        _ lhs: GraphSchemaFieldResolution,
-        _ rhs: GraphSchemaFieldResolution
-    ) -> Bool {
-        if lhs.name != rhs.name {
-            return lhs.name < rhs.name
-        }
-        if lhs.type != rhs.type {
-            return lhs.type.rawValue < rhs.type.rawValue
-        }
-        return lhs.fieldID.uuidString < rhs.fieldID.uuidString
     }
 
     private func fieldClarificationLabel(

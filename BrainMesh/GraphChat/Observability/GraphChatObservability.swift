@@ -194,6 +194,13 @@ nonisolated struct GraphChatSemanticIntentMetric:
     }
 }
 
+nonisolated struct GraphChatBindingDiagnosticMetric:
+    Hashable,
+    Sendable
+{
+    let reason: GraphChatBindingDiagnosticReason
+}
+
 nonisolated enum GraphChatTypedPlannerDraftOutcome:
     String,
     CaseIterable,
@@ -292,6 +299,9 @@ nonisolated enum GraphChatObservabilityEvent: Hashable, Sendable {
     case authoritativeFact(GraphChatAuthoritativeFactMetric)
     case localIntent(GraphChatLocalIntentMetric)
     case semanticIntent(GraphChatSemanticIntentMetric)
+    case bindingDiagnostic(
+        GraphChatBindingDiagnosticMetric
+    )
     case typedPlanner(GraphChatTypedPlannerMetric)
     case intentInterpretation(
         GraphChatIntentInterpretationMetric
@@ -338,6 +348,10 @@ actor GraphChatTechnicalObservabilityRecorder: GraphChatObservabilityRecording {
             let family = metric.family?.rawValue ?? "none"
             BMLog.chat.info(
                 "Semantic intent event=\(metric.event.rawValue, privacy: .public) family=\(family, privacy: .public) interpreterCalls=\(metric.interpreterCallCount) answerProviderCalls=\(metric.answerProviderCallCount)"
+            )
+        case .bindingDiagnostic(let metric):
+            BMLog.chat.info(
+                "Binding diagnostic reason=\(metric.reason.rawValue, privacy: .public)"
             )
         case .typedPlanner(let metric):
             let values = typedPlannerLogValues(

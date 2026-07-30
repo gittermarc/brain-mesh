@@ -1,0 +1,45 @@
+{
+  "version": 1,
+  "groups": [
+    {
+      "kind": "field",
+      "origin": "localizedFieldSynonym",
+      "terms": [
+        {
+          "value": "Geburtsdatum",
+          "language": "german"
+        },
+        {
+          "value": "Geburtstag",
+          "language": "german"
+        },
+        {
+          "value": "Birthday",
+          "language": "english"
+        },
+        {
+          "value": "Birth date",
+          "language": "english"
+        },
+        {
+          "value": "Date of birth",
+          "language": "english"
+        }
+      ]
+    },
+    {
+      "kind": "node",
+      "origin": "appOwnedAlias",
+      "terms": [
+        {
+          "value": "Projekt",
+          "language": "german"
+        },
+        {
+          "value": "Project",
+          "language": "english"
+        }
+      ]
+    }
+  ]
+}

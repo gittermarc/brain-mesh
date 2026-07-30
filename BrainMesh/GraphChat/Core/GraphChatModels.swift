@@ -68,6 +68,7 @@ nonisolated struct GraphChatRequest: Hashable, Sendable, Identifiable {
 
 nonisolated enum GraphChatErrorCode: String, CaseIterable, Hashable, Sendable {
     case invalidRequest
+    case groundingFailure
     case schemaUnavailable
     case invalidQueryPlan
     case cancelled
@@ -80,10 +81,25 @@ nonisolated enum GraphChatErrorCode: String, CaseIterable, Hashable, Sendable {
     case unexpected
 }
 
+nonisolated enum GraphChatBindingDiagnosticReason:
+    String,
+    CaseIterable,
+    Hashable,
+    Sendable
+{
+    case entityNotBound
+    case nodeNotBound
+    case fieldNotBound
+    case multiplePlausibleCandidates
+    case invalidDraftCombination
+}
+
 nonisolated struct GraphChatError: Error, LocalizedError, Hashable, Sendable {
     let code: GraphChatErrorCode
     let message: String
     let recoverySuggestion: String?
+    let bindingDiagnosticReason:
+        GraphChatBindingDiagnosticReason?
 
     var errorDescription: String? {
         message
@@ -92,11 +108,15 @@ nonisolated struct GraphChatError: Error, LocalizedError, Hashable, Sendable {
     init(
         code: GraphChatErrorCode,
         message: String,
-        recoverySuggestion: String? = nil
+        recoverySuggestion: String? = nil,
+        bindingDiagnosticReason:
+            GraphChatBindingDiagnosticReason? = nil
     ) {
         self.code = code
         self.message = message
         self.recoverySuggestion = recoverySuggestion
+        self.bindingDiagnosticReason =
+            bindingDiagnosticReason
     }
 }
 

@@ -160,6 +160,108 @@ struct GraphChatAdvancedIntentEndToEndTests {
 
     @MainActor
     @Test
+    func foundationalNodeDetailsShellExecutesWithoutInterpreterOrProvider()
+        async throws
+    {
+        let store =
+            try BrainMeshTestContainer
+                .makeInMemoryStore()
+        let fixtures =
+            BrainMeshFixtureBuilder(
+                context: store.context
+            )
+        let graph =
+            fixtures.makeGraph(name: "Medizin")
+        let patients =
+            fixtures.makeEntity(
+                name: "Patient",
+                in: graph
+            )
+        let patient =
+            fixtures.makeAttribute(
+                name: "Patient A",
+                owner: patients,
+                notes: "Kontrolltermin geplant"
+            )
+        let status =
+            fixtures.makeDetailField(
+                owner: patients,
+                name: "Versorgungsstatus",
+                type: .singleLineText,
+                sortIndex: 0
+            )
+        fixtures.makeDetailValue(
+            attribute: patient,
+            field: status,
+            stringValue: "Aktiv"
+        )
+        try fixtures.save()
+
+        let interpreter =
+            FakeGraphChatIntentInterpreter()
+        let runtime = makeRuntime(
+            store: store,
+            graphID: graph.id,
+            interpreter: interpreter
+        )
+        let graphScope =
+            GraphScope(graphID: graph.id)
+        let chatScope =
+            GraphChatScope.entireGraph(
+                graphScope
+            )
+        let events = await collect(
+            await runtime.orchestrator
+                .streamAnswer(
+                    question:
+                        "Nenne mir Details zu Patient A",
+                    graphScope: graphScope,
+                    chatScope: chatScope
+                )
+        )
+        let answer =
+            try completedAnswer(events)
+        let inputs =
+            await runtime.nodeExecutor.inputs()
+        let visible = visibleText(events)
+
+        #expect(answer.state == .answer)
+        #expect(
+            answer.directAnswer
+                .contains("Patient A")
+        )
+        #expect(inputs.count == 1)
+        #expect(
+            inputs[0].node
+                == NodeRefKey(
+                    kind: .attribute,
+                    id: patient.id
+                )
+        )
+        #expect(
+            await interpreter.snapshot()
+                .requests.isEmpty
+        )
+        #expect(
+            await runtime.provider.snapshot()
+                .createdSessions.isEmpty
+        )
+        #expect(terminalEventCount(events) == 1)
+        #expect(
+            visible.contains(
+                patient.id.uuidString
+            ) == false
+        )
+        #expect(visible.contains("E1") == false)
+        #expect(visible.contains("F1") == false)
+        #expect(
+            visible.contains("CURRENT")
+                == false
+        )
+    }
+
+    @MainActor
+    @Test
     func duplicateNodeNameClarifiesThenRevalidatesLastNode()
         async throws
     {
