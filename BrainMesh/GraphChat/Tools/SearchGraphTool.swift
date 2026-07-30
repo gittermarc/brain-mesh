@@ -311,16 +311,36 @@ nonisolated struct SearchGraphTool: GraphChatTool {
             guard let link = try await sourceRepository.link(id: result.id, in: graphScope) else {
                 return nil
             }
-            let navigationNode = link.sourceNodeKey ?? link.targetNodeKey
+            guard let source = link.sourceNodeKey,
+                  let target = link.targetNodeKey else {
+                return nil
+            }
             return ResolvedSource(
                 reference: GraphSourceReference(
                     graphID: graphScope.graphID,
                     sourceKind: .link,
                     sourceID: link.id,
-                    node: navigationNode.map {
-                        GraphSourceNodeReference(kind: $0.kind, id: $0.id)
-                    },
-                    linkID: link.id
+                    node: GraphSourceNodeReference(
+                        kind: source.kind,
+                        id: source.id
+                    ),
+                    linkID: link.id,
+                    linkBinding:
+                        GraphSourceLinkBinding(
+                            linkID: link.id,
+                            source:
+                                GraphSourceNodeReference(
+                                    kind: source.kind,
+                                    id: source.id
+                                ),
+                            target:
+                                GraphSourceNodeReference(
+                                    kind: target.kind,
+                                    id: target.id
+                                ),
+                            direction: .outgoing,
+                            note: link.note
+                        )
                 ),
                 title: "\(link.sourceLabel) → \(link.targetLabel)",
                 subtitle: link.note?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false

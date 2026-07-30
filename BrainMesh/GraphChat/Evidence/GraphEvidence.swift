@@ -87,6 +87,24 @@ nonisolated enum GraphEvidenceStableIdentity {
         let fieldID = sourceReference.fieldID?.uuidString ?? ""
         let linkID = sourceReference.linkID?.uuidString ?? ""
         let attachmentID = sourceReference.attachmentID?.uuidString ?? ""
+        let linkBindingParts: [String]
+        if let binding =
+            sourceReference.linkBinding
+        {
+            linkBindingParts = [
+                binding.linkID.uuidString,
+                String(binding.source.kind.rawValue),
+                binding.source.id.uuidString,
+                String(binding.target.kind.rawValue),
+                binding.target.id.uuidString,
+                binding.direction.rawValue,
+                binding.note.map {
+                    "some:\($0)"
+                } ?? "none",
+            ]
+        } else {
+            linkBindingParts = []
+        }
         let keyParts: [String] = [
             sourceReference.graphID.uuidString,
             sourceReference.sourceKind.rawValue,
@@ -97,6 +115,7 @@ nonisolated enum GraphEvidenceStableIdentity {
             ownerID,
             fieldID,
             linkID,
+        ] + linkBindingParts + [
             attachmentID,
             fieldKey,
             suffix

@@ -129,14 +129,17 @@ nonisolated struct GetNeighborsTool: GraphChatTool {
             for link in outgoing {
                 try Task.checkCancellation()
                 guard connections.count < limit,
+                      let source = link.sourceNodeKey,
                       let target = link.targetNodeKey,
+                      source == input.node,
                       target != input.node else {
                     continue
                 }
                 let itemEvidence = Self.linkEvidence(
                     link,
                     center: input.node,
-                    centerLabel: neighborhood.center.label
+                    centerLabel: neighborhood.center.label,
+                    direction: .outgoing
                 )
                 evidence.append(itemEvidence)
                 connections.append(
@@ -156,13 +159,16 @@ nonisolated struct GetNeighborsTool: GraphChatTool {
                     try Task.checkCancellation()
                     guard connections.count < limit,
                           let source = link.sourceNodeKey,
+                          let target = link.targetNodeKey,
+                          target == input.node,
                           source != input.node else {
                         continue
                     }
                     let itemEvidence = Self.linkEvidence(
                         link,
                         center: input.node,
-                        centerLabel: neighborhood.center.label
+                        centerLabel: neighborhood.center.label,
+                        direction: .incoming
                     )
                     evidence.append(itemEvidence)
                     connections.append(
@@ -258,15 +264,39 @@ nonisolated struct GetNeighborsTool: GraphChatTool {
     private static func linkEvidence(
         _ link: GraphLinkDTO,
         center: NodeRefKey,
-        centerLabel: String
+        centerLabel: String,
+        direction: GraphChatLinkDirection
     ) -> GraphEvidence {
-        GraphEvidence(
+        let source = link.sourceNodeKey
+            ?? center
+        let target = link.targetNodeKey
+            ?? center
+        return GraphEvidence(
             sourceReference: GraphSourceReference(
                 graphID: link.scope.graphID,
                 sourceKind: .link,
                 sourceID: link.id,
                 node: GraphSourceNodeReference(kind: center.kind, id: center.id),
-                linkID: link.id
+                linkID: link.id,
+                linkBinding:
+                    GraphSourceLinkBinding(
+                        linkID: link.id,
+                        source:
+                            GraphSourceNodeReference(
+                                kind: source.kind,
+                                id: source.id
+                            ),
+                        target:
+                            GraphSourceNodeReference(
+                                kind: target.kind,
+                                id: target.id
+                            ),
+                        direction:
+                            direction == .outgoing
+                            ? .outgoing
+                            : .incoming,
+                        note: link.note
+                    )
             ),
             summary: "\(link.sourceLabel) → \(link.targetLabel)",
             fieldValues: link.note.map {

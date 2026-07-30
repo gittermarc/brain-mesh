@@ -16,6 +16,7 @@ BrainMesh besitzt bereits mehrere wichtige Schutzlinien:
 - Graph Chat ist read-only, graphgescoped und evidenzgebunden.
 - Exakt erkannte Single-Node-Field-Fragen werden providerfrei ausgeführt und als autoritativer typisierter Single Fact vollständig appseitig gerendert.
 - Der Foundational Fast Path ist über einen verlustfreien Adapter von einer allgemeinen versionierten Typed-Intent-Domain getrennt; beide vorhandenen Foundational Actions laufen durch denselben lokalen Execution Kernel.
+- Entity- und Attribute-Nodes besitzen mit `GraphNodeProfile` jetzt ein vollständiges, value-only und unabhängig begrenztes autoritatives Read-Modell. `GetNodeTool` adaptiert dieses Modell, statt Details, Links und Attachments über ein gemeinsames Restbudget einzeln zusammenzusuchen.
 - Freie Find-Nodes- und Entity-List-Formulierungen werden nach dem Foundational Fast Path durch einen toolfreien On-Device-Interpreter ausschließlich in einen begrenzten untrusted Semantic Draft klassifiziert. Identitäten, Scope, technische Action, Query, Limits, Evidence, Artifacts und sichtbare Antwort bleiben appseitig.
 - Node Details, Compare Nodes und Inspect Graph State werden nach semantischer Klassifikation vollständig appseitig kompiliert und providerfrei über denselben lokalen Execution Kernel abgeschlossen. Node-IDs, Tools, Comparison-Art/-Features, Related-/Hub-Limits und Artifact-Struktur bleiben app-owned.
 - Finalisierte lokale Typed-Intent-Interpretationen sind fachlich editierbar. Jede Korrektur wird an ursprünglichen Turn, Conversation, Scope, Checkpoints und Artifact-Session gebunden, gegen ein frisches vollständiges Schema revalidiert und als providerfreier lokaler Ersatzturn mit atomarem Conversation-/Artifact-Swap ausgeführt.
@@ -791,7 +792,7 @@ Unterstützte Intents:
 - `nodeDetails`: sichere deutsche oder englische Detailhülle und genau ein eindeutig gebundener, im bestehenden Chat-Scope autorisierter Node. Der Adapter erzeugt die vorhandene Typed-Intent-Payload `.nodeDetails` und die vorhandene lokale `GetNodeTool`-Action; eine neue Node-Profile-Darstellung entsteht nicht.
 - Der Single-Field-Plan projiziert Node Identity und exakt das validierte Feld, bindet den Scope auf genau den validierten Node und setzt `limit = 1`.
 - Der Collection-Plan projiziert Node Identity, verwendet keine erfundenen Filter, sortiert stabil nach Node-Anzeigename mit dem bestehenden deterministischen Tie-Breaker und setzt das Limit auf `GraphQueryPlanLimits.maximumResultLimit`.
-- Der Node-Details-Plan bindet den Query-Scope auf genau den validierten Node und verwendet das bestehende appseitige Related-Limit. Alle drei Foundational-Familien laufen über den bestehenden Typed-Intent- und Local-Kernel-Lifecycle.
+- Der Node-Details-Plan bindet den Query-Scope auf genau den validierten Node und verwendet den appseitigen kompatiblen Per-Bereich-Cap, aus dem die zentrale Policy vier unabhängige Profilgrenzen ableitet. Alle drei Foundational-Familien laufen über den bestehenden Typed-Intent- und Local-Kernel-Lifecycle.
 
 Ausführung und Fortsetzung:
 
@@ -840,7 +841,46 @@ Integration und Diagnose:
 
 Bewusste Grenze:
 
-- Nicht hinzugekommen sind eine neue Node-Profile-Darstellung, Relationship-Intent, Multi-Hop-Traversal, `GraphFactBundle` oder modellgestützte Grounded-Answer-Planung. Graph Chat bleibt read-only.
+- Nicht hinzugekommen sind eine neue vollständige Profil-UI, Relationship-Intent, Multi-Hop-Traversal, `GraphFactBundle` oder modellgestützte Grounded-Answer-Planung. Graph Chat bleibt read-only.
+
+### Graph Chat Node Profile Domain (GRAPH-CHAT-NODE-PROFILE-DOMAIN-1)
+
+Pfade:
+
+- `BrainMesh/DataAccess/GraphNodeProfile.swift`
+- `BrainMesh/DataAccess/GraphReadRepository+NodeProfile.swift`
+- `BrainMesh/GraphChat/Tools/GetNodeTool.swift`
+- `BrainMesh/GraphChat/Core/GraphSourceReference.swift`
+- `BrainMesh/GraphChat/Evidence/GraphEvidence.swift`
+- `BrainMesh/GraphChat/Evidence/GraphEvidenceValidator.swift`
+- `BrainMesh/GraphChat/TypedIntent/GraphChatIntentLimitPolicy.swift`
+
+Read-Vertrag und Authority:
+
+- `GraphNodeProfileReading` akzeptiert ausschließlich `GraphScope`, `NodeRefKey` und appseitige `GraphNodeProfileLimits`. Die produktive `GraphReadRepository`-Implementierung erzeugt einen eigenen read-only `ModelContext`; kein SwiftData-Modell verlässt diesen Context.
+- `GraphNodeProfile` und alle enthaltenen Owner-, Field-, Endpoint-, Connection-, Window- und Limitwerte sind value-only, `Hashable` und `Sendable`. Entity und Attribute tragen eigenen sichtbaren Namen und qualifizierten Anzeigenamen; Attributes führen ihren aktuell graphgescopten Owner separat.
+- Detailwerte werden ausnahmslos über `fetchDetailValueAuthority` und damit die bestehende `DetailDataIntegrityPolicy` geladen. Cross-Graph-, verwaiste, typwidrige und konfliktbehaftete Records liefern keinen Profilfakt. Die stabile Reihenfolge folgt Feld-`sortIndex`, normalisiertem Feldnamen, Feld-ID und Value-ID.
+- Links werden getrennt nach incoming und outgoing geladen. Nur Links mit beiden im aktuellen Graphen auflösbaren Endpunkten gelangen in das Profil. Jeder Eintrag trägt Link-ID, Created-At-Tie-Breaker, Richtung, Quell- und Zielendpoint, Gegenknoten, Owner-Anzeige und den exakten optionalen Notizwert. Sortierung ist Created-At absteigend, danach Link-ID und Endpoint-Tie-Breaker.
+- Attachments verwenden ausschließlich `GraphAttachmentMetadataDTO`. `fileData`, `localPath`, Previewdaten und Dateiinhalte werden weder gelesen noch in Profil, Evidence oder Conversation State transportiert.
+
+Unabhängige Limits und Adapter:
+
+- `GraphChatIntentLimitPolicy` besitzt vier getrennte Profilgrenzen für autoritative Detailwerte, eingehende Verbindungen, ausgehende Verbindungen und Attachments. Der Repository-Eingang lehnt Werte oberhalb dieser zentralen Policy ab.
+- Jeder Bereich besitzt ein eigenes `GraphNodeProfileResultWindow` mit exaktem `totalCount`, `returnedCount`, `limit`, `limitReached` und der Limitquelle `.appPolicy`. Ein großer Bereich kann keinen anderen verdrängen; kleine Bereiche innerhalb ihrer Grenze sind vollständig.
+- Der bestehende `GetNodeInput.relatedLimit` bleibt nur als kompatibler appseitiger Per-Bereich-Cap erhalten. Der echte Foundation-Models-Toolvertrag exponiert kein Limit mehr, und der Legacy-Tool-Runtime ersetzt alte modellseitige Werte durch `GraphChatIntentLimitPolicy.nodeDetailRelatedItemCount`.
+- Das unveränderte Tool-Call-Budget zählt das bounded Profil als ein Root-Ergebnis. Die Bereichsgrößen werden ausschließlich durch die vier Profilgrenzen beschränkt; das bestehende Evidence-Budget bleibt eine zusätzliche unabhängige Sicherheitsgrenze.
+- `GetNodeOutput` behält die bestehende Node-Details-Darstellung, ergänzt aber separate Detail-, Incoming-, Outgoing- und Attachment-Windows. Counts stammen vom vollständigen Profil; sichtbare Items und Evidence stammen aus demselben Profil-Snapshot. Es existiert keine zweite Node-Details-Datenautorität.
+
+Link-Notiz-Evidence:
+
+- `GraphSourceLinkBinding` bindet Graph Source Reference und Evidence an Link-ID, Quellnode, Zielnode, Richtung relativ zum beschriebenen Node und den exakt verwendeten optionalen Notizwert. Diese Werte fließen in die stabile Evidence-ID ein.
+- `GraphEvidenceSourceValidator` löst den Link erneut im aktuellen Graphen auf, verlangt beide aktuellen Endpunkte und vergleicht die vollständige Binding-Struktur sowie den Notizwert. Änderung, Entfernung oder Löschen der Notiz beziehungsweise des Links invalidieren die alte Evidence; ein Link ohne Notiz kann keinen früheren Text belegen.
+- Gleichlautende Link-IDs in anderen Graphen werden weiterhin durch Graph-Scope und die vollständige Binding-Revalidation abgelehnt. `GetNodeTool`, `GetNeighborsTool` und Link-Suchergebnisse erzeugen die neue Produktionsbindung.
+
+Lifecycle:
+
+- Cancellation wird vor und zwischen Identität, Detailauthority, outgoing Links, incoming Links, Endpointauflösung, Attachments und finaler Profilpublikation geprüft. Ein Abbruch liefert kein Teilprofil.
+- Der bestehende Local-Intent-Kernel, Evidence-/Artifact-Commit, Ledger, Presentation Firewall, Conversation-Compare-and-set und Single-Terminal-Vertrag bleiben unverändert maßgeblich.
 
 ### Graph Chat Semantic Intent Interpreter
 
@@ -907,8 +947,8 @@ Refinement-Policy:
 
 Advanced-Intent-Policy:
 
-- `GraphChatAdvancedIntentPolicy.default` ist die zentrale Quelle für die neuen technischen Grenzen: höchstens `8` Comparison-Nodes, höchstens `8` Comparison-Features, `6` Defaultfeatures, Node-Details-Related-Limit `20`, Structural-Related-Limit `0`, Graph-Hub-Limit `10`, maximal `96` Evidence-Einträge und `4` Artifacts. Interpreter und Modell können keinen dieser Werte setzen.
-- Node Details akzeptiert genau einen nach aktueller Schema-/Repositorysicht revalidierten Node aus explizitem Anzeigenamen, `CURRENT`, Ordinal, Last Node oder einer bestehenden Clarification. Der erzeugte Query-Scope ist exakt dieser Node; `GraphChatScopeAuthorization` verhindert jeden Zugriff außerhalb des bestehenden Chat-Scopes. `GetNodeTool` lädt Attachment-Metadaten, aber nie Attachment-Binärinhalte.
+- `GraphChatAdvancedIntentPolicy.default` ist die zentrale Kompatibilitätssicht auf die technischen Grenzen: höchstens `8` Comparison-Nodes, höchstens `8` Comparison-Features, `6` Defaultfeatures, Node-Details-Per-Bereich-Cap `20`, Structural-Cap `0`, Graph-Hub-Limit `10`, maximal `96` Evidence-Einträge und `4` Artifacts. Die zugrunde liegende `GraphChatIntentLimitPolicy` besitzt zusätzlich die vier unabhängigen Node-Profilgrenzen. Interpreter und Modell können keinen dieser Werte setzen.
+- Node Details akzeptiert genau einen nach aktueller Schema-/Repositorysicht revalidierten Node aus explizitem Anzeigenamen, `CURRENT`, Ordinal, Last Node oder einer bestehenden Clarification. Der erzeugte Query-Scope ist exakt dieser Node; `GraphChatScopeAuthorization` verhindert jeden Zugriff außerhalb des bestehenden Chat-Scopes. `GetNodeTool` lädt das autoritative Profil mit getrennten Bereichen und Attachment-Metadaten, aber nie Attachment-Binärinhalte.
 - `GraphChatComparisonPlan` ist value-only und bindet Graph, Chat-Scope, Request, Conversation, Turn, mindestens zwei eindeutige revalidierte Nodes, Comparison-Art, Features, optionale Selection Query, gemeinsames Related-Limit, Sprache, erwartete Cardinality und die zentrale Policy. Gemischte Graphen, stale Nodes/Comparisons, doppelte Subjects sowie übergroße Node-/Featuremengen werden abgelehnt.
 - Attributes derselben Entity werden fachlich verglichen. Die Selection Query projiziert immer Node Identity und die ausdrücklich verlangten Felder. Ohne Feldangabe sortiert die App das vollständige aktuelle Entity-Schema zuerst nach `isPinned` absteigend, dann `sortIndex`, normalisiertem Anzeigenamen und zuletzt ausschließlich intern nach Feld-UUID; sie verwendet höchstens sechs Felder. Query-Zellen transportieren fehlende autoritative Values als `.missing`; Integrity-Konflikte und Values ohne revalidierte Evidence werden entfernt.
 - Entity-Nodes, gemischte Node-Arten und Nodes unterschiedlicher Entities verwenden keine gemeinsame Detailfeldprojektion. Die feste strukturelle Featuremenge besteht aus Node-Art, Owner-Anzeigename sofern vorhanden, Anzahl direkter Links, Anzahl Attachment-Metadaten, Notiz-Vorhandensein und Anzahl autoritativer Detailwerte. Die strukturelle `GetNodeTool`-Action verwendet `includeNotes: false` und Related-Limit `0`; Notiz-, Linknotiz- und Attachment-Inhalte gelangen damit nicht in Output oder Evidence.
@@ -1011,7 +1051,7 @@ Execution-Kernel:
 - Fehler und Cancellation entfernen Evidence, Presentation, Ledger-Einträge und gestagte Artifacts und setzen die Conversation-Transaktion auf ihren Base-State zurück. Scheitert der äußere Commit nach erfolgreichem Artifact-Commit, entfernt der Kernel die bereits committed wirkenden Session-Artefakte.
 - Erfolgreicher Commit behält ausschließlich die finalen Session-Artefakte; temporäre Evidence-, Presentation-, Ledger-, Staging- und Conversation-Transaktionszustände werden anschließend bereinigt.
 - Single Field behält Node Identity plus exakt ein Feld, Limit `1`, denselben Authoritative-Fact-Extractor und vollständig appseitiges Rendering. Collections behalten das vollständige `GraphChatResultWindow`, Truncation und das bestehende Result-Artefakt.
-- Node Details behalten den exakten Node-Scope und das zentrale Related-Limit; Same-Entity-Comparisons verwenden ausschließlich die validierte Selection Query; Structural Comparisons verwenden ausschließlich `GetNodeTool`-Strukturdaten; Graph State verlangt den exakten Entire-Graph-Scope.
+- Node Details behalten den exakten Node-Scope und die vier zentralen Profilgrenzen; Same-Entity-Comparisons verwenden ausschließlich die validierte Selection Query; Structural Comparisons verwenden ausschließlich `GetNodeTool`-Strukturdaten; Graph State verlangt den exakten Entire-Graph-Scope.
 - Explizit semantisch `.unrecognized` beziehungsweise `.openEnded` klassifizierte Fragen erreichen unverändert die Provider-Pipeline; lokale Execution erzeugt weder Answer-Provider-Session noch modellbestimmten Tool Call oder Modelltext.
 
 Bewusste Grenze:
@@ -1648,6 +1688,8 @@ Die realistischen Obergrenzen sind **UNKNOWN U7** und müssen produktseitig fest
 - Appseitige Query-Intent-Compilation für alle sieben Feldtypen, deutsche/englische Zahlen-, Boolean- und Datumswerte, Operator-Matrix, Choice-Bindung, Field-Entity-Mismatch, gleichnamige Feld-Clarification, Node-Identity-Projektion, Sortierung, Count-/Group-Artefakte, vollständige Group References und evidence-gebundene Limits.
 - In-Memory-End-to-End-Pfade für offene Projekte nach Fälligkeitsdatum, Count, Group Count, sichere Gruppenfortsetzung und überfälliges Refinement als exakte Schnittmenge; ausgeschlossene und graphfremde Nodes bleiben ausgeschlossen, erfolgreiche Compilation startet keinen freien Provider und Cancellation committed nichts.
 - In-Memory-End-to-End-Pfade für eindeutige und mehrdeutige Node Details, Clarification-Auswahl, Last Node, Ordinal, Cross-Graph-Ablehnung, appseitiges Related-Limit und ausgeschlossene Attachment-Inhalte.
+- Repository-Profile für Entity und Attribute aus Medizin, Bibliothek und IT-Operations: vollständige kleine Bereiche, getrennte Detail-/Incoming-/Outgoing-/Attachment-Windows, Konkurrenzfreiheit der Bereiche, korrekte Gegenknoten und Richtungen, stabile Tie-Breaker, leere Bereiche, Detail-Integrity, Metadaten ohne Binärinhalt und Cancellation während des mehrteiligen Loads.
+- Link-Notiz-Authority für den Wert „3× täglich“ einschließlich Endpoint-/Richtungsbindung, Änderung, Entfernung, Link-Löschung und identischer Link-ID in einem anderen Graphen.
 - Same-Entity-Comparison mit expliziten Feldern, gepinnter/default-sortierter Featureauswahl, autoritativen typisierten Values, `.missing`, Integrity-/Evidence-Ausschluss, graphgescopter Navigation, `lastComparison`, `lastCompared` und Comparison-`CURRENT`.
 - Structural Comparison über gemischte Node-Arten ausschließlich aus Node-Art, Owner, direkten Links, Attachment-Metadatenzahl, Notiz-Vorhandensein und autoritativer Detailwertzahl; Notiz-/Attachment-Inhalte bleiben ausgeschlossen.
 - Graph-State-Artifact-Auswahl für Overview, Counts, Structure und Health sowie End-to-End-Graph-Health mit Metric/Health Finding, appseitigem Hub-Limit und verhindertem Scope-Widening.

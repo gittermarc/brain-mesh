@@ -65,6 +65,10 @@ nonisolated struct GraphChatIntentLimitPolicy:
     let defaultComparisonFeatureCount: Int
     let nodeDetailRelatedItemCount: Int
     let maximumNodeRelatedItemCount: Int
+    let nodeProfileDetailValueCount: Int
+    let nodeProfileIncomingConnectionCount: Int
+    let nodeProfileOutgoingConnectionCount: Int
+    let nodeProfileAttachmentCount: Int
     let maximumNeighborCount: Int
     let structuralRelatedItemCount: Int
     let graphHubCount: Int
@@ -100,6 +104,10 @@ nonisolated struct GraphChatIntentLimitPolicy:
         defaultComparisonFeatureCount: 6,
         nodeDetailRelatedItemCount: 20,
         maximumNodeRelatedItemCount: 30,
+        nodeProfileDetailValueCount: 20,
+        nodeProfileIncomingConnectionCount: 20,
+        nodeProfileOutgoingConnectionCount: 20,
+        nodeProfileAttachmentCount: 20,
         maximumNeighborCount: 30,
         structuralRelatedItemCount: 0,
         graphHubCount: 10,
@@ -150,6 +158,10 @@ nonisolated struct GraphChatIntentLimitPolicy:
         defaultComparisonFeatureCount: Int,
         nodeDetailRelatedItemCount: Int,
         maximumNodeRelatedItemCount: Int,
+        nodeProfileDetailValueCount: Int,
+        nodeProfileIncomingConnectionCount: Int,
+        nodeProfileOutgoingConnectionCount: Int,
+        nodeProfileAttachmentCount: Int,
         maximumNeighborCount: Int,
         structuralRelatedItemCount: Int,
         graphHubCount: Int,
@@ -202,6 +214,26 @@ nonisolated struct GraphChatIntentLimitPolicy:
         precondition(
             (0...maximumNodeRelatedItemCount)
                 .contains(nodeDetailRelatedItemCount)
+        )
+        precondition(
+            (0...maximumNodeRelatedItemCount)
+                .contains(nodeProfileDetailValueCount)
+        )
+        precondition(
+            (0...maximumNodeRelatedItemCount)
+                .contains(
+                    nodeProfileIncomingConnectionCount
+                )
+        )
+        precondition(
+            (0...maximumNodeRelatedItemCount)
+                .contains(
+                    nodeProfileOutgoingConnectionCount
+                )
+        )
+        precondition(
+            (0...maximumNodeRelatedItemCount)
+                .contains(nodeProfileAttachmentCount)
         )
         precondition(
             (0...maximumNodeRelatedItemCount)
@@ -284,6 +316,14 @@ nonisolated struct GraphChatIntentLimitPolicy:
             nodeDetailRelatedItemCount
         self.maximumNodeRelatedItemCount =
             maximumNodeRelatedItemCount
+        self.nodeProfileDetailValueCount =
+            nodeProfileDetailValueCount
+        self.nodeProfileIncomingConnectionCount =
+            nodeProfileIncomingConnectionCount
+        self.nodeProfileOutgoingConnectionCount =
+            nodeProfileOutgoingConnectionCount
+        self.nodeProfileAttachmentCount =
+            nodeProfileAttachmentCount
         self.maximumNeighborCount =
             maximumNeighborCount
         self.structuralRelatedItemCount =
@@ -319,5 +359,41 @@ nonisolated struct GraphChatIntentLimitPolicy:
             standardInterpreterContext
         self.compactInterpreterContext =
             compactInterpreterContext
+    }
+
+    var defaultNodeProfileLimits:
+        GraphNodeProfileLimits
+    {
+        nodeProfileLimits(
+            compatibilityLimit:
+                nodeDetailRelatedItemCount
+        )
+    }
+
+    func nodeProfileLimits(
+        compatibilityLimit: Int
+    ) -> GraphNodeProfileLimits {
+        let normalizedLimit = min(
+            max(0, compatibilityLimit),
+            maximumNodeRelatedItemCount
+        )
+        return GraphNodeProfileLimits(
+            detailValueLimit: min(
+                normalizedLimit,
+                nodeProfileDetailValueCount
+            ),
+            incomingConnectionLimit: min(
+                normalizedLimit,
+                nodeProfileIncomingConnectionCount
+            ),
+            outgoingConnectionLimit: min(
+                normalizedLimit,
+                nodeProfileOutgoingConnectionCount
+            ),
+            attachmentLimit: min(
+                normalizedLimit,
+                nodeProfileAttachmentCount
+            )
+        )
     }
 }

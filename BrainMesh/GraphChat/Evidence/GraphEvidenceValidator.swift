@@ -38,6 +38,7 @@ actor GraphEvidenceSourceValidator: GraphEvidenceValidating {
         let relatedNodes: Set<NodeRefKey>
         let ownerEntityIDs: Set<UUID>
         let authoritativeFieldValue: GraphEvidenceFieldValue?
+        let authoritativeLink: GraphLinkDTO?
     }
 
     private let repository: any GraphEvidenceSourceReading
@@ -109,7 +110,8 @@ actor GraphEvidenceSourceValidator: GraphEvidenceValidating {
                 attachmentID: nil,
                 relatedNodes: [],
                 ownerEntityIDs: [],
-                authoritativeFieldValue: nil
+                authoritativeFieldValue: nil,
+                authoritativeLink: nil
             )
 
         case .entity:
@@ -126,7 +128,8 @@ actor GraphEvidenceSourceValidator: GraphEvidenceValidating {
                 attachmentID: nil,
                 relatedNodes: [entity.nodeKey],
                 ownerEntityIDs: [entity.id],
-                authoritativeFieldValue: nil
+                authoritativeFieldValue: nil,
+                authoritativeLink: nil
             )
 
         case .attribute:
@@ -149,7 +152,8 @@ actor GraphEvidenceSourceValidator: GraphEvidenceValidating {
                 attachmentID: nil,
                 relatedNodes: nodes,
                 ownerEntityIDs: owners,
-                authoritativeFieldValue: nil
+                authoritativeFieldValue: nil,
+                authoritativeLink: nil
             )
 
         case .detailField:
@@ -167,7 +171,8 @@ actor GraphEvidenceSourceValidator: GraphEvidenceValidating {
                 attachmentID: nil,
                 relatedNodes: [NodeRefKey(kind: .entity, id: field.entityID)],
                 ownerEntityIDs: [field.entityID],
-                authoritativeFieldValue: nil
+                authoritativeFieldValue: nil,
+                authoritativeLink: nil
             )
 
         case .detailValue:
@@ -200,7 +205,8 @@ actor GraphEvidenceSourceValidator: GraphEvidenceValidating {
                     fieldName: field.name,
                     value: value.value.graphEvidenceValue,
                     unit: field.unit
-                )
+                ),
+                authoritativeLink: nil
             )
 
         case .link:
@@ -209,7 +215,23 @@ actor GraphEvidenceSourceValidator: GraphEvidenceValidating {
             else {
                 return nil
             }
-            let nodes = Set([link.sourceNodeKey, link.targetNodeKey].compactMap { $0 })
+            guard let source = link.sourceNodeKey,
+                  let target = link.targetNodeKey,
+                  try await nodeExists(
+                    source,
+                    graphScope: graphScope
+                  ),
+                  try await nodeExists(
+                    target,
+                    graphScope: graphScope
+                  )
+            else {
+                return nil
+            }
+            let nodes: Set<NodeRefKey> = [
+                source,
+                target,
+            ]
             let owners = try await ownerEntityIDs(for: nodes, graphScope: graphScope)
             return ResolvedSource(
                 graphScope: graphScope,
@@ -219,7 +241,8 @@ actor GraphEvidenceSourceValidator: GraphEvidenceValidating {
                 attachmentID: nil,
                 relatedNodes: nodes,
                 ownerEntityIDs: owners,
-                authoritativeFieldValue: nil
+                authoritativeFieldValue: nil,
+                authoritativeLink: link
             )
 
         case .attachment:
@@ -239,7 +262,8 @@ actor GraphEvidenceSourceValidator: GraphEvidenceValidating {
                 attachmentID: attachment.id,
                 relatedNodes: [ownerNode],
                 ownerEntityIDs: owners,
-                authoritativeFieldValue: nil
+                authoritativeFieldValue: nil,
+                authoritativeLink: nil
             )
         }
     }
@@ -248,6 +272,39 @@ actor GraphEvidenceSourceValidator: GraphEvidenceValidating {
         _ evidence: GraphEvidence,
         resolved: ResolvedSource
     ) -> Bool {
+        let noteValues = evidence.fieldValues
+            .filter {
+                $0.fieldID == nil
+                    && $0.fieldName
+                        == "Link-Notiz"
+            }
+        if noteValues.isEmpty == false,
+            evidence.sourceReference
+                .linkBinding == nil
+        {
+            return false
+        }
+        if let binding =
+            evidence.sourceReference.linkBinding
+        {
+            guard
+                let link = resolved.authoritativeLink,
+                link.id == binding.linkID,
+                link.note == binding.note
+            else {
+                return false
+            }
+            if noteValues.isEmpty == false {
+                guard
+                    let note = binding.note,
+                    noteValues.count == 1,
+                    noteValues[0].value
+                        == .text(note)
+                else {
+                    return false
+                }
+            }
+        }
         guard let authoritative = resolved.authoritativeFieldValue else {
             return true
         }
@@ -300,6 +357,38 @@ actor GraphEvidenceSourceValidator: GraphEvidenceValidating {
         if let attachmentID = reference.attachmentID,
            resolved.attachmentID != attachmentID {
             return false
+        }
+        if let binding = reference.linkBinding {
+            guard
+                resolved.sourceKind == .link,
+                let link = resolved.authoritativeLink,
+                reference.sourceID == binding.linkID,
+                reference.linkID == binding.linkID,
+                link.id == binding.linkID,
+                link.sourceNodeKey
+                    == binding.source.nodeKey,
+                link.targetNodeKey
+                    == binding.target.nodeKey,
+                link.note == binding.note
+            else {
+                return false
+            }
+            switch binding.direction {
+            case .incoming:
+                guard
+                    reference.node?.nodeKey
+                        == binding.target.nodeKey
+                else {
+                    return false
+                }
+            case .outgoing:
+                guard
+                    reference.node?.nodeKey
+                        == binding.source.nodeKey
+                else {
+                    return false
+                }
+            }
         }
         if let linkID = reference.linkID {
             if resolved.sourceKind == .link, linkID != resolved.sourceID {
@@ -368,6 +457,24 @@ actor GraphEvidenceSourceValidator: GraphEvidenceValidating {
             }
         }
         return result
+    }
+
+    private func nodeExists(
+        _ node: NodeRefKey,
+        graphScope: GraphScope
+    ) async throws -> Bool {
+        switch node.kind {
+        case .entity:
+            return try await repository.entity(
+                id: node.id,
+                in: graphScope
+            ) != nil
+        case .attribute:
+            return try await repository.attribute(
+                id: node.id,
+                in: graphScope
+            ) != nil
+        }
     }
 }
 

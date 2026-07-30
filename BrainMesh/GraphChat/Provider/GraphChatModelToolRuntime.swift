@@ -313,10 +313,9 @@ actor GraphChatModelToolRuntime: GraphChatModelToolRunning {
             return try await searchGraph(query: query, limit: limit)
         case .queryDetailValues(let queryRequest):
             return try await queryDetailValues(queryRequest)
-        case .getNode(let nodeAlias, let relatedLimit):
+        case .getNode(let nodeAlias, _):
             return try await getNode(
-                alias: nodeAlias,
-                relatedLimit: relatedLimit
+                alias: nodeAlias
             )
         case .getNeighbors(let nodeAlias, let limit):
             return try await getNeighbors(alias: nodeAlias, limit: limit)
@@ -541,12 +540,17 @@ actor GraphChatModelToolRuntime: GraphChatModelToolRunning {
     }
 
     private func getNode(
-        alias: String,
-        relatedLimit: Int
+        alias: String
     ) async throws -> GraphChatModelToolResponse {
         let node = try await resolveNodeAlias(alias)
         let result = try await getNodeTool.execute(
-            GetNodeInput(node: node, relatedLimit: relatedLimit),
+            GetNodeInput(
+                node: node,
+                relatedLimit:
+                    GraphChatIntentLimitPolicy
+                        .default
+                        .nodeDetailRelatedItemCount
+            ),
             context: context
         )
         try await register(result.evidence)

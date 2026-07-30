@@ -181,6 +181,42 @@ struct GraphChatToolsTests {
         #expect(output.attachmentMetadataCount == 1)
         #expect(output.authoritativeDetailValueCount == 1)
         #expect(output.structureEvidenceID != nil)
+        #expect(
+            output.detailValueWindow.totalCount == 1
+                && output.detailValueWindow
+                    .returnedCount == 1
+                && output.detailValueWindow.limit == 10
+                && output.detailValueWindow
+                    .limitReached == false
+        )
+        #expect(
+            output.attachmentWindow.totalCount == 1
+                && output.attachmentWindow
+                    .returnedCount == 1
+                && output.attachmentWindow.limit == 10
+                && output.attachmentWindow
+                    .limitReached == false
+        )
+        #expect(
+            output.incomingLinkWindow
+                .totalCount == 0
+                && output.incomingLinkWindow
+                    .returnedCount == 0
+                && output.incomingLinkWindow
+                    .limit == 10
+                && output.incomingLinkWindow
+                    .limitReached == false
+        )
+        #expect(
+            output.outgoingLinkWindow
+                .totalCount == 0
+                && output.outgoingLinkWindow
+                    .returnedCount == 0
+                && output.outgoingLinkWindow
+                    .limit == 10
+                && output.outgoingLinkWindow
+                    .limitReached == false
+        )
         #expect(String(describing: output).contains("BINARY-CONTENT-MUST-STAY-UNREAD") == false)
         #expect(result.evidence.flatMap(\.fieldValues).contains { field in
             if case .text("BINARY-CONTENT-MUST-STAY-UNREAD") = field.value {
@@ -210,6 +246,18 @@ struct GraphChatToolsTests {
         #expect(zeroLimitOutput.hasNotes)
         #expect(zeroLimitOutput.attachments.isEmpty)
         #expect(zeroLimitOutput.attachmentMetadataCount == 1)
+        #expect(
+            zeroLimitOutput.attachmentWindow
+                .totalCount == 1
+        )
+        #expect(
+            zeroLimitOutput.attachmentWindow
+                .returnedCount == 0
+        )
+        #expect(
+            zeroLimitOutput.attachmentWindow
+                .limitSources == [.tool]
+        )
         #expect(
             zeroLimitResult.evidence
                 .flatMap(\.fieldValues)

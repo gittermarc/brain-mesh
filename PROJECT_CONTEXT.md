@@ -1,6 +1,6 @@
 # BrainMesh – Project Context
 
-> Start Here für neue Entwickler:innen. Stand: GRAPH-CHAT-CORE-GROUNDING-1 nach INTENT-COMPILER-7, mit zentralem app-owned Mention Grounding, produktivem Typed-Planner-Cutover, gebündelter Limit-Policy, begrenzter Interpreter-Recovery und providerfreier lokaler Ausführung aller unterstützten Intent-Familien.
+> Start Here für neue Entwickler:innen. Stand: GRAPH-CHAT-NODE-PROFILE-DOMAIN-1 nach GRAPH-CHAT-CORE-GROUNDING-1 und INTENT-COMPILER-7, mit autoritativem app-owned Node-Profil, zentralem Mention Grounding, produktivem Typed-Planner-Cutover, gebündelter Limit-Policy, begrenzter Interpreter-Recovery und providerfreier lokaler Ausführung aller unterstützten Intent-Familien.
 
 ## TL;DR
 
@@ -45,6 +45,7 @@ BrainMesh ist eine native SwiftUI-App für iPhone und iPad, in der Nutzer:innen 
 - **Two-Stage Typed Planner**: Verbindliche Reihenfolge aus Foundational Fast Path und anschließendem toolfreien Semantic Interpreter. Nach der Draft-Validierung besitzt ausschließlich die App Identitäten, Scope, Tool, Query, Operator, typisierte Werte, Projektion, Aggregation, Sortierung, Limits, Evidence, Artifacts, Interpretation und finalen Fachtext.
 - **Typed Planner Cutover Policy**: `GraphChatTypedPlannerCutoverPolicy` klassifiziert Find Nodes, Entity List, Filtered List, Count, Group Count, Refinement, Node Details, Compare Nodes und Inspect Graph State als vollständig lokale Familien. Ein teilweise akzeptierter Draft darf nie in freie Tool- oder Query-Improvisation fallen.
 - **Intent Limit Policy**: `GraphChatIntentLimitPolicy` ist die gemeinsame appseitige Quelle für Search-/Query-/Collection-/Group-Limits, Filter, Projektion, Comparison, Related Items, Graph Hubs, Clarification, Interpreter-Strings/-Arrays sowie Standard- und Compact-Kontextprofile.
+- **Graph Node Profile**: `GraphNodeProfile` ist das vollständige value-only, `Hashable`- und `Sendable`-fähige Read-Modell für genau einen graphgescopten Entity- oder Attribute-Node. Es trennt autoritative Detailwerte, eingehende Verbindungen, ausgehende Verbindungen und Attachment-Metadaten samt jeweils eigenem appseitigem Limit und exaktem Result Window. SwiftData-Modelle und Attachment-Inhalte verlassen den Repository-Context nicht.
 - **Bounded Interpreter Recovery**: Ein normaler begrenzter Interpreter-Request erhält ausschließlich bei `contextWindowExceeded` genau einen noch kompakteren Retry im selben Request-/Cancellation-Lifecycle. Nach einem gelieferten Draft gibt es keinen Retry. Schemawidrige oder manipulierte Drafts scheitern geschlossen; technische Nichtverfügbarkeit darf deterministisch den Legacy-Provider öffnen.
 - **Query Intent Compiler**: Zentrale appseitige Trust Boundary nach der Draft-Validierung. Sie löst Entity und Felder gegen das vollständige aktive Schema auf, wählt ausschließlich typkompatible Operatoren, parst lokalisierte Werte deterministisch und erzeugt Scope, Projektion, Aggregation, Limits, Kardinalität und stabile Sortierung. Jeder Plan durchläuft anschließend erneut `GraphQueryPlanValidator` und `GraphChatScopeAuthorization`.
 - **Advanced Intent Compiler**: Appseitige Trust Boundary für Node Details, Compare Nodes und Inspect Graph State. Sie löst und revalidiert Nodes aus Anzeigenamen, `CURRENT`, Ordinal, Last Node, Last Compared oder Clarification, bestimmt `GetNodeTool` beziehungsweise `GraphStatsTool`, Comparison-Art, Features, Selection Query, Limits, Artifact-Typ und Trusted Events. Das Modell kann keine Node-ID, Toolwahl, technische Comparison-Feature-ID oder Limits setzen.
@@ -87,7 +88,7 @@ BrainMesh ist eine native SwiftUI-App für iPhone und iPad, in der Nutzer:innen 
 
 ### Read Models, Index und Caches
 
-- `BrainMesh/DataAccess/GraphReadRepository.swift` erzeugt graphweite Value-Snapshots.
+- `BrainMesh/DataAccess/GraphReadRepository.swift` erzeugt graphweite Value-Snapshots; `GraphReadRepository+NodeProfile.swift` implementiert den engen `GraphNodeProfileReading`-Vertrag für vollständige, unabhängig begrenzte Node-Profile.
 - `BrainMesh/Search/Index/` verwaltet SQLite-Schema, Dokumente, Manifeste und Reconciliation.
 - `BrainMesh/Mainscreen/EntitiesHome/` besitzt Loader und abgeleitete Home-Caches.
 - `BrainMesh/Stats/` berechnet Graphstatistiken und Health-Ergebnisse.
@@ -115,7 +116,7 @@ BrainMesh ist eine native SwiftUI-App für iPhone und iPad, in der Nutzer:innen 
 - Akzeptierter Entity-List-Draft → vollständige appseitige Entity-Auflösung und Ambiguitätsbehandlung → feste lokale Query-Action ohne erfundene Filter, mit Node Identity, stabiler Namenssortierung, deterministischem Tie-Breaker und zentraler Default-/Maximum-Limit-Policy. `ResultWindow` und Truncation werden bis in Artifact und lokale Antwort erhalten.
 - Akzeptierter Query-Draft → `GraphChatQueryIntentCompiler` → appseitig aufgelöste Entity-/Feld-IDs und -Aliasse, typisierter Filterwert, Sortierung, Node-Identity-Projektion plus explizite Felder, `.count` oder `.groupCount(field)`, evidence-gebundenes Limit und validierter Local-Action-Vertrag. Mehrdeutige gleichnamige Felder erzeugen eine fachliche Pending Clarification ohne technische IDs.
 - Akzeptiertes Refinement → ausschließlich frisch revalidierter `GraphChatResolvedConversationScope` mit konkreter Entity und konkreten Attribute-Nodes → exakter Node-/Selection-Scope, geerbte Quellfilter plus neue AND-Filter und nur bei expliziter Absicht ersetzte Sortierung. Ein Refinement kann weder zuvor ausgeschlossene noch graphfremde Nodes zurückholen.
-- Akzeptierter Node-Details-Draft → genau ein erneut autorisierter `NodeRefKey` → feste `GetNodeTool`-Action mit appseitigem Related-Limit `20` → Metadaten-only Attachments, Evidence, Node-Detail-Artifact, `nodeResolved`, Result-/`CURRENT`-Bindung und lokaler Abschluss. Gleichnamige Nodes werden geklärt; ein Node außerhalb des Chat-Scopes wird nicht geladen.
+- Akzeptierter Node-Details-Draft → genau ein erneut autorisierter `NodeRefKey` → feste `GetNodeTool`-Action → ein autoritatives `GraphNodeProfile` mit unabhängig appseitig begrenzten Detailwerten, eingehenden Links, ausgehenden Links und Metadaten-only Attachments → Evidence, Node-Detail-Artifact, `nodeResolved`, Result-/`CURRENT`-Bindung und lokaler Abschluss. Gleichnamige Nodes werden geklärt; ein Node außerhalb des Chat-Scopes wird nicht geladen.
 - Akzeptierter Comparison-Draft → `GraphChatComparisonPlan` mit höchstens `8` Nodes und `8` Features. Gleichartige Attributes derselben Entity verwenden eine Selection Query mit Node Identity und expliziten oder deterministischen Defaultfeldern. Andere Node-Kombinationen verwenden ausschließlich gemeinsame Strukturmerkmale; Notizinhalte werden nicht in Output oder Evidence transportiert und nicht semantisch analysiert, Attachment-Inhalte werden gar nicht geladen.
 - Akzeptierter Graph-State-Draft → appseitig gewählter Aspekt `overview`, `counts`, `structure` oder `health` → feste `GraphStatsTool`-Action mit Hub-Limit `10` und erlaubter Metric-/Ranking-/Health-Finding-Auswahl. Der Pfad ist nur bei exakt `.entireGraph` zulässig und erweitert Entity-, Node- oder Selection-Chats niemals.
 - Erfolgreiche semantische Find-/Query-/Node-/Comparison-/Graph-State-Turns verwenden den gemeinsamen Local Intent Execution Kernel, lokale Tools, Evidence Registry, Artifact Factory, Primary Result Ledger, deterministischen Answer Fallback, Presentation Firewall und Conversation Reducer. Es entsteht weder eine freie Answer-Provider-Session noch ein zweiter Modellaufruf.
@@ -125,7 +126,7 @@ BrainMesh ist eine native SwiftUI-App für iPhone und iPad, in der Nutzer:innen 
 - Nur explizite `.unrecognized`-/`.openEnded`-Drafts oder eine eindeutig technische Interpreter-Nichtverfügbarkeit nach höchstens einem Compact-Retry erreichen die unveränderte freie Provider-Pipeline. Ein erkannter, aber nicht sicher auflösbarer, schemawidriger oder manipulierter Draft wird geklärt oder abgelehnt und niemals als freie Tool-Improvisation fortgesetzt.
 - Foundational Single-Field → exakt ein graph-/chat-gescopter Attribute-Node, Node Identity plus exakt ein validiertes Feld, appseitiges Limit `1`, erneute Query-Plan-/Scope-Validierung und Ausführung über die bestehende Query Engine. Der Erfolg wird als typisierte einzeilige Table-Artefaktprojektion transportiert. Ein Suchtreffer allein ist nie Detailwert-Autorität.
 - Foundational Entity Collection → unveränderter autorisierter Entity-/Node-/Selection-Scope, Node-Identity-Projektion, stabile Namenssortierung und `GraphQueryPlanLimits.maximumResultLimit`. „Alle“ bedeutet alle autorisierten Ergebnisse bis zu diesem gemeinsamen Sicherheitslimit; Truncation bleibt im Result-Artefakt und in der lokalisierten Mindestantwort sichtbar.
-- Foundational Node Details → exakt ein durch den Mention Resolver gebundener und autorisierter Node, fester Node-Scope und die bestehende lokale `GetNodeTool`-Action mit appseitigem Related-Limit. Der Turn läuft ohne Interpreter und Answer Provider durch denselben Typed-Intent-, Kernel-, Evidence-, Artifact-, Finalizer- und Commit-Lifecycle.
+- Foundational Node Details → exakt ein durch den Mention Resolver gebundener und autorisierter Node, fester Node-Scope und die bestehende lokale `GetNodeTool`-Action auf Basis desselben autoritativen Node-Profils. Der Turn läuft ohne Interpreter und Answer Provider durch denselben Typed-Intent-, Kernel-, Evidence-, Artifact-, Finalizer- und Commit-Lifecycle.
 - Mehrdeutiger Foundational Intent → bestehende graph-/session-/turngebundene Pending Clarification mit ausschließlich fachlichen Anzeigenamen. Die Auswahl setzt dieselbe Originalfrage fort und wird gegen Schema, Scope und Quell-Turn erneut validiert.
 - Modell-Tool-Call → typisierte Conversation-Scope-Auflösung → Query-Plan-Validierung; ein Modell-Entity-Alias ist bei einer homogenen revalidierten Conversation-Referenz nur ein untrusted Hint.
 - Semantisch repair-fähiger Tool-Call → strukturiertes validiertes Repair-Ergebnis → höchstens ein vollständiger erneuter Tool-Call → unveränderte Validatoren und Tool-Budgets.
@@ -159,7 +160,7 @@ Content-free Planner-Observability unterscheidet Foundational Fast Path, Semanti
 
 Bewusst frei beziehungsweise nicht als Typed Intent unterstützt bleiben allgemeine Erklärungen, Synthesen und Bewertungen, Multi-Hop-Analysen, Minimum/Maximum und andere nicht definierte Aggregationen, Attachment-Inhaltsanalyse sowie Schreib- oder Mutationswünsche. Echte offene read-only Fragen dürfen weiterhin die bestehende evidenz- und presentation-gesicherte Legacy-Pipeline verwenden; Graph-Writes bleiben grundsätzlich ausgeschlossen.
 
-Die gebündelte `GraphChatTypedIntentPlannerAcceptanceTests`-Suite verknüpft 18 reale In-Memory-Szenarien für alle Familien, Fast Path, Clarification, Interpretation, Correction, Draft-Manipulation, Legacy-Fallback, Sicherheitsbindungen, Cancellation und große Schemas/Compact-Retry. Ergänzende Grounding-Suites verwenden fachlich getrennte Medizin-, Bibliotheks- und IT-Operations-Fixtures und prüfen Deutsch/Englisch, Unicode, Umlaute/ß, Flexion, konservative Tippfehler, Mehrdeutigkeit, vollständige Kataloge jenseits der Promptgrenzen sowie Entity-/Node-/Selection- und Cross-Graph-Scope. Die filesystem-synchronisierten Xcode-Gruppen ordnen neue Produktions-, Ressourcen- und Testdateien automatisch dem korrekten Target zu.
+Die gebündelte `GraphChatTypedIntentPlannerAcceptanceTests`-Suite verknüpft 18 reale In-Memory-Szenarien für alle Familien, Fast Path, Clarification, Interpretation, Correction, Draft-Manipulation, Legacy-Fallback, Sicherheitsbindungen, Cancellation und große Schemas/Compact-Retry. Ergänzende Grounding-Suites verwenden fachlich getrennte Medizin-, Bibliotheks- und IT-Operations-Fixtures und prüfen Deutsch/Englisch, Unicode, Umlaute/ß, Flexion, konservative Tippfehler, Mehrdeutigkeit, vollständige Kataloge jenseits der Promptgrenzen sowie Entity-/Node-/Selection- und Cross-Graph-Scope. `GraphNodeProfileRepositoryTests` und `GraphChatLinkNoteAuthorityTests` prüfen vollständige kleine Entity-/Attribute-Profile, unabhängige Result Windows, stabile Reihenfolge, Detail-Integrity, Metadaten-only Attachments, Cancellation sowie wertgebundene Link-Notiz-Revalidierung in denselben drei Fachdomänen. Die filesystem-synchronisierten Xcode-Gruppen ordnen neue Produktions-, Ressourcen- und Testdateien automatisch dem korrekten Target zu.
 
 ## Folder Map
 
@@ -302,6 +303,22 @@ Duplicate-Resolution:
 - Der Query-Source-Snapshot transportiert konfliktbehaftete Authority-Keys separat von den autoritativen Werten. So bleibt ein ungelöster Konflikt bis zur Single-Fact-Entscheidung sichtbar, obwohl kein willkürlich gewählter Wert in den Query-Zeilen erscheint.
 - Ein bewusster Save im Detail-Editor setzt den gewählten typisierten Wert und konsolidiert alle reparierbaren Records desselben Keys in derselben SwiftData-Transaktion auf einen Record. Ein Save-Fehler rollt die gesamte Konsolidierung zurück.
 - Es wird bewusst kein CloudKit-problematisches `@Attribute(.unique)` verwendet.
+
+### Autoritatives Node-Profil
+
+`BrainMesh/DataAccess/GraphNodeProfile.swift` definiert den engen `GraphNodeProfileReading`-Vertrag und sämtliche value-only Profiltypen. Die produktive Implementierung liegt in `BrainMesh/DataAccess/GraphReadRepository+NodeProfile.swift` und verwendet für einen Request genau einen repository-eigenen `ModelContext`.
+
+Invarianten:
+
+- Entity- und Attribute-Identität werden ausschließlich per `GraphScope + NodeRefKey` aufgelöst.
+- Attribute transportieren ihren graphgescopten Entity-Owner separat von eigenem Namen und qualifiziertem Anzeigenamen.
+- Detailwerte werden ausschließlich über die bestehende `DetailDataIntegrityPolicy` autorisiert und nach Feldreihenfolge, normalisiertem Feldnamen, Feld-ID und Value-ID stabil sortiert.
+- Eingehende und ausgehende Links bleiben getrennt. Jeder Profileintrag bindet Link-ID, Richtung, beide Endpunkte sowie einen gegen den aktuellen Graphen aufgelösten Gegenknoten mit Kind, Owner und Anzeigenamen. Verwaiste, typwidrige oder graphfremde Endpunkte werden nicht als Verbindung geliefert.
+- Detailwerte, eingehende Links, ausgehende Links und Attachment-Metadaten besitzen unabhängige Limits aus `GraphChatIntentLimitPolicy`. Jedes `GraphNodeProfileResultWindow` führt `totalCount`, `returnedCount`, `limit`, `limitReached` und `.appPolicy` als Limitquelle; es gibt kein stilles Abschneiden und kein gemeinsames Restbudget.
+- Attachments werden ausschließlich als `GraphAttachmentMetadataDTO` ohne `fileData`, `localPath`, Preview-, Bild- oder Dateiinhalte transportiert.
+- `GetNodeTool` adaptiert das Profil verlustfrei in die bestehende öffentliche Node-Details-Struktur und erhält je Bereich ein eigenes Chat-Result-Window. Der Legacy-Foundation-Models-Toolvertrag darf kein Bereichslimit mehr setzen; produktive Provider-Aufrufe verwenden die zentrale App-Policy.
+- Das Call-/Result-Budget zählt ein Node-Profil als ein Root-Ergebnis. Die vier unabhängigen Inhaltsbereiche bleiben durch ihre zentralen Profilgrenzen und zusätzlich durch das unveränderte Evidence-Budget begrenzt, ohne wieder ein gemeinsames Restbudget einzuführen.
+- Produktionsseitige Link-Evidence trägt zusätzlich ein `GraphSourceLinkBinding` mit Graph, Link-ID, Quell- und Zielnode, Richtung und exaktem optionalem Notizwert. Live-Revalidierung vergleicht diese Bindung mit dem aktuellen graphgescopten Repository-Wert. Änderung, Entfernung, Löschen oder Cross-Graph-Auflösung invalidieren die alte Evidence.
 
 ## Sync / Storage
 
@@ -497,6 +514,8 @@ Duplicate-Resolution:
 - Node-Details-, Comparison- und Graph-State-Drafts nur über `GraphChatAdvancedIntentCompiler` und `GraphChatAdvancedIntentPolicy` in technische Actions überführen.
 - Same-Entity-Comparisons nur aus autoritativen Query-Zellen mit Evidence pro Wert bauen; fehlende Werte bleiben `.missing`, Integrity-Konflikte und Werte ohne Evidence werden entfernt.
 - Default-Comparison-Felder zuerst nach `isPinned`, dann `sortIndex`, normalisiertem Anzeigenamen und ausschließlich internem UUID-Tie-Breaker sortieren; maximal sechs Defaultfelder verwenden.
+- Vollständige Node-Beschreibungen ausschließlich über `GraphNodeProfileReading` laden; die vier Profilbereiche getrennt begrenzen und ihre Result Windows bis zum Tool-Adapter erhalten.
+- Link-Notizen nur mit einer vollständigen `GraphSourceLinkBinding` belegen und vor Finalisierung gegen Endpunkte, Richtung und aktuellen optionalen Notizwert revalidieren.
 
 ### Don’t
 
@@ -513,6 +532,7 @@ Duplicate-Resolution:
 - Für gemischte Node-Arten oder unterschiedliche Entities keine gemeinsamen Detailfelder erfinden; nur appseitig belegte Strukturmerkmale vergleichen.
 - `GraphStatsTool` niemals außerhalb des exakten Entire-Graph-Chat-Scopes ausführen.
 - Notiz- oder Attachment-Inhalte niemals für strukturelle Vergleiche analysieren.
+- Detailwerte, eingehende Links, ausgehende Links und Attachments eines Node-Profils niemals um ein gemeinsames Restlimit konkurrieren lassen.
 - `imagePath`/`localPath` nicht als autoritative Daten behandeln.
 - Keine unbegrenzten UI-Listen oder graphweiten Snapshots ohne bewusstes Limit einführen.
 - CloudKit-Accountstatus nicht als Sync-Health interpretieren.

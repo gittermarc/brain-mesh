@@ -291,23 +291,12 @@ private nonisolated struct FoundationQueryDetailValuesTool: Tool {
 
 private nonisolated struct FoundationGetNodeTool: Tool {
     let name = "getNode"
-    let description = "Read one E, N, CURRENT, CI, CE, or CN node alias after app-side scope and repository validation, including attachment metadata only."
+    let description = "Read one E, N, CURRENT, CI, CE, or CN node alias after app-side scope and repository validation. The app applies independent fixed limits and returns attachment metadata only."
 
     @Generable
     nonisolated struct Arguments {
         @Guide(description: "E or N alias previously supplied by a tool.")
         var nodeAlias: String
-
-        @Guide(
-            description:
-                "Maximum number of related detail, link, and attachment metadata records.",
-            .range(
-                0
-                    ... GraphChatIntentLimitPolicy
-                        .default.maximumNodeRelatedItemCount
-            )
-        )
-        var relatedLimit: Int
     }
 
     let runner: any GraphChatModelToolRunning
@@ -317,7 +306,10 @@ private nonisolated struct FoundationGetNodeTool: Tool {
         try await callTool(
             request: .getNode(
                 nodeAlias: arguments.nodeAlias,
-                relatedLimit: arguments.relatedLimit
+                relatedLimit:
+                    GraphChatIntentLimitPolicy
+                        .default
+                        .nodeDetailRelatedItemCount
             ),
             runner: runner,
             reporter: reporter

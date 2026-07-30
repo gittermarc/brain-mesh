@@ -26,6 +26,27 @@ nonisolated struct GraphSourceNodeReference: Hashable, Sendable {
     }
 }
 
+nonisolated enum GraphSourceLinkDirection:
+    String,
+    CaseIterable,
+    Hashable,
+    Sendable
+{
+    case incoming
+    case outgoing
+}
+
+nonisolated struct GraphSourceLinkBinding:
+    Hashable,
+    Sendable
+{
+    let linkID: UUID
+    let source: GraphSourceNodeReference
+    let target: GraphSourceNodeReference
+    let direction: GraphSourceLinkDirection
+    let note: String?
+}
+
 nonisolated enum GraphSourceNavigationTarget: Hashable, Sendable {
     case graph(GraphScope)
     case node(GraphScope, NodeRefKey)
@@ -39,6 +60,7 @@ nonisolated struct GraphSourceReference: Hashable, Sendable, Identifiable {
     let owner: GraphSourceNodeReference?
     let fieldID: UUID?
     let linkID: UUID?
+    let linkBinding: GraphSourceLinkBinding?
     let attachmentID: UUID?
 
     var id: GraphSourceReference {
@@ -97,6 +119,7 @@ nonisolated struct GraphSourceReference: Hashable, Sendable, Identifiable {
         owner: GraphSourceNodeReference? = nil,
         fieldID: UUID? = nil,
         linkID: UUID? = nil,
+        linkBinding: GraphSourceLinkBinding? = nil,
         attachmentID: UUID? = nil
     ) {
         self.graphID = graphID
@@ -106,6 +129,7 @@ nonisolated struct GraphSourceReference: Hashable, Sendable, Identifiable {
         self.owner = owner
         self.fieldID = fieldID
         self.linkID = linkID
+        self.linkBinding = linkBinding
         self.attachmentID = attachmentID
     }
 }
