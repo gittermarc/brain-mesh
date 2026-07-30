@@ -25,6 +25,16 @@ nonisolated struct GraphChatRegistryAnswerArtifactRevalidator: GraphChatAnswerAr
             return nil
         }
         let availableEvidenceIDs = Set(evidence.map(\.id))
+        if case .nodeProfile =
+            artifact.payload
+        {
+            return GraphChatNodeProfileArtifactEvidenceProjector
+                .revalidatedArtifact(
+                    artifact,
+                    availableEvidenceIDs:
+                        availableEvidenceIDs
+                )
+        }
         guard Set(artifact.allEvidenceIDs).isSubset(of: availableEvidenceIDs) else {
             return nil
         }
@@ -59,6 +69,26 @@ nonisolated struct GraphChatLiveAnswerArtifactRevalidator: GraphChatAnswerArtifa
             in: scope
         )
         let validatedEvidenceIDs = Set(validatedEvidence.map(\.id))
+        if case .nodeProfile =
+            artifact.payload
+        {
+            guard
+                let profile =
+                    GraphChatNodeProfileArtifactEvidenceProjector
+                    .revalidatedArtifact(
+                        artifact,
+                        availableEvidenceIDs:
+                            validatedEvidenceIDs
+                    )
+            else {
+                return nil
+            }
+            return try await
+                revalidatedNodeProfileNavigation(
+                    profile,
+                    scope: scope
+                )
+        }
         if case .comparison = artifact.payload {
             guard let comparison =
                     revalidatedComparison(
@@ -87,6 +117,203 @@ nonisolated struct GraphChatLiveAnswerArtifactRevalidator: GraphChatAnswerArtifa
             artifact,
             scope: scope
         )
+    }
+
+    private func revalidatedNodeProfileNavigation(
+        _ artifact: GraphChatAnswerArtifact,
+        scope: GraphChatScope
+    ) async throws -> GraphChatAnswerArtifact? {
+        guard
+            case .nodeProfile(let source) =
+                artifact.payload
+        else {
+            return nil
+        }
+        let revalidator =
+            GraphChatAnswerArtifactNavigationTargetRevalidator(
+                sourceRepository:
+                    sourceRepository
+            )
+        guard
+            let sourceNodeTarget =
+                source.nodeNavigationTarget,
+            let nodeTarget =
+                try await revalidator
+                .revalidatedTarget(
+                    sourceNodeTarget,
+                    in: scope.graphScope
+                )
+        else {
+            return nil
+        }
+
+        let owner:
+            GraphChatAnswerArtifactNodeProfileOwner?
+        if let sourceOwner = source.owner {
+            let target:
+                GraphChatAnswerArtifactNavigationTarget?
+            if let sourceTarget =
+                sourceOwner
+                    .navigationTarget
+            {
+                target =
+                    try await revalidator
+                    .revalidatedTarget(
+                        sourceTarget,
+                        in:
+                            scope.graphScope
+                    )
+            } else {
+                target = nil
+            }
+            owner =
+                GraphChatAnswerArtifactNodeProfileOwner(
+                    label:
+                        sourceOwner.label,
+                    navigationTarget:
+                        target
+                )
+        } else {
+            owner = nil
+        }
+
+        let incoming =
+            try await revalidatedConnections(
+                source.incomingConnections,
+                revalidator:
+                    revalidator,
+                graphScope:
+                    scope.graphScope
+            )
+        let outgoing =
+            try await revalidatedConnections(
+                source.outgoingConnections,
+                revalidator:
+                    revalidator,
+                graphScope:
+                    scope.graphScope
+            )
+        var navigationTargets: [
+            GraphChatAnswerArtifactNavigationTarget
+        ] = []
+        for target in artifact.navigationTargets {
+            try Task.checkCancellation()
+            let validated =
+                try await revalidator
+                .revalidatedTarget(
+                    target,
+                    in: scope.graphScope
+                )
+            if let validated {
+                navigationTargets.append(
+                    validated
+                )
+            }
+        }
+        let payload =
+            GraphChatAnswerArtifactNodeProfilePayload(
+                node: source.node,
+                visibleName:
+                    source.visibleName,
+                displayName:
+                    source.displayName,
+                owner: owner,
+                notes: source.notes,
+                detailValues:
+                    source.detailValues,
+                incomingConnections:
+                    incoming,
+                outgoingConnections:
+                    outgoing,
+                attachments:
+                    source.attachments,
+                detailValueMetadata:
+                    source
+                        .detailValueMetadata,
+                incomingConnectionMetadata:
+                    source
+                        .incomingConnectionMetadata,
+                outgoingConnectionMetadata:
+                    source
+                        .outgoingConnectionMetadata,
+                attachmentMetadata:
+                    source
+                        .attachmentMetadata,
+                nodeNavigationTarget:
+                    nodeTarget,
+                identityEvidence:
+                    source.identityEvidence,
+                evidence:
+                    source.evidence
+            )
+        return GraphChatAnswerArtifact(
+            id: artifact.id,
+            sessionID:
+                artifact.sessionID,
+            graphScope:
+                artifact.graphScope,
+            title: artifact.title,
+            payload:
+                .nodeProfile(payload),
+            evidence:
+                artifact.evidence,
+            navigationTargets:
+                navigationTargets,
+            querySummary:
+                artifact.querySummary
+        )
+    }
+
+    private func revalidatedConnections(
+        _ values: [
+            GraphChatAnswerArtifactNodeProfileConnection
+        ],
+        revalidator:
+            GraphChatAnswerArtifactNavigationTargetRevalidator,
+        graphScope: GraphScope
+    ) async throws -> [
+        GraphChatAnswerArtifactNodeProfileConnection
+    ] {
+        var result: [
+            GraphChatAnswerArtifactNodeProfileConnection
+        ] = []
+        result.reserveCapacity(values.count)
+        for value in values {
+            try Task.checkCancellation()
+            let target:
+                GraphChatAnswerArtifactNavigationTarget?
+            if let sourceTarget =
+                value.counterpartNavigationTarget
+            {
+                target =
+                    try await revalidator
+                    .revalidatedTarget(
+                        sourceTarget,
+                        in: graphScope
+                    )
+            } else {
+                target = nil
+            }
+            result.append(
+                GraphChatAnswerArtifactNodeProfileConnection(
+                    id: value.id,
+                    direction:
+                        value.direction,
+                    sourceLabel:
+                        value.sourceLabel,
+                    targetLabel:
+                        value.targetLabel,
+                    counterpartLabel:
+                        value.counterpartLabel,
+                    counterpartNavigationTarget:
+                        target,
+                    note: value.note,
+                    evidence:
+                        value.evidence
+                )
+            )
+        }
+        return result
     }
 
     private func revalidatedNavigation(

@@ -172,6 +172,10 @@ struct GraphChatToolsTests {
         let output = try #require(result.payload)
         #expect(result.state == .success)
         #expect(output.label == "Documents · Policy")
+        #expect(output.visibleName == "Policy")
+        #expect(
+            output.notesEvidenceID != nil
+        )
         #expect(output.detailValues.map(\.value) == [.integer(4)])
         #expect(output.attachments.count == 1)
         #expect(output.attachments[0].originalFilename == "policy.pdf")

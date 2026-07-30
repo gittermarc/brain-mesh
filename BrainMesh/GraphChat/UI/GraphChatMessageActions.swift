@@ -146,7 +146,8 @@ nonisolated struct GraphChatCopyPayload: Hashable, Sendable {
 }
 
 nonisolated enum GraphChatCopyContentBuilder {
-    static let maximumCopyLength = 16_000
+    static let maximumCopyLength =
+        128 * 1_024
 
     static func payload(
         for state: GraphChatAssistantMessageState,

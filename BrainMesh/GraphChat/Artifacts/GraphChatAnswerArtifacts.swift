@@ -555,6 +555,9 @@ nonisolated struct GraphChatAnswerArtifactTimelinePayload: Hashable, Sendable {
 }
 
 nonisolated enum GraphChatAnswerArtifactPayload: Hashable, Sendable {
+    case nodeProfile(
+        GraphChatAnswerArtifactNodeProfilePayload
+    )
     case metric(GraphChatAnswerArtifactMetricPayload)
     case resultList(GraphChatAnswerArtifactResultListPayload)
     case table(GraphChatAnswerArtifactTablePayload)
@@ -566,6 +569,7 @@ nonisolated enum GraphChatAnswerArtifactPayload: Hashable, Sendable {
 }
 
 nonisolated enum GraphChatAnswerArtifactKind: String, CaseIterable, Hashable, Sendable {
+    case nodeProfile
     case metric
     case resultList
     case table
@@ -690,6 +694,8 @@ nonisolated struct GraphChatAnswerArtifact: Hashable, Sendable, Identifiable {
 
     var kind: GraphChatAnswerArtifactKind {
         switch payload {
+        case .nodeProfile:
+            return .nodeProfile
         case .metric:
             return .metric
         case .resultList:
@@ -793,6 +799,9 @@ nonisolated struct GraphChatAnswerArtifact: Hashable, Sendable, Identifiable {
 nonisolated extension GraphChatAnswerArtifactPayload {
     fileprivate var allNavigationTargets: [GraphChatAnswerArtifactNavigationTarget] {
         switch self {
+        case .nodeProfile(let payload):
+            return payload
+                .allNavigationTargets
         case .metric:
             return []
         case .resultList(let payload):
@@ -814,6 +823,8 @@ nonisolated extension GraphChatAnswerArtifactPayload {
 
     fileprivate var allEvidenceIDs: [GraphEvidenceID] {
         switch self {
+        case .nodeProfile(let payload):
+            return payload.allEvidenceIDs
         case .metric(let payload):
             return payload.evidence.evidenceIDs
         case .resultList(let payload):

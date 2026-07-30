@@ -17,6 +17,7 @@ BrainMesh besitzt bereits mehrere wichtige Schutzlinien:
 - Exakt erkannte Single-Node-Field-Fragen werden providerfrei ausgeführt und als autoritativer typisierter Single Fact vollständig appseitig gerendert.
 - Der Foundational Fast Path ist über einen verlustfreien Adapter von einer allgemeinen versionierten Typed-Intent-Domain getrennt; beide vorhandenen Foundational Actions laufen durch denselben lokalen Execution Kernel.
 - Entity- und Attribute-Nodes besitzen mit `GraphNodeProfile` jetzt ein vollständiges, value-only und unabhängig begrenztes autoritatives Read-Modell. `GetNodeTool` adaptiert dieses Modell, statt Details, Links und Attachments über ein gemeinsames Restbudget einzeln zusammenzusuchen.
+- Erfolgreiche Node-Details-Turns besitzen mit `GraphChatAnswerArtifactNodeProfilePayload` ein eigenes verlustfreies Artifact. Ein gemeinsamer deutscher/englischer Präsentationswert speist deterministischen Antworttext und strukturierte UI; Copy übernimmt denselben finalisierten `GraphChatAnswer`.
 - Freie Find-Nodes- und Entity-List-Formulierungen werden nach dem Foundational Fast Path durch einen toolfreien On-Device-Interpreter ausschließlich in einen begrenzten untrusted Semantic Draft klassifiziert. Identitäten, Scope, technische Action, Query, Limits, Evidence, Artifacts und sichtbare Antwort bleiben appseitig.
 - Node Details, Compare Nodes und Inspect Graph State werden nach semantischer Klassifikation vollständig appseitig kompiliert und providerfrei über denselben lokalen Execution Kernel abgeschlossen. Node-IDs, Tools, Comparison-Art/-Features, Related-/Hub-Limits und Artifact-Struktur bleiben app-owned.
 - Finalisierte lokale Typed-Intent-Interpretationen sind fachlich editierbar. Jede Korrektur wird an ursprünglichen Turn, Conversation, Scope, Checkpoints und Artifact-Session gebunden, gegen ein frisches vollständiges Schema revalidiert und als providerfreier lokaler Ersatzturn mit atomarem Conversation-/Artifact-Swap ausgeführt.
@@ -789,7 +790,7 @@ Unterstützte Intents:
 
 - `singleNodeFieldValue`: sichere deutsche oder englische Fragehülle sowie ein durch den zentralen Mention Resolver gebundener Attribute-Anzeigename und ein gebundenes Feld derselben Entity. Nach Entfernen der beiden fachlichen Spannen dürfen nur die ausdrücklich unterstützten Hüllenwörter verbleiben.
 - `entityAttributeCollection`: sichere deutsche oder englische Listenhülle und eine durch den zentralen Mention Resolver eindeutig gebundene Entity. Filter, Aggregationen, freie Semantik und analytische Zusätze werden nicht kompiliert.
-- `nodeDetails`: sichere deutsche oder englische Detailhülle und genau ein eindeutig gebundener, im bestehenden Chat-Scope autorisierter Node. Der Adapter erzeugt die vorhandene Typed-Intent-Payload `.nodeDetails` und die vorhandene lokale `GetNodeTool`-Action; eine neue Node-Profile-Darstellung entsteht nicht.
+- `nodeDetails`: sichere deutsche oder englische Detailhülle und genau ein eindeutig gebundener, im bestehenden Chat-Scope autorisierter Node. Der Adapter erzeugt die vorhandene Typed-Intent-Payload `.nodeDetails` und die vorhandene lokale `GetNodeTool`-Action; deren Ergebnis wird durch denselben generischen `.nodeProfile`-Artifact- und Finalizerpfad präsentiert wie semantisch kompilierte Node Details.
 - Der Single-Field-Plan projiziert Node Identity und exakt das validierte Feld, bindet den Scope auf genau den validierten Node und setzt `limit = 1`.
 - Der Collection-Plan projiziert Node Identity, verwendet keine erfundenen Filter, sortiert stabil nach Node-Anzeigename mit dem bestehenden deterministischen Tie-Breaker und setzt das Limit auf `GraphQueryPlanLimits.maximumResultLimit`.
 - Der Node-Details-Plan bindet den Query-Scope auf genau den validierten Node und verwendet den appseitigen kompatiblen Per-Bereich-Cap, aus dem die zentrale Policy vier unabhängige Profilgrenzen ableitet. Alle drei Foundational-Familien laufen über den bestehenden Typed-Intent- und Local-Kernel-Lifecycle.
@@ -841,7 +842,7 @@ Integration und Diagnose:
 
 Bewusste Grenze:
 
-- Nicht hinzugekommen sind eine neue vollständige Profil-UI, Relationship-Intent, Multi-Hop-Traversal, `GraphFactBundle` oder modellgestützte Grounded-Answer-Planung. Graph Chat bleibt read-only.
+- Nicht hinzugekommen sind Relationship-Intent, Multi-Hop-Traversal, `GraphFactBundle` oder modellgestützte Grounded-Answer-Planung. Graph Chat bleibt read-only.
 
 ### Graph Chat Node Profile Domain (GRAPH-CHAT-NODE-PROFILE-DOMAIN-1)
 
@@ -869,7 +870,7 @@ Unabhängige Limits und Adapter:
 - Jeder Bereich besitzt ein eigenes `GraphNodeProfileResultWindow` mit exaktem `totalCount`, `returnedCount`, `limit`, `limitReached` und der Limitquelle `.appPolicy`. Ein großer Bereich kann keinen anderen verdrängen; kleine Bereiche innerhalb ihrer Grenze sind vollständig.
 - Der bestehende `GetNodeInput.relatedLimit` bleibt nur als kompatibler appseitiger Per-Bereich-Cap erhalten. Der echte Foundation-Models-Toolvertrag exponiert kein Limit mehr, und der Legacy-Tool-Runtime ersetzt alte modellseitige Werte durch `GraphChatIntentLimitPolicy.nodeDetailRelatedItemCount`.
 - Das unveränderte Tool-Call-Budget zählt das bounded Profil als ein Root-Ergebnis. Die Bereichsgrößen werden ausschließlich durch die vier Profilgrenzen beschränkt; das bestehende Evidence-Budget bleibt eine zusätzliche unabhängige Sicherheitsgrenze.
-- `GetNodeOutput` behält die bestehende Node-Details-Darstellung, ergänzt aber separate Detail-, Incoming-, Outgoing- und Attachment-Windows. Counts stammen vom vollständigen Profil; sichtbare Items und Evidence stammen aus demselben Profil-Snapshot. Es existiert keine zweite Node-Details-Datenautorität.
+- `GetNodeOutput` erhält sichtbaren und qualifizierten Namen, separate Notiz-Evidence sowie getrennte Detail-, Incoming-, Outgoing- und Attachment-Windows. Counts stammen vom vollständigen Profil; sichtbare Items und Evidence stammen aus demselben Profil-Snapshot. Die Artifact Factory projiziert diesen Output verlustfrei in `.nodeProfile`; es existiert keine zweite Node-Details-Datenautorität.
 
 Link-Notiz-Evidence:
 
@@ -881,6 +882,38 @@ Lifecycle:
 
 - Cancellation wird vor und zwischen Identität, Detailauthority, outgoing Links, incoming Links, Endpointauflösung, Attachments und finaler Profilpublikation geprüft. Ein Abbruch liefert kein Teilprofil.
 - Der bestehende Local-Intent-Kernel, Evidence-/Artifact-Commit, Ledger, Presentation Firewall, Conversation-Compare-and-set und Single-Terminal-Vertrag bleiben unverändert maßgeblich.
+
+### Graph Chat Node Profile Presentation (GRAPH-CHAT-NODE-PROFILE-PRESENTATION-1)
+
+Pfade:
+
+- `BrainMesh/GraphChat/Artifacts/GraphChatNodeProfileAnswerArtifact.swift`
+- `BrainMesh/GraphChat/Artifacts/GraphChatNodeProfilePresentation.swift`
+- `BrainMesh/GraphChat/Artifacts/GraphChatAnswerArtifactFactory+NodeNeighbors.swift`
+- `BrainMesh/GraphChat/Artifacts/GraphChatAnswerArtifactRevalidator.swift`
+- `BrainMesh/GraphChat/Orchestration/GraphChatDeterministicAnswerFallbackRenderer.swift`
+- `BrainMesh/GraphChat/UI/Artifacts/GraphChatNodeProfileArtifactView.swift`
+- `BrainMesh/GraphChat/UI/Artifacts/GraphChatFinalAnswerView.swift`
+- `BrainMesh/GraphChat/UI/GraphChatMessageActions.swift`
+
+Artifact- und Präsentationsvertrag:
+
+- `.nodeProfile` ist ein eigener `GraphChatAnswerArtifactPayload` und keine künstliche Detailtabelle. Der Payload erhält sichtbaren und qualifizierten Node-Namen, Owner, optionale Notizen, typisierte Detailwerte mit Einheit, getrennte incoming/outgoing Connections mit beiden Anzeigenamen, Gegenknoten und Link-Notiz sowie metadata-only Attachments einschließlich des unveränderten Content-Type-Werts.
+- Detailwerte, incoming Connections, outgoing Connections und Attachments tragen vier unabhängige `GraphChatAnswerArtifactResultMetadata`. Factory-Budgets wirken je Bereich separat. Vollständige kleine Bereiche bleiben vollständig; eine Kürzung erzeugt pro betroffenem Bereich einen konkreten deutschen oder englischen Hinweis. Leere Bereiche werden ausgelassen, ohne die gültige Node-Identity in einen No-Results-Fall umzudeuten.
+- `GraphChatNodeProfilePresentation` ist die gemeinsame lokalisierte Projektion. Der deterministische Fallback verwendet exakt deren `plainText`; `GraphChatNodeProfileArtifactView` verwendet dieselben Titel, Zeilentexte und Begrenzungsangaben. `GraphChatCopyContentBuilder` liest ausschließlich den finalisierten `GraphChatAnswer`; es existieren weder ein zweiter Profilformatter für Copy noch eine facts-reduzierte Kurzantwort.
+- Die sichtbare Attachment-Präsentation enthält fachliche Art, Titel, Dateiname, Format und Größe. Das Artifact erhält den Content-Type-Identifier verlustfrei für Authority/Revalidation, zeigt ihn aber nicht als technischen UTI. UUIDs, interne Entity-/Field-Aliasse, `CURRENT` und technische Runtime-Begriffe werden nicht aus dem Payload gerendert.
+
+Evidence und partielle Live-Revalidierung:
+
+- `GraphEvidence.nodeProfileArea` kennzeichnet ausschließlich produktive Profil-Evidence für Identity, Notizen, Detailwert, Connection oder Attachment. Der Source Validator vergleicht Node-Namen, Owner und Notizen, typisierten Feldwert und Einheit, aktuelle Link-Endpunktanzeigen, Richtung und exakte Link-Notiz sowie alle Attachment-Metadaten mit dem aktuellen graphgescopten Repository-Wert.
+- `GraphChatNodeProfileArtifactEvidenceProjector` verlangt die gültige Identity, entfernt aber ungültige Notizen, einzelne Detailwerte, einzelne incoming/outgoing Connections und Attachments unabhängig. Nur das betroffene Window erhält zusätzlich `.sourceLimited`; ein weiterhin gültiger Rest bleibt deterministisch finalisierbar.
+- Der Finalizer projiziert auch den im Primary Result Ledger liegenden ursprünglichen Profil-Payload gegen die nach der letzten Live-Revalidierung tatsächlich im `GraphChatAnswer` verbliebenen Evidence-IDs. Damit kann der deterministische Antworttext keine bereits aus dem Registry-Artifact entfernten Fakten wieder einführen.
+- Profilnavigation besteht ausschließlich aus `openNode`/`focusNodeInGraph`-Zielen im aktiven `GraphScope`. Identity-, Owner- und Gegenknoten-Ziele werden live gegen das Repository geprüft; invalidierte Ziele werden nicht publiziert. Attachments besitzen keine Navigation, und Link-Metadaten öffnen weder Dateien noch graphfremde Endpunkte.
+
+Ausführung und Lifecycle:
+
+- Foundational Node Details und semantisch kompilierte Node Details rufen unverändert dieselbe `GetNodeTool`-Action im `GraphChatLocalIntentExecutionKernel` auf, erzeugen denselben `.nodeProfile`-Payload und laufen durch denselben Finalizer. Beide Pfade erzeugen keine Answer-Provider-Session.
+- Interpretation, Interpretation Correction, Checkpoints, `CURRENT`, Primary Result Ledger, Conversation-/Artifact-Transaktionen, Deferred Swap, Rollback und Cancellation bleiben unverändert. Der Profiltyp führt keinen zweiten Commit- oder Terminalpfad ein; Erfolg, Fehler, Clarification und Cancellation behalten jeweils genau ein Terminal Event.
 
 ### Graph Chat Semantic Intent Interpreter
 
@@ -1690,6 +1723,8 @@ Die realistischen Obergrenzen sind **UNKNOWN U7** und müssen produktseitig fest
 - In-Memory-End-to-End-Pfade für eindeutige und mehrdeutige Node Details, Clarification-Auswahl, Last Node, Ordinal, Cross-Graph-Ablehnung, appseitiges Related-Limit und ausgeschlossene Attachment-Inhalte.
 - Repository-Profile für Entity und Attribute aus Medizin, Bibliothek und IT-Operations: vollständige kleine Bereiche, getrennte Detail-/Incoming-/Outgoing-/Attachment-Windows, Konkurrenzfreiheit der Bereiche, korrekte Gegenknoten und Richtungen, stabile Tie-Breaker, leere Bereiche, Detail-Integrity, Metadaten ohne Binärinhalt und Cancellation während des mehrteiligen Loads.
 - Link-Notiz-Authority für den Wert „3× täglich“ einschließlich Endpoint-/Richtungsbindung, Änderung, Entfernung, Link-Löschung und identischer Link-ID in einem anderen Graphen.
+- Node-Profile-Artifact-Domain und Factory für vollständige, Notiz-only, Link-only und Attachment-only Profile; deutsche und englische gemeinsame Präsentation, identischer UI-/Copy-Link-Notiztext, getrennte konkrete Truncation-Hinweise, keine UUIDs/Aliasse/UTIs, bereichsweise Evidence-Projektion und echte Live-Revalidierung mit erhaltenem gültigem Rest.
+- Medizinische Vollantwort für Patient A mit allen Detailwerten, Node-Notiz, Medikament 3, „3× täglich“ und Attachment-Metadaten sowie bibliothekarische Autorin- und technische Service-Fixtures über dieselbe generische Factory. Foundational Fast Path und semantisch kompilierter Pfad liefern denselben Payload und Antworttext ohne Answer Provider.
 - Same-Entity-Comparison mit expliziten Feldern, gepinnter/default-sortierter Featureauswahl, autoritativen typisierten Values, `.missing`, Integrity-/Evidence-Ausschluss, graphgescopter Navigation, `lastComparison`, `lastCompared` und Comparison-`CURRENT`.
 - Structural Comparison über gemischte Node-Arten ausschließlich aus Node-Art, Owner, direkten Links, Attachment-Metadatenzahl, Notiz-Vorhandensein und autoritativer Detailwertzahl; Notiz-/Attachment-Inhalte bleiben ausgeschlossen.
 - Graph-State-Artifact-Auswahl für Overview, Counts, Structure und Health sowie End-to-End-Graph-Health mit Metric/Health Finding, appseitigem Hub-Limit und verhindertem Scope-Widening.

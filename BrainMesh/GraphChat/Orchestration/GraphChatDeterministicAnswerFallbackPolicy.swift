@@ -56,9 +56,26 @@ nonisolated struct GraphChatDeterministicAnswerFallbackSource:
         self.evidence = primaryResult.evidence.filter {
             retainedEvidenceIDs.contains($0.id)
         }
-        let retainedArtifacts = primaryResult.artifacts.filter {
-            retainedArtifactIDs.contains($0.id)
-        }
+        let retainedArtifacts =
+            primaryResult.artifacts
+            .filter {
+                retainedArtifactIDs
+                    .contains($0.id)
+            }
+            .compactMap { artifact in
+                guard
+                    case .nodeProfile =
+                        artifact.payload
+                else {
+                    return artifact
+                }
+                return GraphChatNodeProfileArtifactEvidenceProjector
+                    .revalidatedArtifact(
+                        artifact,
+                        availableEvidenceIDs:
+                            retainedEvidenceIDs
+                    )
+            }
         self.artifacts = retainedArtifacts
         self.appliedFilters = Self.filters(in: retainedArtifacts)
     }
@@ -103,6 +120,9 @@ nonisolated struct GraphChatDeterministicAnswerFallbackSource:
     var authoritativeCount: Int? {
         for artifact in artifacts {
             switch artifact.payload {
+            case .nodeProfile:
+                return 1
+
             case .metric(let payload):
                 guard let aggregation = artifact.querySummary?.aggregation,
                       case .count = aggregation,

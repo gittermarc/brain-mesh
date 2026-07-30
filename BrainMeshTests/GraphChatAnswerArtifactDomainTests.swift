@@ -8,6 +8,9 @@ struct GraphChatAnswerArtifactDomainTests {
     func allSupportedPayloadKindsRemainValueOnlyAndSendable() {
         let fixture = ArtifactDomainFixture()
         let payloads: [GraphChatAnswerArtifactPayload] = [
+            .nodeProfile(
+                fixture.nodeProfilePayload
+            ),
             .metric(fixture.metricPayload),
             .resultList(fixture.listPayload),
             .table(fixture.tablePayload),
@@ -320,6 +323,112 @@ private struct ArtifactDomainFixture {
             value: .integer(4),
             unit: nil,
             contextDescription: "Validated scope",
+            evidence: evidence
+        )
+    }
+
+    var nodeProfilePayload:
+        GraphChatAnswerArtifactNodeProfilePayload
+    {
+        let complete =
+            GraphChatAnswerArtifactResultMetadata(
+                resultCount: 1,
+                returnedCount: 1
+            )
+        return GraphChatAnswerArtifactNodeProfilePayload(
+            node: node,
+            visibleName: "Gateway",
+            displayName:
+                "Services • Gateway",
+            owner:
+                GraphChatAnswerArtifactNodeProfileOwner(
+                    label: "Services",
+                    navigationTarget:
+                        .openNode(
+                            graphScope:
+                                graphScope,
+                            node:
+                                NodeRefKey(
+                                    kind:
+                                        .entity,
+                                    id:
+                                        uuid(5)
+                                )
+                        )
+                ),
+            notes:
+                GraphChatAnswerArtifactNodeProfileNotes(
+                    text: "Public edge",
+                    evidence: evidence
+                ),
+            detailValues: [
+                GraphChatAnswerArtifactNodeProfileDetailValue(
+                    id:
+                        GraphChatAnswerArtifactItemID(
+                            rawValue:
+                                uuid(6)
+                        ),
+                    fieldID: uuid(7),
+                    fieldName: "Port",
+                    fieldType:
+                        .numberInt,
+                    value: .integer(443),
+                    unit: nil,
+                    evidence: evidence
+                ),
+            ],
+            incomingConnections: [],
+            outgoingConnections: [
+                GraphChatAnswerArtifactNodeProfileConnection(
+                    id:
+                        GraphChatAnswerArtifactItemID(
+                            rawValue:
+                                uuid(8)
+                        ),
+                    direction: .outgoing,
+                    sourceLabel:
+                        "Services • Gateway",
+                    targetLabel:
+                        "Services • Backend",
+                    counterpartLabel:
+                        "Services • Backend",
+                    counterpartNavigationTarget:
+                        openTarget,
+                    note: "TLS",
+                    evidence: evidence
+                ),
+            ],
+            attachments: [
+                GraphChatAnswerArtifactNodeProfileAttachment(
+                    id:
+                        GraphChatAnswerArtifactItemID(
+                            rawValue:
+                                uuid(9)
+                        ),
+                    contentKind: .file,
+                    title: "Runbook",
+                    originalFilename:
+                        "runbook.pdf",
+                    contentTypeIdentifier:
+                        "com.adobe.pdf",
+                    fileExtension: "pdf",
+                    byteCount: 1_024,
+                    evidence: evidence
+                ),
+            ],
+            detailValueMetadata: complete,
+            incomingConnectionMetadata:
+                GraphChatAnswerArtifactResultMetadata(
+                    resultCount: 0,
+                    returnedCount: 0
+                ),
+            outgoingConnectionMetadata:
+                complete,
+            attachmentMetadata:
+                complete,
+            nodeNavigationTarget:
+                openTarget,
+            identityEvidence: evidence,
             evidence: evidence
         )
     }

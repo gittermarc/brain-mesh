@@ -57,6 +57,12 @@ nonisolated struct GraphChatDeterministicAnswerFallbackRenderer: Sendable {
         language: GraphChatResponseLanguage
     ) -> String? {
         switch artifact.payload {
+        case .nodeProfile(let payload):
+            return GraphChatNodeProfilePresentation(
+                payload: payload,
+                language: language
+            ).plainText
+
         case .metric(let payload):
             return metricSummary(
                 payload,

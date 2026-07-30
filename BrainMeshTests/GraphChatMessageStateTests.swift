@@ -67,7 +67,12 @@ struct GraphChatMessageStateTests {
 
     @Test
     func finalPresentationBoundsLargeAnswersAndEvidenceCollections() {
-        let evidence = (0..<20).map(makeEvidence)
+        let oversizedEvidenceCount =
+            GraphChatAssistantMessageState
+                .maximumEvidence + 1
+        let evidence = (
+            0..<oversizedEvidenceCount
+        ).map(makeEvidence)
         let filters = (0..<20).map { index in
             GraphChatAppliedFilter(
                 fieldName: "Feld \(index)",
@@ -81,10 +86,16 @@ struct GraphChatMessageStateTests {
                 prompt: "Prompt \(index)"
             )
         }
+        let oversizedTextLength =
+            GraphChatAssistantMessageState
+                .maximumTextLength + 1
         let sections = (0..<12).map { index in
             GraphChatAnswerSection(
                 title: "Abschnitt \(index)",
-                text: String(repeating: "A", count: 20_000)
+                text: String(
+                    repeating: "A",
+                    count: oversizedTextLength
+                )
             )
         }
         var state = GraphChatAssistantMessageState(question: "Frage")
@@ -92,7 +103,10 @@ struct GraphChatMessageStateTests {
         state.apply(
             .completed(
                 GraphChatAnswer(
-                    directAnswer: String(repeating: "B", count: 20_000),
+                    directAnswer: String(
+                        repeating: "B",
+                        count: oversizedTextLength
+                    ),
                     sections: sections,
                     evidence: evidence,
                     appliedFilters: filters,

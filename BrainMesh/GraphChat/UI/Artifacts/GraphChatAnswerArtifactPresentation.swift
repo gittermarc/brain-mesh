@@ -8,6 +8,7 @@
 import Foundation
 
 nonisolated enum GraphChatAnswerArtifactRenderComponent: String, CaseIterable, Hashable, Sendable {
+    case nodeProfile
     case metric
     case resultList
     case table
@@ -26,6 +27,11 @@ nonisolated struct GraphChatAnswerArtifactRenderDescriptor: Hashable, Sendable {
         for artifact: GraphChatAnswerArtifact
     ) -> GraphChatAnswerArtifactRenderDescriptor {
         switch artifact.payload {
+        case .nodeProfile:
+            return GraphChatAnswerArtifactRenderDescriptor(
+                component: .nodeProfile,
+                isEmpty: false
+            )
         case .metric:
             return GraphChatAnswerArtifactRenderDescriptor(
                 component: .metric,
@@ -720,7 +726,9 @@ nonisolated struct GraphChatAnswerArtifactStrings: Sendable {
 nonisolated extension GraphChatAnswerArtifactPayload {
     var resultMetadata: GraphChatAnswerArtifactResultMetadata? {
         switch self {
-        case .metric, .healthFinding:
+        case .nodeProfile,
+            .metric,
+            .healthFinding:
             return nil
         case .comparison(let payload):
             return payload.resultMetadata

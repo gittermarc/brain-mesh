@@ -691,7 +691,29 @@ struct GraphChatAnswerArtifactFactoryTests {
                 graphScope: context.graphScope
             )
         )
-        #expect(nodeDraft.payload.kind == .table)
+        #expect(
+            nodeDraft.payload.kind
+                == .nodeProfile
+        )
+        guard
+            case .nodeProfile(
+                let nodeProfile
+            ) = nodeDraft.payload
+        else {
+            Issue.record(
+                "Expected node profile artifact"
+            )
+            return
+        }
+        #expect(
+            nodeProfile.detailValues
+                .count == 1
+        )
+        #expect(
+            nodeProfile
+                .detailValueMetadata
+                .returnedCount == 1
+        )
 
         let neighborNode = NodeRefKey(kind: .attribute, id: uuid(605))
         let neighborDraft = try #require(
@@ -760,19 +782,51 @@ struct GraphChatAnswerArtifactFactoryTests {
             graphScope: context.graphScope,
             requestedLimit: 10
         ) == nil)
-        #expect(GraphChatAnswerArtifactFactory.nodeDetails(
-            output: GetNodeOutput(
-                node: NodeRefKey(kind: .attribute, id: GraphChatTestSupport.projectAttributeID),
-                label: "No structured fields",
-                notes: "Text remains available",
-                owner: nil,
-                detailValues: [],
-                links: [],
-                attachments: [],
-                evidenceIDs: [evidenceID(610)]
-            ),
-            graphScope: context.graphScope
-        ) == nil)
+        let notesOnly =
+            try #require(
+                GraphChatAnswerArtifactFactory
+                    .nodeDetails(
+                        output: GetNodeOutput(
+                            node: NodeRefKey(
+                                kind:
+                                    .attribute,
+                                id:
+                                    GraphChatTestSupport
+                                    .projectAttributeID
+                            ),
+                            label:
+                                "No structured fields",
+                            notes:
+                                "Text remains available",
+                            owner: nil,
+                            detailValues: [],
+                            links: [],
+                            attachments: [],
+                            evidenceIDs: [
+                                evidenceID(610),
+                                evidenceID(611),
+                            ],
+                            notesEvidenceID:
+                                evidenceID(611)
+                        ),
+                        graphScope:
+                            context.graphScope
+                    )
+            )
+        guard
+            case .nodeProfile(
+                let notesProfile
+            ) = notesOnly.payload
+        else {
+            Issue.record(
+                "Expected notes-only node profile"
+            )
+            return
+        }
+        #expect(
+            notesProfile.notes?.text
+                == "Text remains available"
+        )
     }
 
     @Test
@@ -960,6 +1014,8 @@ struct GraphChatAnswerArtifactFactoryTests {
 private extension GraphChatAnswerArtifactPayload {
     var kind: GraphChatAnswerArtifactKind {
         switch self {
+        case .nodeProfile:
+            return .nodeProfile
         case .metric:
             return .metric
         case .resultList:

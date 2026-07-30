@@ -61,9 +61,10 @@ nonisolated struct GraphChatToolActivityPresentation: Hashable, Sendable, Identi
 }
 
 nonisolated struct GraphChatAssistantMessageState: Hashable, Sendable {
-    static let maximumTextLength = 12_000
+    static let maximumTextLength =
+        128 * 1_024
     static let maximumSections = 8
-    static let maximumEvidence = 12
+    static let maximumEvidence = 200
     static let maximumArtifacts = 12
     static let maximumFilters = 12
     static let maximumFollowUps = 3
@@ -427,13 +428,25 @@ nonisolated struct GraphChatEvidencePresentation: Hashable, Sendable, Identifiab
         ).nonEmpty ?? evidence.summary
         self.summary = evidence.summary
         self.fieldValues = evidence.fieldValues
+            .filter {
+                $0.fieldName != "Dateityp"
+            }
             .prefix(Self.maximumFieldValues)
             .map { fieldValue in
                 GraphChatEvidenceValuePresentation(
                     id: fieldValue.id,
-                    fieldName: fieldValue.fieldName,
+                    fieldName:
+                        Self.localizedFieldName(
+                            fieldValue
+                                .fieldName,
+                            language:
+                                language
+                        ),
                     valueText: Self.valueText(
                         fieldValue.value,
+                        fieldName:
+                            fieldValue
+                                .fieldName,
                         unit: fieldValue.unit,
                         language: language,
                         locale: locale
@@ -496,6 +509,7 @@ nonisolated struct GraphChatEvidencePresentation: Hashable, Sendable, Identifiab
 
     private static func valueText(
         _ value: GraphEvidenceValue,
+        fieldName: String,
         unit: String?,
         language: GraphChatResponseLanguage,
         locale: Locale
@@ -503,7 +517,11 @@ nonisolated struct GraphChatEvidencePresentation: Hashable, Sendable, Identifiab
         let base: String
         switch value {
         case .text(let text):
-            base = text
+            base = localizedTechnicalValue(
+                text,
+                fieldName: fieldName,
+                language: language
+            )
         case .integer(let integer):
             base = integer.formatted(.number.locale(locale))
         case .decimal(let decimal):
@@ -537,6 +555,74 @@ nonisolated struct GraphChatEvidencePresentation: Hashable, Sendable, Identifiab
             return base
         }
         return "\(base) \(unit)"
+    }
+
+    private static func localizedFieldName(
+        _ value: String,
+        language: GraphChatResponseLanguage
+    ) -> String {
+        guard language == .english else {
+            return value
+        }
+        switch value {
+        case "Anzeigename":
+            return "Display name"
+        case "Notizen":
+            return "Notes"
+        case "Link-Notiz":
+            return "Link note"
+        case "Titel":
+            return "Title"
+        case "Dateiname":
+            return "Filename"
+        case "Dateigröße":
+            return "File size"
+        case "Dateiendung":
+            return "File extension"
+        case "Attachment-Art":
+            return "Attachment type"
+        case "Node-Art":
+            return "Node type"
+        case "Direkte Verbindungen":
+            return "Direct links"
+        case "Attachment-Metadaten":
+            return "Attachment metadata"
+        case "Notizen vorhanden":
+            return "Notes available"
+        case "Autoritative Detailwerte":
+            return "Authoritative detail values"
+        default:
+            return value
+        }
+    }
+
+    private static func localizedTechnicalValue(
+        _ value: String,
+        fieldName: String,
+        language: GraphChatResponseLanguage
+    ) -> String {
+        switch (language, fieldName, value) {
+        case (.german, "Node-Art", "entity"):
+            return "Entity"
+        case (.german, "Node-Art", "attribute"):
+            return "Attribut"
+        case (.english, "Node-Art", "entity"):
+            return "Entity"
+        case (.english, "Node-Art", "attribute"):
+            return "Attribute"
+        case (.german, "Attachment-Art", "file"):
+            return "Datei"
+        case (.english, "Attachment-Art", "file"):
+            return "File"
+        case (_, "Attachment-Art", "video"):
+            return "Video"
+        case (.german, "Attachment-Art", "galleryImage"):
+            return "Galeriebild"
+        case (.english, "Attachment-Art", "galleryImage"):
+            return "Gallery image"
+        default:
+            return value
+        }
     }
 }
 

@@ -752,6 +752,8 @@ nonisolated extension GraphChatAnswerArtifactFactory {
 private nonisolated extension GraphChatAnswerArtifactPayload {
     var kind: GraphChatAnswerArtifactKind {
         switch self {
+        case .nodeProfile:
+            return .nodeProfile
         case .metric:
             return .metric
         case .resultList:

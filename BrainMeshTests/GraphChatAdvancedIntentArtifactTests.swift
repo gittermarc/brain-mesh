@@ -634,6 +634,8 @@ struct GraphChatAdvancedIntentArtifactTests {
     ) -> [GraphChatAnswerArtifactKind] {
         drafts.map {
             switch $0.payload {
+            case .nodeProfile:
+                return .nodeProfile
             case .metric:
                 return .metric
             case .resultList:

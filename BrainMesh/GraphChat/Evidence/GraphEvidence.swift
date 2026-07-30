@@ -30,24 +30,42 @@ nonisolated struct GraphEvidenceFieldValue: Hashable, Sendable, Identifiable {
     }
 }
 
+nonisolated enum GraphNodeProfileEvidenceArea:
+    String,
+    CaseIterable,
+    Hashable,
+    Sendable
+{
+    case identity
+    case notes
+    case detailValue
+    case connection
+    case attachment
+}
+
 nonisolated struct GraphEvidence: Hashable, Sendable, Identifiable {
     let id: GraphEvidenceID
     let sourceReference: GraphSourceReference
     let summary: String
     let fieldValues: [GraphEvidenceFieldValue]
     let navigationTitle: String?
+    let nodeProfileArea:
+        GraphNodeProfileEvidenceArea?
 
     init(
         sourceReference: GraphSourceReference,
         summary: String,
         fieldValues: [GraphEvidenceFieldValue] = [],
         navigationTitle: String? = nil,
+        nodeProfileArea:
+            GraphNodeProfileEvidenceArea? = nil,
         identitySuffix: String = ""
     ) {
         self.sourceReference = sourceReference
         self.summary = summary
         self.fieldValues = fieldValues
         self.navigationTitle = navigationTitle
+        self.nodeProfileArea = nodeProfileArea
         self.id = GraphEvidenceStableIdentity.makeID(
             sourceReference: sourceReference,
             fieldValues: fieldValues,

@@ -29,6 +29,39 @@ nonisolated protocol GraphEvidenceValidating: Sendable {
 actor GraphEvidenceSourceValidator: GraphEvidenceValidating {
     static let shared = GraphEvidenceSourceValidator(repository: GraphReadRepository.shared)
 
+    private struct NodeProfileSnapshot:
+        Sendable
+    {
+        let summary: String
+        let navigationTitle: String
+        let identityFields:
+            [GraphEvidenceFieldValue]
+        let noteFields:
+            [GraphEvidenceFieldValue]
+        let attachmentFields:
+            [GraphEvidenceFieldValue]
+
+        init(
+            summary: String,
+            navigationTitle: String,
+            identityFields:
+                [GraphEvidenceFieldValue] = [],
+            noteFields:
+                [GraphEvidenceFieldValue] = [],
+            attachmentFields:
+                [GraphEvidenceFieldValue] = []
+        ) {
+            self.summary = summary
+            self.navigationTitle =
+                navigationTitle
+            self.identityFields =
+                identityFields
+            self.noteFields = noteFields
+            self.attachmentFields =
+                attachmentFields
+        }
+    }
+
     private struct ResolvedSource: Sendable {
         let graphScope: GraphScope
         let sourceKind: GraphSourceKind
@@ -39,6 +72,41 @@ actor GraphEvidenceSourceValidator: GraphEvidenceValidating {
         let ownerEntityIDs: Set<UUID>
         let authoritativeFieldValue: GraphEvidenceFieldValue?
         let authoritativeLink: GraphLinkDTO?
+        let nodeProfileSnapshot:
+            NodeProfileSnapshot?
+
+        init(
+            graphScope: GraphScope,
+            sourceKind: GraphSourceKind,
+            sourceID: UUID,
+            fieldID: UUID?,
+            attachmentID: UUID?,
+            relatedNodes: Set<NodeRefKey>,
+            ownerEntityIDs: Set<UUID>,
+            authoritativeFieldValue:
+                GraphEvidenceFieldValue?,
+            authoritativeLink:
+                GraphLinkDTO?,
+            nodeProfileSnapshot:
+                NodeProfileSnapshot? = nil
+        ) {
+            self.graphScope = graphScope
+            self.sourceKind = sourceKind
+            self.sourceID = sourceID
+            self.fieldID = fieldID
+            self.attachmentID =
+                attachmentID
+            self.relatedNodes =
+                relatedNodes
+            self.ownerEntityIDs =
+                ownerEntityIDs
+            self.authoritativeFieldValue =
+                authoritativeFieldValue
+            self.authoritativeLink =
+                authoritativeLink
+            self.nodeProfileSnapshot =
+                nodeProfileSnapshot
+        }
     }
 
     private let repository: any GraphEvidenceSourceReading
@@ -129,7 +197,11 @@ actor GraphEvidenceSourceValidator: GraphEvidenceValidating {
                 relatedNodes: [entity.nodeKey],
                 ownerEntityIDs: [entity.id],
                 authoritativeFieldValue: nil,
-                authoritativeLink: nil
+                authoritativeLink: nil,
+                nodeProfileSnapshot:
+                    Self.nodeProfileSnapshot(
+                        entity: entity
+                    )
             )
 
         case .attribute:
@@ -153,7 +225,12 @@ actor GraphEvidenceSourceValidator: GraphEvidenceValidating {
                 relatedNodes: nodes,
                 ownerEntityIDs: owners,
                 authoritativeFieldValue: nil,
-                authoritativeLink: nil
+                authoritativeLink: nil,
+                nodeProfileSnapshot:
+                    Self.nodeProfileSnapshot(
+                        attribute:
+                            attribute
+                    )
             )
 
         case .detailField:
@@ -206,7 +283,15 @@ actor GraphEvidenceSourceValidator: GraphEvidenceValidating {
                     value: value.value.graphEvidenceValue,
                     unit: field.unit
                 ),
-                authoritativeLink: nil
+                authoritativeLink: nil,
+                nodeProfileSnapshot:
+                    NodeProfileSnapshot(
+                        summary:
+                            "\(attribute.displayLabel): \(field.name)",
+                        navigationTitle:
+                            attribute
+                                .displayLabel
+                    )
             )
 
         case .link:
@@ -233,6 +318,32 @@ actor GraphEvidenceSourceValidator: GraphEvidenceValidating {
                 target,
             ]
             let owners = try await ownerEntityIDs(for: nodes, graphScope: graphScope)
+            let sourceLabel =
+                try await nodeDisplayName(
+                    source,
+                    graphScope:
+                        graphScope
+                ) ?? link.sourceLabel
+            let targetLabel =
+                try await nodeDisplayName(
+                    target,
+                    graphScope:
+                        graphScope
+                ) ?? link.targetLabel
+            let navigationTitle: String?
+            if let referenceNode =
+                reference.node
+            {
+                navigationTitle =
+                    try await nodeDisplayName(
+                        referenceNode
+                            .nodeKey,
+                        graphScope:
+                            graphScope
+                    )
+            } else {
+                navigationTitle = nil
+            }
             return ResolvedSource(
                 graphScope: graphScope,
                 sourceKind: .link,
@@ -242,7 +353,15 @@ actor GraphEvidenceSourceValidator: GraphEvidenceValidating {
                 relatedNodes: nodes,
                 ownerEntityIDs: owners,
                 authoritativeFieldValue: nil,
-                authoritativeLink: link
+                authoritativeLink: link,
+                nodeProfileSnapshot:
+                    NodeProfileSnapshot(
+                        summary:
+                            "\(sourceLabel) → \(targetLabel)",
+                        navigationTitle:
+                            navigationTitle
+                            ?? sourceLabel
+                    )
             )
 
         case .attachment:
@@ -254,6 +373,12 @@ actor GraphEvidenceSourceValidator: GraphEvidenceValidating {
                 return nil
             }
             let owners = try await ownerEntityIDs(for: [ownerNode], graphScope: graphScope)
+            let navigationTitle =
+                try await nodeDisplayName(
+                    ownerNode,
+                    graphScope:
+                        graphScope
+                )
             return ResolvedSource(
                 graphScope: graphScope,
                 sourceKind: .attachment,
@@ -263,7 +388,19 @@ actor GraphEvidenceSourceValidator: GraphEvidenceValidating {
                 relatedNodes: [ownerNode],
                 ownerEntityIDs: owners,
                 authoritativeFieldValue: nil,
-                authoritativeLink: nil
+                authoritativeLink: nil,
+                nodeProfileSnapshot:
+                    NodeProfileSnapshot(
+                        summary:
+                            attachment.title,
+                        navigationTitle:
+                            navigationTitle
+                            ?? attachment.title,
+                        attachmentFields:
+                            Self.attachmentFields(
+                                attachment
+                            )
+                    )
             )
         }
     }
@@ -305,6 +442,15 @@ actor GraphEvidenceSourceValidator: GraphEvidenceValidating {
                 }
             }
         }
+        if let area =
+            evidence.nodeProfileArea
+        {
+            return nodeProfileContentIsConsistent(
+                evidence,
+                area: area,
+                resolved: resolved
+            )
+        }
         guard let authoritative = resolved.authoritativeFieldValue else {
             return true
         }
@@ -316,6 +462,73 @@ actor GraphEvidenceSourceValidator: GraphEvidenceValidating {
         }
         return matchingValues.count == 1
             && matchingValues[0] == authoritative
+    }
+
+    private func nodeProfileContentIsConsistent(
+        _ evidence: GraphEvidence,
+        area: GraphNodeProfileEvidenceArea,
+        resolved: ResolvedSource
+    ) -> Bool {
+        guard
+            let snapshot =
+                resolved.nodeProfileSnapshot,
+            evidence.summary
+                == snapshot.summary,
+            evidence.navigationTitle
+                == snapshot.navigationTitle
+        else {
+            return false
+        }
+
+        switch area {
+        case .identity:
+            return evidence.fieldValues
+                == snapshot.identityFields
+
+        case .notes:
+            return snapshot.noteFields
+                .isEmpty == false
+                && evidence.fieldValues
+                    == snapshot.noteFields
+
+        case .detailValue:
+            guard
+                let authoritative =
+                    resolved
+                        .authoritativeFieldValue
+            else {
+                return false
+            }
+            return evidence.fieldValues
+                == [authoritative]
+
+        case .connection:
+            guard
+                let link =
+                    resolved
+                        .authoritativeLink
+            else {
+                return false
+            }
+            let expected =
+                link.note.map {
+                    [
+                        GraphEvidenceFieldValue(
+                            fieldID: nil,
+                            fieldName:
+                                "Link-Notiz",
+                            value: .text($0),
+                            unit: nil
+                        ),
+                    ]
+                } ?? []
+            return evidence.fieldValues
+                == expected
+
+        case .attachment:
+            return evidence.fieldValues
+                == snapshot.attachmentFields
+        }
     }
 
     private func referenceMetadataIsConsistent(
@@ -474,6 +687,203 @@ actor GraphEvidenceSourceValidator: GraphEvidenceValidating {
                 id: node.id,
                 in: graphScope
             ) != nil
+        }
+    }
+
+    private func nodeDisplayName(
+        _ node: NodeRefKey,
+        graphScope: GraphScope
+    ) async throws -> String? {
+        switch node.kind {
+        case .entity:
+            return try await repository
+                .entity(
+                    id: node.id,
+                    in: graphScope
+                )?.name
+        case .attribute:
+            return try await repository
+                .attribute(
+                    id: node.id,
+                    in: graphScope
+                )?.displayLabel
+        }
+    }
+
+    private nonisolated static func nodeProfileSnapshot(
+        entity: GraphEntityDTO
+    ) -> NodeProfileSnapshot {
+        NodeProfileSnapshot(
+            summary: entity.name,
+            navigationTitle: entity.name,
+            identityFields: [
+                GraphEvidenceFieldValue(
+                    fieldID: nil,
+                    fieldName: "Name",
+                    value:
+                        .text(entity.name),
+                    unit: nil
+                ),
+                GraphEvidenceFieldValue(
+                    fieldID: nil,
+                    fieldName:
+                        "Anzeigename",
+                    value:
+                        .text(entity.name),
+                    unit: nil
+                ),
+            ],
+            noteFields:
+                notesFields(entity.notes)
+        )
+    }
+
+    private nonisolated static func nodeProfileSnapshot(
+        attribute: GraphAttributeDTO
+    ) -> NodeProfileSnapshot {
+        var identityFields = [
+            GraphEvidenceFieldValue(
+                fieldID: nil,
+                fieldName: "Name",
+                value:
+                    .text(attribute.name),
+                unit: nil
+            ),
+            GraphEvidenceFieldValue(
+                fieldID: nil,
+                fieldName: "Anzeigename",
+                value:
+                    .text(
+                        attribute.displayLabel
+                    ),
+                unit: nil
+            ),
+        ]
+        if let owner =
+            attribute.ownerLabel
+        {
+            identityFields.append(
+                GraphEvidenceFieldValue(
+                    fieldID: nil,
+                    fieldName: "Owner",
+                    value: .text(owner),
+                    unit: nil
+                )
+            )
+        }
+        return NodeProfileSnapshot(
+            summary:
+                attribute.displayLabel,
+            navigationTitle:
+                attribute.displayLabel,
+            identityFields:
+                identityFields,
+            noteFields:
+                notesFields(
+                    attribute.notes
+                )
+        )
+    }
+
+    private nonisolated static func notesFields(
+        _ notes: String
+    ) -> [GraphEvidenceFieldValue] {
+        guard
+            notes.trimmingCharacters(
+                in: .whitespacesAndNewlines
+            ).isEmpty == false
+        else {
+            return []
+        }
+        return [
+            GraphEvidenceFieldValue(
+                fieldID: nil,
+                fieldName: "Notizen",
+                value: .text(notes),
+                unit: nil
+            ),
+        ]
+    }
+
+    private nonisolated static func attachmentFields(
+        _ attachment:
+            GraphAttachmentMetadataDTO
+    ) -> [GraphEvidenceFieldValue] {
+        [
+            GraphEvidenceFieldValue(
+                fieldID: nil,
+                fieldName: "Titel",
+                value:
+                    .text(attachment.title),
+                unit: nil
+            ),
+            GraphEvidenceFieldValue(
+                fieldID: nil,
+                fieldName: "Dateiname",
+                value:
+                    .text(
+                        attachment
+                            .originalFilename
+                    ),
+                unit: nil
+            ),
+            GraphEvidenceFieldValue(
+                fieldID: nil,
+                fieldName: "Dateigröße",
+                value:
+                    .integer(
+                        attachment.byteCount
+                    ),
+                unit: "Bytes"
+            ),
+            GraphEvidenceFieldValue(
+                fieldID: nil,
+                fieldName:
+                    "Attachment-Art",
+                value:
+                    .text(
+                        attachmentKindKey(
+                            attachment
+                                .contentKind
+                        )
+                    ),
+                unit: nil
+            ),
+            GraphEvidenceFieldValue(
+                fieldID: nil,
+                fieldName: "Dateityp",
+                value:
+                    .text(
+                        attachment
+                            .contentTypeIdentifier
+                    ),
+                unit: nil
+            ),
+            GraphEvidenceFieldValue(
+                fieldID: nil,
+                fieldName: "Dateiendung",
+                value:
+                    .text(
+                        attachment
+                            .fileExtension
+                    ),
+                unit: nil
+            ),
+        ]
+    }
+
+    private nonisolated static func attachmentKindKey(
+        _ kind: AttachmentContentKind?
+    ) -> String {
+        switch kind {
+        case .file:
+            return "file"
+        case .video:
+            return "video"
+        case .galleryImage:
+            return "galleryImage"
+        case nil:
+            return "unknown"
         }
     }
 }

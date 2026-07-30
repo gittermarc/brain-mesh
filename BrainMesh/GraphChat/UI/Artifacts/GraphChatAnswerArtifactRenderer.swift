@@ -42,6 +42,27 @@ struct GraphChatAnswerArtifactRenderer: View {
             }
         } else {
             switch artifact.payload {
+            case .nodeProfile(let payload):
+                GraphChatNodeProfileArtifactView(
+                    artifact: artifact,
+                    resolved: resolved,
+                    payload: payload,
+                    availableEvidence:
+                        availableEvidence,
+                    language: language,
+                    allowsEvidenceActions:
+                        allowsEvidenceActions,
+                    canOpenTarget:
+                        canOpenTarget,
+                    onOpenTarget:
+                        onOpenTarget,
+                    onOpenEvidence:
+                        onOpenEvidence,
+                    onShowEvidenceInGraph:
+                        onShowEvidenceInGraph,
+                    onShowEvidenceDrawer:
+                        onShowEvidenceDrawer
+                )
             case .metric(let payload):
                 GraphChatMetricArtifactView(
                     artifact: artifact,
@@ -184,6 +205,8 @@ struct GraphChatAnswerArtifactRenderer: View {
         for component: GraphChatAnswerArtifactRenderComponent
     ) -> String {
         switch component {
+        case .nodeProfile:
+            return "person.text.rectangle"
         case .metric:
             return "number"
         case .resultList:

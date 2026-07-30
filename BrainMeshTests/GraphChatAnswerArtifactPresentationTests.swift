@@ -13,6 +13,12 @@ struct GraphChatAnswerArtifactPresentationTests {
     func rendererSelectsExactlyOneSpecializedComponentForEveryArtifactType() {
         let fixture = AnswerArtifactPresentationFixture()
         let expectations: [(GraphChatAnswerArtifactPayload, GraphChatAnswerArtifactRenderComponent)] = [
+            (
+                .nodeProfile(
+                    fixture.nodeProfilePayload
+                ),
+                .nodeProfile
+            ),
             (.metric(fixture.metricPayload), .metric),
             (.resultList(fixture.listPayload), .resultList),
             (.table(fixture.tablePayload), .table),
@@ -704,6 +710,66 @@ struct AnswerArtifactPresentationFixture {
             unit: nil,
             contextDescription: nil,
             evidence: binding
+        )
+    }
+
+    var nodeProfilePayload:
+        GraphChatAnswerArtifactNodeProfilePayload
+    {
+        let empty =
+            GraphChatAnswerArtifactResultMetadata(
+                resultCount: 0,
+                returnedCount: 0
+            )
+        return GraphChatAnswerArtifactNodeProfilePayload(
+            node:
+                NodeRefKey(
+                    kind: .attribute,
+                    id: uuid(10)
+                ),
+            visibleName: "Alpha",
+            displayName:
+                "Projects • Alpha",
+            owner:
+                GraphChatAnswerArtifactNodeProfileOwner(
+                    label: "Projects",
+                    navigationTarget:
+                        nodeTarget
+                ),
+            notes:
+                GraphChatAnswerArtifactNodeProfileNotes(
+                    text: "Validated notes",
+                    evidence:
+                        GraphChatAnswerArtifactEvidenceBinding(
+                            evidenceIDs: [
+                                nodeEvidence.id,
+                            ]
+                        )
+                ),
+            detailValues: [],
+            incomingConnections: [],
+            outgoingConnections: [],
+            attachments: [],
+            detailValueMetadata: empty,
+            incomingConnectionMetadata:
+                empty,
+            outgoingConnectionMetadata:
+                empty,
+            attachmentMetadata: empty,
+            nodeNavigationTarget:
+                nodeTarget,
+            identityEvidence:
+                GraphChatAnswerArtifactEvidenceBinding(
+                    evidenceIDs: [
+                        nodeEvidence.id,
+                    ]
+                ),
+            evidence:
+                GraphChatAnswerArtifactEvidenceBinding(
+                    evidenceIDs: [
+                        nodeEvidence.id,
+                    ]
+                )
         )
     }
 

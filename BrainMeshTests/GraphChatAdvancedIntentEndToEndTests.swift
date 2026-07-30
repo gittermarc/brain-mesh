@@ -88,8 +88,13 @@ struct GraphChatAdvancedIntentEndToEndTests {
             chatScope: chatScope
         )
         let artifact = try #require(artifacts.first)
-        guard case .table(let payload) = artifact.payload else {
-            Issue.record("Expected a deterministic node-detail table.")
+        guard
+            case .nodeProfile(let payload) =
+                artifact.payload
+        else {
+            Issue.record(
+                "Expected a deterministic node profile."
+            )
             return
         }
         let inputs = await runtime.nodeExecutor.inputs()
@@ -108,16 +113,23 @@ struct GraphChatAdvancedIntentEndToEndTests {
                     .nodeDetailRelatedLimit
         )
         #expect(inputs[0].includeNotes)
-        #expect(payload.rows.count == 2)
         #expect(
-            payload.rows
-                .flatMap(\.cells)
+            payload.detailValues.count == 2
+        )
+        #expect(
+            payload.detailValues
                 .contains {
-                    if case .text("Status") = $0.value {
-                        return true
-                    }
-                    return false
+                    $0.fieldName == "Status"
                 }
+        )
+        #expect(
+            payload.notes?.text
+                == "Interne Notiz"
+        )
+        #expect(
+            payload.attachments.first?
+                .originalFilename
+                == "atlas.pdf"
         )
         #expect(
             answer.evidence
@@ -195,6 +207,45 @@ struct GraphChatAdvancedIntentEndToEndTests {
             field: status,
             stringValue: "Aktiv"
         )
+        let pulse =
+            fixtures.makeDetailField(
+                owner: patients,
+                name: "Ruhepuls",
+                type: .numberInt,
+                sortIndex: 1,
+                unit: "bpm"
+            )
+        fixtures.makeDetailValue(
+            attribute: patient,
+            field: pulse,
+            intValue: 72
+        )
+        let medications =
+            fixtures.makeEntity(
+                name: "Medikament",
+                in: graph
+            )
+        let medication =
+            fixtures.makeAttribute(
+                name: "Medikament 3",
+                owner: medications
+            )
+        fixtures.makeLink(
+            source: .attribute(patient),
+            target:
+                .attribute(medication),
+            note: "3× täglich"
+        )
+        fixtures.makeAttachment(
+            owner: .attribute(patient),
+            title: "Laborbericht",
+            originalFilename:
+                "patient-a-labor.pdf",
+            contentTypeIdentifier:
+                "com.adobe.pdf",
+            fileExtension: "pdf",
+            byteCount: 4_096
+        )
         try fixtures.save()
 
         let interpreter =
@@ -230,6 +281,62 @@ struct GraphChatAdvancedIntentEndToEndTests {
             answer.directAnswer
                 .contains("Patient A")
         )
+        #expect(
+            answer.directAnswer
+                .contains(
+                    "Kontrolltermin geplant"
+                )
+        )
+        #expect(
+            answer.directAnswer
+                .contains(
+                    "Versorgungsstatus: Aktiv"
+                )
+        )
+        #expect(
+            answer.directAnswer
+                .contains(
+                    "Ruhepuls: 72 bpm"
+                )
+        )
+        #expect(
+            answer.directAnswer
+                .contains("Medikament 3")
+        )
+        #expect(
+            answer.directAnswer
+                .contains("3× täglich")
+        )
+        #expect(
+            answer.directAnswer
+                .contains(
+                    "patient-a-labor.pdf"
+                )
+        )
+        var messageState =
+            GraphChatAssistantMessageState(
+                question:
+                    "Nenne mir Details zu Patient A"
+            )
+        messageState.apply(
+            .completed(answer)
+        )
+        let copied =
+            GraphChatCopyContentBuilder
+            .payload(
+                for: messageState,
+                sourcePolicy: .none
+            )
+        #expect(
+            copied?.text.contains(
+                "3× täglich"
+            ) == true
+        )
+        #expect(
+            copied?.text.contains(
+                "patient-a-labor.pdf"
+            ) == true
+        )
         #expect(inputs.count == 1)
         #expect(
             inputs[0].node
@@ -257,6 +364,186 @@ struct GraphChatAdvancedIntentEndToEndTests {
         #expect(
             visible.contains("CURRENT")
                 == false
+        )
+    }
+
+    @MainActor
+    @Test
+    func foundationalAndSemanticNodeDetailsUseIdenticalProfileFinalization()
+        async throws
+    {
+        let store =
+            try BrainMeshTestContainer
+                .makeInMemoryStore()
+        let fixtures =
+            BrainMeshFixtureBuilder(
+                context: store.context
+            )
+        let graph =
+            fixtures.makeGraph(
+                name: "Technik"
+            )
+        let services =
+            fixtures.makeEntity(
+                name: "Services",
+                in: graph
+            )
+        let gateway =
+            fixtures.makeAttribute(
+                name: "Service Gateway",
+                owner: services,
+                notes: "Öffentlicher Einstieg"
+            )
+        let port =
+            fixtures.makeDetailField(
+                owner: services,
+                name: "Port",
+                type: .numberInt,
+                sortIndex: 0
+            )
+        fixtures.makeDetailValue(
+            attribute: gateway,
+            field: port,
+            intValue: 443
+        )
+        try fixtures.save()
+
+        let graphScope =
+            GraphScope(graphID: graph.id)
+        let chatScope =
+            GraphChatScope.entireGraph(
+                graphScope
+            )
+        let foundationalInterpreter =
+            FakeGraphChatIntentInterpreter()
+        let semanticInterpreter =
+            FakeGraphChatIntentInterpreter(
+                steps: [
+                    .draft(
+                        GraphChatUntrustedSemanticIntentDraft(
+                            family:
+                                .nodeDetails,
+                            nodeTerms: [
+                                "Service Gateway",
+                            ],
+                            responseLanguage:
+                                .german
+                        )
+                    ),
+                ]
+            )
+        let foundational =
+            makeRuntime(
+                store: store,
+                graphID: graph.id,
+                interpreter:
+                    foundationalInterpreter
+            )
+        let semantic =
+            makeRuntime(
+                store: store,
+                graphID: graph.id,
+                interpreter:
+                    semanticInterpreter
+            )
+        let foundationalEvents =
+            await collect(
+                await foundational
+                    .orchestrator
+                    .streamAnswer(
+                        question:
+                            "Nenne mir Details zu Service Gateway",
+                        graphScope:
+                            graphScope,
+                        chatScope:
+                            chatScope
+                    )
+            )
+        let semanticEvents =
+            await collect(
+                await semantic
+                    .orchestrator
+                    .streamAnswer(
+                        question:
+                            "Ich möchte Service Gateway genauer ansehen.",
+                        graphScope:
+                            graphScope,
+                        chatScope:
+                            chatScope
+                    )
+            )
+        let foundationalAnswer =
+            try completedAnswer(
+                foundationalEvents
+            )
+        let semanticAnswer =
+            try completedAnswer(
+                semanticEvents
+            )
+        let foundationalArtifact =
+            try #require(
+                await resolvedArtifacts(
+                    answer:
+                        foundationalAnswer,
+                    runtime:
+                        foundational,
+                    graphScope:
+                        graphScope,
+                    chatScope:
+                        chatScope
+                ).first
+            )
+        let semanticArtifact =
+            try #require(
+                await resolvedArtifacts(
+                    answer: semanticAnswer,
+                    runtime: semantic,
+                    graphScope:
+                        graphScope,
+                    chatScope:
+                        chatScope
+                ).first
+            )
+
+        #expect(
+            foundationalAnswer
+                .directAnswer
+                == semanticAnswer
+                .directAnswer
+        )
+        #expect(
+            foundationalArtifact.payload
+                == semanticArtifact.payload
+        )
+        #expect(
+            await foundational.provider
+                .snapshot()
+                .createdSessions.isEmpty
+        )
+        #expect(
+            await semantic.provider
+                .snapshot()
+                .createdSessions.isEmpty
+        )
+        #expect(
+            await foundationalInterpreter
+                .snapshot()
+                .requests.isEmpty
+        )
+        #expect(
+            await semanticInterpreter
+                .snapshot()
+                .requests.count == 1
+        )
+        #expect(
+            terminalEventCount(
+                foundationalEvents
+            ) == 1
+        )
+        #expect(
+            terminalEventCount(
+                semanticEvents
+            ) == 1
         )
     }
 

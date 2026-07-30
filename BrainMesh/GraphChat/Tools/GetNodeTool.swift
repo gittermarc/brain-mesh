@@ -76,12 +76,14 @@ nonisolated struct GraphChatAttachmentMetadata: Hashable, Sendable, Identifiable
 nonisolated struct GetNodeOutput: Sendable {
     let node: NodeRefKey
     let label: String
+    let visibleName: String
     let notes: String
     let owner: GraphChatNodeOwner?
     let detailValues: [GraphChatNodeDetailValue]
     let links: [GraphChatNodeLinkMetadata]
     let attachments: [GraphChatAttachmentMetadata]
     let evidenceIDs: [GraphEvidenceID]
+    let notesEvidenceID: GraphEvidenceID?
     let detailValueWindow: GraphChatResultWindow
     let incomingLinkWindow: GraphChatResultWindow
     let outgoingLinkWindow: GraphChatResultWindow
@@ -101,6 +103,8 @@ nonisolated struct GetNodeOutput: Sendable {
         links: [GraphChatNodeLinkMetadata],
         attachments: [GraphChatAttachmentMetadata],
         evidenceIDs: [GraphEvidenceID],
+        visibleName: String? = nil,
+        notesEvidenceID: GraphEvidenceID? = nil,
         detailValueWindow: GraphChatResultWindow? = nil,
         incomingLinkWindow: GraphChatResultWindow? = nil,
         outgoingLinkWindow: GraphChatResultWindow? = nil,
@@ -113,12 +117,16 @@ nonisolated struct GetNodeOutput: Sendable {
     ) {
         self.node = node
         self.label = label
+        self.visibleName =
+            visibleName ?? label
         self.notes = notes
         self.owner = owner
         self.detailValues = detailValues
         self.links = links
         self.attachments = attachments
         self.evidenceIDs = evidenceIDs
+        self.notesEvidenceID =
+            notesEvidenceID
         self.detailValueWindow = detailValueWindow ?? .complete(totalCount: detailValues.count)
         self.incomingLinkWindow =
             incomingLinkWindow
@@ -143,9 +151,11 @@ nonisolated struct GetNodeOutput: Sendable {
             )
         self.hasNotes =
             hasNotes
-            ?? notes.trimmingCharacters(
-                in: .whitespacesAndNewlines
-            ).isEmpty == false
+            ?? (
+                notes.trimmingCharacters(
+                    in: .whitespacesAndNewlines
+                ).isEmpty == false
+            )
         self.directLinkCount =
             directLinkCount ?? links.count
         self.attachmentMetadataCount =
@@ -241,10 +251,22 @@ nonisolated struct GetNodeTool: GraphChatTool {
                 prepared.output.attachments.filter {
                     validIDs.contains($0.evidenceID)
                 }
+            let validatedNotesEvidenceID =
+                prepared.output
+                    .notesEvidenceID
+                    .flatMap { evidenceID in
+                        validIDs.contains(evidenceID)
+                            ? evidenceID
+                            : nil
+                    }
             let output = GetNodeOutput(
                 node: prepared.output.node,
                 label: prepared.output.label,
-                notes: prepared.output.notes,
+                notes:
+                    validatedNotesEvidenceID
+                        == nil
+                    ? ""
+                    : prepared.output.notes,
                 owner: prepared.output.owner,
                 detailValues: validatedDetailValues,
                 links: validatedLinks,
@@ -252,6 +274,11 @@ nonisolated struct GetNodeTool: GraphChatTool {
                 evidenceIDs: prepared.output.evidenceIDs.filter {
                     validIDs.contains($0)
                 },
+                visibleName:
+                    prepared.output
+                        .visibleName,
+                notesEvidenceID:
+                    validatedNotesEvidenceID,
                 detailValueWindow:
                     Self.validatedWindow(
                         prepared.output
@@ -287,7 +314,8 @@ nonisolated struct GetNodeTool: GraphChatTool {
                             validatedAttachments.count
                     ),
                 hasNotes:
-                    prepared.output.hasNotes,
+                    prepared.output
+                        .hasNotes,
                 directLinkCount:
                     prepared.output
                         .directLinkCount,
@@ -363,13 +391,33 @@ nonisolated struct GetNodeTool: GraphChatTool {
                 )
             }
         )
-        var baseFields: [GraphEvidenceFieldValue] = []
-        if profile.hasNotes {
+        var baseFields: [GraphEvidenceFieldValue] = [
+            GraphEvidenceFieldValue(
+                fieldID: nil,
+                fieldName: "Name",
+                value:
+                    .text(
+                        profile.visibleName
+                    ),
+                unit: nil
+            ),
+            GraphEvidenceFieldValue(
+                fieldID: nil,
+                fieldName: "Anzeigename",
+                value:
+                    .text(
+                        profile.displayName
+                    ),
+                unit: nil
+            ),
+        ]
+        if let ownerLabel = owner?.label {
             baseFields.append(
                 GraphEvidenceFieldValue(
                     fieldID: nil,
-                    fieldName: "Notizen",
-                    value: .text(notes),
+                    fieldName: "Owner",
+                    value:
+                        .text(ownerLabel),
                     unit: nil
                 )
             )
@@ -378,12 +426,37 @@ nonisolated struct GetNodeTool: GraphChatTool {
         let baseEvidence = GraphEvidence(
             sourceReference: baseReference,
             summary: label,
-            fieldValues:
-                includeNotes ? baseFields : [],
+            fieldValues: baseFields,
             navigationTitle: label,
+            nodeProfileArea: .identity,
             identitySuffix: "node-detail"
         )
         var evidence = [baseEvidence]
+        let notesEvidence: GraphEvidence?
+        if includeNotes,
+            profile.hasNotes
+        {
+            let item = GraphEvidence(
+                sourceReference: baseReference,
+                summary: label,
+                fieldValues: [
+                    GraphEvidenceFieldValue(
+                        fieldID: nil,
+                        fieldName: "Notizen",
+                        value: .text(notes),
+                        unit: nil
+                    ),
+                ],
+                navigationTitle: label,
+                nodeProfileArea: .notes,
+                identitySuffix:
+                    "node-notes"
+            )
+            notesEvidence = item
+            evidence.append(item)
+        } else {
+            notesEvidence = nil
+        }
 
         var detailItems: [GraphChatNodeDetailValue] = []
         detailItems.reserveCapacity(
@@ -423,6 +496,8 @@ nonisolated struct GetNodeTool: GraphChatTool {
                     ),
                 ],
                 navigationTitle: label,
+                nodeProfileArea:
+                    .detailValue,
                 identitySuffix: "node-field"
             )
             evidence.append(itemEvidence)
@@ -513,6 +588,8 @@ nonisolated struct GetNodeTool: GraphChatTool {
                     ]
                 } ?? [],
                 navigationTitle: label,
+                nodeProfileArea:
+                    .connection,
                 identitySuffix: "node-link"
             )
             evidence.append(itemEvidence)
@@ -555,6 +632,15 @@ nonisolated struct GetNodeTool: GraphChatTool {
                 fieldValues: [
                     GraphEvidenceFieldValue(
                         fieldID: nil,
+                        fieldName: "Titel",
+                        value:
+                            .text(
+                                attachment.title
+                            ),
+                        unit: nil
+                    ),
+                    GraphEvidenceFieldValue(
+                        fieldID: nil,
                         fieldName: "Dateiname",
                         value: .text(attachment.originalFilename),
                         unit: nil
@@ -565,11 +651,46 @@ nonisolated struct GetNodeTool: GraphChatTool {
                         value:
                             .integer(
                                 attachment.byteCount
-                            ),
+                        ),
                         unit: "Bytes"
-                    )
+                    ),
+                    GraphEvidenceFieldValue(
+                        fieldID: nil,
+                        fieldName:
+                            "Attachment-Art",
+                        value:
+                            .text(
+                                Self.attachmentKindKey(
+                                    contentKind
+                                )
+                            ),
+                        unit: nil
+                    ),
+                    GraphEvidenceFieldValue(
+                        fieldID: nil,
+                        fieldName: "Dateityp",
+                        value:
+                            .text(
+                                attachment
+                                    .contentTypeIdentifier
+                            ),
+                        unit: nil
+                    ),
+                    GraphEvidenceFieldValue(
+                        fieldID: nil,
+                        fieldName:
+                            "Dateiendung",
+                        value:
+                            .text(
+                                attachment
+                                    .fileExtension
+                            ),
+                        unit: nil
+                    ),
                 ],
                 navigationTitle: label,
+                nodeProfileArea:
+                    .attachment,
                 identitySuffix: "attachment-metadata"
             )
             evidence.append(itemEvidence)
@@ -661,6 +782,10 @@ nonisolated struct GetNodeTool: GraphChatTool {
             links: linkItems,
             attachments: attachmentItems,
             evidenceIDs: evidence.map(\.id),
+            visibleName:
+                profile.visibleName,
+            notesEvidenceID:
+                notesEvidence?.id,
             detailValueWindow:
                 Self.chatWindow(
                     profile.detailValueWindow
@@ -692,6 +817,19 @@ nonisolated struct GetNodeTool: GraphChatTool {
                 structureEvidence.id
         )
         return PreparedOutput(output: output, evidence: GraphEvidenceCollection(evidence).values)
+    }
+
+    private nonisolated static func attachmentKindKey(
+        _ kind: AttachmentContentKind
+    ) -> String {
+        switch kind {
+        case .file:
+            return "file"
+        case .video:
+            return "video"
+        case .galleryImage:
+            return "galleryImage"
+        }
     }
 
     private nonisolated static func chatWindow(
