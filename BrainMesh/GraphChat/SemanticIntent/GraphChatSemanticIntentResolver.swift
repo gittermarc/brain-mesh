@@ -32,6 +32,16 @@ nonisolated enum GraphChatSemanticNodeSelectionRole:
 {
     case details
     case comparison(Int)
+    case relationshipCenter
+    case relationshipCounterpart
+}
+
+nonisolated enum GraphChatSemanticEntitySelectionRole:
+    Hashable,
+    Sendable
+{
+    case primary
+    case relationshipCounterpart
 }
 
 nonisolated struct GraphChatSemanticSelectedNode:
@@ -48,12 +58,16 @@ nonisolated struct GraphChatSemanticIntentSelection:
 {
     let draft: GraphChatUntrustedSemanticIntentDraft
     let selectedEntityID: UUID?
+    let selectedRelationshipCounterpartEntityID:
+        UUID?
     let selectedFields: [GraphChatSemanticSelectedField]
     let selectedNodes: [GraphChatSemanticSelectedNode]
 
     init(
         draft: GraphChatUntrustedSemanticIntentDraft,
         selectedEntityID: UUID?,
+        selectedRelationshipCounterpartEntityID:
+            UUID? = nil,
         selectedFields:
             [GraphChatSemanticSelectedField] = [],
         selectedNodes:
@@ -61,6 +75,8 @@ nonisolated struct GraphChatSemanticIntentSelection:
     ) {
         self.draft = draft
         self.selectedEntityID = selectedEntityID
+        self.selectedRelationshipCounterpartEntityID =
+            selectedRelationshipCounterpartEntityID
         self.selectedFields = selectedFields
         self.selectedNodes = selectedNodes
     }
@@ -81,12 +97,24 @@ nonisolated struct GraphChatSemanticEntityCandidate:
 {
     let entityID: UUID
     let displayName: String
+    let selectionRole:
+        GraphChatSemanticEntitySelectionRole
+    let preservedPrimaryEntityID: UUID?
+    let preservedRelationshipCounterpartEntityID:
+        UUID?
     let selectedFields: [GraphChatSemanticSelectedField]
     let selectedNodes: [GraphChatSemanticSelectedNode]
 
     init(
         entityID: UUID,
         displayName: String,
+        selectionRole:
+            GraphChatSemanticEntitySelectionRole =
+                .primary,
+        preservedPrimaryEntityID:
+            UUID? = nil,
+        preservedRelationshipCounterpartEntityID:
+            UUID? = nil,
         selectedFields:
             [GraphChatSemanticSelectedField] = [],
         selectedNodes:
@@ -94,6 +122,11 @@ nonisolated struct GraphChatSemanticEntityCandidate:
     ) {
         self.entityID = entityID
         self.displayName = displayName
+        self.selectionRole = selectionRole
+        self.preservedPrimaryEntityID =
+            preservedPrimaryEntityID
+        self.preservedRelationshipCounterpartEntityID =
+            preservedRelationshipCounterpartEntityID
         self.selectedFields = selectedFields
         self.selectedNodes = selectedNodes
     }
@@ -188,6 +221,8 @@ nonisolated struct GraphChatSemanticIntentResolver:
         GraphChatQueryIntentCompiler
     private let advancedCompiler:
         GraphChatAdvancedIntentCompiler
+    private let relationshipCompiler:
+        GraphChatRelationshipIntentCompiler
 
     init(
         limitPolicy:
@@ -208,17 +243,24 @@ nonisolated struct GraphChatSemanticIntentResolver:
                 ),
         advancedCompiler:
             GraphChatAdvancedIntentCompiler =
-                GraphChatAdvancedIntentCompiler()
+                GraphChatAdvancedIntentCompiler(),
+        relationshipCompiler:
+            GraphChatRelationshipIntentCompiler =
+                GraphChatRelationshipIntentCompiler()
     ) {
         self.limitPolicy = limitPolicy
         self.mentionResolver = mentionResolver
         self.queryCompiler = queryCompiler
         self.advancedCompiler = advancedCompiler
+        self.relationshipCompiler =
+            relationshipCompiler
     }
 
     func resolve(
         draft: GraphChatUntrustedSemanticIntentDraft,
         selectedEntityID: UUID?,
+        selectedRelationshipCounterpartEntityID:
+            UUID? = nil,
         selectedFields:
             [GraphChatSemanticSelectedField] = [],
         selectedNodes:
@@ -311,6 +353,26 @@ nonisolated struct GraphChatSemanticIntentResolver:
                 requestID: requestID,
                 sourceTurnID: sourceTurnID,
                 clarificationID: clarificationID
+            )
+        case .relationships:
+            return try relationshipCompiler.compile(
+                draft: draft,
+                selectedEntityID:
+                    selectedEntityID,
+                selectedRelationshipCounterpartEntityID:
+                    selectedRelationshipCounterpartEntityID,
+                selectedNodes:
+                    selectedNodes,
+                providerPlan:
+                    providerPlan,
+                schemaContext:
+                    schemaContext,
+                requestID:
+                    requestID,
+                sourceTurnID:
+                    sourceTurnID,
+                clarificationID:
+                    clarificationID
             )
         case .findNodes:
             break
@@ -768,7 +830,8 @@ nonisolated struct GraphChatSemanticIntentResolver:
         case .filteredCollection, .count,
             .groupCount, .refinement,
             .nodeDetails, .compareNodes,
-            .inspectGraphState:
+            .inspectGraphState,
+            .relationships:
             throw GraphChatSemanticIntentResolutionError
                 .unsupportedCombination
         }

@@ -180,6 +180,7 @@ struct GraphChatInterpretationCorrectionEditorView: View {
                     groupingSection
                     resultAmountSection
                     graphStateSection
+                    relationshipSection
                 }
                 .disabled(isBusy)
             }
@@ -226,6 +227,20 @@ struct GraphChatInterpretationCorrectionEditorView: View {
         .onChange(of: selection.nodes) { _, _ in
             synchronizeEntityForNodeSelection()
             sanitizeFieldBoundSelections()
+        }
+        .onChange(
+            of:
+                selection
+                    .relationshipCounterpartEntityID
+        ) { _, _ in
+            sanitizeRelationshipCounterpartNode()
+        }
+        .onChange(
+            of:
+                selection
+                    .relationshipCounterpartNode
+        ) { _, _ in
+            synchronizeRelationshipCounterpartEntity()
         }
         .onChange(of: isApplying) { _, newValue in
             if newValue == false {
@@ -667,6 +682,136 @@ struct GraphChatInterpretationCorrectionEditorView: View {
         }
     }
 
+    @ViewBuilder
+    private var relationshipSection: some View {
+        if capabilities.intentKind == .relationships {
+            Section(strings.relationship) {
+                if capabilities.contains(
+                    .relationshipDirection
+                ) {
+                    Picker(
+                        strings.relationshipDirection,
+                        selection:
+                            $selection
+                                .relationshipDirection
+                    ) {
+                        ForEach(
+                            GraphChatRelationshipDirection
+                                .allCases,
+                            id: \.self
+                        ) { direction in
+                            Text(
+                                strings.relationshipDirectionName(
+                                    direction
+                                )
+                            )
+                            .tag(Optional(direction))
+                        }
+                    }
+                    .accessibilityIdentifier(
+                        "graph-chat-correction-relationship-direction"
+                    )
+                }
+
+                if capabilities.contains(
+                    .relationshipCounterpartEntity
+                ) {
+                    Picker(
+                        strings.relationshipCounterpartEntity,
+                        selection:
+                            $selection
+                                .relationshipCounterpartEntityID
+                    ) {
+                        Text(strings.anyCounterpartEntity)
+                            .tag(nil as UUID?)
+                        ForEach(snapshot.entities) { entity in
+                            Text(entity.displayName)
+                                .tag(Optional(entity.id))
+                        }
+                    }
+                    .accessibilityHint(
+                        strings.relationshipCatalogHint
+                    )
+                    .accessibilityIdentifier(
+                        "graph-chat-correction-relationship-counterpart-entity"
+                    )
+                }
+
+                if capabilities.contains(
+                    .relationshipCounterpartNode
+                ) {
+                    Picker(
+                        strings.relationshipCounterpartNode,
+                        selection:
+                            $selection
+                                .relationshipCounterpartNode
+                    ) {
+                        if relationshipCounterpartIsOptional {
+                            Text(strings.anyCounterpartNode)
+                                .tag(nil as NodeRefKey?)
+                        } else {
+                            Text(strings.chooseCounterpartNode)
+                                .tag(nil as NodeRefKey?)
+                        }
+                        ForEach(
+                            availableRelationshipCounterpartNodes
+                        ) { node in
+                            nodeLabel(node)
+                                .tag(Optional(node.node))
+                        }
+                    }
+                    .accessibilityHint(
+                        strings.relationshipCatalogHint
+                    )
+                    .accessibilityIdentifier(
+                        "graph-chat-correction-relationship-counterpart-node"
+                    )
+                }
+
+                if capabilities.contains(
+                    .relationshipNotePredicate
+                ) {
+                    Picker(
+                        strings.relationshipNoteFilter,
+                        selection:
+                            relationshipNoteModeBinding
+                    ) {
+                        ForEach(
+                            GraphChatRelationshipNoteMode
+                                .allCases,
+                            id: \.self
+                        ) { mode in
+                            Text(
+                                strings.relationshipNoteModeName(
+                                    mode
+                                )
+                            )
+                            .tag(mode)
+                        }
+                    }
+                    .accessibilityIdentifier(
+                        "graph-chat-correction-relationship-note-mode"
+                    )
+
+                    if relationshipNoteMode == .contains {
+                        TextField(
+                            strings.relationshipNoteTerm,
+                            text:
+                                relationshipNoteTermBinding
+                        )
+                        .textInputAutocapitalization(
+                            .sentences
+                        )
+                        .submitLabel(.done)
+                        .accessibilityIdentifier(
+                            "graph-chat-correction-relationship-note-term"
+                        )
+                    }
+                }
+            }
+        }
+    }
+
     private var applyBar: some View {
         VStack(spacing: 0) {
             Divider()
@@ -852,7 +997,98 @@ struct GraphChatInterpretationCorrectionEditorView: View {
            resultAmountIsValid == false {
             return false
         }
+        if capabilities.intentKind == .relationships,
+           relationshipSelectionIsValid == false {
+            return false
+        }
         return true
+    }
+
+    private var relationshipSelectionIsValid: Bool {
+        guard
+            let direction =
+                selection.relationshipDirection,
+            GraphChatRelationshipDirection
+                .allCases.contains(direction)
+        else {
+            return false
+        }
+        if let entityID =
+                selection
+                    .relationshipCounterpartEntityID,
+           snapshot.entity(id: entityID) == nil {
+            return false
+        }
+        if let node =
+                selection
+                    .relationshipCounterpartNode {
+            guard
+                let option = snapshot.node(node)
+            else {
+                return false
+            }
+            if let entityID =
+                    selection
+                        .relationshipCounterpartEntityID,
+               option.ownerEntityID != entityID {
+                return false
+            }
+        } else if relationshipCounterpartIsOptional
+            == false {
+            return false
+        }
+        if relationshipCounterpartIsOptional == false {
+            return direction == .both
+                && selection
+                    .relationshipNotePredicate
+                    == nil
+        }
+        if case .contains(let term)? =
+                selection
+                    .relationshipNotePredicate {
+            return term
+                .trimmingCharacters(
+                    in: .whitespacesAndNewlines
+                )
+                .isEmpty == false
+        }
+        return true
+    }
+
+    private var relationshipCounterpartIsOptional: Bool {
+        capabilities.contains(
+            .relationshipDirection
+        )
+    }
+
+    private var availableRelationshipCounterpartNodes:
+        [GraphChatInterpretationCorrectionNodeOption]
+    {
+        guard
+            let entityID =
+                selection
+                    .relationshipCounterpartEntityID
+        else {
+            return snapshot.nodes
+        }
+        return snapshot.nodes.filter {
+            $0.ownerEntityID == entityID
+        }
+    }
+
+    private var relationshipNoteMode:
+        GraphChatRelationshipNoteMode
+    {
+        switch selection.relationshipNotePredicate {
+        case .none:
+            return .any
+        case .some(.present):
+            return .present
+        case .some(.missing):
+            return .missing
+        case .some(.contains):
+            return .contains
+        }
     }
 
     private var resultAmountIsValid: Bool {
@@ -1037,6 +1273,64 @@ struct GraphChatInterpretationCorrectionEditorView: View {
         )
     }
 
+    private var relationshipNoteModeBinding:
+        Binding<GraphChatRelationshipNoteMode>
+    {
+        Binding(
+            get: {
+                relationshipNoteMode
+            },
+            set: { mode in
+                switch mode {
+                case .any:
+                    selection
+                        .relationshipNotePredicate =
+                        nil
+                case .present:
+                    selection
+                        .relationshipNotePredicate =
+                        .present
+                case .missing:
+                    selection
+                        .relationshipNotePredicate =
+                        .missing
+                case .contains:
+                    let current: String
+                    if case .contains(let term)? =
+                            selection
+                                .relationshipNotePredicate {
+                        current = term
+                    } else {
+                        current = ""
+                    }
+                    selection
+                        .relationshipNotePredicate =
+                        .contains(current)
+                }
+            }
+        )
+    }
+
+    private var relationshipNoteTermBinding:
+        Binding<String>
+    {
+        Binding(
+            get: {
+                if case .contains(let term)? =
+                        selection
+                            .relationshipNotePredicate {
+                    return term
+                }
+                return ""
+            },
+            set: { term in
+                selection
+                    .relationshipNotePredicate =
+                    .contains(term)
+            }
+        )
+    }
+
     private func nodeMembershipBinding(
         _ node: NodeRefKey
     ) -> Binding<Bool> {
@@ -1137,6 +1431,41 @@ struct GraphChatInterpretationCorrectionEditorView: View {
         }
     }
 
+    private func sanitizeRelationshipCounterpartNode() {
+        guard
+            let counterpart =
+                selection
+                    .relationshipCounterpartNode,
+            let option =
+                snapshot.node(counterpart)
+        else {
+            return
+        }
+        if let entityID =
+                selection
+                    .relationshipCounterpartEntityID,
+           option.ownerEntityID != entityID {
+            selection
+                .relationshipCounterpartNode =
+                nil
+        }
+    }
+
+    private func synchronizeRelationshipCounterpartEntity() {
+        guard
+            let counterpart =
+                selection
+                    .relationshipCounterpartNode,
+            let option =
+                snapshot.node(counterpart)
+        else {
+            return
+        }
+        selection
+            .relationshipCounterpartEntityID =
+            option.ownerEntityID
+    }
+
     @ViewBuilder
     private func nodeLabel(
         _ node:
@@ -1176,4 +1505,16 @@ private nonisolated enum
     case standard
     case all
     case limited
+}
+
+nonisolated enum GraphChatRelationshipNoteMode:
+    String,
+    CaseIterable,
+    Hashable,
+    Sendable
+{
+    case any
+    case present
+    case missing
+    case contains
 }

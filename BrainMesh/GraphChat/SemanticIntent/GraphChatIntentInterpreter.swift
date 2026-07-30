@@ -22,8 +22,43 @@ nonisolated enum GraphChatSemanticIntentFamily:
     case nodeDetails
     case compareNodes
     case inspectGraphState
+    case relationships
     case unrecognized
     case openEnded
+}
+
+nonisolated enum GraphChatSemanticRelationshipRequest:
+    String,
+    CaseIterable,
+    Hashable,
+    Sendable
+{
+    case connections
+    case linkNotesBetweenNodes
+}
+
+nonisolated enum GraphChatSemanticRelationshipDirection:
+    String,
+    CaseIterable,
+    Hashable,
+    Sendable
+{
+    case unspecified
+    case incoming
+    case outgoing
+    case both
+}
+
+nonisolated enum GraphChatSemanticRelationshipNotePredicate:
+    String,
+    CaseIterable,
+    Hashable,
+    Sendable
+{
+    case unspecified
+    case present
+    case missing
+    case contains
 }
 
 nonisolated enum GraphChatSemanticFindTarget:
@@ -139,6 +174,14 @@ nonisolated struct GraphChatUntrustedSemanticIntentDraft:
     let projectionTerms: [String]
     let groupFieldTerm: String?
     let graphStateAspect: GraphChatGraphStateAspect
+    let relationshipRequest:
+        GraphChatSemanticRelationshipRequest
+    let relationshipDirection:
+        GraphChatSemanticRelationshipDirection
+    let relationshipCounterpartEntityTerm: String?
+    let relationshipNotePredicate:
+        GraphChatSemanticRelationshipNotePredicate
+    let relationshipNoteTerm: String?
     let responseLanguage: GraphChatResponseLanguage
 
     init(
@@ -155,6 +198,18 @@ nonisolated struct GraphChatUntrustedSemanticIntentDraft:
         groupFieldTerm: String? = nil,
         graphStateAspect:
             GraphChatGraphStateAspect = .overview,
+        relationshipRequest:
+            GraphChatSemanticRelationshipRequest =
+                .connections,
+        relationshipDirection:
+            GraphChatSemanticRelationshipDirection =
+                .unspecified,
+        relationshipCounterpartEntityTerm:
+            String? = nil,
+        relationshipNotePredicate:
+            GraphChatSemanticRelationshipNotePredicate =
+                .unspecified,
+        relationshipNoteTerm: String? = nil,
         responseLanguage: GraphChatResponseLanguage
     ) {
         self.family = family
@@ -169,6 +224,16 @@ nonisolated struct GraphChatUntrustedSemanticIntentDraft:
         self.projectionTerms = projectionTerms
         self.groupFieldTerm = groupFieldTerm
         self.graphStateAspect = graphStateAspect
+        self.relationshipRequest =
+            relationshipRequest
+        self.relationshipDirection =
+            relationshipDirection
+        self.relationshipCounterpartEntityTerm =
+            relationshipCounterpartEntityTerm
+        self.relationshipNotePredicate =
+            relationshipNotePredicate
+        self.relationshipNoteTerm =
+            relationshipNoteTerm
         self.responseLanguage = responseLanguage
     }
 }
@@ -404,16 +469,33 @@ nonisolated struct GraphChatSemanticDraftValidator:
             GraphChatSemanticSafety.normalizedOptional(
                 source.groupFieldTerm
             )
+        let relationshipCounterpartEntityTerm =
+            GraphChatSemanticSafety.normalizedOptional(
+                source
+                    .relationshipCounterpartEntityTerm
+            )
+        let relationshipNoteTerm =
+            GraphChatSemanticSafety.normalizedOptional(
+                source.relationshipNoteTerm
+            )
         let filters = try normalizedFilters(source.filters)
         let sorting = try normalizedSorting(source.sorting)
         let projectionTerms = try normalizedProjectionTerms(
             source.projectionTerms
         )
         let nodeTerms = try normalizedNodeTerms(
-            source.nodeTerms
+            source.nodeTerms,
+            preservingDuplicates:
+                source.family == .relationships
         )
         let semanticValues =
-            [entityTerm, searchTerm, groupFieldTerm]
+            [
+                entityTerm,
+                searchTerm,
+                groupFieldTerm,
+                relationshipCounterpartEntityTerm,
+                relationshipNoteTerm,
+            ]
                 .compactMap { $0 }
             + filters.flatMap {
                 [$0.fieldTerm] + $0.values
@@ -450,11 +532,44 @@ nonisolated struct GraphChatSemanticDraftValidator:
                     .overlongValue
             }
         }
+        if let relationshipCounterpartEntityTerm {
+            guard relationshipCounterpartEntityTerm
+                    .count
+                    <= GraphChatSemanticSafety
+                        .maximumEntityTermLength else {
+                throw GraphChatSemanticDraftValidationError
+                    .overlongValue
+            }
+        }
+        if let relationshipNoteTerm {
+            guard relationshipNoteTerm.count
+                    <= GraphChatSemanticSafety
+                        .maximumFilterValueLength else {
+                throw GraphChatSemanticDraftValidationError
+                    .overlongValue
+            }
+        }
         if case .first(let count) = source.resultAmount {
             guard count > 0,
                   count <= GraphChatSemanticSafety.maximumRequestedCount else {
                 throw GraphChatSemanticDraftValidationError
                     .invalidRequestedCount
+            }
+        }
+        if source.family != .relationships {
+            guard
+                source.relationshipRequest
+                    == .connections,
+                source.relationshipDirection
+                    == .unspecified,
+                relationshipCounterpartEntityTerm
+                    == nil,
+                source.relationshipNotePredicate
+                    == .unspecified,
+                relationshipNoteTerm == nil
+            else {
+                throw GraphChatSemanticDraftValidationError
+                    .invalidCombination
             }
         }
 
@@ -593,6 +708,66 @@ nonisolated struct GraphChatSemanticDraftValidator:
                     .invalidCombination
             }
 
+        case .relationships:
+            guard
+                searchTerm == nil,
+                source.findTarget == .anyEntry,
+                source.resultAmount == .standard,
+                filters.isEmpty,
+                sorting == nil,
+                projectionTerms.isEmpty,
+                groupFieldTerm == nil
+            else {
+                throw GraphChatSemanticDraftValidationError
+                    .invalidCombination
+            }
+            switch source.relationshipRequest {
+            case .connections:
+                guard
+                    (nodeTerms.count == 1
+                        || nodeTerms.count == 2)
+                        || (
+                            nodeTerms.isEmpty
+                            && source
+                                .conversationReference
+                                == .currentSelection
+                        )
+                else {
+                    throw GraphChatSemanticDraftValidationError
+                        .invalidCombination
+                }
+            case .linkNotesBetweenNodes:
+                guard
+                    nodeTerms.count == 2,
+                    source.conversationReference == .none,
+                    source.relationshipDirection
+                        == .unspecified
+                        || source
+                            .relationshipDirection
+                            == .both,
+                    relationshipCounterpartEntityTerm
+                        == nil,
+                    source.relationshipNotePredicate
+                        == .unspecified,
+                    relationshipNoteTerm == nil
+                else {
+                    throw GraphChatSemanticDraftValidationError
+                        .invalidCombination
+                }
+            }
+            switch source.relationshipNotePredicate {
+            case .contains:
+                guard relationshipNoteTerm != nil else {
+                    throw GraphChatSemanticDraftValidationError
+                        .invalidCombination
+                }
+            case .unspecified, .present, .missing:
+                guard relationshipNoteTerm == nil else {
+                    throw GraphChatSemanticDraftValidationError
+                        .invalidCombination
+                }
+            }
+
         case .unrecognized, .openEnded:
             guard entityTerm == nil,
                   searchTerm == nil,
@@ -603,7 +778,12 @@ nonisolated struct GraphChatSemanticDraftValidator:
                   filters.isEmpty,
                   sorting == nil,
                   projectionTerms.isEmpty,
-                  groupFieldTerm == nil else {
+                  groupFieldTerm == nil,
+                  relationshipCounterpartEntityTerm
+                    == nil,
+                  source.relationshipNotePredicate
+                    == .unspecified,
+                  relationshipNoteTerm == nil else {
                 throw GraphChatSemanticDraftValidationError
                     .invalidCombination
             }
@@ -623,12 +803,23 @@ nonisolated struct GraphChatSemanticDraftValidator:
             groupFieldTerm: groupFieldTerm,
             graphStateAspect:
                 source.graphStateAspect,
+            relationshipRequest:
+                source.relationshipRequest,
+            relationshipDirection:
+                source.relationshipDirection,
+            relationshipCounterpartEntityTerm:
+                relationshipCounterpartEntityTerm,
+            relationshipNotePredicate:
+                source.relationshipNotePredicate,
+            relationshipNoteTerm:
+                relationshipNoteTerm,
             responseLanguage: source.responseLanguage
         )
     }
 
     private func normalizedNodeTerms(
-        _ source: [String]
+        _ source: [String],
+        preservingDuplicates: Bool
     ) throws -> [String] {
         guard source.count
                 <= GraphChatSemanticSafety.maximumNodeTerms
@@ -650,7 +841,8 @@ nonisolated struct GraphChatSemanticDraftValidator:
                     .overlongValue
             }
             let key = BMSearch.fold(normalized)
-            return seen.insert(key).inserted
+            return preservingDuplicates
+                || seen.insert(key).inserted
                 ? normalized
                 : nil
         }

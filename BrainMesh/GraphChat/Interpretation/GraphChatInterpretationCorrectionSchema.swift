@@ -228,8 +228,18 @@ nonisolated struct GraphChatInterpretationCorrectionSchemaSnapshot:
         case .fields, .filters, .sorting, .groupingField:
             return fields(for: entityID).isEmpty ? .noFields : nil
         case .searchTerm, .findTarget, .resultAmount,
-             .graphStateAspect:
+             .graphStateAspect,
+             .relationshipDirection,
+             .relationshipNotePredicate:
             return nil
+        case .relationshipCounterpartEntity:
+            return entities.isEmpty
+                ? .noAuthorizedEntities
+                : nil
+        case .relationshipCounterpartNode:
+            return nodes.isEmpty
+                ? .noAuthorizedNodes
+                : nil
         }
     }
 
@@ -316,7 +326,8 @@ nonisolated struct GraphChatInterpretationCorrectionSchemaSnapshot:
                 resultAmount = .first(limit)
             }
         case .nodeDetails, .compareNodes,
-             .inspectGraphState:
+             .inspectGraphState,
+             .relationships:
             break
         }
 
@@ -347,6 +358,10 @@ nonisolated struct GraphChatInterpretationCorrectionSchemaSnapshot:
             .inspectGraphState:
             initialEntityID =
                 interpretation.entities.first?.id
+        case .relationships:
+            initialEntityID =
+                interpretation.relationship?
+                    .center.ownerEntityID
         }
 
         return GraphChatInterpretationCorrectionSelection(
@@ -362,7 +377,19 @@ nonisolated struct GraphChatInterpretationCorrectionSchemaSnapshot:
             resultAmount: resultAmount,
             search: search,
             graphStateAspect:
-                interpretation.graphStateAspect
+                interpretation.graphStateAspect,
+            relationshipDirection:
+                interpretation.relationship?
+                    .direction,
+            relationshipCounterpartEntityID:
+                interpretation.relationship?
+                    .counterpartEntity?.id,
+            relationshipCounterpartNode:
+                interpretation.relationship?
+                    .counterpartNode?.node,
+            relationshipNotePredicate:
+                interpretation.relationship?
+                    .notePredicate
         )
     }
 
@@ -619,6 +646,92 @@ nonisolated struct GraphChatInterpretationCorrectionSchemaSnapshot:
                 )
             }
         }
+        if capabilities.intentKind
+            == .relationships {
+            guard
+                let original =
+                    binding
+                        .originalInterpretation
+                        .relationship,
+                selection.relationshipDirection
+                    != nil,
+                node(original.center.node)
+                    != nil
+            else {
+                return .invalid(
+                    .invalidRelationshipSelection
+                )
+            }
+            if let entityID =
+                    selection
+                        .relationshipCounterpartEntityID,
+               entity(id: entityID) == nil {
+                return .invalid(
+                    .invalidRelationshipSelection
+                )
+            }
+            if let counterpartNode =
+                    selection
+                        .relationshipCounterpartNode {
+                guard
+                    let option =
+                        node(counterpartNode),
+                    (
+                        selection
+                            .relationshipCounterpartEntityID
+                            .map {
+                                option.ownerEntityID
+                                    == $0
+                            } ?? true
+                    )
+                else {
+                    return .invalid(
+                        .invalidRelationshipSelection
+                    )
+                }
+            }
+            if original.request
+                == .linkNotesBetweenNodes {
+                guard
+                    selection
+                        .relationshipCounterpartNode
+                        != nil,
+                    selection
+                        .relationshipDirection
+                        == .both,
+                    selection
+                        .relationshipNotePredicate
+                        == nil
+                else {
+                    return .invalid(
+                        .invalidRelationshipSelection
+                    )
+                }
+            }
+            if case .contains(let term)? =
+                    selection
+                        .relationshipNotePredicate {
+                let normalized =
+                    term.trimmingCharacters(
+                        in:
+                            .whitespacesAndNewlines
+                    )
+                guard
+                    normalized.isEmpty == false,
+                    normalized.count
+                        <= GraphChatSemanticSafety
+                            .maximumFilterValueLength,
+                    GraphChatSemanticSafety
+                        .containsTechnicalIdentifier(
+                            normalized
+                        ) == false
+                else {
+                    return .invalid(
+                        .invalidRelationshipSelection
+                    )
+                }
+            }
+        }
 
         return .ready
     }
@@ -829,7 +942,9 @@ nonisolated struct GraphChatInterpretationCorrectionSchemaBuilder:
         context: GraphSchemaContext,
         chatScope: GraphChatScope,
         language: GraphChatResponseLanguage,
-        graphIsLocked: Bool = false
+        graphIsLocked: Bool = false,
+        includeFullGraphRelationshipCatalog:
+            Bool = false
     ) -> GraphChatInterpretationCorrectionSchemaSnapshot {
         let graphScope = chatScope.graphScope
         let localeIdentifier = language.localeIdentifier
@@ -862,7 +977,13 @@ nonisolated struct GraphChatInterpretationCorrectionSchemaBuilder:
             aliases.entitiesByAlias.values
         )
         let authorizedEntityIDsResult =
-            authorizedEntityIDs(
+            includeFullGraphRelationshipCatalog
+            ? AuthorizedEntityResult.success(
+                Set(
+                    allEntities.map(\.entityID)
+                )
+            )
+            : authorizedEntityIDs(
                 chatScope: chatScope,
                 aliases: aliases
             )
@@ -987,14 +1108,15 @@ nonisolated struct GraphChatInterpretationCorrectionSchemaBuilder:
         )
         let authorizedNodes = aliases.nodesByKey.values
             .filter { resolution in
-                GraphChatScopeAuthorization.allows(
-                    scope: .node(
-                        resolution.node,
-                        in: graphScope
-                    ),
-                    within: chatScope,
-                    aliases: aliases
-                )
+                includeFullGraphRelationshipCatalog
+                    || GraphChatScopeAuthorization.allows(
+                        scope: .node(
+                            resolution.node,
+                            in: graphScope
+                        ),
+                        within: chatScope,
+                        aliases: aliases
+                    )
             }
         let sortedNodes = stableNodes(
             uniqueNodes(authorizedNodes)

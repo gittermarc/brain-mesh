@@ -30,6 +30,7 @@ nonisolated struct GraphChatTypedPlannerCutoverPolicy:
             .nodeDetails,
             .compareNodes,
             .inspectGraphState,
+            .relationships,
         ]
     }
 
@@ -49,7 +50,8 @@ nonisolated struct GraphChatTypedPlannerCutoverPolicy:
             .filteredCollection, .count,
             .groupCount, .refinement,
             .nodeDetails, .compareNodes,
-            .inspectGraphState:
+            .inspectGraphState,
+            .relationships:
             preconditionFailure(
                 "Every recognized family must be explicitly covered by the cutover policy."
             )
@@ -72,7 +74,8 @@ nonisolated struct GraphChatTypedPlannerCutoverPolicy:
             .filteredCollection, .count,
             .groupCount, .refinement,
             .nodeDetails, .compareNodes,
-            .inspectGraphState:
+            .inspectGraphState,
+            .relationships:
             preconditionFailure(
                 "Every recognized family must be explicitly covered by the cutover policy."
             )

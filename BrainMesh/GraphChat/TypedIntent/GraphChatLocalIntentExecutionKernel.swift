@@ -130,6 +130,8 @@ nonisolated struct GraphChatLocalIntentExecutionKernel: Sendable {
         any GraphChatLocalIntentNodeExecuting
     private let statsExecutor:
         any GraphChatLocalIntentStatsExecuting
+    private let relationshipExecutor:
+        any GraphChatLocalIntentRelationshipExecuting
     private let conversationStateReducer:
         GraphChatConversationStateReducer
     private let timeZone: TimeZone
@@ -154,6 +156,9 @@ nonisolated struct GraphChatLocalIntentExecutionKernel: Sendable {
         statsExecutor:
             any GraphChatLocalIntentStatsExecuting =
                 UnavailableGraphChatLocalStatsExecutor(),
+        relationshipExecutor:
+            any GraphChatLocalIntentRelationshipExecuting =
+                GraphChatRelationshipExecutor(),
         conversationStateReducer:
             GraphChatConversationStateReducer,
         calendar: Calendar,
@@ -170,6 +175,8 @@ nonisolated struct GraphChatLocalIntentExecutionKernel: Sendable {
         self.searchExecutor = searchExecutor
         self.nodeExecutor = nodeExecutor
         self.statsExecutor = statsExecutor
+        self.relationshipExecutor =
+            relationshipExecutor
         self.conversationStateReducer =
             conversationStateReducer
         self.timeZone = timeZone
@@ -302,6 +309,17 @@ nonisolated struct GraphChatLocalIntentExecutionKernel: Sendable {
                 )
                 validatedAction =
                     .graphState(action)
+            case .relationships(let plan):
+                try validateRelationshipAction(
+                    plan,
+                    intent: intent,
+                    schemaContext:
+                        schemaContext,
+                    providerPlan:
+                        providerPlan
+                )
+                validatedAction =
+                    .relationship(plan)
             }
         } catch {
             await recordRevalidationRejection(
@@ -513,6 +531,7 @@ nonisolated struct GraphChatLocalIntentExecutionKernel: Sendable {
                (
                    intent.kind == .nodeDetails
                        || intent.kind == .compareNodes
+                       || intent.kind == .relationships
                )
             {
                 await record(
@@ -584,7 +603,8 @@ nonisolated struct GraphChatLocalIntentExecutionKernel: Sendable {
     ) throws {
         switch action {
         case .node, .sameEntityComparison,
-            .structuralComparison, .graphState:
+            .structuralComparison, .graphState,
+            .relationship:
             guard
                 requestedArtifactIDs.isEmpty
                     == false,
@@ -638,6 +658,9 @@ nonisolated struct GraphChatLocalIntentExecutionKernel: Sendable {
         case graphState(
             GraphChatLocalGraphStateAction
         )
+        case relationship(
+            GraphChatRelationshipPlan
+        )
 
         var toolKind: GraphChatToolKind {
             switch self {
@@ -652,6 +675,8 @@ nonisolated struct GraphChatLocalIntentExecutionKernel: Sendable {
                 return .queryDetailValues
             case .graphState:
                 return .graphStats
+            case .relationship:
+                return .getNeighbors
             }
         }
     }
@@ -1396,6 +1421,112 @@ nonisolated struct GraphChatLocalIntentExecutionKernel: Sendable {
                 authoritativeFactExpectation:
                     nil
             )
+
+        case .relationship(let plan):
+            let budget = GraphChatToolBudget(
+                policy:
+                    GraphChatToolBudgetPolicy(
+                        maximumCalls: 1,
+                        maximumResultCountPerTool:
+                            plan.limits
+                                .maximumResultLimit
+                                + 1,
+                        maximumEvidenceCount:
+                            plan.limits
+                                .maximumEvidenceCount
+                    )
+            )
+            let result =
+                try await relationshipExecutor
+                    .execute(
+                        plan,
+                        context:
+                            GraphChatToolContext(
+                                scope:
+                                    plan.queryScope,
+                                budget: budget
+                            )
+                    )
+            try Task.checkCancellation()
+            guard
+                (
+                    result.state == .success
+                    || result.state
+                        == .noResults
+                ),
+                let output = result.payload,
+                output.center.nodeKey
+                    == plan.centerNode.node,
+                output.connections.count
+                    <= plan.limits
+                        .resultLimit,
+                result.evidence.isEmpty
+                    == false,
+                result.evidence.count
+                    <= plan.limits
+                        .maximumEvidenceCount,
+                let draft =
+                    GraphChatAnswerArtifactFactory
+                        .relationships(
+                            output: output,
+                            plan: plan
+                        )
+            else {
+                throw GraphChatLocalIntentExecutionError
+                    .artifactUnavailable
+            }
+            try await evidenceRegistry.register(
+                result.evidence
+            )
+            await presentationRegistry
+                .registerValidatedEvidence(
+                    result.evidence
+                )
+            try await conversationTransaction
+                .apply(
+                    GraphChatConversationTrustedEvent(
+                        graphScope:
+                            intent.scope.graphScope,
+                        chatScope:
+                            intent.scope.chatScope,
+                        payload:
+                            .relationshipResolved(
+                                plan: plan,
+                                output: output,
+                                state:
+                                    result.state,
+                                evidence:
+                                    result.evidence
+                            )
+                    )
+                )
+            let artifactIDs = try await stage(
+                [draft],
+                registry: artifactRegistry,
+                evidenceRegistry:
+                    evidenceRegistry,
+                presentationRegistry:
+                    presentationRegistry,
+                transactionID: transactionID
+            )
+            return ActionExecution(
+                response:
+                    GraphChatModelToolResponse(
+                        tool: .getNeighbors,
+                        state: result.state,
+                        content:
+                            "local-relationship-result",
+                        evidenceIDs:
+                            result.evidence
+                                .map(\.id),
+                        artifactIDs:
+                            artifactIDs
+                    ),
+                evidence: result.evidence,
+                artifactIDs: artifactIDs,
+                authoritativeFactExpectation:
+                    nil
+            )
         }
     }
 
@@ -1441,9 +1572,38 @@ nonisolated struct GraphChatLocalIntentExecutionKernel: Sendable {
         _ draft:
             GraphChatAnswerArtifactDraft
     ) throws {
+        if case .relationship(let payload) =
+                draft.payload {
+            guard
+                payload.identityEvidence
+                    .evidenceIDs
+                    .isEmpty == false,
+                payload.connections
+                    .allSatisfy({
+                        $0.evidence
+                            .evidenceIDs
+                            .isEmpty == false
+                    }),
+                payload.resultMetadata
+                    .returnedCount
+                    == payload
+                        .connections.count,
+                payload.resultWindow
+                    .returnedCount
+                    == payload
+                        .connections.count,
+                payload.resultWindow
+                    .totalCount
+                    == payload.resultMetadata
+                        .totalCount
+            else {
+                throw GraphChatLocalIntentExecutionError
+                    .artifactUnavailable
+            }
+            return
+        }
         guard case .comparison(let payload) =
-                draft.payload
-        else {
+                draft.payload else {
             return
         }
         let subjectIDs = Set(
@@ -1697,6 +1857,150 @@ nonisolated struct GraphChatLocalIntentExecutionKernel: Sendable {
         }
     }
 
+    private func validateRelationshipAction(
+        _ plan: GraphChatRelationshipPlan,
+        intent: GraphChatTypedIntent,
+        schemaContext: GraphSchemaContext,
+        providerPlan: GraphChatProviderTurnPlan
+    ) throws {
+        guard
+            intent.version == .v2,
+            intent.kind == .relationships,
+            intent.factExpectation == .none,
+            intent.expectedCardinality
+                == .zeroOrMore,
+            case .relationships(
+                let payloadPlan
+            ) = intent.payload,
+            payloadPlan == plan,
+            plan.binding == intent.binding,
+            plan.graphScope
+                == intent.scope.graphScope,
+            plan.chatScope
+                == intent.scope.chatScope,
+            plan.queryScope
+                == intent.scope.queryScope,
+            plan.limits == intent.limits,
+            plan.responseLanguage
+                == intent.responseLanguage,
+            let center =
+                schemaContext
+                    .foundationalAliases
+                    .nodesByKey[
+                        plan.centerNode.node
+                    ],
+            center.ownerEntityID
+                == plan.centerEntity.id,
+            center.displayName
+                == plan.centerNode.displayName,
+            schemaContext
+                .foundationalAliases
+                .entity(
+                    id:
+                        plan.centerEntity.id
+                ) != nil,
+            GraphChatScopeAuthorization.allows(
+                scope: plan.queryScope,
+                within: plan.chatScope,
+                aliases:
+                    schemaContext
+                        .foundationalAliases
+            )
+        else {
+            throw GraphChatLocalIntentExecutionError
+                .invalidCompiledAction
+        }
+        if let counterpartEntity =
+                plan.counterpartEntity {
+            guard
+                schemaContext
+                    .foundationalAliases
+                    .entity(
+                        id:
+                            counterpartEntity.id
+                    ) != nil
+            else {
+                throw GraphChatLocalIntentExecutionError
+                    .staleSchemaIdentity
+            }
+        }
+        if let counterpartNode =
+                plan.counterpartNode {
+            guard
+                let node =
+                    schemaContext
+                        .foundationalAliases
+                        .nodesByKey[
+                            counterpartNode.node
+                        ],
+                node.ownerEntityID
+                    == counterpartNode
+                        .ownerEntityID,
+                node.displayName
+                    == counterpartNode
+                        .displayName
+            else {
+                throw GraphChatLocalIntentExecutionError
+                    .staleSchemaIdentity
+            }
+        }
+        if let sourceContextID =
+                plan
+                    .sourceRelationshipContextID {
+            guard
+                let previous =
+                    providerPlan
+                        .requestBaseState
+                        .lastRelationship,
+                previous.resultContextID
+                    == sourceContextID,
+                previous.sourceTurnID
+                    == plan.binding
+                        .sourceTurnID,
+                previous.plan.graphScope
+                    == plan.graphScope,
+                previous.plan.chatScope
+                    == plan.chatScope,
+                previous.plan.centerEntity.id
+                    == plan.centerEntity.id,
+                previous.plan.centerNode.node
+                    == plan.centerNode.node,
+                previous.plan.counterpartEntity?
+                    .id
+                    == plan.counterpartEntity?
+                        .id,
+                previous.plan.counterpartNode?
+                    .node
+                    == plan.counterpartNode?
+                        .node,
+                providerPlan
+                    .requestBaseState
+                    .turnContexts
+                    .contains(
+                        where: {
+                            $0.id
+                                == previous
+                                    .sourceTurnID
+                        }
+                    ),
+                providerPlan
+                    .requestBaseState
+                    .resultContexts
+                    .contains(
+                        where: {
+                            $0.id
+                                == sourceContextID
+                            && $0.kind
+                                == .relationship
+                        }
+                    )
+            else {
+                throw GraphChatLocalIntentExecutionError
+                    .staleResultSet
+            }
+        }
+    }
+
     private func validateBinding(
         intent: GraphChatTypedIntent,
         providerPlan: GraphChatProviderTurnPlan,
@@ -1728,6 +2032,11 @@ nonisolated struct GraphChatLocalIntentExecutionKernel: Sendable {
                     || providerPlan
                             .currentResolvedScope?
                             .revision
+                            .sourceTurnID
+                            == sourceTurnID
+                    || providerPlan
+                            .requestBaseState
+                            .lastRelationship?
                             .sourceTurnID
                             == sourceTurnID
                   ) else {

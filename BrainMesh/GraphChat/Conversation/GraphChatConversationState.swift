@@ -25,6 +25,7 @@ nonisolated enum GraphChatConversationResultKind: String, CaseIterable, Hashable
     case neighbors
     case stats
     case comparison
+    case relationship
 }
 
 nonisolated enum GraphChatConversationReference: Hashable, Sendable {
@@ -120,6 +121,16 @@ nonisolated struct GraphChatConversationResultContext: Hashable, Sendable, Ident
 nonisolated struct GraphChatConversationComparisonContext: Hashable, Sendable {
     let references: [GraphChatConversationReference]
     let technicalDescription: String
+}
+
+nonisolated struct GraphChatConversationRelationshipContext:
+    Hashable,
+    Sendable
+{
+    let resultContextID: UUID
+    let sourceTurnID: UUID
+    let plan: GraphChatRelationshipPlan
+    let resultWindow: GraphChatResultWindow
 }
 
 nonisolated struct GraphChatConversationComparisonSubject:
@@ -220,6 +231,8 @@ nonisolated struct GraphChatConversationStateSnapshot: Hashable, Sendable {
     let groupReferences: [GraphChatConversationGroupReference]
     let lastValidatedQueryPlan: ValidatedGraphQueryPlan?
     let lastComparison: GraphChatConversationComparisonContext?
+    let lastRelationship:
+        GraphChatConversationRelationshipContext?
     let referenceTargets: GraphChatConversationReferenceTargets
     let pendingClarification: GraphChatPendingClarification?
 
@@ -235,6 +248,8 @@ nonisolated struct GraphChatConversationStateSnapshot: Hashable, Sendable {
         self.groupReferences = state.groupReferences
         self.lastValidatedQueryPlan = state.lastValidatedQueryPlan
         self.lastComparison = state.lastComparison
+        self.lastRelationship =
+            state.lastRelationship
         self.referenceTargets = state.referenceTargets
         self.pendingClarification = state.pendingClarification
     }
@@ -252,6 +267,8 @@ nonisolated struct GraphChatConversationState: Hashable, Sendable {
     var groupReferences: [GraphChatConversationGroupReference]
     var lastValidatedQueryPlan: ValidatedGraphQueryPlan?
     var lastComparison: GraphChatConversationComparisonContext?
+    var lastRelationship:
+        GraphChatConversationRelationshipContext?
     var referenceTargets: GraphChatConversationReferenceTargets
     var pendingClarification: GraphChatPendingClarification?
     var lastResetReason: GraphChatConversationResetReason?
@@ -276,6 +293,7 @@ nonisolated struct GraphChatConversationState: Hashable, Sendable {
             groupReferences: [],
             lastValidatedQueryPlan: nil,
             lastComparison: nil,
+            lastRelationship: nil,
             referenceTargets: .empty,
             pendingClarification: nil,
             lastResetReason: resetReason,

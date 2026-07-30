@@ -104,7 +104,68 @@ nonisolated struct GraphChatIntentInterpretationRenderer:
             return comparisonTitle(interpretation)
         case .inspectGraphState:
             return graphStateTitle(interpretation)
+        case .relationships:
+            return relationshipTitle(
+                interpretation
+            )
         }
+    }
+
+    private func relationshipTitle(
+        _ interpretation:
+            GraphChatIntentInterpretation
+    ) -> String {
+        guard let relationship =
+                interpretation.relationship
+        else {
+            return interpretation.responseLanguage
+                == .german
+                ? "Direkte Verbindungen"
+                : "Direct connections"
+        }
+        let direction: String
+        switch (
+            interpretation.responseLanguage,
+            relationship.direction
+        ) {
+        case (.german, .incoming):
+            direction = "eingehende"
+        case (.german, .outgoing):
+            direction = "ausgehende"
+        case (.german, .both):
+            direction = "direkte"
+        case (.english, .incoming):
+            direction = "incoming"
+        case (.english, .outgoing):
+            direction = "outgoing"
+        case (.english, .both):
+            direction = "direct"
+        }
+        if relationship.request
+            == .linkNotesBetweenNodes,
+           let counterpart =
+                relationship.counterpartNode {
+            return interpretation.responseLanguage
+                == .german
+                ? "Link-Notizen zwischen \(relationship.center.displayName) und \(counterpart.displayName)"
+                : "Link notes between \(relationship.center.displayName) and \(counterpart.displayName)"
+        }
+        let counterpart =
+            relationship.counterpartNode?
+                .displayName
+            ?? relationship
+                .counterpartEntity?
+                .displayName
+        if let counterpart {
+            return interpretation.responseLanguage
+                == .german
+                ? "\(direction.capitalized) Verbindungen von \(relationship.center.displayName) zu \(counterpart)"
+                : "\(direction.capitalized) connections from \(relationship.center.displayName) to \(counterpart)"
+        }
+        return interpretation.responseLanguage
+            == .german
+            ? "\(direction.capitalized) Verbindungen von \(relationship.center.displayName)"
+            : "\(direction.capitalized) connections of \(relationship.center.displayName)"
     }
 
     private func findTitle(

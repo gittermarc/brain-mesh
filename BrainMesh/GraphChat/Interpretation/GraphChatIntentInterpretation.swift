@@ -166,6 +166,7 @@ nonisolated enum GraphChatIntentInterpretationResultExtentKind:
     case refinedCollection
     case comparison
     case graphState
+    case relationship
 }
 
 nonisolated struct GraphChatIntentInterpretationResultExtent:
@@ -196,6 +197,26 @@ nonisolated enum GraphChatIntentInterpretationEditableComponent:
     case resultExtent
     case sourceResultSet
     case graphStateAspect
+    case relationshipDirection
+    case relationshipCounterpartEntity
+    case relationshipCounterpartNode
+    case relationshipNotePredicate
+}
+
+nonisolated struct GraphChatIntentInterpretationRelationship:
+    Hashable,
+    Sendable
+{
+    let request: GraphChatRelationshipRequestKind
+    let direction: GraphChatRelationshipDirection
+    let center:
+        GraphChatIntentInterpretationNode
+    let counterpartEntity:
+        GraphChatIntentInterpretationEntity?
+    let counterpartNode:
+        GraphChatIntentInterpretationNode?
+    let notePredicate:
+        GraphChatRelationshipNotePredicate?
 }
 
 nonisolated struct GraphChatIntentInterpretationPresentation:
@@ -232,6 +253,8 @@ nonisolated struct GraphChatIntentInterpretation:
     let aggregation: GraphChatIntentInterpretationAggregation?
     let resultExtent: GraphChatIntentInterpretationResultExtent
     let graphStateAspect: GraphChatGraphStateAspect?
+    let relationship:
+        GraphChatIntentInterpretationRelationship?
     let resolutionSource: GraphChatTypedIntentResolutionSource
     let resolutionOrigin: GraphChatTypedIntentResolutionOrigin
     let resolutionQuality: GraphChatTypedIntentResolutionQuality
@@ -315,6 +338,87 @@ nonisolated struct GraphChatIntentInterpretation:
                 return false
             }
         } else if graphStateAspect != nil {
+            return false
+        }
+        if intentKind == .relationships {
+            guard
+                let relationship,
+                resultExtent.kind
+                    == .relationship,
+                resultExtent
+                    .expectedCardinality
+                    == .zeroOrMore,
+                resultExtent.subjectCount == 1,
+                scopeBinding.queryScope
+                    == .node(
+                        relationship.center.node,
+                        in:
+                            scopeBinding
+                                .graphScope
+                    ),
+                fields.isEmpty,
+                projectedFields.isEmpty,
+                filters.isEmpty,
+                sorting.isEmpty,
+                grouping == nil,
+                aggregation == nil,
+                nodes.contains(
+                    relationship.center
+                ),
+                entities.contains(
+                    where: {
+                        $0.id
+                            == relationship
+                                .center
+                                .ownerEntityID
+                    }
+                ),
+                (
+                    relationship
+                        .counterpartNode
+                        .map {
+                            nodes.contains($0)
+                        } ?? true
+                ),
+                (
+                    relationship
+                        .counterpartEntity
+                        .map {
+                            entities.contains($0)
+                        } ?? true
+                )
+            else {
+                return false
+            }
+            if let counterpartNode =
+                    relationship
+                        .counterpartNode {
+                guard
+                    let counterpartEntity =
+                        relationship
+                            .counterpartEntity,
+                    counterpartNode
+                        .ownerEntityID
+                        == counterpartEntity.id
+                else {
+                    return false
+                }
+            }
+            if relationship.request
+                == .linkNotesBetweenNodes {
+                guard
+                    relationship
+                        .counterpartNode
+                        != nil,
+                    relationship.direction
+                        == .both,
+                    relationship.notePredicate
+                        == nil
+                else {
+                    return false
+                }
+            }
+        } else if relationship != nil {
             return false
         }
         if let correctionOrigin {

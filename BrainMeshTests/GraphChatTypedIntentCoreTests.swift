@@ -16,6 +16,9 @@ struct GraphChatTypedIntentCoreTests {
             GraphChatTypedIntentDomainVersion.v1
         )
         requireHashableSendable(
+            GraphChatTypedIntentDomainVersion.v2
+        )
+        requireHashableSendable(
             GraphChatTypedIntentKind.allCases
         )
         requireHashableSendable(
@@ -927,7 +930,73 @@ private struct TypedIntentContractFixture {
                 ),
                 cardinality: .zeroOrMore
             ),
+            try relationshipIntent(),
         ]
+    }
+
+    private func relationshipIntent()
+        throws -> GraphChatTypedIntent
+    {
+        let relationshipLimits =
+            GraphChatTypedIntentLimits(
+                resultLimit:
+                    GraphChatIntentLimitPolicy
+                        .default
+                        .nodeDetailRelatedItemCount,
+                maximumResultLimit:
+                    GraphChatIntentLimitPolicy
+                        .default
+                        .maximumNeighborCount,
+                maximumEvidenceCount:
+                    GraphChatIntentLimitPolicy
+                        .default
+                        .maximumNeighborCount
+                    + 1,
+                maximumArtifactCount: 1
+            )
+        let queryScope =
+            GraphChatScope.node(
+                firstNode.node,
+                in: graphScope
+            )
+        let plan = try GraphChatRelationshipPlan(
+            graphScope: graphScope,
+            chatScope: chatScope,
+            queryScope: queryScope,
+            binding: binding,
+            request: .connections,
+            centerEntity: firstEntity,
+            centerNode: firstNode,
+            direction: .both,
+            counterpartEntity:
+                firstEntity,
+            counterpartNode:
+                secondNode,
+            limits:
+                relationshipLimits,
+            responseLanguage: .german
+        )
+        return try GraphChatTypedIntent(
+            version: .v2,
+            scope:
+                GraphChatTypedIntentScope(
+                    graphScope:
+                        graphScope,
+                    chatScope:
+                        chatScope,
+                    queryScope:
+                        queryScope
+                ),
+            responseLanguage: .german,
+            binding: binding,
+            resolution: resolution,
+            expectedCardinality:
+                .zeroOrMore,
+            factExpectation: .none,
+            limits:
+                relationshipLimits,
+            payload: .relationships(plan)
+        )
     }
 
     private func intent(

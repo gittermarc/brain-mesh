@@ -29,7 +29,10 @@ nonisolated extension GraphChatConversationStateReducer {
         let singular: GraphChatConversationReference?
         if ordinal.count == 1 {
             singular = ordinal.first
-        } else if context.kind == .node || context.kind == .neighbors {
+        } else if context.kind == .node
+            || context.kind == .neighbors
+            || context.kind == .relationship
+        {
             singular = ordinal.first
         } else {
             singular = nil

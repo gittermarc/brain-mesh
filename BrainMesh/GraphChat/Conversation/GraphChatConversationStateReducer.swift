@@ -26,6 +26,8 @@ nonisolated struct GraphChatConversationStateReducer: Sendable {
         }
 
         var candidate = state
+        var pendingRelationshipTurnID:
+            UUID?
         switch event.payload {
         case .schemaResolved(let schemaContext, let resultState, let evidence):
             try validate(schemaContext: schemaContext, evidence: evidence, state: state)
@@ -83,6 +85,42 @@ nonisolated struct GraphChatConversationStateReducer: Sendable {
                 eventID: event.id,
                 to: &candidate
             )
+        case .relationshipResolved(
+            let plan,
+            let output,
+            let resultState,
+            let evidence
+        ):
+            guard
+                plan.graphScope
+                    == state.graphScope,
+                plan.chatScope
+                    == state.chatScope,
+                plan.queryScope
+                    == .node(
+                        plan.centerNode.node,
+                        in: state.graphScope
+                    ),
+                output.center.nodeKey
+                    == plan.centerNode.node
+            else {
+                throw GraphChatConversationStateError
+                    .chatScopeMismatch
+            }
+            try validate(
+                evidence: evidence,
+                state: state
+            )
+            applyRelationship(
+                plan: plan,
+                output: output,
+                resultState: resultState,
+                evidence: evidence,
+                eventID: event.id,
+                to: &candidate
+            )
+            pendingRelationshipTurnID =
+                plan.binding.turnID
         case .statsResolved(let output, let resultState, let evidence):
             try validate(evidence: evidence, state: state)
             applyStats(
@@ -138,7 +176,37 @@ nonisolated struct GraphChatConversationStateReducer: Sendable {
             applyTurnCompletion(completion, to: &candidate)
         }
 
+        let pendingRelationship:
+            GraphChatConversationRelationshipContext?
+        if let pendingRelationshipTurnID,
+           let relationship =
+            candidate.lastRelationship,
+           relationship.sourceTurnID
+            == pendingRelationshipTurnID {
+            pendingRelationship =
+                relationship
+        } else {
+            pendingRelationship = nil
+        }
         let result = enforceBudgets(candidate)
+        if let pendingRelationship,
+           result.state.resultContexts
+            .contains(
+                where: {
+                    $0.id
+                        == pendingRelationship
+                            .resultContextID
+                }
+            ) {
+            var state = result.state
+            state.lastRelationship =
+                pendingRelationship
+            return GraphChatConversationStateReduction(
+                state: state,
+                evictedItemCount:
+                    result.evictedItemCount
+            )
+        }
         return GraphChatConversationStateReduction(
             state: result.state,
             evictedItemCount: result.evictedItemCount
@@ -184,6 +252,7 @@ nonisolated struct GraphChatConversationStateReducer: Sendable {
             groupReferences: [],
             lastValidatedQueryPlan: nil,
             lastComparison: nil,
+            lastRelationship: nil,
             referenceTargets: .empty,
             pendingClarification: nil,
             lastResetReason: reason,

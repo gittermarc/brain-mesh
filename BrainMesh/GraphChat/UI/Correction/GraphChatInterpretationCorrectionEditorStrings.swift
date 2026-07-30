@@ -370,6 +370,127 @@ nonisolated struct GraphChatInterpretationCorrectionEditorStrings:
         )
     }
 
+    var relationship: String {
+        text(
+            german: "Direkte Verbindungen",
+            english: "Direct connections"
+        )
+    }
+
+    var relationshipDirection: String {
+        text(
+            german: "Richtung",
+            english: "Direction"
+        )
+    }
+
+    func relationshipDirectionName(
+        _ direction: GraphChatRelationshipDirection
+    ) -> String {
+        switch direction {
+        case .incoming:
+            return text(
+                german: "Eingehend",
+                english: "Incoming"
+            )
+        case .outgoing:
+            return text(
+                german: "Ausgehend",
+                english: "Outgoing"
+            )
+        case .both:
+            return text(
+                german: "Beide Richtungen",
+                english: "Both directions"
+            )
+        }
+    }
+
+    var relationshipCounterpartEntity: String {
+        text(
+            german: "Gegenkategorie",
+            english: "Counterpart category"
+        )
+    }
+
+    var anyCounterpartEntity: String {
+        text(
+            german: "Alle Kategorien",
+            english: "Any category"
+        )
+    }
+
+    var relationshipCounterpartNode: String {
+        text(
+            german: "Gegeneintrag",
+            english: "Counterpart entry"
+        )
+    }
+
+    var anyCounterpartNode: String {
+        text(
+            german: "Alle Einträge",
+            english: "Any entry"
+        )
+    }
+
+    var chooseCounterpartNode: String {
+        text(
+            german: "Eintrag auswählen",
+            english: "Choose entry"
+        )
+    }
+
+    var relationshipCatalogHint: String {
+        text(
+            german:
+                "Die Auswahl wird gegen den aktuellen vollständigen Graph-Katalog geprüft.",
+            english:
+                "The selection is checked against the current complete graph catalog."
+        )
+    }
+
+    var relationshipNoteFilter: String {
+        text(
+            german: "Link-Notiz",
+            english: "Link note"
+        )
+    }
+
+    func relationshipNoteModeName(
+        _ mode: GraphChatRelationshipNoteMode
+    ) -> String {
+        switch mode {
+        case .any:
+            return text(
+                german: "Beliebig",
+                english: "Any"
+            )
+        case .present:
+            return text(
+                german: "Vorhanden",
+                english: "Present"
+            )
+        case .missing:
+            return text(
+                german: "Fehlt",
+                english: "Missing"
+            )
+        case .contains:
+            return text(
+                german: "Enthält Text",
+                english: "Contains text"
+            )
+        }
+    }
+
+    var relationshipNoteTerm: String {
+        text(
+            german: "Text in der Link-Notiz",
+            english: "Text in the link note"
+        )
+    }
+
     var sourceResultSet: String {
         text(german: "Ausgangsmenge", english: "Source result set")
     }

@@ -85,6 +85,16 @@ nonisolated struct GraphChatInterpretationCorrectionCompiler:
         guard capabilities.isEditable else {
             throw invalid(.interpretationNotEditable)
         }
+        if capabilities.intentKind
+            == .relationships {
+            return try compileRelationship(
+                request: request,
+                providerPlan: providerPlan,
+                schemaContext: schemaContext,
+                requestID: requestID,
+                requestedAt: requestedAt
+            )
+        }
         let aliases =
             schemaContext.foundationalAliases
         let entity = try selectedEntity(
@@ -336,7 +346,8 @@ nonisolated struct GraphChatInterpretationCorrectionCompiler:
             .entityCollection,
             .countOrGroup,
             .narrowResultSet,
-            .inspectGraphState:
+            .inspectGraphState,
+            .relationships:
             selectedNodes = []
         }
         let draft = try semanticDraft(
@@ -452,6 +463,273 @@ nonisolated struct GraphChatInterpretationCorrectionCompiler:
         )
     }
 
+    private func compileRelationship(
+        request:
+            GraphChatInterpretationCorrectionRequest,
+        providerPlan: GraphChatProviderTurnPlan,
+        schemaContext: GraphSchemaContext,
+        requestID: UUID,
+        requestedAt: Date
+    ) throws
+        -> GraphChatInterpretationCorrectionCompilation
+    {
+        let interpretation =
+            request.binding
+                .originalInterpretation
+        guard
+            let relationship =
+                interpretation.relationship,
+            request.binding.intentDomainVersion
+                == .v2,
+            let direction =
+                request.selection
+                    .relationshipDirection
+        else {
+            throw invalid(
+                .invalidRelationshipSelection
+            )
+        }
+        let aliases =
+            schemaContext.foundationalAliases
+        guard
+            let center =
+                aliases.nodesByKey[
+                    relationship.center.node
+                ],
+            center.ownerEntityID
+                == relationship
+                    .center.ownerEntityID,
+            GraphChatScopeAuthorization.allows(
+                scope: .node(
+                    center.node,
+                    in:
+                        schemaContext
+                            .graphScope
+                ),
+                within:
+                    request.binding.chatScope,
+                aliases: aliases
+            ),
+            aliases.entity(
+                id: center.ownerEntityID
+            ) != nil
+        else {
+            throw stale(.nodeUnavailable)
+        }
+
+        let selectedCounterpartNode =
+            request.selection
+                .relationshipCounterpartNode
+        let counterpartNode =
+            try selectedCounterpartNode.map {
+                node -> GraphSchemaNodeResolution in
+                guard let resolution =
+                        aliases.nodesByKey[node]
+                else {
+                    throw stale(
+                        .nodeUnavailable
+                    )
+                }
+                return resolution
+            }
+        let counterpartEntityID =
+            request.selection
+                .relationshipCounterpartEntityID
+            ?? counterpartNode?
+                .ownerEntityID
+        let counterpartEntity =
+            try counterpartEntityID.map {
+                id -> GraphSchemaEntityResolution in
+                guard let entity =
+                        aliases.entity(id: id)
+                else {
+                    throw stale(
+                        .entityUnavailable
+                    )
+                }
+                return entity
+            }
+        if let counterpartNode,
+           let counterpartEntity,
+           counterpartNode.ownerEntityID
+            != counterpartEntity.entityID {
+            throw invalid(
+                .invalidRelationshipSelection
+            )
+        }
+        if relationship.request
+            == .linkNotesBetweenNodes {
+            guard counterpartNode != nil,
+                  direction == .both else {
+                throw invalid(
+                    .invalidRelationshipSelection
+                )
+            }
+        }
+
+        let note:
+            (
+                GraphChatSemanticRelationshipNotePredicate,
+                String?
+            )
+        switch request.selection
+            .relationshipNotePredicate {
+        case nil:
+            note = (.unspecified, nil)
+        case .present:
+            note = (.present, nil)
+        case .missing:
+            note = (.missing, nil)
+        case .contains(let term):
+            note = (.contains, term)
+        }
+        let semanticDirection:
+            GraphChatSemanticRelationshipDirection
+        switch direction {
+        case .incoming:
+            semanticDirection = .incoming
+        case .outgoing:
+            semanticDirection = .outgoing
+        case .both:
+            semanticDirection = .both
+        }
+        let semanticRequest:
+            GraphChatSemanticRelationshipRequest =
+            relationship.request
+                == .connections
+            ? .connections
+            : .linkNotesBetweenNodes
+        let nodeTerms =
+            [center.displayName]
+            + (
+                counterpartNode.map {
+                    [$0.displayName]
+                } ?? []
+            )
+        let draft =
+            GraphChatUntrustedSemanticIntentDraft(
+                family: .relationships,
+                nodeTerms: nodeTerms,
+                relationshipRequest:
+                    semanticRequest,
+                relationshipDirection:
+                    semanticDirection,
+                relationshipCounterpartEntityTerm:
+                    semanticRequest
+                        == .linkNotesBetweenNodes
+                    ? nil
+                    : counterpartEntity?.name,
+                relationshipNotePredicate:
+                    note.0,
+                relationshipNoteTerm:
+                    note.1,
+                responseLanguage:
+                    interpretation
+                        .responseLanguage
+            )
+        let validatorRequest =
+            GraphChatIntentInterpreterRequest(
+                normalizedQuestion:
+                    request.binding
+                        .originalQuestion,
+                responseLanguage:
+                    draft.responseLanguage,
+                schemaEntities: [],
+                conversationDescriptions: [],
+                scopeDescription: ""
+            )
+        let validatedDraft:
+            GraphChatUntrustedSemanticIntentDraft
+        do {
+            validatedDraft =
+                try draftValidator.validate(
+                    draft,
+                    for: validatorRequest
+                )
+        } catch {
+            throw invalid(
+                .invalidRelationshipSelection
+            )
+        }
+        var selectedNodes = [
+            GraphChatSemanticSelectedNode(
+                role: .relationshipCenter,
+                node: center.node
+            ),
+        ]
+        if let counterpartNode {
+            selectedNodes.append(
+                GraphChatSemanticSelectedNode(
+                    role:
+                        .relationshipCounterpart,
+                    node:
+                        counterpartNode.node
+                )
+            )
+        }
+        let resolution:
+            GraphChatSemanticIntentResolution
+        do {
+            resolution = try resolver.resolve(
+                draft: validatedDraft,
+                selectedEntityID:
+                    center.ownerEntityID,
+                selectedRelationshipCounterpartEntityID:
+                    counterpartEntity?.entityID,
+                selectedNodes:
+                    selectedNodes,
+                currentResolvedScope: nil,
+                providerPlan:
+                    providerPlan,
+                schemaContext:
+                    schemaContext,
+                requestID: requestID,
+                sourceTurnID:
+                    interpretation
+                        .turnBinding
+                        .sourceTurnID,
+                clarificationID: nil,
+                referenceDate:
+                    requestedAt
+            )
+        } catch let error
+            as GraphChatSemanticIntentResolutionError {
+            throw mapped(error)
+        } catch {
+            throw invalid(
+                .invalidRelationshipSelection
+            )
+        }
+        guard
+            case .compiled(let adaptation) =
+                resolution,
+            adaptation.intent.kind
+                == .relationships,
+            adaptation.intent.version
+                == .v2,
+            adaptation.intent.scope.graphScope
+                == request.binding.graphScope,
+            adaptation.intent.scope.chatScope
+                == request.binding.chatScope
+        else {
+            throw stale(.schemaChanged)
+        }
+        return GraphChatInterpretationCorrectionCompilation(
+            adaptation: adaptation,
+            schemaContext:
+                GraphSchemaContext(
+                    graphScope:
+                        schemaContext.graphScope,
+                    snapshot:
+                        schemaContext.snapshot,
+                    aliases:
+                        aliases,
+                    foundationalAliases:
+                        aliases
+                )
+        )
+    }
+
     private func validateBinding(
         _ request:
             GraphChatInterpretationCorrectionRequest,
@@ -499,7 +777,8 @@ nonisolated struct GraphChatInterpretationCorrectionCompiler:
         guard let entityID else {
             switch capabilities.intentKind {
             case .findNodes,
-                .inspectGraphState:
+                .inspectGraphState,
+                .relationships:
                 return nil
             case .entityCollection,
                 .countOrGroup,
@@ -681,7 +960,8 @@ nonisolated struct GraphChatInterpretationCorrectionCompiler:
                 : nil
         case .findNodes, .entityCollection,
             .countOrGroup, .narrowResultSet,
-            .inspectGraphState:
+            .inspectGraphState,
+            .relationships:
             return
         }
         guard
@@ -760,6 +1040,8 @@ nonisolated struct GraphChatInterpretationCorrectionCompiler:
             family = .compareNodes
         case .inspectGraphState:
             family = .inspectGraphState
+        case .relationships:
+            family = .relationships
         }
 
         if family == .findNodes {
@@ -880,6 +1162,7 @@ nonisolated struct GraphChatInterpretationCorrectionCompiler:
             .groupCount,
             .refinement,
             .inspectGraphState,
+            .relationships,
             .unrecognized,
             .openEnded:
             return []
@@ -968,7 +1251,8 @@ nonisolated struct GraphChatInterpretationCorrectionCompiler:
                     .resultLimit
             )
         case .countOrGroup, .nodeDetails,
-            .compareNodes, .inspectGraphState:
+            .compareNodes, .inspectGraphState,
+            .relationships:
             return .standard
         }
     }
@@ -987,6 +1271,7 @@ nonisolated struct GraphChatInterpretationCorrectionCompiler:
             return entity?.name
         case .compareNodes,
             .inspectGraphState,
+            .relationships,
             .unrecognized, .openEnded:
             return nil
         }
@@ -1264,6 +1549,8 @@ nonisolated struct GraphChatInterpretationCorrectionCompiler:
             return .invalidNodeSelection
         case .inspectGraphState:
             return .graphStateRequiresEntireGraph
+        case .relationships:
+            return .invalidRelationshipSelection
         case .unrecognized, .openEnded:
             return .interpretationNotEditable
         }

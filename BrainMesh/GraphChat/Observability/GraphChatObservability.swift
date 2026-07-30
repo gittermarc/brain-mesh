@@ -155,6 +155,7 @@ nonisolated enum GraphChatSemanticIntentLifecycleEvent:
     case comparisonRejected
     case graphOverviewCompiled
     case graphHealthCompiled
+    case relationshipIntentCompiled
     case staleNodeDiscarded
     case typeConflict
     case valueParsingRejected

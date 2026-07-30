@@ -95,6 +95,7 @@ nonisolated struct GraphChatAdvancedIntentCompiler:
         case .findNodes, .entityList,
             .filteredCollection, .count,
             .groupCount, .refinement,
+            .relationships,
             .unrecognized, .openEnded:
             throw GraphChatSemanticIntentResolutionError
                 .unsupportedCombination

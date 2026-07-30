@@ -50,6 +50,9 @@ actor GraphChatOrchestrator {
         semanticStatsExecutor:
             any GraphChatLocalIntentStatsExecuting =
                 UnavailableGraphChatLocalStatsExecutor(),
+        semanticRelationshipExecutor:
+            any GraphChatLocalIntentRelationshipExecuting =
+                GraphChatRelationshipExecutor(),
         toolRunnerFactory: any GraphChatModelToolRunnerFactory,
         toolBudgetPolicy: GraphChatToolBudgetPolicy = .default,
         concurrentRequestPolicy: GraphChatConcurrentRequestPolicy = .cancelPrevious,
@@ -82,6 +85,8 @@ actor GraphChatOrchestrator {
                 semanticNodeExecutor,
             semanticStatsExecutor:
                 semanticStatsExecutor,
+            semanticRelationshipExecutor:
+                semanticRelationshipExecutor,
             toolRunnerFactory: toolRunnerFactory,
             toolBudgetPolicy: toolBudgetPolicy,
             conversationStatePolicy: conversationStatePolicy,

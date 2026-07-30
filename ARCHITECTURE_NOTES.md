@@ -821,6 +821,8 @@ Pfade:
 - `BrainMesh/GraphChat/SemanticIntent/GraphChatSemanticIntentResolver.swift`
 - `BrainMesh/GraphChat/SemanticIntent/GraphChatQueryIntentCompiler.swift`
 - `BrainMesh/GraphChat/SemanticIntent/GraphChatAdvancedIntentCompiler.swift`
+- `BrainMesh/GraphChat/SemanticIntent/GraphChatRelationshipFastPathCompiler.swift`
+- `BrainMesh/GraphChat/SemanticIntent/GraphChatRelationshipIntentCompiler.swift`
 - `BrainMesh/GraphChat/Interpretation/GraphChatInterpretationCorrectionCompiler.swift`
 
 Resolver-Vertrag:
@@ -838,11 +840,11 @@ Integration und Diagnose:
 - Die providerfreien Basishüllen erkennen in Deutsch und Englisch ausschließlich Listen einer genannten Entity beziehungsweise vollständige Details eines genannten Nodes. Die extrahierte fachliche Spanne wird an den Resolver übergeben; erfolgreiche Ausführung bleibt im bestehenden Typed-Intent-, Local-Kernel-, Evidence-, Artifact-, Finalizer-, Presentation- und atomaren Commit-Lifecycle.
 - Gewöhnliche Binding-Fehler verwenden `GraphChatErrorCode.groundingFailure` plus eine content-free `GraphChatBindingDiagnosticReason`: `entityNotBound`, `nodeNotBound`, `fieldNotBound`, `multiplePlausibleCandidates` oder `invalidDraftCombination`. Observability loggt nur diese Enum-Kategorie. Echte Mehrdeutigkeit erzeugt weiterhin eine request-/turn-/conversation-/graph-/scopegebundene Pending Clarification.
 - Scope-Verletzungen, stale oder manipulierte Selections, technische Identifier, Schema-/Draft-Vertragsverletzungen außerhalb einer gewöhnlichen ungültigen Kombination und Cross-Graph-Mismatches bleiben geschlossene Fehler. Sie öffnen weder Legacy-Provider noch Bounded Tool Repair.
-- Die bestehende Typed-Intent-Domainversion bleibt `v1`; `ResolutionSource`, `ResolutionOrigin` und `ResolutionQuality` wurden nicht erweitert. Exaktes beziehungsweise kanonisches Display-Matching bleibt `.exact`; App-Alias, Umlaut-/Flexionsvariante und konservativer Tippfehler werden bewusst auf `.constrainedSynonym` abgebildet, Clarification-/Conversation-Revalidation auf die bestehenden Qualitätsfälle.
+- Core Grounding änderte die damalige Typed-Intent-Domainversion `v1` nicht. GRAPH-CHAT-RELATIONSHIP-INTENT-1 ergänzt später additiv `v2` ausschließlich für den Relationship-Payload; bestehende Familien bleiben als `v1` gültig. `ResolutionSource`, `ResolutionOrigin` und `ResolutionQuality` wurden nicht erweitert. Exaktes beziehungsweise kanonisches Display-Matching bleibt `.exact`; App-Alias, Umlaut-/Flexionsvariante und konservativer Tippfehler werden bewusst auf `.constrainedSynonym` abgebildet, Clarification-/Conversation-Revalidation auf die bestehenden Qualitätsfälle.
 
 Bewusste Grenze:
 
-- Nicht hinzugekommen sind Relationship-Intent, Multi-Hop-Traversal, `GraphFactBundle` oder modellgestützte Grounded-Answer-Planung. Graph Chat bleibt read-only.
+- Nicht hinzugekommen sind allgemeine Multi-Hop-Traversal, `GraphFactBundle` oder modellgestützte Grounded-Answer-Planung. Graph Chat bleibt read-only.
 
 ### Graph Chat Node Profile Domain (GRAPH-CHAT-NODE-PROFILE-DOMAIN-1)
 
@@ -915,6 +917,60 @@ Ausführung und Lifecycle:
 - Foundational Node Details und semantisch kompilierte Node Details rufen unverändert dieselbe `GetNodeTool`-Action im `GraphChatLocalIntentExecutionKernel` auf, erzeugen denselben `.nodeProfile`-Payload und laufen durch denselben Finalizer. Beide Pfade erzeugen keine Answer-Provider-Session.
 - Interpretation, Interpretation Correction, Checkpoints, `CURRENT`, Primary Result Ledger, Conversation-/Artifact-Transaktionen, Deferred Swap, Rollback und Cancellation bleiben unverändert. Der Profiltyp führt keinen zweiten Commit- oder Terminalpfad ein; Erfolg, Fehler, Clarification und Cancellation behalten jeweils genau ein Terminal Event.
 
+### Graph Chat Relationship Intent (GRAPH-CHAT-RELATIONSHIP-INTENT-1)
+
+Pfade:
+
+- `BrainMesh/GraphChat/TypedIntent/GraphChatRelationshipIntentPlan.swift`
+- `BrainMesh/GraphChat/TypedIntent/GraphChatRelationshipExecutor.swift`
+- `BrainMesh/GraphChat/SemanticIntent/GraphChatRelationshipFastPathCompiler.swift`
+- `BrainMesh/GraphChat/SemanticIntent/GraphChatRelationshipIntentCompiler.swift`
+- `BrainMesh/GraphChat/Artifacts/GraphChatRelationshipAnswerArtifact.swift`
+- `BrainMesh/GraphChat/Artifacts/GraphChatAnswerArtifactFactory+Relationships.swift`
+- `BrainMesh/GraphChat/Artifacts/GraphChatRelationshipPresentation.swift`
+- `BrainMesh/GraphChat/UI/Artifacts/GraphChatRelationshipArtifactView.swift`
+- `BrainMeshTests/GraphChatRelationshipIntentTests.swift`
+- `BrainMeshTests/GraphChatRelationshipIntentEndToEndTests.swift`
+
+Versionierter Vertrag und Trust Boundary:
+
+- `GraphChatTypedIntentDomainVersion.v2` ergänzt ausschließlich den Payload `.relationships`; bestehende `v1`-Payloads bleiben gültig, während ein Relationship-Payload unter `v1` geschlossen abgelehnt wird. `GraphChatRelationshipPlanVersion.v1` ist die eigenständig versionierte Planform.
+- Der app-owned Plan bindet Graph-, Chat- und exakten Center-Node-Query-Scope, Request-, Conversation- und Turn-ID, optionalen Source Turn beziehungsweise Clarification, Request-Art, Center-Entity/-Node, Richtung, optionale Gegen-Entity/-Node, optionales Link-Notiz-Prädikat, gemeinsame Limits, Sprache, Kardinalität und optional den vorherigen Relationship-Result-Context. Outer Typed Intent und innerer Plan müssen in Scope, Binding, Sprache, Limits und Kardinalität wertgleich sein.
+- Die fachliche Request-Art unterscheidet direkte Connections und Link-Notizen zwischen zwei gebundenen Nodes. Richtung ist incoming, outgoing oder both. Das Notizprädikat ist present, missing oder case-/diakritik-/breiteninsensitives contains mit begrenztem nichttechnischem Literal.
+- Die Foundation-Models-Schemaerweiterung enthält ausschließlich Relationship-Bedeutung und user-visible Textspannen: Request-Art, Richtung, Gegen-Entity-Anzeigename, Link-Notiz-Prädikat und Literal sowie höchstens zwei Node-Anzeigenamen. UUIDs, Aliasse, Link-IDs, Toolnamen, Query-Pläne, Operatorimplementierungen, Scope, appseitige Limits, Evidence, Artifacts und Antworttext sind weiterhin ausgeschlossen und werden zusätzlich durch `GraphChatSemanticDraftValidator` abgewehrt.
+- `GraphChatRelationshipFastPathCompiler` besitzt konservative generische deutsche und englische Hüllen für klare direkte Connections, incoming/outgoing, Gegen-Entity und Link-Notiz zwischen zwei Nodes. Der Produktionscode enthält keine medizinischen, bibliothekarischen oder technischen Fachnamen. Ein Fast-Path-Draft durchläuft denselben Draft Validator und Resolver, startet aber keinen Interpreter-Aufruf.
+- `GraphChatRelationshipIntentCompiler` löst Center-Entity/-Node und optionale Gegen-Entity/-Node ausschließlich mit `GraphMentionResolver` gegen `GraphSchemaContext.foundationalAliases` auf. Der vollständige Graphkatalog bleibt appseitig; Chat- und Owner-Scope werden als Constraints angewandt. Mehrere beste Entity- oder Node-Kandidaten erzeugen die vorhandene gebundene Pending Clarification und bewahren ihre Center-/Counterpart-Rolle über die Auswahl.
+
+Lokale Ausführung und Reihenfolge:
+
+- `GraphChatRelationshipExecutor` implementiert den engen lokalen Relationship-Vertrag auf `GraphChatNeighborhoodReading`. Die produktive Instanz verwendet `NodeRepository.directNeighborhood` und liest alle aktuellen direkten eingehenden und ausgehenden Links des Center-Nodes in einem graphgescopten Snapshot.
+- Vor jeder Filterung werden Center-Identität und aktueller Center-Owner geprüft. Für jeden Link werden aktuelle Quell-/Zielendpunkte, auflösbarer Gegenknoten und aktueller Gegenknoten-Owner verlangt. Richtung, Gegenknoten und Gegen-Entity werden aus den aktuellen Endpunkten und Summaries berechnet, nicht aus gespeicherten Labels oder dem Draft.
+- Die vollständige direkte Kandidatenmenge wird zuerst nach Richtung, Gegen-Entity, Gegenknoten und Link-Notiz gefiltert. Erst danach entstehen stabile Sortierung, `GraphChatResultWindow` und finales Limit. Ein frühes `prefix` aus `GetNeighborsTool` ist keine Datenquelle dieses Executors.
+- Self-Links erscheinen genau einmal und besitzen die explizite Richtung `.selfLink`; sie bleiben für incoming, outgoing und both deterministisch sichtbar. Parallele Links bleiben getrennte Zeilen. Die stabile Ordnung verwendet gefalteten Gegenknoten-Anzeigenamen, Node-Art, Gegenknoten-ID, Richtung, Link-Erstellzeit und Link-ID; technische Tie-Breaker werden nie gerendert.
+- Bei Link-Notiz-Fragen zwischen zwei Nodes filtert der Plan auf den konkreten Gegenknoten und both. Alle aktuellen parallelen Links werden ausgegeben; die App wählt keinen Link per Fetch-Reihenfolge oder `first`. Der optionale Notizwert stammt direkt aus dem aktuellen `GraphLinkDTO`.
+
+Evidence, Artifact und Präsentation:
+
+- Center-Evidence bindet die aktuelle Node-Identität. Jede Connection-Evidence verwendet `GraphSourceLinkBinding` mit aktueller Link-ID, Quelle, Ziel, Richtung relativ zum Center und exakt aktuellem optionalem Notizwert. `GraphEvidenceSourceValidator` entfernt eine Zeile, sobald Link, Endpunkt oder Notiz nicht mehr wertgleich ist.
+- `.relationship` ist ein eigener `GraphChatAnswerArtifactPayload`. Jede Zeile enthält Quell-/Zielanzeigename, Gegenknoten und aktuellen Owner, Richtung, Notiz, Parallel-Link-Ordinal/-Anzahl, graphgescopte Open-/Focus-Navigation und eigene Evidence. Payload und Result Metadata behalten zusätzlich das vollständige Executor-`GraphChatResultWindow` einschließlich aller Limitquellen.
+- `GraphChatRelationshipArtifactEvidenceProjector` verlangt gültige Center-Identity und projiziert einzelne Connection-Zeilen evidenceweise. Entfernte Zeilen markieren das Window als source-limited; unbekannte Gesamtzahlen werden nicht erfunden. Der Live Artifact Revalidator wendet anschließend die vorhandene Navigation-Revalidation an.
+- `GraphChatRelationshipPresentation` erzeugt Titel, List Rows und `plainText` aus demselben finalisierten Payload. Der deterministische Answer Fallback und die SwiftUI-Relationship-View verwenden diese gemeinsame Projektion. Link-Notizen, Richtung, parallele Verbindungen und Truncation werden deutsch beziehungsweise englisch identisch beschrieben; UUIDs, Aliasse und Toolstrings bleiben unsichtbar.
+
+Conversation, `CURRENT`, Interpretation und Correction:
+
+- Der Trusted Event `.relationshipResolved` wird über den bestehenden Conversation Reducer angewandt. Er erzeugt einen Result Context `.relationship`, aggregiert parallele Link-Evidence je Gegenknoten, aktualisiert Reference Targets und speichert `lastRelationship` mit Plan, Result Context, Source Turn und Result Window.
+- Ein Direction-only Follow-up mit `currentSelection` darf ausschließlich `lastRelationship` verwenden. Compiler und Kernel verlangen denselben Graph-/Chat-Scope, einen noch vorhandenen Relationship-Result-Context und Turn sowie frisch auflösbare Center-/Counterpart-Identitäten. Center, Gegen-Entity/-Node und vorhandenes Notizprädikat werden geerbt; nur ausdrücklich gesetzte Richtung oder Notizbedingung wird ersetzt. Generic `CURRENT` darf diesen Pfad nicht auf Entity-, Selection- oder Entire-Graph-Scope verbreitern.
+- Conversation-Budget-Eviction entfernt `lastRelationship`, sobald der gebundene Result Context oder Source Turn nicht mehr vorhanden ist. Scope-/Graph-Reset, Edit-and-Resend, Regenerate und Checkpoint-Suffix-Replacement verwenden die vorhandenen State-/Artifact-Lifecycle-Regeln.
+- `GraphChatIntentInterpretation` enthält eine typisierte Relationship-Sicht mit Request, Richtung, Center, Gegen-Entity/-Node und Notizprädikat. Der Execution Witness akzeptiert sie nur, wenn der letzte Relationship-Context exakt zum ausgeführten Plan und neuesten Result Context passt.
+- Interpretation Correction bietet appseitige Richtung, Gegen-Entity, Gegenknoten und Notizprädikat. Für Gegenendpunkte wird nur im Relationship-Editor der vollständige aktuelle Graphkatalog angeboten; der Center bleibt an den ursprünglichen Chat-Scope gebunden. Der Correction Compiler revalidiert jede Auswahl erneut über Schema, Resolver und Typed Plan und führt den Ersatzturn im bestehenden deferred Artifact-/Checkpoint-/Compare-and-set-Lifecycle lokal aus.
+
+Cutover und Lifecycle:
+
+- `.relationships` ist eine unterstützte Familie in `GraphChatTypedPlannerCutoverPolicy`. Ein erkannter, manipulierter, mehrdeutiger, stale oder scopewidriger Relationship-Draft wird Clarification oder Failure; er kann weder Legacy Tool Repair noch freie Provider-Toolwahl öffnen.
+- Der gemeinsame `GraphChatLocalIntentExecutionKernel` besitzt weiterhin genau eine Conversation-, Evidence-, Presentation-, Artifact- und Ledger-Transaktion. Relationship-Ausführung registriert `getNeighbors` nur als lokalen Ledger-Tooltyp, verlangt genau ein typisiertes Artifact und verwendet dieselbe lokale Finalisierung, Interpretation, Presentation Firewall, deferred Publication, Cancellation und atomare Rollback-Grenze.
+- Klare Fast-Path-Fragen erzeugen weder Semantic-Interpreter- noch `GraphChatModelProvider`-Session. Eine nicht durch den Fast Path erkannte, aber erfolgreich toolfrei interpretierte Relationship-Frage verwendet höchstens einen Semantic-Interpreter-Aufruf und weiterhin null Answer-Provider-Aufrufe. Jeder Stream endet genau einmal.
+- Bewusst nicht enthalten sind allgemeine Multi-Hop-Ausführung, `GraphFactBundle` und modellgestützte Antwortplanung.
+
 ### Graph Chat Semantic Intent Interpreter
 
 Pfade:
@@ -927,6 +983,8 @@ Pfade:
 - `BrainMesh/GraphChat/SemanticIntent/GraphChatSemanticIntentResolver.swift`
 - `BrainMesh/GraphChat/SemanticIntent/GraphChatQueryIntentCompiler.swift`
 - `BrainMesh/GraphChat/SemanticIntent/GraphChatAdvancedIntentCompiler.swift`
+- `BrainMesh/GraphChat/SemanticIntent/GraphChatRelationshipFastPathCompiler.swift`
+- `BrainMesh/GraphChat/SemanticIntent/GraphChatRelationshipIntentCompiler.swift`
 - `BrainMesh/GraphChat/SemanticIntent/GraphChatQueryIntentValueParser.swift`
 - `BrainMesh/GraphChat/SemanticIntent/GraphChatSemanticIntentExecutor.swift`
 - `BrainMesh/GraphChat/SemanticIntent/GraphChatSemanticIntentLimitPolicy.swift`
@@ -939,15 +997,15 @@ Zweistufige Trust Boundary:
 
 - `GraphChatIntentInterpreting` ist vom freien `GraphChatModelProvider` getrennt. Seine Foundation-Models-Implementierung besitzt keine Tools und liefert keine Nutzerantwort, sondern ausschließlich einen value-only, `Sendable` und untrusted `GraphChatSemanticIntentDraft`.
 - Der Interpreter-Request enthält nur die normalisierte Frage, Antwortsprache, begrenzte nutzersichtbare Entity-/Feldanzeigenamen, appseitig erzeugte sichere Conversation-Beschreibungen und eine nutzersichtbare fachliche Scope-Beschreibung. UUIDs, interne Aliasse und der vollständige App-Katalog werden nicht übertragen.
-- Der Draft kann nur Intent-Familie, fachliche Entity-/Feld-/Node-Anzeigenamen, fachliche Filterrelationen, wörtliche Nutzerwerte, Sortier-/Projektions-/Gruppierungsbedeutung, einen der vier Graph-State-Aspekte, eine revalidierbare Conversation-Auswahl und Antwortsprache ausdrücken. Aliasse, IDs, Toolnamen, Comparison-Feature-IDs, Limits und Query-Pläne sind nicht Teil des Vertrags. `GraphChatSemanticIntentDraftValidator` lehnt technische Identifikatoren und Aliasse, Tool-/Query-/Evidence-/Artifact-Sprache, überlange beziehungsweise zu viele Werte sowie ungültige Familienkombinationen ab.
-- Der Draft ist niemals eine validierte Identität. `GraphChatSemanticIntentResolver`, `GraphChatQueryIntentCompiler` und `GraphChatAdvancedIntentCompiler` delegieren Entity-, Node- und Feldanzeigenamen an den zentralen `GraphMentionResolver`, der ausschließlich gegen den vollständigen appseitigen `GraphSchemaContext.foundationalAliases` bindet und den Graph-/Chat-/Owner-/Selection-Scope erneut autorisiert. Mehrdeutige fachliche Begriffe erzeugen eine bestehende graph-/conversation-/turngebundene Pending Clarification; nicht sicher bindbare unterstützte Intents werden nicht geraten.
-- Erst nach erfolgreicher Auflösung legt die App die technische Action fest: `SearchGraphTool` für Find Nodes, `GetNodeTool` für Node Details und strukturelle Comparisons, `GraphStatsTool` für Graph State beziehungsweise einen durch `GraphChatQueryIntentCompiler` oder `GraphChatAdvancedIntentCompiler` erzeugten `GraphQueryPlan` für Collections, Count, Group Count, Refinement und Same-Entity-Comparison. Die App besitzt Entity-/Field-/Node-Identitäten, Operator, typisierten Wert, Scope, Sortierung, Tie-Breaker, Projektion, Aggregation, Comparison-Art/-Features, Kardinalität, Limits, Evidence-Revalidierung, Artifact-Typ und Conversation-State-Commit.
+- Der Draft kann nur Intent-Familie, fachliche Entity-/Feld-/Node-Anzeigenamen, fachliche Filterrelationen, wörtliche Nutzerwerte, Sortier-/Projektions-/Gruppierungsbedeutung, einen der vier Graph-State-Aspekte, direkte Relationship-Request/-Richtung/-Gegen-Entity/-Notiz-Bedeutung, eine revalidierbare Conversation-Auswahl und Antwortsprache ausdrücken. Aliasse, IDs, Link-IDs, Toolnamen, Comparison-Feature-IDs, Limits und Query-Pläne sind nicht Teil des Vertrags. `GraphChatSemanticIntentDraftValidator` lehnt technische Identifikatoren und Aliasse, Tool-/Query-/Evidence-/Artifact-Sprache, überlange beziehungsweise zu viele Werte sowie ungültige Familienkombinationen ab.
+- Der Draft ist niemals eine validierte Identität. `GraphChatSemanticIntentResolver`, `GraphChatQueryIntentCompiler`, `GraphChatAdvancedIntentCompiler` und `GraphChatRelationshipIntentCompiler` delegieren Entity-, Node- und Feldanzeigenamen an den zentralen `GraphMentionResolver`, der ausschließlich gegen den vollständigen appseitigen `GraphSchemaContext.foundationalAliases` bindet und den Graph-/Chat-/Owner-/Selection-Scope erneut autorisiert. Mehrdeutige fachliche Begriffe erzeugen eine bestehende graph-/conversation-/turngebundene Pending Clarification; nicht sicher bindbare unterstützte Intents werden nicht geraten.
+- Erst nach erfolgreicher Auflösung legt die App die technische Action fest: `SearchGraphTool` für Find Nodes, `GetNodeTool` für Node Details und strukturelle Comparisons, `GraphStatsTool` für Graph State, `GraphChatRelationshipExecutor` für direkte Links beziehungsweise einen durch `GraphChatQueryIntentCompiler` oder `GraphChatAdvancedIntentCompiler` erzeugten `GraphQueryPlan` für Collections, Count, Group Count, Refinement und Same-Entity-Comparison. Die App besitzt Entity-/Field-/Node-/Link-Identitäten, Operator, typisierten Wert, Scope, Richtung, Sortierung, Tie-Breaker, Projektion, Aggregation, Comparison-Art/-Features, Kardinalität, Limits, Evidence-Revalidierung, Artifact-Typ und Conversation-State-Commit.
 
 Pipeline- und Fallback-Reihenfolge:
 
 - `GraphChatRequestPreflight` läuft zuerst. Danach erhält der providerfreie Foundational Compiler den vollständigen Schema-Kontext. `.compiled` und `.clarification` werden sofort lokal abgeschlossen und rufen den semantischen Interpreter nicht auf.
-- Nur `.notRecognized` erreicht den Semantic Coordinator. Akzeptierte Find-, Query-, Node-Details-, Comparison- und Graph-State-Drafts werden über den gemeinsamen `GraphChatLocalIntentExecutionKernel` lokal ausgeführt und mit Primary Result, Evidence, zulässigen Result-Artefakten, deterministischem Answer Fallback und Presentation Firewall gerendert; eine freie Answer-Provider-Session entsteht nicht.
-- Ausschließlich explizite Drafts der Familien `.unrecognized` oder `.openEnded` fallen auf die unveränderte Provider-Pipeline zurück. Validierungs-, Binding-, Scope-, Query- und Search-Fehler eines bereits erkannten unterstützten Intents sind harte Clarification-/Failure-Pfade und kein impliziter Provider-Fallback.
+- Nur `.notRecognized` erreicht den Semantic Coordinator. Dort laufen konservative Relationship Fast Paths noch vor einem möglichen Interpreter-Aufruf. Akzeptierte Find-, Query-, Node-Details-, Comparison-, Graph-State- und Relationship-Drafts werden über den gemeinsamen `GraphChatLocalIntentExecutionKernel` lokal ausgeführt und mit Primary Result, Evidence, zulässigen Result-Artefakten, deterministischem Answer Fallback und Presentation Firewall gerendert; eine freie Answer-Provider-Session entsteht nicht.
+- Ausschließlich explizite Drafts der Familien `.unrecognized` oder `.openEnded` fallen auf die unveränderte Provider-Pipeline zurück. Validierungs-, Binding-, Scope-, Query-, Search- und Relationship-Fehler eines bereits erkannten unterstützten Intents sind harte Clarification-/Failure-Pfade und kein impliziter Provider-Fallback.
 - Cancellation wird unmittelbar weitergereicht. Vor dem atomaren äußeren Commit werden Conversation-, Evidence-, Presentation-, Artifact- und Ledger-Zustände vollständig zurückgerollt; jeder Stream behält genau ein terminales Event.
 
 Find Nodes:
@@ -992,7 +1050,7 @@ Advanced-Intent-Policy:
 
 Observability:
 
-- Content-free Events unterscheiden Interpreter-Start, Draft akzeptiert/abgelehnt, Find/List/Filtered Collection/Count/Group/Refinement/Node Details kompiliert, Same-Entity- und Structural Comparison, Comparison-Ablehnung, Graph Overview, Graph Health, Typkonflikt, abgelehntes Value Parsing, verhinderte Scope-Erweiterung, verworfenen stale Node, abgelehntes stale Resultset, Clarification, Legacy-Provider-Fallback und Cancellation.
+- Content-free Events unterscheiden Interpreter-Start, Draft akzeptiert/abgelehnt, Find/List/Filtered Collection/Count/Group/Refinement/Node Details/Relationship kompiliert, Same-Entity- und Structural Comparison, Comparison-Ablehnung, Graph Overview, Graph Health, Typkonflikt, abgelehntes Value Parsing, verhinderte Scope-Erweiterung, verworfenen stale Node, abgelehntes stale Resultset, Clarification, Legacy-Provider-Fallback und Cancellation.
 - Request-Metriken zählen Interpreter- und Answer-Provider-Aufrufe getrennt. Fragen, Draftwerte, Anzeigenamen, Aliasse, IDs, Suchbegriffe und Antworttext werden nicht protokolliert.
 
 ### Graph Chat Typed Planner Cutover (INTENT-COMPILER-7)
@@ -1014,14 +1072,14 @@ Verbindliche Planner-Reihenfolge:
 2. `GraphChatFoundationalIntentCoordinator` prüft die exakten providerfreien Fast-Path-Familien.
 3. Nur `.notRecognized` startet `GraphChatIntentInterpreting`; der Interpreter besitzt keine Tools und antwortet nicht fachlich.
 4. `GraphChatSemanticDraftValidator` prüft den untrusted Draft vollständig, bevor irgendeine Identität aufgelöst oder lokal ausgeführt wird.
-5. Conversation Reference Resolver, Semantic Resolver, Query Intent Compiler und Advanced Intent Compiler binden ausschließlich gegen frisches vollständiges App-Schema und aktuellen Scope.
+5. Conversation Reference Resolver, Semantic Resolver, Query Intent Compiler, Advanced Intent Compiler und Relationship Intent Compiler binden ausschließlich gegen frisches vollständiges App-Schema und aktuellen Scope.
 6. Mehrdeutigkeit erzeugt eine fachliche Clarification; andernfalls entsteht ein versionierter `GraphChatTypedIntent` mit einer vollständig bestimmten lokalen Action.
-7. `GraphChatLocalIntentExecutionKernel` revalidiert und führt Query, Search, Get Node oder Graph Stats lokal aus; Finalizer, Presentation Firewall, Evidence, Artifact, Ledger und Conversation Commit bleiben app-owned.
+7. `GraphChatLocalIntentExecutionKernel` revalidiert und führt Query, Search, Get Node, Graph Stats oder direkte Relationships lokal aus; Finalizer, Presentation Firewall, Evidence, Artifact, Ledger und Conversation Commit bleiben app-owned.
 8. Erst ein Draft der Familie `.unrecognized`/`.openEnded` oder die eindeutig technische Nichtverfügbarkeit des Interpreters öffnet die vorhandene Legacy-Provider-Pipeline.
 
 Harte Cutover-Regel:
 
-- `GraphChatTypedPlannerCutoverPolicy.supportedFamilies` enthält exakt Find Nodes, Entity List, Filtered Collection, Count, Group Count, Refinement, Node Details, Compare Nodes und Inspect Graph State.
+- `GraphChatTypedPlannerCutoverPolicy.supportedFamilies` enthält exakt Find Nodes, Entity List, Filtered Collection, Count, Group Count, Refinement, Node Details, Compare Nodes, Inspect Graph State und Relationships.
 - Für diese Familien kann `legacyFallbackReason(for:)` keinen Grund liefern. Ein Resolver-Rückfall aus einer unterstützten Familie ist ein `invalidRequest` und kein Übergang zur Provider-Toolwahl.
 - Ein teilweise valider Draft wird nicht „best effort“ ausgeführt: UUID, technischer Alias, graphfremde Auswahl, inkompatibles Feld, falscher Operator, stale `CURRENT` oder Scope-Konflikt führen zu Clarification oder harter Ablehnung.
 - Nach einem akzeptierten Draft gibt es weder Interpreter-Retry noch Tool-Repair noch Answer Provider. Eine erfolgreiche freie unterstützte Frage besitzt höchstens einen Interpreter-Aufruf; der Foundational Fast Path besitzt null Modellaufrufe.
@@ -1728,6 +1786,7 @@ Die realistischen Obergrenzen sind **UNKNOWN U7** und müssen produktseitig fest
 - Same-Entity-Comparison mit expliziten Feldern, gepinnter/default-sortierter Featureauswahl, autoritativen typisierten Values, `.missing`, Integrity-/Evidence-Ausschluss, graphgescopter Navigation, `lastComparison`, `lastCompared` und Comparison-`CURRENT`.
 - Structural Comparison über gemischte Node-Arten ausschließlich aus Node-Art, Owner, direkten Links, Attachment-Metadatenzahl, Notiz-Vorhandensein und autoritativer Detailwertzahl; Notiz-/Attachment-Inhalte bleiben ausgeschlossen.
 - Graph-State-Artifact-Auswahl für Overview, Counts, Structure und Health sowie End-to-End-Graph-Health mit Metric/Health Finding, appseitigem Hub-Limit und verhindertem Scope-Widening.
+- Relationship-Intent-Domainversion 2, Plan-/Draft-Manipulationsabwehr, generische deutsche/englische Fast Paths, incoming/outgoing/both, Gegen-Entity/-Node- und Link-Notiz-Filter vor Limit, Self-/Parallel-Links, gleichnamige Gegenknoten, stabile Reihenfolge, vollständige Result Windows und sichtbare Truncation. Aktuelle Link-Notizen werden mit „3× täglich“, Änderung, Leerwert und Löschung geprüft; Medizin, Bibliothek und IT-Operations laufen durch dieselbe lokale Factory. End-to-End-Tests belegen echte Clarification, sicheren `CURRENT`-Richtungs-Follow-up ohne Scope-Verbreiterung, Cross-Graph-/Chat-Scope-Ablehnung, null Answer-Provider-Sessions nach Fast Path oder Interpreter-Compilation, genau ein Terminal Event sowie Cancellation mit leerem atomarem Commit.
 - Zentrale Comparison-Plan-Limits für Nodes und Features sowie providerfreie lokale Finalisierung und genau ein terminales Event in den Advanced-Intent-End-to-End-Szenarien.
 - Interpretation-Correction-Verträge, intent-spezifische Editorfelder, vollständige Schema-/Scope-/Session-Revalidation, typisierte Choice-/Toggle-/Zahl-/Datum-Filter, Operator-Kompatibilität, Entity-/Node-/Comparison-/Refinement-/Graph-State-Sicherheitsgrenzen, Doppelbestätigungs-Latch, Checkpoint-/Suffix-/Feedback-Replacement, deferred Artifact-Swap, Cancellation-/Commit-Rollback und Single-Terminal-Vertrag. Der End-to-End-Pfad ersetzt „Offene Projekte, sortiert nach Name“ durch die lokal ausgeführte Fälligkeitsdatum-Sortierung; Interpreter bleibt bei einem Aufruf, Answer Provider bei null und `CURRENT` enthält nur das neue Resultset.
 - `GraphChatTypedIntentPlannerAcceptanceTests` bündelt 18 benannte In-Memory-Akzeptanzszenarien: Foundational Single Fact, Natural Find/List, Filter/Sort, Count, Group, Refinement, Node Details, Comparison, Graph State, Clarification, Interpretation/Copy, Correction, Draft-Manipulation, Open-Ended-Fallback, Sicherheitsbindungen, Cancellation und große Schemas mit Standard-/Compact-Recovery. Zusätzliche End-to-End-Tests belegen genau zwei Interpreter-Aufrufe beim Compact-Retry, keinen Retry nach Draft, keinen Provider bei Draft-Manipulation sowie keinen verspäteten Comparison-Commit.

@@ -32,6 +32,19 @@ nonisolated extension GraphChatConversationStateReducer {
         }
 
         let retainedResultIDs = Set(state.resultContexts.map(\.id))
+        let retainedTurnIDs = Set(
+            state.turnContexts.map(\.id)
+        )
+        if let relationship =
+                state.lastRelationship,
+           retainedResultIDs.contains(
+            relationship.resultContextID
+           ) == false
+            || retainedTurnIDs.contains(
+                relationship.sourceTurnID
+            ) == false {
+            state.lastRelationship = nil
+        }
         state.turnContexts = state.turnContexts.map { turn in
             GraphChatConversationTurnContext(
                 id: turn.id,

@@ -14,6 +14,10 @@ nonisolated enum GraphChatTypedIntentDomainVersion:
     Sendable
 {
     case v1 = 1
+    case v2 = 2
+
+    static let current =
+        GraphChatTypedIntentDomainVersion.v2
 }
 
 nonisolated enum GraphChatTypedIntentKind:
@@ -29,6 +33,7 @@ nonisolated enum GraphChatTypedIntentKind:
     case narrowResultSet
     case compareNodes
     case inspectGraphState
+    case relationships
 }
 
 nonisolated enum GraphChatTypedIntentResolutionSource:
@@ -255,6 +260,7 @@ nonisolated enum GraphChatTypedIntentPayload: Hashable, Sendable {
     case narrowResultSet(GraphChatTypedNarrowResultSetIntent)
     case compareNodes(GraphChatTypedCompareNodesIntent)
     case inspectGraphState(GraphChatTypedInspectGraphStateIntent)
+    case relationships(GraphChatRelationshipPlan)
 
     var kind: GraphChatTypedIntentKind {
         switch self {
@@ -272,6 +278,8 @@ nonisolated enum GraphChatTypedIntentPayload: Hashable, Sendable {
             return .compareNodes
         case .inspectGraphState:
             return .inspectGraphState
+        case .relationships:
+            return .relationships
         }
     }
 
@@ -291,6 +299,15 @@ nonisolated enum GraphChatTypedIntentPayload: Hashable, Sendable {
             return value.entities
         case .inspectGraphState(let value):
             return value.entity.map { [$0] } ?? []
+        case .relationships(let value):
+            var entities = [value.centerEntity]
+            if let counterpart =
+                    value.counterpartEntity,
+               counterpart.id
+                    != value.centerEntity.id {
+                entities.append(counterpart)
+            }
+            return entities
         }
     }
 
@@ -310,6 +327,8 @@ nonisolated enum GraphChatTypedIntentPayload: Hashable, Sendable {
             return value.fields
         case .inspectGraphState:
             return []
+        case .relationships:
+            return []
         }
     }
 
@@ -325,6 +344,17 @@ nonisolated enum GraphChatTypedIntentPayload: Hashable, Sendable {
             return value.nodes
         case .compareNodes(let value):
             return value.nodes
+        case .relationships(let value):
+            if let counterpart =
+                    value.counterpartNode,
+               counterpart.node
+                    != value.centerNode.node {
+                return [
+                    value.centerNode,
+                    counterpart,
+                ]
+            }
+            return [value.centerNode]
         }
     }
 }
@@ -343,6 +373,7 @@ nonisolated enum GraphChatTypedIntentValidationError:
     case invalidNodeBinding
     case invalidCardinality
     case invalidFactExpectation
+    case invalidRelationshipPlan
 
     var errorDescription: String? {
         switch self {
@@ -362,6 +393,8 @@ nonisolated enum GraphChatTypedIntentValidationError:
             return "Die erwartete Kardinalität passt nicht zur Intent-Art."
         case .invalidFactExpectation:
             return "Die Fact-Erwartung passt nicht zum Typed Intent."
+        case .invalidRelationshipPlan:
+            return "Der Relationship-Plan stimmt nicht mit dem versionierten Typed-Intent-Vertrag überein."
         }
     }
 }
@@ -392,7 +425,10 @@ nonisolated struct GraphChatTypedIntent: Hashable, Sendable {
         limits: GraphChatTypedIntentLimits,
         payload: GraphChatTypedIntentPayload
     ) throws {
-        guard version == .v1 else {
+        guard Self.supports(
+            version: version,
+            payload: payload
+        ) else {
             throw GraphChatTypedIntentValidationError
                 .unsupportedDomainVersion
         }
@@ -413,6 +449,20 @@ nonisolated struct GraphChatTypedIntent: Hashable, Sendable {
             expectedCardinality: expectedCardinality,
             factExpectation: factExpectation
         )
+        if case .relationships(let plan) = payload {
+            guard
+                version == .v2,
+                plan.graphScope == scope.graphScope,
+                plan.chatScope == scope.chatScope,
+                plan.queryScope == scope.queryScope,
+                plan.binding == binding,
+                plan.limits == limits,
+                plan.responseLanguage == responseLanguage
+            else {
+                throw GraphChatTypedIntentValidationError
+                    .invalidRelationshipPlan
+            }
+        }
 
         self.version = version
         self.scope = scope
@@ -492,7 +542,8 @@ nonisolated struct GraphChatTypedIntent: Hashable, Sendable {
                 throw GraphChatTypedIntentValidationError
                     .invalidNodeBinding
             }
-        case .findNodes, .inspectGraphState:
+        case .findNodes, .inspectGraphState,
+            .relationships:
             break
         }
     }
@@ -514,6 +565,28 @@ nonisolated struct GraphChatTypedIntent: Hashable, Sendable {
            expectedCardinality != .twoOrMore {
             throw GraphChatTypedIntentValidationError
                 .invalidCardinality
+        }
+        if case .relationships(let plan) = payload {
+            guard expectedCardinality
+                    == .zeroOrMore,
+                  factExpectation == .none,
+                  plan.expectedCardinality
+                    == expectedCardinality else {
+                throw GraphChatTypedIntentValidationError
+                    .invalidCardinality
+            }
+        }
+    }
+
+    private static func supports(
+        version: GraphChatTypedIntentDomainVersion,
+        payload: GraphChatTypedIntentPayload
+    ) -> Bool {
+        switch (version, payload) {
+        case (.v1, .relationships):
+            return false
+        case (.v1, _), (.v2, _):
+            return true
         }
     }
 }

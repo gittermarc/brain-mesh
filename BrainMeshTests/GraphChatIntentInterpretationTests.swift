@@ -79,6 +79,11 @@ struct GraphChatIntentInterpretationTests {
                 .presentation.title
                 == "Gesundheitszustand des gesamten Graphen"
         )
+        #expect(
+            byKind[.relationships]?
+                .presentation.title
+                == "Direkte Verbindungen von Atlas zu Apollo"
+        )
     }
 
     @Test
@@ -823,6 +828,9 @@ struct GraphChatIntentInterpretationTestFixture {
             try graphStateInterpretation(
                 language: .german
             ),
+            try relationshipInterpretation(
+                language: .german
+            ),
         ]
     }
 
@@ -1249,6 +1257,96 @@ struct GraphChatIntentInterpretationTestFixture {
                                 .default
                                 .graphHubLimit
                     )
+            )
+        )
+    }
+
+    func relationshipInterpretation(
+        language: GraphChatResponseLanguage
+    ) throws -> GraphChatIntentInterpretation {
+        let binding =
+            GraphChatTypedIntentBinding(
+                requestID: requestID,
+                conversationID:
+                    conversationID,
+                turnID: requestID,
+                sourceTurnID: nil,
+                clarificationID: nil
+            )
+        let limits =
+            GraphChatTypedIntentLimits(
+                resultLimit:
+                    GraphChatIntentLimitPolicy
+                        .default
+                        .nodeDetailRelatedItemCount,
+                maximumResultLimit:
+                    GraphChatIntentLimitPolicy
+                        .default
+                        .maximumNeighborCount,
+                maximumEvidenceCount:
+                    GraphChatIntentLimitPolicy
+                        .default
+                        .maximumNeighborCount + 1,
+                maximumArtifactCount: 1
+            )
+        let queryScope =
+            GraphChatScope.node(
+                atlasNode.node,
+                in: graphScope
+            )
+        let plan =
+            try GraphChatRelationshipPlan(
+                graphScope: graphScope,
+                chatScope: chatScope,
+                queryScope: queryScope,
+                binding: binding,
+                request: .connections,
+                centerEntity:
+                    entity(language),
+                centerNode: atlasNode,
+                direction: .both,
+                counterpartEntity:
+                    entity(language),
+                counterpartNode:
+                    apolloNode,
+                limits: limits,
+                responseLanguage: language
+            )
+        let intent =
+            try GraphChatTypedIntent(
+                version: .v2,
+                scope:
+                    GraphChatTypedIntentScope(
+                        graphScope:
+                            graphScope,
+                        chatScope:
+                            chatScope,
+                        queryScope:
+                            queryScope
+                    ),
+                responseLanguage:
+                    language,
+                binding: binding,
+                resolution:
+                    GraphChatTypedIntentResolution(
+                        source:
+                            .appSemanticResolution,
+                        origin:
+                            .schemaDisplayName,
+                        quality: .exact
+                    ),
+                expectedCardinality:
+                    .zeroOrMore,
+                factExpectation: .none,
+                limits: limits,
+                payload:
+                    .relationships(plan)
+            )
+        return try #require(
+            builder.executionInterpretation(
+                intent: intent,
+                witness:
+                    .relationship(plan)
             )
         )
     }

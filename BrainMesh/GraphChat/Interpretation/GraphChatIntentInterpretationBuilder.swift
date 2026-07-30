@@ -16,6 +16,7 @@ nonisolated enum GraphChatIntentInterpretationExecutionWitness:
     case node(GraphChatTypedNodeIdentity)
     case comparison([NodeRefKey])
     case graphState(GraphChatGraphStateAspect)
+    case relationship(GraphChatRelationshipPlan)
 }
 
 nonisolated struct GraphChatIntentInterpretationBuilder:
@@ -135,6 +136,31 @@ nonisolated struct GraphChatIntentInterpretationBuilder:
                 intent: intent,
                 graphState: graphState,
                 aspect: aspect,
+                correctionOrigin:
+                    correctionOrigin
+            )
+        case .relationship(let plan):
+            guard
+                intent.kind
+                    == .relationships,
+                case .relationships(
+                    let payloadPlan
+                ) = intent.payload,
+                payloadPlan == plan,
+                plan.binding
+                    == intent.binding,
+                plan.graphScope
+                    == intent.scope.graphScope,
+                plan.chatScope
+                    == intent.scope.chatScope,
+                plan.queryScope
+                    == intent.scope.queryScope
+            else {
+                return nil
+            }
+            return makeRelationshipInterpretation(
+                intent: intent,
+                plan: plan,
                 correctionOrigin:
                     correctionOrigin
             )
@@ -292,6 +318,8 @@ nonisolated struct GraphChatIntentInterpretationBuilder:
             extentKind = .boundedCollection
         case .inspectGraphState:
             extentKind = .graphState
+        case .relationships:
+            extentKind = .relationship
         }
 
         let interpretation =
@@ -331,6 +359,7 @@ nonisolated struct GraphChatIntentInterpretationBuilder:
                             == .completeAuthorizedCollection
                 ),
                 graphStateAspect: nil,
+                relationship: nil,
                 resolutionSource:
                     intent.resolution.source,
                 resolutionOrigin:
@@ -557,6 +586,7 @@ nonisolated struct GraphChatIntentInterpretationBuilder:
                         false
                 ),
                 graphStateAspect: nil,
+                relationship: nil,
                 resolutionSource:
                     intent.resolution.source,
                 resolutionOrigin:
@@ -618,6 +648,7 @@ nonisolated struct GraphChatIntentInterpretationBuilder:
                         false
                 ),
                 graphStateAspect: nil,
+                relationship: nil,
                 resolutionSource:
                     intent.resolution.source,
                 resolutionOrigin:
@@ -678,6 +709,7 @@ nonisolated struct GraphChatIntentInterpretationBuilder:
                         false
                 ),
                 graphStateAspect: nil,
+                relationship: nil,
                 resolutionSource:
                     intent.resolution.source,
                 resolutionOrigin:
@@ -736,6 +768,7 @@ nonisolated struct GraphChatIntentInterpretationBuilder:
                         true
                 ),
                 graphStateAspect: aspect,
+                relationship: nil,
                 resolutionSource:
                     intent.resolution.source,
                 resolutionOrigin:
@@ -744,6 +777,100 @@ nonisolated struct GraphChatIntentInterpretationBuilder:
                     intent.resolution.quality,
                 editableComponents: [
                     .graphStateAspect,
+                ],
+                formattingTimeZoneIdentifier:
+                    timeZone.identifier,
+                correctionOrigin:
+                    correctionOrigin
+            )
+        return valid(interpretation)
+    }
+
+    private func makeRelationshipInterpretation(
+        intent: GraphChatTypedIntent,
+        plan: GraphChatRelationshipPlan,
+        correctionOrigin:
+            GraphChatInterpretationCorrectionOrigin?
+    ) -> GraphChatIntentInterpretation? {
+        let entities =
+            intent.payload.entities.map(
+                GraphChatIntentInterpretationEntity
+                    .init
+            )
+        let nodes =
+            intent.payload.nodes.map(
+                GraphChatIntentInterpretationNode
+                    .init
+            )
+        let center =
+            GraphChatIntentInterpretationNode(
+                plan.centerNode
+            )
+        let counterpartEntity =
+            plan.counterpartEntity.map(
+                GraphChatIntentInterpretationEntity
+                    .init
+            )
+        let counterpartNode =
+            plan.counterpartNode.map(
+                GraphChatIntentInterpretationNode
+                    .init
+            )
+        let interpretation =
+            GraphChatIntentInterpretation(
+                version: .v1,
+                intentKind: .relationships,
+                scopeBinding:
+                    scopeBinding(intent),
+                turnBinding:
+                    turnBinding(intent),
+                responseLanguage:
+                    intent.responseLanguage,
+                entities: entities,
+                nodes: nodes,
+                fields: [],
+                projectedFields: [],
+                filters: [],
+                sorting: [],
+                grouping: nil,
+                aggregation: nil,
+                resultExtent:
+                    resultExtent(
+                        intent: intent,
+                        kind: .relationship,
+                        resultLimit:
+                            plan.limits
+                                .resultLimit,
+                        subjectCount: 1,
+                        includesAllAuthorizedResults:
+                            false
+                    ),
+                graphStateAspect: nil,
+                relationship:
+                    GraphChatIntentInterpretationRelationship(
+                        request:
+                            plan.request,
+                        direction:
+                            plan.direction,
+                        center: center,
+                        counterpartEntity:
+                            counterpartEntity,
+                        counterpartNode:
+                            counterpartNode,
+                        notePredicate:
+                            plan.notePredicate
+                    ),
+                resolutionSource:
+                    intent.resolution.source,
+                resolutionOrigin:
+                    intent.resolution.origin,
+                resolutionQuality:
+                    intent.resolution.quality,
+                editableComponents: [
+                    .relationshipDirection,
+                    .relationshipCounterpartEntity,
+                    .relationshipCounterpartNode,
+                    .relationshipNotePredicate,
                 ],
                 formattingTimeZoneIdentifier:
                     timeZone.identifier,
@@ -887,6 +1014,13 @@ nonisolated struct GraphChatIntentInterpretationBuilder:
         case .inspectGraphState:
             components = [
                 .graphStateAspect,
+            ]
+        case .relationships:
+            components = [
+                .relationshipDirection,
+                .relationshipCounterpartEntity,
+                .relationshipCounterpartNode,
+                .relationshipNotePredicate,
             ]
         }
         if hasFilters == false {

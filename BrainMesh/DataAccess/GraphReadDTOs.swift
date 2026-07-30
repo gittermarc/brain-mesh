@@ -31,6 +31,7 @@ nonisolated struct GraphEntityDTO: Identifiable, Hashable, Sendable {
             scope: scope,
             nodeKey: nodeKey,
             label: name,
+            visibleName: name,
             notes: notes,
             iconSymbolName: iconSymbolName,
             ownerEntityID: nil,
@@ -58,6 +59,7 @@ nonisolated struct GraphAttributeDTO: Identifiable, Hashable, Sendable {
             scope: scope,
             nodeKey: nodeKey,
             label: displayLabel,
+            visibleName: name,
             notes: notes,
             iconSymbolName: iconSymbolName,
             ownerEntityID: ownerEntityID,
@@ -172,10 +174,31 @@ nonisolated struct GraphNodeSummaryDTO: Identifiable, Hashable, Sendable {
     let scope: GraphScope
     let nodeKey: NodeRefKey
     let label: String
+    let visibleName: String
     let notes: String
     let iconSymbolName: String?
     let ownerEntityID: UUID?
     let ownerLabel: String?
+
+    init(
+        scope: GraphScope,
+        nodeKey: NodeRefKey,
+        label: String,
+        visibleName: String? = nil,
+        notes: String,
+        iconSymbolName: String?,
+        ownerEntityID: UUID?,
+        ownerLabel: String?
+    ) {
+        self.scope = scope
+        self.nodeKey = nodeKey
+        self.label = label
+        self.visibleName = visibleName ?? label
+        self.notes = notes
+        self.iconSymbolName = iconSymbolName
+        self.ownerEntityID = ownerEntityID
+        self.ownerLabel = ownerLabel
+    }
 
     var id: NodeRefKey {
         nodeKey

@@ -73,7 +73,10 @@ nonisolated struct GraphChatInterpretationCorrectionOrigin:
         let intent = adaptation.intent
         return version == .v1
             && requestQuestion.isEmpty == false
-            && intent.version == .v1
+            && GraphChatTypedIntentDomainVersion
+                .allCases.contains(
+                    intent.version
+                )
             && intent.kind
                 == interpretation.intentKind
             && intent.scope.graphScope
@@ -212,7 +215,10 @@ nonisolated struct GraphChatInterpretationCorrectionBinding:
         }
         guard
             version == .v1,
-            intentDomainVersion == .v1,
+            GraphChatTypedIntentDomainVersion
+                .allCases.contains(
+                    intentDomainVersion
+                ),
             originalInterpretation.version == .v1,
             originalInterpretation.isInternallyConsistent,
             let correctionOrigin =
@@ -374,6 +380,12 @@ nonisolated struct GraphChatInterpretationCorrectionSelection:
     var resultAmount: GraphChatSemanticResultAmount?
     var search: GraphChatInterpretationCorrectionSearch?
     var graphStateAspect: GraphChatGraphStateAspect?
+    var relationshipDirection:
+        GraphChatRelationshipDirection?
+    var relationshipCounterpartEntityID: UUID?
+    var relationshipCounterpartNode: NodeRefKey?
+    var relationshipNotePredicate:
+        GraphChatRelationshipNotePredicate?
 
     init(
         entityID: UUID? = nil,
@@ -384,7 +396,15 @@ nonisolated struct GraphChatInterpretationCorrectionSelection:
         groupingFieldID: UUID? = nil,
         resultAmount: GraphChatSemanticResultAmount? = nil,
         search: GraphChatInterpretationCorrectionSearch? = nil,
-        graphStateAspect: GraphChatGraphStateAspect? = nil
+        graphStateAspect: GraphChatGraphStateAspect? = nil,
+        relationshipDirection:
+            GraphChatRelationshipDirection? = nil,
+        relationshipCounterpartEntityID:
+            UUID? = nil,
+        relationshipCounterpartNode:
+            NodeRefKey? = nil,
+        relationshipNotePredicate:
+            GraphChatRelationshipNotePredicate? = nil
     ) {
         self.entityID = entityID
         self.nodes = nodes
@@ -395,6 +415,14 @@ nonisolated struct GraphChatInterpretationCorrectionSelection:
         self.resultAmount = resultAmount
         self.search = search
         self.graphStateAspect = graphStateAspect
+        self.relationshipDirection =
+            relationshipDirection
+        self.relationshipCounterpartEntityID =
+            relationshipCounterpartEntityID
+        self.relationshipCounterpartNode =
+            relationshipCounterpartNode
+        self.relationshipNotePredicate =
+            relationshipNotePredicate
     }
 }
 
@@ -414,6 +442,10 @@ nonisolated enum GraphChatInterpretationCorrectionEditableComponent:
     case resultAmount
     case groupingField
     case graphStateAspect
+    case relationshipDirection
+    case relationshipCounterpartEntity
+    case relationshipCounterpartNode
+    case relationshipNotePredicate
 }
 
 nonisolated struct GraphChatInterpretationCorrectionSelectionLimit:
@@ -574,6 +606,23 @@ nonisolated struct GraphChatInterpretationCorrectionCapabilities:
                 .graphStateAspect,
             ]
             nodeLimit = nil
+        case .relationships:
+            if interpretation.relationship?
+                .request
+                == .linkNotesBetweenNodes {
+                components = [
+                    .relationshipCounterpartEntity,
+                    .relationshipCounterpartNode,
+                ]
+            } else {
+                components = [
+                    .relationshipDirection,
+                    .relationshipCounterpartEntity,
+                    .relationshipCounterpartNode,
+                    .relationshipNotePredicate,
+                ]
+            }
+            nodeLimit = nil
         }
 
         return GraphChatInterpretationCorrectionCapabilities(
@@ -637,6 +686,7 @@ nonisolated enum GraphChatInterpretationCorrectionValidationIssue:
     case missingGroupingField
     case scopeExpansion
     case graphStateRequiresEntireGraph
+    case invalidRelationshipSelection
 }
 
 nonisolated enum GraphChatInterpretationCorrectionValidationState:
@@ -759,6 +809,12 @@ nonisolated enum GraphChatInterpretationCorrectionCopy {
             detail = "Diese Interpretation kann nicht bearbeitet werden."
         case (.english, .interpretationNotEditable):
             detail = "This interpretation cannot be edited."
+        case (.german, .invalidRelationshipSelection):
+            detail =
+                "Prüfe Richtung, Gegenkategorie, Gegeneintrag und Link-Notiz-Filter."
+        case (.english, .invalidRelationshipSelection):
+            detail =
+                "Check the direction, counterpart category, counterpart entry, and link-note filter."
         }
         return GraphChatInterpretationCorrectionNotice(
             title:

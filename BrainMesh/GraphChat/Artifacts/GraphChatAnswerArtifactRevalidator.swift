@@ -35,6 +35,15 @@ nonisolated struct GraphChatRegistryAnswerArtifactRevalidator: GraphChatAnswerAr
                         availableEvidenceIDs
                 )
         }
+        if case .relationship =
+            artifact.payload {
+            return GraphChatRelationshipArtifactEvidenceProjector
+                .revalidatedArtifact(
+                    artifact,
+                    availableEvidenceIDs:
+                        availableEvidenceIDs
+                )
+        }
         guard Set(artifact.allEvidenceIDs).isSubset(of: availableEvidenceIDs) else {
             return nil
         }
@@ -88,6 +97,24 @@ nonisolated struct GraphChatLiveAnswerArtifactRevalidator: GraphChatAnswerArtifa
                     profile,
                     scope: scope
                 )
+        }
+        if case .relationship =
+            artifact.payload {
+            guard
+                let relationship =
+                    GraphChatRelationshipArtifactEvidenceProjector
+                    .revalidatedArtifact(
+                        artifact,
+                        availableEvidenceIDs:
+                            validatedEvidenceIDs
+                    )
+            else {
+                return nil
+            }
+            return try await revalidatedNavigation(
+                relationship,
+                scope: scope
+            )
         }
         if case .comparison = artifact.payload {
             guard let comparison =

@@ -604,7 +604,11 @@ final class GraphChatViewModel: ObservableObject {
                                 chatScope:
                                     chatScope,
                                 language:
-                                    language
+                                    language,
+                                includeFullGraphRelationshipCatalog:
+                                    interpretation
+                                        .intentKind
+                                        == .relationships
                             )
                     let capabilities =
                         GraphChatInterpretationCorrectionCapabilities
@@ -872,7 +876,12 @@ final class GraphChatViewModel: ObservableObject {
                                     self
                                         .currentAccessDecision
                                         .route
-                                        == .graphLocked
+                                        == .graphLocked,
+                                includeFullGraphRelationshipCatalog:
+                                    binding
+                                        .originalInterpretation
+                                        .intentKind
+                                        == .relationships
                             )
                     let request =
                         GraphChatInterpretationCorrectionRequest(

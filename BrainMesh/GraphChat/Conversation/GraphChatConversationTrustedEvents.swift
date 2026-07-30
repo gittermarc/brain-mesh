@@ -61,6 +61,12 @@ nonisolated enum GraphChatConversationTrustedPayload: Sendable {
         state: GraphChatToolResultState,
         evidence: [GraphEvidence]
     )
+    case relationshipResolved(
+        plan: GraphChatRelationshipPlan,
+        output: GraphChatRelationshipOutput,
+        state: GraphChatToolResultState,
+        evidence: [GraphEvidence]
+    )
     case statsResolved(
         output: GraphStatsOutput,
         state: GraphChatToolResultState,
@@ -96,6 +102,8 @@ nonisolated enum GraphChatConversationTrustedPayload: Sendable {
         case .nodeResolved:
             return .getNode
         case .neighborsResolved:
+            return .getNeighbors
+        case .relationshipResolved:
             return .getNeighbors
         case .statsResolved:
             return .graphStats

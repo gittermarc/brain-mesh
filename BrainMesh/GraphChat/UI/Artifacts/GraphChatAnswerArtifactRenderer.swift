@@ -63,6 +63,27 @@ struct GraphChatAnswerArtifactRenderer: View {
                     onShowEvidenceDrawer:
                         onShowEvidenceDrawer
                 )
+            case .relationship(let payload):
+                GraphChatRelationshipArtifactView(
+                    artifact: artifact,
+                    resolved: resolved,
+                    payload: payload,
+                    availableEvidence:
+                        availableEvidence,
+                    language: language,
+                    allowsEvidenceActions:
+                        allowsEvidenceActions,
+                    canOpenTarget:
+                        canOpenTarget,
+                    onOpenTarget:
+                        onOpenTarget,
+                    onOpenEvidence:
+                        onOpenEvidence,
+                    onShowEvidenceInGraph:
+                        onShowEvidenceInGraph,
+                    onShowEvidenceDrawer:
+                        onShowEvidenceDrawer
+                )
             case .metric(let payload):
                 GraphChatMetricArtifactView(
                     artifact: artifact,
@@ -207,6 +228,8 @@ struct GraphChatAnswerArtifactRenderer: View {
         switch component {
         case .nodeProfile:
             return "person.text.rectangle"
+        case .relationship:
+            return "point.3.connected.trianglepath.dotted"
         case .metric:
             return "number"
         case .resultList:

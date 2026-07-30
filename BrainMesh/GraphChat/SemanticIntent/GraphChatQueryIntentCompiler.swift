@@ -1817,6 +1817,7 @@ nonisolated struct GraphChatQueryIntentCompiler:
             return true
         case .findNodes, .nodeDetails,
             .compareNodes, .inspectGraphState,
+            .relationships,
             .unrecognized, .openEnded:
             return false
         }

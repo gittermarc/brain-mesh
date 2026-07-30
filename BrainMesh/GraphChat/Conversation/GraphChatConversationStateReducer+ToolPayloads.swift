@@ -380,6 +380,154 @@ nonisolated extension GraphChatConversationStateReducer {
         )
     }
 
+    func applyRelationship(
+        plan: GraphChatRelationshipPlan,
+        output: GraphChatRelationshipOutput,
+        resultState: GraphChatToolResultState,
+        evidence: [GraphEvidence],
+        eventID: UUID,
+        to state: inout GraphChatConversationState
+    ) {
+        let validIDs = Set(evidence.map(\.id))
+        guard
+            validIDs.contains(
+                output.centerEvidenceID
+            )
+        else {
+            return
+        }
+        let centerEvidenceID =
+            output.centerEvidenceID
+        let center =
+            GraphChatConversationNodeReference(
+                node: output.center.nodeKey,
+                label:
+                    boundedLabel(
+                        output.center.label
+                    ),
+                ownerEntityID:
+                    output.center.kind
+                        == .entity
+                    ? output.center
+                        .nodeKey.id
+                    : output.center
+                        .ownerEntityID,
+                evidenceIDs:
+                    boundedEvidenceIDs([
+                        centerEvidenceID,
+                    ])
+            )
+        upsertNode(center, in: &state)
+        upsertEntityFromNode(
+            center,
+            fallbackName:
+                plan.centerEntity
+                    .displayName,
+            in: &state
+        )
+
+        var orderedNodes = [NodeRefKey]()
+        var labels = [NodeRefKey: String]()
+        var owners = [NodeRefKey: UUID?]()
+        var evidenceByNode =
+            [NodeRefKey: [GraphEvidenceID]]()
+        for connection in output.connections
+        where validIDs.contains(
+            connection.evidenceID
+        ) {
+            let node =
+                connection.counterpart.nodeKey
+            if labels[node] == nil {
+                orderedNodes.append(node)
+                labels[node] =
+                    connection.counterpart
+                        .visibleName
+                owners[node] =
+                    connection.counterpart.kind
+                        == .entity
+                    ? connection.counterpart
+                        .nodeKey.id
+                    : connection.counterpart
+                        .ownerEntityID
+            }
+            evidenceByNode[node, default: []]
+                .append(
+                    connection.evidenceID
+                )
+        }
+        let references = orderedNodes
+            .enumerated()
+            .map { index, node in
+                let itemEvidence =
+                    boundedEvidenceIDs(
+                        evidenceByNode[node]
+                            ?? []
+                    )
+                let label =
+                    boundedLabel(
+                        labels[node] ?? ""
+                    )
+                let reference =
+                    GraphChatConversationNodeReference(
+                        node: node,
+                        label: label,
+                        ownerEntityID:
+                            owners[node] ?? nil,
+                        evidenceIDs:
+                            itemEvidence
+                    )
+                upsertNode(
+                    reference,
+                    in: &state
+                )
+                upsertEntityFromNode(
+                    reference,
+                    fallbackName:
+                        plan
+                            .counterpartEntity?
+                            .displayName,
+                    in: &state
+                )
+                return GraphChatConversationResultReference(
+                    ordinal: index + 1,
+                    reference: .node(node),
+                    label: label,
+                    evidenceIDs:
+                        itemEvidence
+                )
+            }
+        appendResultContext(
+            GraphChatConversationResultContext(
+                id: eventID,
+                kind: .relationship,
+                state: resultState,
+                entityID:
+                    plan.counterpartEntity?.id,
+                references: references,
+                groupReferences: [],
+                evidenceIDs:
+                    boundedEvidenceIDs(
+                        evidence.map(\.id)
+                    ),
+                appliedFilters: [],
+                technicalDescription:
+                    boundedTechnicalDescription(
+                        "Direkte Relationship-Auswahl mit \(output.connections.count) Links, Richtung \(plan.direction.rawValue), vollständig \(output.resultWindow.totalCount != nil)"
+                    )
+            ),
+            to: &state
+        )
+        state.lastRelationship =
+            GraphChatConversationRelationshipContext(
+                resultContextID: eventID,
+                sourceTurnID:
+                    plan.binding.turnID,
+                plan: plan,
+                resultWindow:
+                    output.resultWindow
+            )
+    }
+
     func applyStats(
         _ output: GraphStatsOutput,
         resultState: GraphChatToolResultState,

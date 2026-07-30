@@ -187,6 +187,27 @@ nonisolated extension GraphChatLocalIntentPreparedExecution {
                     graphState.aspect
                 )
 
+        case (.relationships, .getNeighbors):
+            guard
+                latestResult?.kind
+                    == .relationship,
+                case .relationships(
+                    let relationshipPlan
+                ) = intent.payload,
+                let relationship =
+                    state.lastRelationship,
+                relationship.plan
+                    == relationshipPlan,
+                relationship.resultContextID
+                    == latestResult?.id
+            else {
+                return nil
+            }
+            witness =
+                .relationship(
+                    relationshipPlan
+                )
+
         default:
             return nil
         }

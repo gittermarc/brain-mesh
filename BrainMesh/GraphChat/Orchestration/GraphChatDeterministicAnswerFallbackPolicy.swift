@@ -63,18 +63,24 @@ nonisolated struct GraphChatDeterministicAnswerFallbackSource:
                     .contains($0.id)
             }
             .compactMap { artifact in
-                guard
-                    case .nodeProfile =
-                        artifact.payload
-                else {
+                switch artifact.payload {
+                case .nodeProfile:
+                    return GraphChatNodeProfileArtifactEvidenceProjector
+                        .revalidatedArtifact(
+                            artifact,
+                            availableEvidenceIDs:
+                                retainedEvidenceIDs
+                        )
+                case .relationship:
+                    return GraphChatRelationshipArtifactEvidenceProjector
+                        .revalidatedArtifact(
+                            artifact,
+                            availableEvidenceIDs:
+                                retainedEvidenceIDs
+                        )
+                default:
                     return artifact
                 }
-                return GraphChatNodeProfileArtifactEvidenceProjector
-                    .revalidatedArtifact(
-                        artifact,
-                        availableEvidenceIDs:
-                            retainedEvidenceIDs
-                    )
             }
         self.artifacts = retainedArtifacts
         self.appliedFilters = Self.filters(in: retainedArtifacts)
@@ -122,6 +128,12 @@ nonisolated struct GraphChatDeterministicAnswerFallbackSource:
             switch artifact.payload {
             case .nodeProfile:
                 return 1
+            case .relationship(let payload):
+                return payload
+                    .resultMetadata.totalCount
+                    ?? payload
+                        .resultMetadata
+                        .returnedCount
 
             case .metric(let payload):
                 guard let aggregation = artifact.querySummary?.aggregation,

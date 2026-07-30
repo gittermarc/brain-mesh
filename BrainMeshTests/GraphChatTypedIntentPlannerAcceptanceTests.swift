@@ -172,6 +172,7 @@ struct GraphChatTypedIntentPlannerAcceptanceTests {
                     .nodeDetails,
                     .compareNodes,
                     .inspectGraphState,
+                    .relationships,
                 ])
         )
         #expect(

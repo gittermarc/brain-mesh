@@ -132,7 +132,8 @@ nonisolated struct GraphChatLocalIntentQueryExecutionSupport:
             return query
         case .searchGraph, .nodeDetails,
             .compareNodes,
-            .inspectGraphState:
+            .inspectGraphState,
+            .relationships:
             throw GraphChatLocalIntentExecutionError
                 .invalidCompiledAction
         }

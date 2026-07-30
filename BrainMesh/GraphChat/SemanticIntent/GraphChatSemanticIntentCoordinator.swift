@@ -42,6 +42,8 @@ nonisolated struct GraphChatSemanticIntentCoordinator:
         GraphChatIntentInterpreterRequestBuilder
     private let draftValidator:
         GraphChatSemanticDraftValidator
+    private let relationshipFastPath:
+        GraphChatRelationshipFastPathCompiler
     private let resolver:
         GraphChatSemanticIntentResolver
     private let referenceResolver:
@@ -67,6 +69,9 @@ nonisolated struct GraphChatSemanticIntentCoordinator:
         draftValidator:
             GraphChatSemanticDraftValidator =
                 GraphChatSemanticDraftValidator(),
+        relationshipFastPath:
+            GraphChatRelationshipFastPathCompiler =
+                GraphChatRelationshipFastPathCompiler(),
         resolver:
             GraphChatSemanticIntentResolver =
                 GraphChatSemanticIntentResolver(),
@@ -88,6 +93,8 @@ nonisolated struct GraphChatSemanticIntentCoordinator:
         self.compactRetryRequestBuilder =
             compactRetryRequestBuilder
         self.draftValidator = draftValidator
+        self.relationshipFastPath =
+            relationshipFastPath
         self.resolver = resolver
         self.referenceResolver = referenceResolver
         self.localAnswerBuilder = localAnswerBuilder
@@ -130,6 +137,8 @@ nonisolated struct GraphChatSemanticIntentCoordinator:
 
         let draft: GraphChatUntrustedSemanticIntentDraft
         let selectedEntityID: UUID?
+        let selectedRelationshipCounterpartEntityID:
+            UUID?
         let selectedFields:
             [GraphChatSemanticSelectedField]
         let selectedNodes:
@@ -143,6 +152,9 @@ nonisolated struct GraphChatSemanticIntentCoordinator:
                 selectedEntityID =
                     continuation.selection
                         .selectedEntityID
+                selectedRelationshipCounterpartEntityID =
+                    continuation.selection
+                        .selectedRelationshipCounterpartEntityID
                 selectedFields =
                     continuation.selection
                         .selectedFields
@@ -175,13 +187,30 @@ nonisolated struct GraphChatSemanticIntentCoordinator:
                 throw mapped
             }
         } else {
-            let recovery: InterpreterRecoveryResolution
+            let recovery:
+                InterpreterRecoveryResolution
             do {
-                recovery = try await interpretWithRecovery(
-                    request,
-                    providerPlan: providerPlan,
-                    schemaContext: schemaContext
-                )
+                if let fastDraft =
+                    relationshipFastPath.compile(
+                        question:
+                            providerPlan
+                                .normalizedQuestion,
+                        language:
+                            providerPlan
+                                .responseLanguage
+                    )
+                {
+                    recovery = .draft(fastDraft)
+                } else {
+                    recovery =
+                        try await interpretWithRecovery(
+                            request,
+                            providerPlan:
+                                providerPlan,
+                            schemaContext:
+                                schemaContext
+                        )
+                }
             } catch {
                 if isCancellation(error) {
                     await record(
@@ -260,6 +289,8 @@ nonisolated struct GraphChatSemanticIntentCoordinator:
                     throw mapped
                 }
                 selectedEntityID = nil
+                selectedRelationshipCounterpartEntityID =
+                    nil
                 selectedFields = []
                 selectedNodes = []
             }
@@ -310,6 +341,8 @@ nonisolated struct GraphChatSemanticIntentCoordinator:
                         requestedAt,
                     selectedEntityID:
                         selectedEntityID,
+                    selectedRelationshipCounterpartEntityID:
+                        selectedRelationshipCounterpartEntityID,
                     selectedFields:
                         selectedFields,
                     selectedNodes:
@@ -359,6 +392,8 @@ nonisolated struct GraphChatSemanticIntentCoordinator:
                     draft: draft,
                     selectedEntityID:
                         selectedEntityID,
+                    selectedRelationshipCounterpartEntityID:
+                        selectedRelationshipCounterpartEntityID,
                     selectedFields:
                         selectedFields,
                     selectedNodes:
@@ -638,17 +673,29 @@ nonisolated struct GraphChatSemanticIntentCoordinator:
         requestID: UUID,
         requestedAt: Date,
         selectedEntityID: UUID?,
+        selectedRelationshipCounterpartEntityID:
+            UUID?,
         selectedFields:
             [GraphChatSemanticSelectedField],
         selectedNodes:
             [GraphChatSemanticSelectedNode]
     ) async throws -> CurrentScopeResolution {
+        if draft.family == .relationships,
+           draft.conversationReference
+            == .currentSelection {
+            // Relationship continuations are bound exclusively through the
+            // revalidated relationship context, never through generic CURRENT.
+            return .resolved(nil)
+        }
         if let current =
             providerPlan.currentResolvedScope
         {
             return .resolved(current)
         }
-        if draft.family == .compareNodes,
+        if (
+            draft.family == .compareNodes
+            || draft.family == .relationships
+        ),
            providerPlan.currentReference != nil {
             return .resolved(nil)
         }
@@ -731,6 +778,8 @@ nonisolated struct GraphChatSemanticIntentCoordinator:
                                     draft: draft,
                                     selectedEntityID:
                                         selectedEntityID,
+                                    selectedRelationshipCounterpartEntityID:
+                                        selectedRelationshipCounterpartEntityID,
                                     selectedFields:
                                         selectedFields,
                                     selectedNodes:
@@ -800,7 +849,17 @@ nonisolated struct GraphChatSemanticIntentCoordinator:
                             draft:
                                 clarification.draft,
                             selectedEntityID:
-                                candidate.entityID,
+                                candidate.selectionRole
+                                    == .primary
+                                ? candidate.entityID
+                                : candidate
+                                    .preservedPrimaryEntityID,
+                            selectedRelationshipCounterpartEntityID:
+                                candidate.selectionRole
+                                    == .relationshipCounterpart
+                                ? candidate.entityID
+                                : candidate
+                                    .preservedRelationshipCounterpartEntityID,
                             selectedFields:
                                 candidate
                                     .selectedFields,
@@ -1086,6 +1145,8 @@ nonisolated struct GraphChatSemanticIntentCoordinator:
                     : .graphOverviewCompiled
             }
             return .graphOverviewCompiled
+        case .relationships:
+            return .relationshipIntentCompiled
         case .unrecognized, .openEnded:
             return .legacyProviderFallback
         }

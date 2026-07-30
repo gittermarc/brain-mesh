@@ -61,6 +61,16 @@ extension GraphStatsTool:
     GraphChatLocalIntentStatsExecuting
 {}
 
+nonisolated protocol GraphChatLocalIntentRelationshipExecuting:
+    Sendable
+{
+    func execute(
+        _ plan: GraphChatRelationshipPlan,
+        context: GraphChatToolContext
+    ) async throws
+        -> GraphChatToolResult<GraphChatRelationshipOutput>
+}
+
 nonisolated struct UnavailableGraphChatLocalStatsExecutor:
     GraphChatLocalIntentStatsExecuting
 {
@@ -159,6 +169,7 @@ nonisolated enum GraphChatLocalIntentAction: Hashable, Sendable {
     case nodeDetails(GraphChatLocalNodeDetailsAction)
     case compareNodes(GraphChatComparisonPlan)
     case inspectGraphState(GraphChatLocalGraphStateAction)
+    case relationships(GraphChatRelationshipPlan)
 }
 
 nonisolated struct GraphChatTypedIntentAdaptation:

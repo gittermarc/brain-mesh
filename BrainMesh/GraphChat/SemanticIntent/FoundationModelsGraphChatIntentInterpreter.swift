@@ -35,7 +35,7 @@ private nonisolated struct FoundationGraphChatGeneratedFilterDraft {
 private nonisolated struct FoundationGraphChatGeneratedIntentDraft {
     @Guide(
         description:
-            "Exactly one of findNodes, entityList, filteredCollection, count, groupCount, refinement, nodeDetails, compareNodes, inspectGraphState, unrecognized, or openEnded."
+            "Exactly one of findNodes, entityList, filteredCollection, count, groupCount, refinement, nodeDetails, compareNodes, inspectGraphState, relationships, unrecognized, or openEnded."
     )
     var family: String
 
@@ -53,7 +53,7 @@ private nonisolated struct FoundationGraphChatGeneratedIntentDraft {
 
     @Guide(
         description:
-            "Literal user-visible node display names, in requested order. Use one for nodeDetails, two or more for compareNodes, and none for conversation references."
+            "Literal user-visible node display names, in requested order. Use one for nodeDetails, two or more for compareNodes, one center plus an optional explicit counterpart for relationships, and none for conversation references."
     )
     var nodeTerms: [String]
 
@@ -127,6 +127,36 @@ private nonisolated struct FoundationGraphChatGeneratedIntentDraft {
             "Exactly one of overview, counts, structure, or health. Use only for inspectGraphState; otherwise overview."
     )
     var graphStateAspect: String
+
+    @Guide(
+        description:
+            "Exactly one of connections or linkNotesBetweenNodes. Use only with relationships; otherwise connections."
+    )
+    var relationshipRequest: String
+
+    @Guide(
+        description:
+            "Exactly one of unspecified, incoming, outgoing, or both. This is user meaning only."
+    )
+    var relationshipDirection: String
+
+    @Guide(
+        description:
+            "Exact user-visible entity display name requested for the other endpoint, otherwise empty."
+    )
+    var relationshipCounterpartEntityTerm: String
+
+    @Guide(
+        description:
+            "Exactly one of unspecified, present, missing, or contains for the user-visible link note condition."
+    )
+    var relationshipNotePredicate: String
+
+    @Guide(
+        description:
+            "Literal user wording to match inside a link note only when relationshipNotePredicate is contains; otherwise empty."
+    )
+    var relationshipNoteTerm: String
 
     @Guide(
         description:
@@ -219,11 +249,14 @@ actor FoundationModelsGraphChatIntentInterpreter:
         Use nodeDetails when the user asks to show or describe one named or referenced node.
         Use compareNodes only when the user asks to compare two or more named or referenced nodes.
         Use inspectGraphState for graph overview, counts, structure, health, or strongly connected nodes.
+        Use relationships for direct incoming, outgoing, or bidirectional connections, optional other-endpoint entity or node constraints, and link notes between two named nodes.
         Use unrecognized when the meaning does not match those families.
         Use openEnded only when the user explicitly asks an open-ended graph question that needs the legacy answer flow.
         When an entity type is clear, place only its exact supplied display name in entityTerm; never an alias or ID.
         Put only exact supplied field display names in filters, sortFieldTerm, projectionTerms, and groupFieldTerm.
         Put literal user-visible node display names in nodeTerms. Do not invent or normalize node names.
+        For relationships put the center node first and an explicitly named other node second. For a direction-only follow-up, use currentSelection and no node terms.
+        relationshipCounterpartEntityTerm may contain only an exact supplied user-visible entity name. Relationship note fields contain only semantic note meaning and literal user wording.
         For nodeDetails and compareNodes, projectionTerms contains only comparison or detail fields explicitly requested by the user.
         For inspectGraphState choose overview, counts, structure, or health from the user's meaning.
         Node identity is projected by the app; never place node name in projectionTerms.
@@ -296,6 +329,21 @@ actor FoundationModelsGraphChatIntentInterpreter:
                 GraphChatGraphStateAspect(
                     rawValue:
                         generated.graphStateAspect
+                ),
+            let relationshipRequest =
+                GraphChatSemanticRelationshipRequest(
+                    rawValue:
+                        generated.relationshipRequest
+                ),
+            let relationshipDirection =
+                GraphChatSemanticRelationshipDirection(
+                    rawValue:
+                        generated.relationshipDirection
+                ),
+            let relationshipNotePredicate =
+                GraphChatSemanticRelationshipNotePredicate(
+                    rawValue:
+                        generated.relationshipNotePredicate
                 )
         else {
             throw invalidOutput()
@@ -391,6 +439,17 @@ actor FoundationModelsGraphChatIntentInterpreter:
                 generated.groupFieldTerm,
             graphStateAspect:
                 graphStateAspect,
+            relationshipRequest:
+                relationshipRequest,
+            relationshipDirection:
+                relationshipDirection,
+            relationshipCounterpartEntityTerm:
+                generated
+                    .relationshipCounterpartEntityTerm,
+            relationshipNotePredicate:
+                relationshipNotePredicate,
+            relationshipNoteTerm:
+                generated.relationshipNoteTerm,
             responseLanguage: language
         )
     }

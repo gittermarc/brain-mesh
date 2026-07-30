@@ -636,6 +636,8 @@ struct GraphChatAdvancedIntentArtifactTests {
             switch $0.payload {
             case .nodeProfile:
                 return .nodeProfile
+            case .relationship:
+                return .relationship
             case .metric:
                 return .metric
             case .resultList:

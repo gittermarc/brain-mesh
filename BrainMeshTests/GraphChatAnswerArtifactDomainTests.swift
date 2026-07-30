@@ -11,6 +11,9 @@ struct GraphChatAnswerArtifactDomainTests {
             .nodeProfile(
                 fixture.nodeProfilePayload
             ),
+            .relationship(
+                fixture.relationshipPayload
+            ),
             .metric(fixture.metricPayload),
             .resultList(fixture.listPayload),
             .table(fixture.tablePayload),
@@ -427,6 +430,69 @@ private struct ArtifactDomainFixture {
             attachmentMetadata:
                 complete,
             nodeNavigationTarget:
+                openTarget,
+            identityEvidence: evidence,
+            evidence: evidence
+        )
+    }
+
+    var relationshipPayload:
+        GraphChatAnswerArtifactRelationshipPayload
+    {
+        let counterpart = NodeRefKey(
+            kind: .attribute,
+            id: uuid(11)
+        )
+        let counterpartTarget =
+            GraphChatAnswerArtifactNavigationTarget
+                .openNode(
+                    graphScope: graphScope,
+                    node: counterpart
+                )
+        return GraphChatAnswerArtifactRelationshipPayload(
+            language: .english,
+            request: .connections,
+            direction: .both,
+            centerNode: node,
+            centerLabel: "Gateway",
+            centerEntityID: uuid(5),
+            centerEntityLabel: "Services",
+            counterpartEntityID: nil,
+            counterpartEntityLabel: nil,
+            counterpartNode: nil,
+            counterpartNodeLabel: nil,
+            notePredicate: nil,
+            connections: [
+                GraphChatAnswerArtifactRelationshipConnection(
+                    id:
+                        GraphChatAnswerArtifactItemID(
+                            rawValue: uuid(12)
+                        ),
+                    linkID: uuid(12),
+                    direction: .outgoing,
+                    sourceLabel: "Gateway",
+                    targetLabel: "Backend",
+                    counterpartNode: counterpart,
+                    counterpartLabel: "Backend",
+                    counterpartOwnerEntityID:
+                        uuid(5),
+                    note: "TLS",
+                    parallelOrdinal: 1,
+                    parallelCount: 1,
+                    navigationTargets: [
+                        counterpartTarget,
+                    ],
+                    evidence: evidence
+                ),
+            ],
+            resultWindow:
+                .complete(totalCount: 1),
+            resultMetadata:
+                GraphChatAnswerArtifactResultMetadata(
+                    resultCount: 1,
+                    returnedCount: 1
+                ),
+            centerNavigationTarget:
                 openTarget,
             identityEvidence: evidence,
             evidence: evidence

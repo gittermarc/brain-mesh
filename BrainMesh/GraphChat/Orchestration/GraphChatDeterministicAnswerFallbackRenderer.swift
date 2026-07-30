@@ -62,6 +62,10 @@ nonisolated struct GraphChatDeterministicAnswerFallbackRenderer: Sendable {
                 payload: payload,
                 language: language
             ).plainText
+        case .relationship(let payload):
+            return GraphChatRelationshipPresentation(
+                payload: payload
+            ).plainText
 
         case .metric(let payload):
             return metricSummary(
