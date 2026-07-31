@@ -739,6 +739,8 @@ nonisolated struct GraphChatInterpretationCorrectionCompiler:
         let binding = request.binding
         guard
             binding.version == .v1,
+            binding.readPlanVersion
+                == .current,
             binding.graphScope
                 == providerPlan.scopeKey
                     .graphScope,

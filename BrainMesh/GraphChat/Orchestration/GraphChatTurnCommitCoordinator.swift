@@ -47,18 +47,24 @@ nonisolated struct GraphChatArtifactCommitContext: Hashable, Sendable {
     let chatScope: GraphChatScope
     let sessionID: GraphChatAnswerArtifactSessionID
     let transactionID: GraphChatAnswerArtifactTransactionID
+    let readPlanVersion:
+        GraphChatComposableReadPlanVersion?
 
     init(
         graphScope: GraphScope,
         chatScope: GraphChatScope,
         sessionID: GraphChatAnswerArtifactSessionID,
-        transactionID: GraphChatAnswerArtifactTransactionID
+        transactionID: GraphChatAnswerArtifactTransactionID,
+        readPlanVersion:
+            GraphChatComposableReadPlanVersion? = nil
     ) {
         precondition(graphScope == chatScope.graphScope)
         self.graphScope = graphScope
         self.chatScope = chatScope
         self.sessionID = sessionID
         self.transactionID = transactionID
+        self.readPlanVersion =
+            readPlanVersion
     }
 }
 

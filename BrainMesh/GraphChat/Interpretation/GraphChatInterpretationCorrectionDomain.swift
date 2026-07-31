@@ -73,6 +73,8 @@ nonisolated struct GraphChatInterpretationCorrectionOrigin:
         let intent = adaptation.intent
         return version == .v1
             && requestQuestion.isEmpty == false
+            && adaptation.readPlan.version
+                == .current
             && GraphChatTypedIntentDomainVersion
                 .allCases.contains(
                     intent.version
@@ -128,6 +130,8 @@ nonisolated struct GraphChatInterpretationCorrectionBinding:
     let graphScope: GraphScope
     let chatScope: GraphChatScope
     let intentDomainVersion: GraphChatTypedIntentDomainVersion
+    let readPlanVersion:
+        GraphChatComposableReadPlanVersion
     let originalInterpretation: GraphChatIntentInterpretation
     let artifactSessionID: GraphChatAnswerArtifactSessionID
     let checkpointBeforeOriginalTurn: GraphChatConversationCheckpoint
@@ -230,6 +234,9 @@ nonisolated struct GraphChatInterpretationCorrectionBinding:
             correctionOrigin.adaptation
                 .intent.version
                 == intentDomainVersion,
+            correctionOrigin.adaptation
+                .readPlan.version
+                == .current,
             correctionOrigin.artifactSessionID
                 == artifactSessionID,
             correctionOrigin.requestQuestion
@@ -256,6 +263,11 @@ nonisolated struct GraphChatInterpretationCorrectionBinding:
         self.graphScope = graphScope
         self.chatScope = chatScope
         self.intentDomainVersion = intentDomainVersion
+        self.readPlanVersion =
+            correctionOrigin
+                .adaptation
+                .readPlan
+                .version
         self.originalInterpretation = originalInterpretation
         self.artifactSessionID = artifactSessionID
         self.checkpointBeforeOriginalTurn =

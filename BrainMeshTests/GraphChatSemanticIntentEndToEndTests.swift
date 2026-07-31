@@ -2627,6 +2627,23 @@ struct GraphChatSemanticIntentEndToEndTests {
             )
         )
         #expect(
+            correctedOrigin.adaptation
+                .readPlan.version
+                == .current
+        )
+        #expect(
+            correctedOrigin.adaptation
+                .readPlan.binding.requestID
+                == correctedInterpretation
+                    .turnBinding.requestID
+        )
+        #expect(
+            correctedOrigin.adaptation
+                .readPlan
+                != origin.adaptation
+                    .readPlan
+        )
+        #expect(
             finalState.lastValidatedQueryPlan?
                 .sorting == [
                     GraphValidatedQuerySort(

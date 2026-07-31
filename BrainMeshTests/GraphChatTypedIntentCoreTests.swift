@@ -716,6 +716,11 @@ struct GraphChatTypedIntentCoreTests {
                     turn.deferredArtifactCommit
                 )
                 #expect(
+                    deferredCommit.context
+                        .readPlanVersion
+                        == .current
+                )
+                #expect(
                     await registry
                         .snapshotForTesting()
                         .isEmpty
@@ -742,6 +747,22 @@ struct GraphChatTypedIntentCoreTests {
         #expect(
             finalizedTurn.committedArtifactIDs
                 .isEmpty == false
+        )
+        #expect(
+            finalizedTurn.answer.evidence
+                .isEmpty == false
+        )
+        #expect(
+            finalizedTurn.answer.artifactIDs
+                == finalizedTurn
+                    .committedArtifactIDs
+        )
+        #expect(
+            finalizedTurn.answer.interpretation?
+                .correctionOrigin?
+                .adaptation
+                .readPlan.version
+                == .current
         )
     }
 

@@ -14,6 +14,10 @@ nonisolated extension GraphChatLocalIntentPreparedExecution {
         requestQuestion: String
     ) async -> GraphChatIntentInterpretation? {
         guard
+            adaptation.readPlan.version
+                == .current,
+            artifactContext.readPlanVersion
+                == adaptation.readPlan.version,
             primaryResult.isEligibleAsPrimary,
             primaryResult.completionStatus
                 != .unverified,

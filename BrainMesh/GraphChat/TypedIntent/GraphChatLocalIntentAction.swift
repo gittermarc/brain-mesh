@@ -177,5 +177,23 @@ nonisolated struct GraphChatTypedIntentAdaptation:
     Sendable
 {
     let intent: GraphChatTypedIntent
-    let action: GraphChatLocalIntentAction
+    let readPlan: GraphChatComposableReadPlan
+
+    init(
+        intent: GraphChatTypedIntent,
+        action: GraphChatLocalIntentAction
+    ) {
+        self.intent = intent
+        self.readPlan =
+            GraphChatComposableReadPlanCompiler
+                .compile(
+                    intent: intent,
+                    action: action
+                )
+    }
+
+    var action: GraphChatLocalIntentAction {
+        GraphChatComposableReadPlanLegacyActionAdapter
+            .action(from: readPlan)
+    }
 }

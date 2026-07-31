@@ -85,6 +85,9 @@ nonisolated struct GraphChatIntentLimitPolicy:
     let maximumQueryEvidenceCount: Int
     let maximumAdvancedEvidenceCount: Int
     let maximumAdvancedArtifactCount: Int
+    let maximumComposableReadOperationCount: Int
+    let maximumComposableReadIntermediateCount: Int
+    let maximumComposableReadTraversalHopCount: Int
     let standardInterpreterContext:
         GraphChatIntentInterpreterContextBudget
     let compactInterpreterContext:
@@ -124,6 +127,9 @@ nonisolated struct GraphChatIntentLimitPolicy:
         maximumQueryEvidenceCount: 512,
         maximumAdvancedEvidenceCount: 96,
         maximumAdvancedArtifactCount: 4,
+        maximumComposableReadOperationCount: 12,
+        maximumComposableReadIntermediateCount: 10_000,
+        maximumComposableReadTraversalHopCount: 1,
         standardInterpreterContext:
             GraphChatIntentInterpreterContextBudget(
                 maximumEntities: 24,
@@ -178,6 +184,9 @@ nonisolated struct GraphChatIntentLimitPolicy:
         maximumQueryEvidenceCount: Int,
         maximumAdvancedEvidenceCount: Int,
         maximumAdvancedArtifactCount: Int,
+        maximumComposableReadOperationCount: Int,
+        maximumComposableReadIntermediateCount: Int,
+        maximumComposableReadTraversalHopCount: Int,
         standardInterpreterContext:
             GraphChatIntentInterpreterContextBudget,
         compactInterpreterContext:
@@ -256,6 +265,9 @@ nonisolated struct GraphChatIntentLimitPolicy:
         precondition(maximumQueryEvidenceCount > 1)
         precondition(maximumAdvancedEvidenceCount > 0)
         precondition(maximumAdvancedArtifactCount > 0)
+        precondition(maximumComposableReadOperationCount >= 3)
+        precondition(maximumComposableReadIntermediateCount > 0)
+        precondition(maximumComposableReadTraversalHopCount == 1)
         precondition(
             compactInterpreterContext.maximumEntities
                 <= standardInterpreterContext
@@ -355,6 +367,12 @@ nonisolated struct GraphChatIntentLimitPolicy:
             maximumAdvancedEvidenceCount
         self.maximumAdvancedArtifactCount =
             maximumAdvancedArtifactCount
+        self.maximumComposableReadOperationCount =
+            maximumComposableReadOperationCount
+        self.maximumComposableReadIntermediateCount =
+            maximumComposableReadIntermediateCount
+        self.maximumComposableReadTraversalHopCount =
+            maximumComposableReadTraversalHopCount
         self.standardInterpreterContext =
             standardInterpreterContext
         self.compactInterpreterContext =

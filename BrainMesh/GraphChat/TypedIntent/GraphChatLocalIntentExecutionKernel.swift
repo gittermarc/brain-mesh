@@ -2,7 +2,7 @@
 //  GraphChatLocalIntentExecutionKernel.swift
 //  BrainMesh
 //
-//  Provider-free execution and lifecycle boundary for app-compiled actions.
+//  Provider-free execution and lifecycle boundary for app-compiled read plans.
 //
 
 import Foundation
@@ -137,6 +137,8 @@ nonisolated struct GraphChatLocalIntentExecutionKernel: Sendable {
     private let timeZone: TimeZone
     private let querySupport:
         GraphChatLocalIntentQueryExecutionSupport
+    private let readPlanValidator:
+        GraphChatComposableReadPlanValidator
     private let searchSupport:
         GraphChatLocalIntentSearchExecutionSupport
     private let observability:
@@ -186,6 +188,12 @@ nonisolated struct GraphChatLocalIntentExecutionKernel: Sendable {
                 timeZone: timeZone,
                 referenceDate: referenceDate
             )
+        self.readPlanValidator =
+            GraphChatComposableReadPlanValidator(
+                calendar: calendar,
+                timeZone: timeZone,
+                referenceDate: referenceDate
+            )
         self.searchSupport =
             GraphChatLocalIntentSearchExecutionSupport()
         self.observability = observability
@@ -226,15 +234,35 @@ nonisolated struct GraphChatLocalIntentExecutionKernel: Sendable {
 
         let validatedAction: ValidatedAction
         do {
+            let validatedReadPlan:
+                ValidatedGraphChatComposableReadPlan
+            do {
+                validatedReadPlan =
+                    try readPlanValidator.validate(
+                        adaptation.readPlan,
+                        for: intent,
+                        schemaContext:
+                            schemaContext,
+                        providerPlan:
+                            providerPlan
+                    )
+            } catch let error
+                as GraphChatComposableReadPlanValidationError {
+                throw localExecutionError(
+                    for: error
+                )
+            }
+            let localAction =
+                validatedReadPlan.action
             try querySupport.revalidateIdentities(
                 intent: intent,
                 schemaContext: schemaContext
             )
-            switch adaptation.action {
+            switch localAction {
             case .queryDetailValues:
                 let action = try querySupport
                     .queryAction(
-                        in: adaptation.action
+                        in: localAction
                     )
                 try querySupport
                     .revalidateRefinementSource(
@@ -245,12 +273,25 @@ nonisolated struct GraphChatLocalIntentExecutionKernel: Sendable {
                         schemaContext:
                             schemaContext
                     )
-                let plan = try querySupport
-                    .validatedPlan(
-                        adaptation: adaptation,
-                        schemaContext:
-                            schemaContext
-                    )
+                guard let plan =
+                        validatedReadPlan
+                            .validatedQueryPlan
+                else {
+                    throw GraphChatLocalIntentExecutionError
+                        .invalidCompiledAction
+                }
+                let compatibilityPlan =
+                    try querySupport
+                        .validatedPlan(
+                            adaptation:
+                                adaptation,
+                            schemaContext:
+                                schemaContext
+                        )
+                guard compatibilityPlan == plan else {
+                    throw GraphChatLocalIntentExecutionError
+                        .invalidCompiledAction
+                }
                 validatedAction = .query(
                     plan: plan,
                     action: action
@@ -283,7 +324,14 @@ nonisolated struct GraphChatLocalIntentExecutionKernel: Sendable {
                 if plan.kind
                     == .sameEntityAttributes
                 {
-                    let queryPlan =
+                    guard let queryPlan =
+                            validatedReadPlan
+                                .validatedQueryPlan
+                    else {
+                        throw GraphChatLocalIntentExecutionError
+                            .invalidCompiledAction
+                    }
+                    let compatibilityPlan =
                         try querySupport
                             .validatedComparisonPlan(
                                 plan,
@@ -291,6 +339,12 @@ nonisolated struct GraphChatLocalIntentExecutionKernel: Sendable {
                                 schemaContext:
                                     schemaContext
                             )
+                    guard compatibilityPlan
+                            == queryPlan
+                    else {
+                        throw GraphChatLocalIntentExecutionError
+                            .invalidCompiledAction
+                    }
                     validatedAction =
                         .sameEntityComparison(
                             plan: plan,
@@ -343,7 +397,9 @@ nonisolated struct GraphChatLocalIntentExecutionKernel: Sendable {
             graphScope: intent.scope.graphScope,
             chatScope: intent.scope.chatScope,
             sessionID: artifactSession.sessionID,
-            transactionID: transactionID
+            transactionID: transactionID,
+            readPlanVersion:
+                adaptation.readPlan.version
         )
         let conversationTransaction =
             GraphChatConversationStateTransaction(
@@ -2196,6 +2252,39 @@ nonisolated struct GraphChatLocalIntentExecutionKernel: Sendable {
             kind: kind,
             rejection: rejection
         )
+    }
+
+    private func localExecutionError(
+        for error:
+            GraphChatComposableReadPlanValidationError
+    ) -> GraphChatLocalIntentExecutionError {
+        switch error {
+        case .bindingMismatch:
+            return .invalidBinding
+        case .scopeMismatch:
+            return .invalidScope
+        case .invalidLimits:
+            return .safetyLimitExceeded
+        case .staleEntity, .staleNode,
+            .staleField:
+            return .staleSchemaIdentity
+        case .staleConversationResult:
+            return .staleResultSet
+        case .unsupportedVersion,
+            .invalidOperationOrder,
+            .duplicateStep,
+            .unboundStepReference,
+            .cyclicStepReference,
+            .invalidSelection,
+            .invalidQuery,
+            .invalidProjectionAggregation,
+            .invalidStableSort,
+            .invalidTraversal,
+            .invalidResultContract,
+            .invalidEvidenceContract,
+            .invalidArtifactContract:
+            return .invalidCompiledAction
+        }
     }
 
     private func record(
