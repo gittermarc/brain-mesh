@@ -1653,7 +1653,7 @@ private struct ComposableReadPlanFixture {
         )
     }
 
-    private func groupCount()
+    fileprivate func groupCount()
         throws -> ComposableReadPlanMapping
     {
         let intent = try makeIntent(
