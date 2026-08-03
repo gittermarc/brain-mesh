@@ -140,35 +140,103 @@ nonisolated struct GraphChatComposableReadFastPathCompiler:
                         resolution.candidate.identity else {
                     return []
                 }
-                matches.append(
-                    Match(
-                        entity: entity,
-                        range: resolution.matchedRange
-                    )
-                )
+                guard let merged = mergedMatches(
+                    matches,
+                    adding: [
+                        Match(
+                            entity: entity,
+                            range: resolution.matchedRange
+                        ),
+                    ]
+                ) else {
+                    return []
+                }
+                matches = merged
                 remaining.remove(entity.entityID)
+            case .failure(.ambiguous(let alternatives)):
+                let additional = alternatives.compactMap {
+                    alternative -> Match? in
+                    guard case .entity(let entity) =
+                            alternative.candidate.identity else {
+                        return nil
+                    }
+                    return Match(
+                        entity: entity,
+                        range: alternative.matchedRange
+                    )
+                }
+                guard
+                    additional.count == alternatives.count,
+                    let merged = mergedMatches(
+                        matches,
+                        adding: additional
+                    )
+                else {
+                    return []
+                }
+                matches = merged
+                for match in additional {
+                    remaining.remove(match.entity.entityID)
+                }
             case .failure(.emptyMention),
                 .failure(.noCandidates),
                 .failure(.notFound):
+                break entitySearch
+            case .failure(.staleSelection):
+                guard matches.isEmpty == false else {
+                    return []
+                }
                 break entitySearch
             case .failure:
                 return []
             }
         }
-        let sortedMatches = matches.sorted(
-            by: { lhs, rhs in
-                if lhs.range.startToken
-                    != rhs.range.startToken {
-                    return lhs.range.startToken < rhs.range.startToken
-                }
-                if lhs.range.tokenCount
-                    != rhs.range.tokenCount {
-                    return lhs.range.tokenCount > rhs.range.tokenCount
-                }
-                return lhs.entity.entityID.uuidString < rhs.entity.entityID.uuidString
-            }
+        return matches.map(\.entity)
+    }
+
+    private func mergedMatches(
+        _ existing: [Match],
+        adding additional: [Match]
+    ) -> [Match]? {
+        let merged = (existing + additional).sorted(
+            by: matchOrder
         )
-        return sortedMatches.map(\.entity)
+        guard
+            merged.isEmpty == false,
+            merged.count <= 4,
+            Set(merged.map { $0.entity.entityID }).count
+                == merged.count,
+            merged.allSatisfy({
+                $0.range.tokenCount > 0
+            })
+        else {
+            return nil
+        }
+        for index in 1..<merged.count {
+            let previous = merged[index - 1].range
+            let current = merged[index].range
+            let previousEndToken =
+                previous.startToken + previous.tokenCount
+            guard previousEndToken <= current.startToken else {
+                return nil
+            }
+        }
+        return merged
+    }
+
+    private func matchOrder(
+        _ lhs: Match,
+        _ rhs: Match
+    ) -> Bool {
+        if lhs.range.startToken
+            != rhs.range.startToken {
+            return lhs.range.startToken < rhs.range.startToken
+        }
+        if lhs.range.tokenCount
+            != rhs.range.tokenCount {
+            return lhs.range.tokenCount > rhs.range.tokenCount
+        }
+        return lhs.entity.entityID.uuidString < rhs.entity.entityID.uuidString
     }
 
     private enum CounterpartNodeMatch {
