@@ -465,8 +465,11 @@ nonisolated struct GraphChatRelationshipExecutor:
         case .missing:
             return normalized.isEmpty
         case .contains(let term):
-            return folded(normalized)
-                .contains(folded(term))
+            return GraphChatComposableReadTextNormalizer
+                .contains(
+                    normalized,
+                    term: term
+                )
         }
     }
 

@@ -49,6 +49,8 @@ nonisolated enum GraphChatLocalIntentExecutionError:
 
 nonisolated struct GraphChatLocalIntentPreparedExecution: Sendable {
     let adaptation: GraphChatTypedIntentAdaptation
+    let validatedReadPlan:
+        ValidatedGraphChatComposableReadPlan
     let intent: GraphChatTypedIntent
     let schemaContext: GraphSchemaContext
     let conversationContext: GraphChatConversationContextSnapshot
@@ -132,6 +134,8 @@ nonisolated struct GraphChatLocalIntentExecutionKernel: Sendable {
         any GraphChatLocalIntentStatsExecuting
     private let relationshipExecutor:
         any GraphChatLocalIntentRelationshipExecuting
+    private let composableReadExecutor:
+        any GraphChatLocalIntentComposableReadExecuting
     private let conversationStateReducer:
         GraphChatConversationStateReducer
     private let timeZone: TimeZone
@@ -161,6 +165,9 @@ nonisolated struct GraphChatLocalIntentExecutionKernel: Sendable {
         relationshipExecutor:
             any GraphChatLocalIntentRelationshipExecuting =
                 GraphChatRelationshipExecutor(),
+        composableReadExecutor:
+            any GraphChatLocalIntentComposableReadExecuting =
+                GraphChatComposableReadExecutor(),
         conversationStateReducer:
             GraphChatConversationStateReducer,
         calendar: Calendar,
@@ -179,6 +186,8 @@ nonisolated struct GraphChatLocalIntentExecutionKernel: Sendable {
         self.statsExecutor = statsExecutor
         self.relationshipExecutor =
             relationshipExecutor
+        self.composableReadExecutor =
+            composableReadExecutor
         self.conversationStateReducer =
             conversationStateReducer
         self.timeZone = timeZone
@@ -232,10 +241,10 @@ nonisolated struct GraphChatLocalIntentExecutionKernel: Sendable {
             throw error
         }
 
+        let validatedReadPlan:
+            ValidatedGraphChatComposableReadPlan
         let validatedAction: ValidatedAction
         do {
-            let validatedReadPlan:
-                ValidatedGraphChatComposableReadPlan
             do {
                 validatedReadPlan =
                     try readPlanValidator.validate(
@@ -374,6 +383,10 @@ nonisolated struct GraphChatLocalIntentExecutionKernel: Sendable {
                 )
                 validatedAction =
                     .relationship(plan)
+            case .composableRead:
+                validatedAction = .composableRead(
+                    validatedReadPlan
+                )
             }
         } catch {
             await recordRevalidationRejection(
@@ -509,6 +522,8 @@ nonisolated struct GraphChatLocalIntentExecutionKernel: Sendable {
             let execution =
                 GraphChatLocalIntentPreparedExecution(
                     adaptation: adaptation,
+                    validatedReadPlan:
+                        validatedReadPlan,
                     intent: intent,
                     schemaContext: schemaContext,
                     conversationContext:
@@ -673,7 +688,7 @@ nonisolated struct GraphChatLocalIntentExecutionKernel: Sendable {
                 throw GraphChatLocalIntentExecutionError
                     .artifactUnavailable
             }
-        case .query, .search:
+        case .query, .search, .composableRead:
             break
         }
     }
@@ -717,6 +732,9 @@ nonisolated struct GraphChatLocalIntentExecutionKernel: Sendable {
         case relationship(
             GraphChatRelationshipPlan
         )
+        case composableRead(
+            ValidatedGraphChatComposableReadPlan
+        )
 
         var toolKind: GraphChatToolKind {
             switch self {
@@ -731,7 +749,7 @@ nonisolated struct GraphChatLocalIntentExecutionKernel: Sendable {
                 return .queryDetailValues
             case .graphState:
                 return .graphStats
-            case .relationship:
+            case .relationship, .composableRead:
                 return .getNeighbors
             }
         }
@@ -1476,6 +1494,108 @@ nonisolated struct GraphChatLocalIntentExecutionKernel: Sendable {
                 artifactIDs: artifactIDs,
                 authoritativeFactExpectation:
                     nil
+            )
+
+        case .composableRead(let validatedPlan):
+            let plan = validatedPlan.plan
+            let budget = GraphChatToolBudget(
+                policy: GraphChatToolBudgetPolicy(
+                    maximumCalls: 1,
+                    maximumResultCountPerTool:
+                        plan.limits.maximumResultLimit,
+                    maximumEvidenceCount:
+                        plan.limits.maximumEvidenceCount
+                )
+            )
+            let result = try await composableReadExecutor
+                .execute(
+                    validatedPlan,
+                    context: GraphChatToolContext(
+                        scope: plan.queryScope,
+                        budget: budget
+                    )
+                )
+            try Task.checkCancellation()
+            guard
+                let output = result.payload,
+                output.queryResult.rows.count
+                    <= plan.limits.resultLimit,
+                result.evidence.count
+                    <= plan.limits.maximumEvidenceCount,
+                output.queryResult.evidence
+                    == result.evidence,
+                output.resultSet.nodes.map(\.node)
+                    == output.queryResult.rows.map(\.node),
+                GraphChatScopeAuthorization.allows(
+                    plan: output.continuationPlan,
+                    within: plan.chatScope
+                )
+            else {
+                throw GraphChatLocalIntentExecutionError
+                    .invalidCompiledAction
+            }
+            try await evidenceRegistry.register(
+                result.evidence
+            )
+            await presentationRegistry
+                .registerValidatedEvidence(
+                    result.evidence
+                )
+            let querySummary =
+                GraphChatAnswerArtifactFactory
+                    .composableReadSummary(
+                        validatedPlan,
+                        schemaContext: schemaContext,
+                        language:
+                            intent.responseLanguage
+                    )
+            try await conversationTransaction.apply(
+                GraphChatConversationTrustedEvent(
+                    graphScope: intent.scope.graphScope,
+                    chatScope: intent.scope.chatScope,
+                    payload: .queryResolved(
+                        plan: output.continuationPlan,
+                        result: output.queryResult,
+                        schemaContext: schemaContext
+                    )
+                )
+            )
+            let artifactIDs = try await querySupport
+                .stageArtifacts(
+                    for: output.queryResult,
+                    plan: output.continuationPlan,
+                    action: output.continuationAction,
+                    schemaContext: schemaContext,
+                    language: intent.responseLanguage,
+                    registry: artifactRegistry,
+                    evidenceRegistry: evidenceRegistry,
+                    presentationRegistry:
+                        presentationRegistry,
+                    transactionID: transactionID,
+                    querySummary: querySummary
+                )
+            guard
+                artifactIDs.count
+                    <= plan.limits.maximumArtifactCount,
+                output.queryResult.state != .success
+                    || artifactIDs.count == 1
+            else {
+                throw GraphChatLocalIntentExecutionError
+                    .safetyLimitExceeded
+            }
+            return ActionExecution(
+                response: GraphChatModelToolResponse(
+                    tool: .getNeighbors,
+                    state: result.state,
+                    content:
+                        "local-composable-read-result",
+                    evidenceIDs:
+                        result.evidence.map(\.id),
+                    artifactIDs: artifactIDs
+                ),
+                evidence: result.evidence,
+                artifactIDs: artifactIDs,
+                authoritativeFactExpectation: nil
             )
 
         case .relationship(let plan):

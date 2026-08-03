@@ -14,6 +14,12 @@ import FoundationModels
 private nonisolated struct FoundationGraphChatGeneratedFilterDraft {
     @Guide(
         description:
+            "Exact user-visible entity display name owning this field when the filter belongs to a composable relationship stage; otherwise empty."
+    )
+    var entityTerm: String
+
+    @Guide(
+        description:
             "Exact user-visible field display name from the supplied schema."
     )
     var fieldTerm: String
@@ -148,6 +154,24 @@ private nonisolated struct FoundationGraphChatGeneratedIntentDraft {
 
     @Guide(
         description:
+            "Optional exact user-visible node display name constraining the final counterpart in a composable read; otherwise empty. Never emit an ID or alias."
+    )
+    var relationshipCounterpartNodeTerm: String
+
+    @Guide(
+        description:
+            "Optional exact user-visible intermediate entity display name for a controlled relationship chain; otherwise empty. Never emit a hop count."
+    )
+    var relationshipIntermediateEntityTerm: String
+
+    @Guide(
+        description:
+            "Exact user-visible endpoint entity of the relationship stage whose link carries the note condition in a composable read; otherwise empty."
+    )
+    var relationshipNoteEntityTerm: String
+
+    @Guide(
+        description:
             "Exactly one of unspecified, present, missing, or contains for the user-visible link note condition."
     )
     var relationshipNotePredicate: String
@@ -157,6 +181,12 @@ private nonisolated struct FoundationGraphChatGeneratedIntentDraft {
             "Literal user wording to match inside a link note only when relationshipNotePredicate is contains; otherwise empty."
     )
     var relationshipNoteTerm: String
+
+    @Guide(
+        description:
+            "Exactly one of startNodes or terminalNodes. Use startNodes when the question asks which starting entries have a matching relationship path; otherwise terminalNodes."
+    )
+    var relationshipResultTarget: String
 
     @Guide(
         description:
@@ -249,13 +279,16 @@ actor FoundationModelsGraphChatIntentInterpreter:
         Use nodeDetails when the user asks to show or describe one named or referenced node.
         Use compareNodes only when the user asks to compare two or more named or referenced nodes.
         Use inspectGraphState for graph overview, counts, structure, health, or strongly connected nodes.
-        Use relationships for direct incoming, outgoing, or bidirectional connections, optional other-endpoint entity or node constraints, and link notes between two named nodes.
+        Use relationships for direct connections of named nodes and for bounded entity-to-entity questions that combine an optional intermediate entity, detail filters, and a literal link-note condition.
         Use unrecognized when the meaning does not match those families.
         Use openEnded only when the user explicitly asks an open-ended graph question that needs the legacy answer flow.
         When an entity type is clear, place only its exact supplied display name in entityTerm; never an alias or ID.
         Put only exact supplied field display names in filters, sortFieldTerm, projectionTerms, and groupFieldTerm.
         Put literal user-visible node display names in nodeTerms. Do not invent or normalize node names.
-        For relationships put the center node first and an explicitly named other node second. For a direction-only follow-up, use currentSelection and no node terms.
+        For direct relationships put the center node first and an explicitly named other node second. For a direction-only follow-up, use currentSelection and no node terms.
+        For an entity-to-entity composable read use no nodeTerms, put the requested starting entity in entityTerm, the final endpoint entity in relationshipCounterpartEntityTerm, an explicitly named final endpoint node in relationshipCounterpartNodeTerm, and at most one explicitly mentioned intermediate entity in relationshipIntermediateEntityTerm. Never emit a hop count.
+        For composable filters set each filter's entityTerm to the exact visible entity that owns its field. Leave it empty for ordinary query families.
+        Use relationshipNoteEntityTerm only to identify which relationship stage owns an explicit link-note condition. The app resolves stages, directions, operators, limits, and IDs.
         relationshipCounterpartEntityTerm may contain only an exact supplied user-visible entity name. Relationship note fields contain only semantic note meaning and literal user wording.
         For nodeDetails and compareNodes, projectionTerms contains only comparison or detail fields explicitly requested by the user.
         For inspectGraphState choose overview, counts, structure, or health from the user's meaning.
@@ -344,6 +377,11 @@ actor FoundationModelsGraphChatIntentInterpreter:
                 GraphChatSemanticRelationshipNotePredicate(
                     rawValue:
                         generated.relationshipNotePredicate
+                ),
+            let relationshipResultTarget =
+                GraphChatSemanticComposableResultTarget(
+                    rawValue:
+                        generated.relationshipResultTarget
                 )
         else {
             throw invalidOutput()
@@ -380,6 +418,7 @@ actor FoundationModelsGraphChatIntentInterpreter:
                 throw invalidOutput()
             }
             return GraphChatSemanticFilterDraft(
+                entityTerm: source.entityTerm,
                 fieldTerm: source.fieldTerm,
                 relation: relation,
                 values: source.values
@@ -446,10 +485,21 @@ actor FoundationModelsGraphChatIntentInterpreter:
             relationshipCounterpartEntityTerm:
                 generated
                     .relationshipCounterpartEntityTerm,
+            relationshipCounterpartNodeTerm:
+                generated
+                    .relationshipCounterpartNodeTerm,
+            relationshipIntermediateEntityTerm:
+                generated
+                    .relationshipIntermediateEntityTerm,
+            relationshipNoteEntityTerm:
+                generated
+                    .relationshipNoteEntityTerm,
             relationshipNotePredicate:
                 relationshipNotePredicate,
             relationshipNoteTerm:
                 generated.relationshipNoteTerm,
+            relationshipResultTarget:
+                relationshipResultTarget,
             responseLanguage: language
         )
     }

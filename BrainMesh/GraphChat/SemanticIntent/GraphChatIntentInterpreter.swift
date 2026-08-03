@@ -121,9 +121,32 @@ nonisolated struct GraphChatSemanticFilterDraft:
     Hashable,
     Sendable
 {
+    let entityTerm: String?
     let fieldTerm: String
     let relation: GraphChatSemanticFilterRelation
     let values: [String]
+
+    init(
+        entityTerm: String? = nil,
+        fieldTerm: String,
+        relation: GraphChatSemanticFilterRelation,
+        values: [String]
+    ) {
+        self.entityTerm = entityTerm
+        self.fieldTerm = fieldTerm
+        self.relation = relation
+        self.values = values
+    }
+}
+
+nonisolated enum GraphChatSemanticComposableResultTarget:
+    String,
+    CaseIterable,
+    Hashable,
+    Sendable
+{
+    case startNodes
+    case terminalNodes
 }
 
 nonisolated enum GraphChatSemanticSortTarget:
@@ -179,9 +202,14 @@ nonisolated struct GraphChatUntrustedSemanticIntentDraft:
     let relationshipDirection:
         GraphChatSemanticRelationshipDirection
     let relationshipCounterpartEntityTerm: String?
+    let relationshipCounterpartNodeTerm: String?
+    let relationshipIntermediateEntityTerm: String?
+    let relationshipNoteEntityTerm: String?
     let relationshipNotePredicate:
         GraphChatSemanticRelationshipNotePredicate
     let relationshipNoteTerm: String?
+    let relationshipResultTarget:
+        GraphChatSemanticComposableResultTarget
     let responseLanguage: GraphChatResponseLanguage
 
     init(
@@ -206,10 +234,19 @@ nonisolated struct GraphChatUntrustedSemanticIntentDraft:
                 .unspecified,
         relationshipCounterpartEntityTerm:
             String? = nil,
+        relationshipCounterpartNodeTerm:
+            String? = nil,
+        relationshipIntermediateEntityTerm:
+            String? = nil,
+        relationshipNoteEntityTerm:
+            String? = nil,
         relationshipNotePredicate:
             GraphChatSemanticRelationshipNotePredicate =
                 .unspecified,
         relationshipNoteTerm: String? = nil,
+        relationshipResultTarget:
+            GraphChatSemanticComposableResultTarget =
+                .terminalNodes,
         responseLanguage: GraphChatResponseLanguage
     ) {
         self.family = family
@@ -230,10 +267,18 @@ nonisolated struct GraphChatUntrustedSemanticIntentDraft:
             relationshipDirection
         self.relationshipCounterpartEntityTerm =
             relationshipCounterpartEntityTerm
+        self.relationshipCounterpartNodeTerm =
+            relationshipCounterpartNodeTerm
+        self.relationshipIntermediateEntityTerm =
+            relationshipIntermediateEntityTerm
+        self.relationshipNoteEntityTerm =
+            relationshipNoteEntityTerm
         self.relationshipNotePredicate =
             relationshipNotePredicate
         self.relationshipNoteTerm =
             relationshipNoteTerm
+        self.relationshipResultTarget =
+            relationshipResultTarget
         self.responseLanguage = responseLanguage
     }
 }
@@ -474,6 +519,20 @@ nonisolated struct GraphChatSemanticDraftValidator:
                 source
                     .relationshipCounterpartEntityTerm
             )
+        let relationshipIntermediateEntityTerm =
+            GraphChatSemanticSafety.normalizedOptional(
+                source
+                    .relationshipIntermediateEntityTerm
+            )
+        let relationshipCounterpartNodeTerm =
+            GraphChatSemanticSafety.normalizedOptional(
+                source
+                    .relationshipCounterpartNodeTerm
+            )
+        let relationshipNoteEntityTerm =
+            GraphChatSemanticSafety.normalizedOptional(
+                source.relationshipNoteEntityTerm
+            )
         let relationshipNoteTerm =
             GraphChatSemanticSafety.normalizedOptional(
                 source.relationshipNoteTerm
@@ -494,11 +553,16 @@ nonisolated struct GraphChatSemanticDraftValidator:
                 searchTerm,
                 groupFieldTerm,
                 relationshipCounterpartEntityTerm,
+                relationshipCounterpartNodeTerm,
+                relationshipIntermediateEntityTerm,
+                relationshipNoteEntityTerm,
                 relationshipNoteTerm,
             ]
                 .compactMap { $0 }
             + filters.flatMap {
-                [$0.fieldTerm] + $0.values
+                [$0.entityTerm, $0.fieldTerm]
+                    .compactMap { $0 }
+                    + $0.values
             }
             + projectionTerms
             + nodeTerms
@@ -541,6 +605,26 @@ nonisolated struct GraphChatSemanticDraftValidator:
                     .overlongValue
             }
         }
+        if let relationshipCounterpartNodeTerm {
+            guard relationshipCounterpartNodeTerm
+                    .count
+                    <= GraphChatSemanticSafety
+                        .maximumSearchTermLength else {
+                throw GraphChatSemanticDraftValidationError
+                    .overlongValue
+            }
+        }
+        for term in [
+            relationshipIntermediateEntityTerm,
+            relationshipNoteEntityTerm,
+        ].compactMap({ $0 }) {
+            guard term.count
+                    <= GraphChatSemanticSafety
+                        .maximumEntityTermLength else {
+                throw GraphChatSemanticDraftValidationError
+                    .overlongValue
+            }
+        }
         if let relationshipNoteTerm {
             guard relationshipNoteTerm.count
                     <= GraphChatSemanticSafety
@@ -558,15 +642,25 @@ nonisolated struct GraphChatSemanticDraftValidator:
         }
         if source.family != .relationships {
             guard
+                filters.allSatisfy({
+                    $0.entityTerm == nil
+                }),
                 source.relationshipRequest
                     == .connections,
                 source.relationshipDirection
                     == .unspecified,
                 relationshipCounterpartEntityTerm
                     == nil,
+                relationshipCounterpartNodeTerm
+                    == nil,
+                relationshipIntermediateEntityTerm
+                    == nil,
+                relationshipNoteEntityTerm == nil,
                 source.relationshipNotePredicate
                     == .unspecified,
-                relationshipNoteTerm == nil
+                relationshipNoteTerm == nil,
+                source.relationshipResultTarget
+                    == .terminalNodes
             else {
                 throw GraphChatSemanticDraftValidationError
                     .invalidCombination
@@ -709,6 +803,39 @@ nonisolated struct GraphChatSemanticDraftValidator:
             }
 
         case .relationships:
+            let isComposableCollection =
+                nodeTerms.isEmpty
+                && source.conversationReference == .none
+                && entityTerm != nil
+                && relationshipCounterpartEntityTerm != nil
+            if isComposableCollection {
+                guard
+                    searchTerm == nil,
+                    source.relationshipRequest
+                        == .connections,
+                    source.findTarget == .anyEntry,
+                    groupFieldTerm == nil,
+                    projectionTerms.isEmpty,
+                    sorting == nil
+                        || sorting?.target == .nodeName
+                else {
+                    throw GraphChatSemanticDraftValidationError
+                        .invalidCombination
+                }
+                switch source.relationshipNotePredicate {
+                case .contains:
+                    guard relationshipNoteTerm != nil else {
+                        throw GraphChatSemanticDraftValidationError
+                            .invalidCombination
+                    }
+                case .unspecified, .present, .missing:
+                    guard relationshipNoteTerm == nil else {
+                        throw GraphChatSemanticDraftValidationError
+                            .invalidCombination
+                    }
+                }
+                break
+            }
             guard
                 searchTerm == nil,
                 source.findTarget == .anyEntry,
@@ -716,7 +843,14 @@ nonisolated struct GraphChatSemanticDraftValidator:
                 filters.isEmpty,
                 sorting == nil,
                 projectionTerms.isEmpty,
-                groupFieldTerm == nil
+                groupFieldTerm == nil,
+                relationshipIntermediateEntityTerm
+                    == nil,
+                relationshipCounterpartNodeTerm
+                    == nil,
+                relationshipNoteEntityTerm == nil,
+                source.relationshipResultTarget
+                    == .terminalNodes
             else {
                 throw GraphChatSemanticDraftValidationError
                     .invalidCombination
@@ -781,9 +915,16 @@ nonisolated struct GraphChatSemanticDraftValidator:
                   groupFieldTerm == nil,
                   relationshipCounterpartEntityTerm
                     == nil,
+                  relationshipCounterpartNodeTerm
+                    == nil,
+                  relationshipIntermediateEntityTerm
+                    == nil,
+                  relationshipNoteEntityTerm == nil,
                   source.relationshipNotePredicate
                     == .unspecified,
-                  relationshipNoteTerm == nil else {
+                  relationshipNoteTerm == nil,
+                  source.relationshipResultTarget
+                    == .terminalNodes else {
                 throw GraphChatSemanticDraftValidationError
                     .invalidCombination
             }
@@ -809,10 +950,18 @@ nonisolated struct GraphChatSemanticDraftValidator:
                 source.relationshipDirection,
             relationshipCounterpartEntityTerm:
                 relationshipCounterpartEntityTerm,
+            relationshipCounterpartNodeTerm:
+                relationshipCounterpartNodeTerm,
+            relationshipIntermediateEntityTerm:
+                relationshipIntermediateEntityTerm,
+            relationshipNoteEntityTerm:
+                relationshipNoteEntityTerm,
             relationshipNotePredicate:
                 source.relationshipNotePredicate,
             relationshipNoteTerm:
                 relationshipNoteTerm,
+            relationshipResultTarget:
+                source.relationshipResultTarget,
             responseLanguage: source.responseLanguage
         )
     }
@@ -857,11 +1006,18 @@ nonisolated struct GraphChatSemanticDraftValidator:
                 .invalidCombination
         }
         return try source.map { filter in
+            let entityTerm =
+                GraphChatSemanticSafety.normalizedOptional(
+                    filter.entityTerm
+                )
             guard
                 let fieldTerm =
                     GraphChatSemanticSafety.normalizedOptional(
                         filter.fieldTerm
                     ),
+                (entityTerm?.count ?? 0)
+                    <= GraphChatSemanticSafety
+                        .maximumEntityTermLength,
                 fieldTerm.count
                     <= GraphChatSemanticSafety
                         .maximumFieldTermLength,
@@ -911,6 +1067,7 @@ nonisolated struct GraphChatSemanticDraftValidator:
                     .invalidCombination
             }
             return GraphChatSemanticFilterDraft(
+                entityTerm: entityTerm,
                 fieldTerm: fieldTerm,
                 relation: filter.relation,
                 values: values

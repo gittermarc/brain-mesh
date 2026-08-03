@@ -142,6 +142,15 @@ nonisolated struct GraphDetailValueDTO: Identifiable, Hashable, Sendable {
     }
 }
 
+nonisolated enum GraphDetailValueAuthorityDTO:
+    Equatable,
+    Sendable
+{
+    case missing
+    case authoritative(GraphDetailValueDTO)
+    case conflicted
+}
+
 nonisolated struct GraphAttachmentMetadataDTO: Identifiable, Hashable, Sendable {
     let id: UUID
     let scope: GraphScope
@@ -226,6 +235,34 @@ nonisolated struct GraphSourceSnapshotDTO: Equatable, Sendable {
     let detailFieldDefinitions: [GraphDetailFieldDefinitionDTO]
     let detailValues: [GraphDetailValueDTO]
     let attachments: [GraphAttachmentMetadataDTO]
+    let integrityConflictedValueKeys:
+        Set<DetailValueAuthorityKey>
+
+    init(
+        scope: GraphScope,
+        graph: GraphMetadataDTO,
+        entities: [GraphEntityDTO],
+        attributes: [GraphAttributeDTO],
+        links: [GraphLinkDTO],
+        detailFieldDefinitions:
+            [GraphDetailFieldDefinitionDTO],
+        detailValues: [GraphDetailValueDTO],
+        attachments: [GraphAttachmentMetadataDTO],
+        integrityConflictedValueKeys:
+            Set<DetailValueAuthorityKey> = []
+    ) {
+        self.scope = scope
+        self.graph = graph
+        self.entities = entities
+        self.attributes = attributes
+        self.links = links
+        self.detailFieldDefinitions =
+            detailFieldDefinitions
+        self.detailValues = detailValues
+        self.attachments = attachments
+        self.integrityConflictedValueKeys =
+            integrityConflictedValueKeys
+    }
 
     var nodeSummaries: [GraphNodeSummaryDTO] {
         let entityNodes = entities.map(\.nodeSummary)

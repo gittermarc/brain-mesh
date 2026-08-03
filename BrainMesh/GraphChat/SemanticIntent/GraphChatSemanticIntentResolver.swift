@@ -41,6 +41,7 @@ nonisolated enum GraphChatSemanticEntitySelectionRole:
     Sendable
 {
     case primary
+    case composableIntermediate
     case relationshipCounterpart
 }
 
@@ -60,6 +61,8 @@ nonisolated struct GraphChatSemanticIntentSelection:
     let selectedEntityID: UUID?
     let selectedRelationshipCounterpartEntityID:
         UUID?
+    let selectedComposableIntermediateEntityID:
+        UUID?
     let selectedFields: [GraphChatSemanticSelectedField]
     let selectedNodes: [GraphChatSemanticSelectedNode]
 
@@ -67,6 +70,8 @@ nonisolated struct GraphChatSemanticIntentSelection:
         draft: GraphChatUntrustedSemanticIntentDraft,
         selectedEntityID: UUID?,
         selectedRelationshipCounterpartEntityID:
+            UUID? = nil,
+        selectedComposableIntermediateEntityID:
             UUID? = nil,
         selectedFields:
             [GraphChatSemanticSelectedField] = [],
@@ -77,6 +82,8 @@ nonisolated struct GraphChatSemanticIntentSelection:
         self.selectedEntityID = selectedEntityID
         self.selectedRelationshipCounterpartEntityID =
             selectedRelationshipCounterpartEntityID
+        self.selectedComposableIntermediateEntityID =
+            selectedComposableIntermediateEntityID
         self.selectedFields = selectedFields
         self.selectedNodes = selectedNodes
     }
@@ -102,6 +109,8 @@ nonisolated struct GraphChatSemanticEntityCandidate:
     let preservedPrimaryEntityID: UUID?
     let preservedRelationshipCounterpartEntityID:
         UUID?
+    let preservedComposableIntermediateEntityID:
+        UUID?
     let selectedFields: [GraphChatSemanticSelectedField]
     let selectedNodes: [GraphChatSemanticSelectedNode]
 
@@ -115,6 +124,8 @@ nonisolated struct GraphChatSemanticEntityCandidate:
             UUID? = nil,
         preservedRelationshipCounterpartEntityID:
             UUID? = nil,
+        preservedComposableIntermediateEntityID:
+            UUID? = nil,
         selectedFields:
             [GraphChatSemanticSelectedField] = [],
         selectedNodes:
@@ -127,6 +138,8 @@ nonisolated struct GraphChatSemanticEntityCandidate:
             preservedPrimaryEntityID
         self.preservedRelationshipCounterpartEntityID =
             preservedRelationshipCounterpartEntityID
+        self.preservedComposableIntermediateEntityID =
+            preservedComposableIntermediateEntityID
         self.selectedFields = selectedFields
         self.selectedNodes = selectedNodes
     }
@@ -223,6 +236,8 @@ nonisolated struct GraphChatSemanticIntentResolver:
         GraphChatAdvancedIntentCompiler
     private let relationshipCompiler:
         GraphChatRelationshipIntentCompiler
+    private let composableReadCompiler:
+        GraphChatComposableReadIntentCompiler
 
     init(
         limitPolicy:
@@ -246,7 +261,10 @@ nonisolated struct GraphChatSemanticIntentResolver:
                 GraphChatAdvancedIntentCompiler(),
         relationshipCompiler:
             GraphChatRelationshipIntentCompiler =
-                GraphChatRelationshipIntentCompiler()
+                GraphChatRelationshipIntentCompiler(),
+        composableReadCompiler:
+            GraphChatComposableReadIntentCompiler =
+                GraphChatComposableReadIntentCompiler()
     ) {
         self.limitPolicy = limitPolicy
         self.mentionResolver = mentionResolver
@@ -254,12 +272,16 @@ nonisolated struct GraphChatSemanticIntentResolver:
         self.advancedCompiler = advancedCompiler
         self.relationshipCompiler =
             relationshipCompiler
+        self.composableReadCompiler =
+            composableReadCompiler
     }
 
     func resolve(
         draft: GraphChatUntrustedSemanticIntentDraft,
         selectedEntityID: UUID?,
         selectedRelationshipCounterpartEntityID:
+            UUID? = nil,
+        selectedComposableIntermediateEntityID:
             UUID? = nil,
         selectedFields:
             [GraphChatSemanticSelectedField] = [],
@@ -355,6 +377,29 @@ nonisolated struct GraphChatSemanticIntentResolver:
                 clarificationID: clarificationID
             )
         case .relationships:
+            if draft.nodeTerms.isEmpty,
+               draft.conversationReference == .none,
+               draft.entityTerm != nil,
+               draft.relationshipCounterpartEntityTerm
+                != nil {
+                return try composableReadCompiler.compile(
+                    draft: draft,
+                    selectedEntityID:
+                        selectedEntityID,
+                    selectedIntermediateEntityID:
+                        selectedComposableIntermediateEntityID,
+                    selectedCounterpartEntityID:
+                        selectedRelationshipCounterpartEntityID,
+                    selectedFields: selectedFields,
+                    selectedNodes: selectedNodes,
+                    providerPlan: providerPlan,
+                    schemaContext: schemaContext,
+                    requestID: requestID,
+                    sourceTurnID: sourceTurnID,
+                    clarificationID: clarificationID,
+                    referenceDate: referenceDate
+                )
+            }
             return try relationshipCompiler.compile(
                 draft: draft,
                 selectedEntityID:

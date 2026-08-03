@@ -86,6 +86,9 @@ nonisolated struct GraphChatIntentLimitPolicy:
     let maximumAdvancedEvidenceCount: Int
     let maximumAdvancedArtifactCount: Int
     let maximumComposableReadOperationCount: Int
+    let maximumComposableReadSelectedStartNodeCount: Int
+    let maximumComposableReadVisitedNodeCount: Int
+    let maximumComposableReadCheckedLinkCount: Int
     let maximumComposableReadIntermediateCount: Int
     let maximumComposableReadTraversalHopCount: Int
     let standardInterpreterContext:
@@ -127,9 +130,12 @@ nonisolated struct GraphChatIntentLimitPolicy:
         maximumQueryEvidenceCount: 512,
         maximumAdvancedEvidenceCount: 96,
         maximumAdvancedArtifactCount: 4,
-        maximumComposableReadOperationCount: 12,
-        maximumComposableReadIntermediateCount: 10_000,
-        maximumComposableReadTraversalHopCount: 1,
+        maximumComposableReadOperationCount: 16,
+        maximumComposableReadSelectedStartNodeCount: 200,
+        maximumComposableReadVisitedNodeCount: 400,
+        maximumComposableReadCheckedLinkCount: 800,
+        maximumComposableReadIntermediateCount: 200,
+        maximumComposableReadTraversalHopCount: 2,
         standardInterpreterContext:
             GraphChatIntentInterpreterContextBudget(
                 maximumEntities: 24,
@@ -185,6 +191,9 @@ nonisolated struct GraphChatIntentLimitPolicy:
         maximumAdvancedEvidenceCount: Int,
         maximumAdvancedArtifactCount: Int,
         maximumComposableReadOperationCount: Int,
+        maximumComposableReadSelectedStartNodeCount: Int,
+        maximumComposableReadVisitedNodeCount: Int,
+        maximumComposableReadCheckedLinkCount: Int,
         maximumComposableReadIntermediateCount: Int,
         maximumComposableReadTraversalHopCount: Int,
         standardInterpreterContext:
@@ -266,8 +275,18 @@ nonisolated struct GraphChatIntentLimitPolicy:
         precondition(maximumAdvancedEvidenceCount > 0)
         precondition(maximumAdvancedArtifactCount > 0)
         precondition(maximumComposableReadOperationCount >= 3)
+        precondition(maximumComposableReadSelectedStartNodeCount > 0)
+        precondition(
+            maximumComposableReadVisitedNodeCount
+                >= maximumComposableReadSelectedStartNodeCount
+        )
+        precondition(maximumComposableReadCheckedLinkCount > 0)
         precondition(maximumComposableReadIntermediateCount > 0)
-        precondition(maximumComposableReadTraversalHopCount == 1)
+        precondition(
+            (1...2).contains(
+                maximumComposableReadTraversalHopCount
+            )
+        )
         precondition(
             compactInterpreterContext.maximumEntities
                 <= standardInterpreterContext
@@ -369,6 +388,12 @@ nonisolated struct GraphChatIntentLimitPolicy:
             maximumAdvancedArtifactCount
         self.maximumComposableReadOperationCount =
             maximumComposableReadOperationCount
+        self.maximumComposableReadSelectedStartNodeCount =
+            maximumComposableReadSelectedStartNodeCount
+        self.maximumComposableReadVisitedNodeCount =
+            maximumComposableReadVisitedNodeCount
+        self.maximumComposableReadCheckedLinkCount =
+            maximumComposableReadCheckedLinkCount
         self.maximumComposableReadIntermediateCount =
             maximumComposableReadIntermediateCount
         self.maximumComposableReadTraversalHopCount =

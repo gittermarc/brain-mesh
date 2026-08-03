@@ -366,14 +366,16 @@ nonisolated struct GraphChatIntentInterpretationRenderer:
     ) -> String {
         let language =
             interpretation.responseLanguage
-        let entity =
-            interpretation.entities.first?
-                .displayName
-            ?? (
+        let entityNames = interpretation.entities.map(
+            \.displayName
+        )
+        let entity = entityNames.isEmpty
+            ? (
                 language == .german
                 ? "Einträge"
                 : "Entries"
             )
+            : entityNames.joined(separator: " → ")
         return entity
             + filterClause(interpretation)
     }

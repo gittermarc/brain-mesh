@@ -239,6 +239,313 @@ struct GraphChatRelationshipIntentEndToEndTests {
 
     @MainActor
     @Test
+    func composableMedicalFastPathCompilesLocallyAndCurrentOnlyRefinesItsResult()
+        async throws
+    {
+        let store = try BrainMeshTestContainer
+            .makeInMemoryStore()
+        let fixtures = BrainMeshFixtureBuilder(
+            context: store.context
+        )
+        let graph = fixtures.makeGraph(
+            name: "Medizin"
+        )
+        let patients = fixtures.makeEntity(
+            name: "Patienten",
+            in: graph
+        )
+        let medications = fixtures.makeEntity(
+            name: "Medikamente",
+            in: graph
+        )
+        let services = fixtures.makeEntity(
+            name: "Services",
+            in: graph
+        )
+        let status = fixtures.makeDetailField(
+            owner: patients,
+            name: "Status",
+            type: .singleChoice,
+            sortIndex: 0,
+            options: ["Offen", "Geschlossen"]
+        )
+        let patientA = fixtures.makeAttribute(
+            name: "Patient A",
+            owner: patients
+        )
+        let patientB = fixtures.makeAttribute(
+            name: "Patient B",
+            owner: patients
+        )
+        let patientC = fixtures.makeAttribute(
+            name: "Patient C",
+            owner: patients
+        )
+        let medicationA = fixtures.makeAttribute(
+            name: "Medikament A",
+            owner: medications
+        )
+        let medicationB = fixtures.makeAttribute(
+            name: "Medikament B",
+            owner: medications
+        )
+        let foreignService = fixtures.makeAttribute(
+            name: "Service Fremd",
+            owner: services
+        )
+        fixtures.makeDetailValue(
+            attribute: patientA,
+            field: status,
+            stringValue: "Offen"
+        )
+        fixtures.makeDetailValue(
+            attribute: patientB,
+            field: status,
+            stringValue: "Geschlossen"
+        )
+        fixtures.makeDetailValue(
+            attribute: patientC,
+            field: status,
+            stringValue: "Offen"
+        )
+        fixtures.makeLink(
+            source: .attribute(patientA),
+            target: .attribute(medicationA),
+            note: "3× täglich"
+        )
+        fixtures.makeLink(
+            source: .attribute(patientA),
+            target: .attribute(medicationB),
+            note: "dreimal täglich"
+        )
+        fixtures.makeLink(
+            source: .attribute(patientB),
+            target: .attribute(medicationB),
+            note: "three times daily"
+        )
+        fixtures.makeLink(
+            source: .attribute(patientC),
+            target: .attribute(medicationA),
+            note: "einmal täglich"
+        )
+        fixtures.makeLink(
+            source: .attribute(foreignService),
+            target: .attribute(medicationA),
+            note: "3x täglich"
+        )
+        try fixtures.save()
+
+        let interpreter = FakeGraphChatIntentInterpreter(
+            steps: [
+                .draft(
+                    GraphChatUntrustedSemanticIntentDraft(
+                        family: .refinement,
+                        conversationReference:
+                            .currentSelection,
+                        filters: [
+                            GraphChatSemanticFilterDraft(
+                                fieldTerm: "Status",
+                                relation: .equals,
+                                values: ["Offen"]
+                            ),
+                        ],
+                        responseLanguage: .german
+                    )
+                ),
+            ]
+        )
+        let runtime = makeRuntime(
+            store: store,
+            interpreter: interpreter
+        )
+        let graphScope = GraphScope(
+            graphID: graph.id
+        )
+        let chatScope = GraphChatScope
+            .entireGraph(graphScope)
+
+        let firstEvents = await collect(
+            await runtime.orchestrator.streamAnswer(
+                question:
+                    "Welche Patienten nehmen ein Medikament dreimal täglich?",
+                graphScope: graphScope,
+                chatScope: chatScope
+            )
+        )
+        let firstAnswer = try completedAnswer(
+            firstEvents
+        )
+        let firstInterpretation = try #require(
+            firstAnswer.interpretation
+        )
+        let firstPresentation = await runtime
+            .orchestrator.resolveAnswerPresentation(
+                artifactIDs:
+                    firstAnswer.artifactIDs,
+                evidence: firstAnswer.evidence,
+                graphScope: graphScope,
+                chatScope: chatScope
+            )
+        let firstResolved = try #require(
+            firstPresentation.artifacts.first
+        )
+        guard case .resultList(let firstList) =
+                firstResolved.artifact.payload else {
+            Issue.record(
+                "Expected a composable result-list artifact."
+            )
+            return
+        }
+        let firstState = try #require(
+            await runtime.orchestrator
+                .conversationStateSnapshot()
+        )
+        let initialNodes = Set(
+            firstState.resultContexts.last?
+                .references.compactMap {
+                    reference -> NodeRefKey? in
+                    guard case .node(let node) =
+                            reference.reference else {
+                        return nil
+                    }
+                    return node
+                } ?? []
+        )
+        let drawer = GraphChatEvidenceDrawerPresentation(
+            resolved: firstResolved,
+            availableEvidence:
+                firstPresentation.evidence,
+            language: .german
+        )
+
+        #expect(
+            firstList.rows.map(\.primaryText)
+                == ["Patient A", "Patient B"]
+        )
+        #expect(
+            firstInterpretation.entities.map(\.displayName)
+                == ["Patienten", "Medikamente"]
+        )
+        #expect(
+            firstInterpretation.presentation.title
+                .contains("Patienten → Medikamente")
+        )
+        #expect(firstInterpretation.isCorrectionEditable == false)
+        #expect(
+            initialNodes == Set([
+                NodeRefKey(
+                    kind: .attribute,
+                    id: patientA.id
+                ),
+                NodeRefKey(
+                    kind: .attribute,
+                    id: patientB.id
+                ),
+            ])
+        )
+        #expect(
+            drawer.visibleTextForTesting
+                .contains("Link-Notiz enthält dreimal")
+        )
+        #expect(
+            drawer.visibleTextForTesting
+                .contains("Budgets: Startnodes")
+        )
+        #expect(
+            firstPresentation.evidence.contains {
+                $0.sourceReference.sourceKind == .link
+                    && $0.fieldValues.contains {
+                        $0.fieldName == "Link-Notiz"
+                    }
+            }
+        )
+
+        let secondEvents = await collect(
+            await runtime.orchestrator.streamAnswer(
+                question:
+                    "Und davon nur die mit Status offen?",
+                graphScope: graphScope,
+                chatScope: chatScope
+            )
+        )
+        let secondAnswer = try completedAnswer(
+            secondEvents
+        )
+        let secondPresentation = await runtime
+            .orchestrator.resolveAnswerPresentation(
+                artifactIDs:
+                    secondAnswer.artifactIDs,
+                evidence: secondAnswer.evidence,
+                graphScope: graphScope,
+                chatScope: chatScope
+            )
+        let secondArtifact = try #require(
+            secondPresentation.artifacts.first?
+                .artifact
+        )
+        guard case .resultList(let secondList) =
+                secondArtifact.payload else {
+            Issue.record(
+                "Expected a refined result-list artifact."
+            )
+            return
+        }
+        let secondState = try #require(
+            await runtime.orchestrator
+                .conversationStateSnapshot()
+        )
+        let refinementPlan = try #require(
+            secondState.lastValidatedQueryPlan
+        )
+        guard case .selection(let refinementScope) =
+                refinementPlan.scope else {
+            Issue.record(
+                "Expected CURRENT to compile to an exact selection."
+            )
+            return
+        }
+        let provider = await runtime.provider.snapshot()
+        let interpreterSnapshot = await interpreter.snapshot()
+        let visible = drawer.visibleTextForTesting
+            + visibleText(firstEvents + secondEvents)
+
+        #expect(
+            secondList.rows.map(\.primaryText)
+                == ["Patient A"]
+        )
+        #expect(Set(refinementScope) == initialNodes)
+        #expect(
+            refinementScope.contains(
+                NodeRefKey(
+                    kind: .attribute,
+                    id: patientC.id
+                )
+            ) == false
+        )
+        #expect(
+            refinementScope.contains(
+                NodeRefKey(
+                    kind: .attribute,
+                    id: foreignService.id
+                )
+            ) == false
+        )
+        #expect(
+            refinementPlan.filters.map(\.operation)
+                == [.equals]
+        )
+        #expect(interpreterSnapshot.requests.count == 1)
+        #expect(provider.createdSessions.isEmpty)
+        #expect(provider.streamedSessions.isEmpty)
+        #expect(terminalEventCount(firstEvents) == 1)
+        #expect(terminalEventCount(secondEvents) == 1)
+        #expect(visible.contains(patientA.id.uuidString) == false)
+        #expect(visible.contains("E_") == false)
+        #expect(visible.contains("F_") == false)
+    }
+
+    @MainActor
+    @Test
     func currentContinuationOnlyRefinesTheRevalidatedRelationshipSelection()
         async throws
     {
@@ -748,6 +1055,83 @@ struct GraphChatRelationshipIntentEndToEndTests {
         )
     }
 
+    @MainActor
+    @Test
+    func composableCancellationProducesOneTerminalEventAndAtomicRollback()
+        async throws
+    {
+        let store = try BrainMeshTestContainer
+            .makeInMemoryStore()
+        let fixtures = BrainMeshFixtureBuilder(
+            context: store.context
+        )
+        let graph = fixtures.makeGraph(
+            name: "Composable-Abbruch"
+        )
+        let patients = fixtures.makeEntity(
+            name: "Patienten",
+            in: graph
+        )
+        let medications = fixtures.makeEntity(
+            name: "Medikamente",
+            in: graph
+        )
+        let patient = fixtures.makeAttribute(
+            name: "Patient A",
+            owner: patients
+        )
+        let medication = fixtures.makeAttribute(
+            name: "Medikament A",
+            owner: medications
+        )
+        fixtures.makeLink(
+            source: .attribute(patient),
+            target: .attribute(medication),
+            note: "dreimal täglich"
+        )
+        try fixtures.save()
+
+        let blocker = BlockingComposableReadExecutor()
+        let interpreter = FakeGraphChatIntentInterpreter()
+        let runtime = makeRuntime(
+            store: store,
+            interpreter: interpreter,
+            composableReadExecutor: blocker
+        )
+        let graphScope = GraphScope(graphID: graph.id)
+        let chatScope = GraphChatScope
+            .entireGraph(graphScope)
+        let stream = await runtime.orchestrator
+            .streamAnswer(
+                question:
+                    "Welche Patienten nehmen ein Medikament dreimal täglich?",
+                graphScope: graphScope,
+                chatScope: chatScope
+            )
+        let collector = Task {
+            await collect(stream)
+        }
+        await blocker.waitUntilStarted()
+        await runtime.orchestrator
+            .cancelCurrentGeneration()
+        let events = await collector.value
+        let state = await runtime.orchestrator
+            .conversationStateSnapshot()
+
+        #expect(events.last == .cancelled)
+        #expect(terminalEventCount(events) == 1)
+        #expect(state?.turnContexts.isEmpty != false)
+        #expect(state?.resultContexts.isEmpty != false)
+        #expect(state?.lastValidatedQueryPlan == nil)
+        #expect(
+            await interpreter.snapshot().requests.isEmpty
+        )
+        #expect(
+            await runtime.provider.snapshot()
+                .createdSessions.isEmpty
+        )
+    }
+
     private struct Runtime {
         let orchestrator: GraphChatOrchestrator
         let provider: FakeGraphChatModelProvider
@@ -760,6 +1144,9 @@ struct GraphChatRelationshipIntentEndToEndTests {
             FakeGraphChatIntentInterpreter,
         relationshipExecutor:
             (any GraphChatLocalIntentRelationshipExecuting)? =
+                nil,
+        composableReadExecutor:
+            (any GraphChatLocalIntentComposableReadExecuting)? =
                 nil
     ) -> Runtime {
         let container =
@@ -805,6 +1192,13 @@ struct GraphChatRelationshipIntentEndToEndTests {
                 logger:
                     NoOpGraphChatToolLogger()
             )
+        let localComposableReadExecutor =
+            composableReadExecutor
+            ?? GraphChatComposableReadExecutor(
+                repository: repository,
+                evidenceValidator:
+                    evidenceValidator
+            )
         let orchestrator =
             GraphChatOrchestrator(
                 provider: provider,
@@ -818,6 +1212,8 @@ struct GraphChatRelationshipIntentEndToEndTests {
                     queryEngine,
                 semanticRelationshipExecutor:
                     localRelationshipExecutor,
+                semanticComposableReadExecutor:
+                    localComposableReadExecutor,
                 toolRunnerFactory:
                     EvidenceRegisteringFakeToolRunnerFactory(),
                 referenceResolver:
@@ -981,6 +1377,43 @@ private actor BlockingRelationshipExecutor:
         pending.forEach {
             $0.resume()
         }
+        try await Task.sleep(
+            nanoseconds: UInt64.max
+        )
+        throw CancellationError()
+    }
+
+    func waitUntilStarted() async {
+        guard started == false else {
+            return
+        }
+        await withCheckedContinuation {
+            waiters.append($0)
+        }
+    }
+}
+
+private actor BlockingComposableReadExecutor:
+    GraphChatLocalIntentComposableReadExecuting
+{
+    private var started = false
+    private var waiters:
+        [CheckedContinuation<Void, Never>] = []
+
+    func execute(
+        _ plan: ValidatedGraphChatComposableReadPlan,
+        context: GraphChatToolContext
+    ) async throws
+        -> GraphChatToolResult<
+            GraphChatComposableReadExecutionOutput
+        >
+    {
+        _ = plan
+        _ = context
+        started = true
+        let pending = waiters
+        waiters.removeAll()
+        pending.forEach { $0.resume() }
         try await Task.sleep(
             nanoseconds: UInt64.max
         )

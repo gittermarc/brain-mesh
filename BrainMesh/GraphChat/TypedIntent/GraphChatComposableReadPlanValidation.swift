@@ -88,6 +88,17 @@ nonisolated struct ValidatedGraphChatComposableReadPlan:
     let action: GraphChatLocalIntentAction
     let validatedQueryPlan:
         ValidatedGraphQueryPlan?
+    let validatedFilterStages:
+        [GraphChatComposableReadValidatedFilterStage]
+}
+
+nonisolated struct GraphChatComposableReadValidatedFilterStage:
+    Hashable,
+    Sendable
+{
+    let operationID: GraphChatComposableReadStepID
+    let entity: GraphChatTypedEntityIdentity
+    let filters: [GraphValidatedQueryFilter]
 }
 
 nonisolated enum GraphChatComposableReadPlanNormalizer {
@@ -352,11 +363,19 @@ nonisolated struct GraphChatComposableReadPlanValidator:
                 schemaContext:
                     schemaContext
             )
+        let validatedFilterStages =
+            try validateComposableFiltersIfNeeded(
+                inventory,
+                plan: plan,
+                schemaContext: schemaContext
+            )
         return ValidatedGraphChatComposableReadPlan(
             plan: plan,
             action: action,
             validatedQueryPlan:
-                validatedQueryPlan
+                validatedQueryPlan,
+            validatedFilterStages:
+                validatedFilterStages
         )
     }
 
@@ -422,6 +441,28 @@ nonisolated struct GraphChatComposableReadPlanValidator:
             plan.limits.maximumTraversalHopCount
                 == policy
                     .maximumComposableReadTraversalHopCount,
+            plan.limits.selectedStartNodeLimit
+                == policy
+                    .maximumComposableReadSelectedStartNodeCount,
+            plan.limits.visitedNodeLimit
+                == policy
+                    .maximumComposableReadVisitedNodeCount,
+            plan.limits.checkedLinkLimit
+                == policy
+                    .maximumComposableReadCheckedLinkCount,
+            plan.resultContract
+                != .composableNodeCollection
+                || (
+                    plan.limits.maximumResultLimit
+                        == GraphQueryPlanLimits
+                            .maximumResultLimit
+                    && plan.limits
+                        .maximumEvidenceCount
+                        == policy
+                            .maximumQueryEvidenceCount
+                    && plan.limits
+                        .maximumArtifactCount == 1
+                ),
             plan.operations.count
                 <= plan.limits
                     .maximumOperationCount,
@@ -433,6 +474,10 @@ nonisolated struct GraphChatComposableReadPlanValidator:
             plan.limits.intermediateResultLimit
                 <= policy
                     .maximumComposableReadIntermediateCount,
+            plan.limits.selectedStartNodeLimit > 0,
+            plan.limits.visitedNodeLimit
+                >= plan.limits.selectedStartNodeLimit,
+            plan.limits.checkedLinkLimit > 0,
             plan.limits.maximumEvidenceCount > 0,
             plan.evidenceRequirements.isEmpty
                 == false,
@@ -545,6 +590,41 @@ nonisolated struct GraphChatComposableReadPlanValidator:
                     .limit,
                 ],
             ]
+        case .composableNodeCollection:
+            validKinds = [
+                [
+                    .select,
+                    .traverseRelationships,
+                    .projectTraversalNodes,
+                    .sort,
+                    .limit,
+                ],
+                [
+                    .select,
+                    .filter,
+                    .traverseRelationships,
+                    .projectTraversalNodes,
+                    .sort,
+                    .limit,
+                ],
+                [
+                    .select,
+                    .traverseRelationships,
+                    .traverseRelationships,
+                    .projectTraversalNodes,
+                    .sort,
+                    .limit,
+                ],
+                [
+                    .select,
+                    .filter,
+                    .traverseRelationships,
+                    .traverseRelationships,
+                    .projectTraversalNodes,
+                    .sort,
+                    .limit,
+                ],
+            ]
         }
         guard
             plan.operations.first.map({
@@ -582,6 +662,8 @@ nonisolated struct GraphChatComposableReadPlanValidator:
         case compareNodes
         case inspectGraphState
         case traverseDirectRelationships
+        case traverseRelationships
+        case projectTraversalNodes
         case projectRelationships
         case limit
 
@@ -611,6 +693,10 @@ nonisolated struct GraphChatComposableReadPlanValidator:
             case .traverseDirectRelationships:
                 self =
                     .traverseDirectRelationships
+            case .traverseRelationships:
+                self = .traverseRelationships
+            case .projectTraversalNodes:
+                self = .projectTraversalNodes
             case .projectRelationships:
                 self = .projectRelationships
             case .limit:
@@ -889,7 +975,8 @@ nonisolated struct GraphChatComposableReadPlanValidator:
             switch resultContract {
             case .entityCollection,
                 .compiledCollection,
-                .refinement:
+                .refinement,
+                .composableNodeCollection:
                 throw GraphChatComposableReadPlanValidationError
                     .invalidStableSort
             case .authoritativeSingleField,
@@ -969,6 +1056,10 @@ nonisolated struct GraphChatComposableReadPlanValidator:
         case .relationships:
             expectedIntermediateLimit =
                 plan.limits.maximumResultLimit
+        case .composableNodeCollection:
+            expectedIntermediateLimit =
+                policy
+                    .maximumComposableReadIntermediateCount
         case .authoritativeSingleField,
             .entityCollection,
             .compiledCollection,
@@ -1042,6 +1133,8 @@ nonisolated struct GraphChatComposableReadPlanValidator:
                 case .entityCollection(
                     let collection
                 ) = intent.payload,
+                collection.relatedEntities.isEmpty,
+                collection.relatedNodes.isEmpty,
                 collection.projectedFields
                     .isEmpty,
                 collection.referencedFields
@@ -1079,6 +1172,8 @@ nonisolated struct GraphChatComposableReadPlanValidator:
                 case .entityCollection(
                     let collection
                 ) = intent.payload,
+                collection.relatedEntities.isEmpty,
+                collection.relatedNodes.isEmpty,
                 inventory.projection?
                     .includesNodeIdentity == true,
                 inventory.aggregation == nil,
@@ -1425,6 +1520,177 @@ nonisolated struct GraphChatComposableReadPlanValidator:
                 intent: intent,
                 providerPlan: providerPlan
             )
+        case .composableNodeCollection:
+            try validateComposableNodeCollectionContract(
+                inventory,
+                plan: plan,
+                intent: intent
+            )
+        }
+    }
+
+    private func validateComposableNodeCollectionContract(
+        _ inventory: OperationInventory,
+        plan: GraphChatComposableReadPlan,
+        intent: GraphChatTypedIntent
+    ) throws {
+        guard
+            intent.kind == .entityCollection,
+            intent.factExpectation == .none,
+            intent.expectedCardinality == .zeroOrMore,
+            case .entityCollection(let collection) =
+                intent.payload,
+            collection.relatedEntities.isEmpty == false,
+            collection.relatedEntities.count
+                == inventory.composableTraversals.count,
+            inventory.composableTraversals.count
+                <= plan.limits.maximumTraversalHopCount,
+            inventory.search == nil,
+            inventory.projection == nil,
+            inventory.aggregation == nil,
+            inventory.description == nil,
+            inventory.comparison == nil,
+            inventory.graphState == nil,
+            inventory.traversal == nil,
+            inventory.relationshipProjection == nil,
+            inventory.traversalProjection != nil,
+            inventory.traversalProjection?
+                .deduplicatesNodes == true,
+            inventory.sort?.descriptors.count == 2,
+            inventory.sort?.descriptors.first?.key
+                == .nodeName,
+            inventory.sort?.descriptors.allSatisfy({
+                descriptor in
+                switch descriptor.key {
+                case .nodeName, .stableNodeID:
+                    return true
+                case .field, .counterpartDisplayName,
+                    .counterpartKind,
+                    .counterpartNodeID,
+                    .relationshipDirection,
+                    .linkCreatedAt,
+                    .stableLinkID:
+                    return false
+                }
+            }) == true,
+            plan.artifactContract == .queryResult,
+            selectedEntityID(inventory.selection)
+                == collection.entity.id,
+            plan.chatScope
+                == .entireGraph(plan.graphScope),
+            plan.compiledScope
+                == .entity(
+                    collection.entity.id,
+                    in: plan.graphScope
+                ),
+            collection.relatedEntities.map(\.id)
+                == inventory.composableTraversals.map({
+                    $0.stage.counterpartEntity.id
+                }),
+            collection.relatedNodes
+                == inventory.composableTraversals
+                    .compactMap({
+                        $0.stage.counterpartNode
+                    }),
+            collection.projectedFields.isEmpty,
+            Set(collection.referencedFields.map(\.id))
+                == Set(inventory.fields.compactMap {
+                    $0.identity?.id
+                }),
+            rootPredicatesBelongToRootEntity(
+                inventory,
+                rootEntityID: collection.entity.id
+            ),
+            traversalPredicatesBelongToTheirEntities(
+                inventory.composableTraversals
+            )
+        else {
+            throw GraphChatComposableReadPlanValidationError
+                .invalidTraversal
+        }
+
+        let hasDetailPredicates =
+            inventory.filter?.predicates.isEmpty == false
+            || inventory.composableTraversals.contains {
+                $0.stage.nodePredicates.isEmpty == false
+            }
+        let expectedEvidence:
+            Set<GraphChatComposableReadEvidenceRequirement> =
+                hasDetailPredicates
+                ? [
+                    .nodeIdentity,
+                    .authoritativeDetailValue,
+                    .composableTraversalPath,
+                ]
+                : [
+                    .nodeIdentity,
+                    .composableTraversalPath,
+                ]
+        guard Set(plan.evidenceRequirements)
+                == expectedEvidence else {
+            throw GraphChatComposableReadPlanValidationError
+                .invalidEvidenceContract
+        }
+
+        for traversal in inventory.composableTraversals {
+            let stage = traversal.stage
+            guard
+                stage.counterpartNode == nil
+                    || (
+                        stage.counterpartNode?
+                            .node.kind == .attribute
+                        && stage.counterpartNode?
+                            .ownerEntityID
+                            == stage.counterpartEntity.id
+                    )
+            else {
+                throw GraphChatComposableReadPlanValidationError
+                    .invalidTraversal
+            }
+            if case .contains(let term)? =
+                    stage.notePredicate {
+                let normalized = term.trimmingCharacters(
+                    in: .whitespacesAndNewlines
+                )
+                guard
+                    normalized.isEmpty == false,
+                    normalized.count
+                        <= policy.maximumFilterValueLength,
+                    GraphChatSemanticSafety
+                        .containsTechnicalIdentifier(
+                            normalized
+                        ) == false,
+                    GraphChatComposableReadTextNormalizer
+                        .normalized(normalized)
+                        .isEmpty == false
+                else {
+                    throw GraphChatComposableReadPlanValidationError
+                        .invalidTraversal
+                }
+            }
+        }
+    }
+
+    private func rootPredicatesBelongToRootEntity(
+        _ inventory: OperationInventory,
+        rootEntityID: UUID
+    ) -> Bool {
+        inventory.filter?.predicates.allSatisfy {
+            $0.field.identity?.ownerEntityID
+                == rootEntityID
+        } ?? true
+    }
+
+    private func traversalPredicatesBelongToTheirEntities(
+        _ traversals:
+            [OperationInventory.TraversalOperation]
+    ) -> Bool {
+        traversals.allSatisfy { traversal in
+            traversal.stage.nodePredicates.allSatisfy {
+                $0.field.identity?.ownerEntityID
+                    == traversal.stage
+                        .counterpartEntity.id
+            }
         }
     }
 
@@ -1745,7 +2011,8 @@ nonisolated struct GraphChatComposableReadPlanValidator:
             }
             source = selectionQuery
         case .searchGraph, .nodeDetails,
-            .inspectGraphState, .relationships:
+            .inspectGraphState, .relationships,
+            .composableRead:
             return nil
         }
         let executionSchema =
@@ -1791,6 +2058,138 @@ nonisolated struct GraphChatComposableReadPlanValidator:
                     .scopeMismatch
             }
             return validated
+        } catch let error
+            as GraphChatComposableReadPlanValidationError {
+            throw error
+        } catch {
+            throw GraphChatComposableReadPlanValidationError
+                .invalidQuery
+        }
+    }
+
+    private func validateComposableFiltersIfNeeded(
+        _ inventory: OperationInventory,
+        plan: GraphChatComposableReadPlan,
+        schemaContext: GraphSchemaContext
+    ) throws
+        -> [GraphChatComposableReadValidatedFilterStage]
+    {
+        guard plan.resultContract
+                == .composableNodeCollection else {
+            return []
+        }
+        guard
+            case .entity(let rootReference) =
+                inventory.selection,
+            let rootEntity = rootReference.identity
+        else {
+            throw GraphChatComposableReadPlanValidationError
+                .invalidSelection
+        }
+        var result:
+            [GraphChatComposableReadValidatedFilterStage] = []
+        if let filter = inventory.filter,
+           let operationID = inventory.filterOperationID {
+            result.append(
+                try validatedFilterStage(
+                    operationID: operationID,
+                    entity: rootEntity,
+                    predicates: filter.predicates,
+                    plan: plan,
+                    schemaContext: schemaContext
+                )
+            )
+        }
+        for traversal in inventory.composableTraversals
+        where traversal.stage.nodePredicates.isEmpty == false {
+            result.append(
+                try validatedFilterStage(
+                    operationID: traversal.id,
+                    entity:
+                        traversal.stage
+                            .counterpartEntity,
+                    predicates:
+                        traversal.stage
+                            .nodePredicates,
+                    plan: plan,
+                    schemaContext: schemaContext
+                )
+            )
+        }
+        return result
+    }
+
+    private func validatedFilterStage(
+        operationID: GraphChatComposableReadStepID,
+        entity: GraphChatTypedEntityIdentity,
+        predicates: [GraphChatComposableReadPredicate],
+        plan: GraphChatComposableReadPlan,
+        schemaContext: GraphSchemaContext
+    ) throws -> GraphChatComposableReadValidatedFilterStage {
+        guard
+            predicates.isEmpty == false,
+            predicates.count <= policy.maximumFilterCount,
+            predicates.allSatisfy({
+                $0.field.identity?.ownerEntityID
+                    == entity.id
+            })
+        else {
+            throw GraphChatComposableReadPlanValidationError
+                .invalidQuery
+        }
+        let source = GraphQueryPlan(
+            version: plan.queryPlanVersion,
+            entityAlias: entity.alias,
+            scope: .entity(
+                entity.id,
+                in: plan.graphScope
+            ),
+            filters: predicates.map {
+                GraphQueryFilter(
+                    fieldAlias: $0.field.alias,
+                    operation: $0.operation,
+                    value: $0.value
+                )
+            },
+            sorting: [],
+            projection: [.nodeIdentity],
+            aggregation: nil,
+            limit: 1
+        )
+        let executionSchema = GraphSchemaContext(
+            graphScope: schemaContext.graphScope,
+            snapshot: schemaContext.snapshot,
+            aliases:
+                schemaContext.foundationalAliases,
+            foundationalAliases:
+                schemaContext.foundationalAliases
+        )
+        let validator = GraphQueryPlanValidator(
+            calendar: calendar,
+            timeZone: timeZone,
+            referenceDate:
+                plan.queryReferenceDate
+                ?? referenceDate()
+        )
+        do {
+            let validated = try validator.validate(
+                source,
+                against: executionSchema
+            )
+            guard
+                validated.graphScope == plan.graphScope,
+                validated.entityID == entity.id,
+                validated.filters.count
+                    == predicates.count
+            else {
+                throw GraphChatComposableReadPlanValidationError
+                    .invalidQuery
+            }
+            return GraphChatComposableReadValidatedFilterStage(
+                operationID: operationID,
+                entity: entity,
+                filters: validated.filters
+            )
         } catch let error
             as GraphChatComposableReadPlanValidationError {
             throw error
@@ -1858,6 +2257,11 @@ nonisolated struct GraphChatComposableReadPlanValidator:
     }
 
     private struct OperationInventory {
+        struct TraversalOperation {
+            let id: GraphChatComposableReadStepID
+            let stage: GraphChatComposableReadTraversalStage
+        }
+
         let selection:
             GraphChatComposableReadSelection
         let selectionCount: Int
@@ -1865,6 +2269,8 @@ nonisolated struct GraphChatComposableReadPlanValidator:
             GraphChatComposableReadSearch?
         let filter:
             GraphChatComposableReadFilter?
+        let filterOperationID:
+            GraphChatComposableReadStepID?
         let projection:
             GraphChatComposableReadProjection?
         let sort:
@@ -1879,6 +2285,10 @@ nonisolated struct GraphChatComposableReadPlanValidator:
             GraphChatComposableReadGraphState?
         let traversal:
             GraphChatComposableReadTraversal?
+        let composableTraversals:
+            [TraversalOperation]
+        let traversalProjection:
+            GraphChatComposableReadTraversalProjection?
         let relationshipProjection:
             GraphChatComposableReadRelationshipProjection?
         let limit:
@@ -1900,7 +2310,7 @@ nonisolated struct GraphChatComposableReadPlanValidator:
             var searches:
                 [GraphChatComposableReadSearch] = []
             var filters:
-                [GraphChatComposableReadFilter] = []
+                [(GraphChatComposableReadStepID, GraphChatComposableReadFilter)] = []
             var projections:
                 [GraphChatComposableReadProjection] = []
             var sorts:
@@ -1915,6 +2325,10 @@ nonisolated struct GraphChatComposableReadPlanValidator:
                 [GraphChatComposableReadGraphState] = []
             var traversals:
                 [GraphChatComposableReadTraversal] = []
+            var composableTraversals:
+                [TraversalOperation] = []
+            var traversalProjections:
+                [GraphChatComposableReadTraversalProjection] = []
             var relationshipProjections:
                 [GraphChatComposableReadRelationshipProjection] = []
             var limits:
@@ -1927,7 +2341,7 @@ nonisolated struct GraphChatComposableReadPlanValidator:
                 case .search(let value):
                     searches.append(value)
                 case .filter(let value):
-                    filters.append(value)
+                    filters.append((operation.id, value))
                 case .project(let value):
                     projections.append(value)
                 case .sort(let value):
@@ -1944,6 +2358,15 @@ nonisolated struct GraphChatComposableReadPlanValidator:
                     let value
                 ):
                     traversals.append(value)
+                case .traverseRelationships(let value):
+                    composableTraversals.append(
+                        TraversalOperation(
+                            id: operation.id,
+                            stage: value
+                        )
+                    )
+                case .projectTraversalNodes(let value):
+                    traversalProjections.append(value)
                 case .projectRelationships(
                     let value
                 ):
@@ -1965,6 +2388,8 @@ nonisolated struct GraphChatComposableReadPlanValidator:
                 comparisons.count <= 1,
                 graphStates.count <= 1,
                 traversals.count <= 1,
+                composableTraversals.count <= 2,
+                traversalProjections.count <= 1,
                 relationshipProjections.count
                     <= 1
             else {
@@ -1974,7 +2399,8 @@ nonisolated struct GraphChatComposableReadPlanValidator:
             selection = selections[0]
             selectionCount = selections.count
             search = searches.first
-            filter = filters.first
+            filter = filters.first?.1
+            filterOperationID = filters.first?.0
             projection = projections.first
             sort = sorts.first
             aggregation = aggregations.first
@@ -1982,6 +2408,10 @@ nonisolated struct GraphChatComposableReadPlanValidator:
             comparison = comparisons.first
             graphState = graphStates.first
             traversal = traversals.first
+            self.composableTraversals =
+                composableTraversals
+            traversalProjection =
+                traversalProjections.first
             relationshipProjection =
                 relationshipProjections.first
             limit = limits[0]
@@ -2063,12 +2493,35 @@ nonisolated struct GraphChatComposableReadPlanValidator:
                     )
                 }
             }
+            for traversal in composableTraversals {
+                let stage = traversal.stage
+                entityValues.append(
+                    GraphChatComposableReadEntityReference(
+                        alias:
+                            stage.counterpartEntity.alias,
+                        identity:
+                            stage.counterpartEntity
+                    )
+                )
+                if let counterpart =
+                        stage.counterpartNode {
+                    nodeValues.append(counterpart)
+                }
+            }
 
             var fieldValues:
                 [GraphChatComposableReadFieldReference] = []
             fieldValues.append(
                 contentsOf:
-                    filters.flatMap(\.predicates)
+                    filters.flatMap { $0.1.predicates }
+                        .map(\.field)
+            )
+            fieldValues.append(
+                contentsOf:
+                    composableTraversals
+                        .flatMap {
+                            $0.stage.nodePredicates
+                        }
                         .map(\.field)
             )
             fieldValues.append(

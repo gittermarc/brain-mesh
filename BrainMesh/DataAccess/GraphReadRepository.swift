@@ -242,6 +242,52 @@ actor GraphReadRepository {
         return resolved.first { $0.id == model.id }
     }
 
+    func detailValueAuthority(
+        attributeID: UUID,
+        fieldID: UUID,
+        in scope: GraphScope
+    ) async throws -> GraphDetailValueAuthorityDTO {
+        let context = try await makeReadContext()
+        try checkCancellation()
+        let models = try context.fetch(
+            GraphScopedFetches.detailValues(
+                attributeID: attributeID,
+                fieldID: fieldID,
+                in: scope
+            )
+        )
+        try checkCancellation()
+        let authority = try fetchDetailValueAuthority(
+            in: scope,
+            context: context,
+            models: models
+        )
+        let key = DetailValueAuthorityKey(
+            graphID: scope.graphID,
+            attributeID: attributeID,
+            fieldID: fieldID
+        )
+        if authority.conflictedKeys.contains(key)
+            || authority.values.count > 1
+            || (
+                models.isEmpty == false
+                    && authority.values.isEmpty
+            )
+        {
+            return .conflicted
+        }
+        guard let value = authority.values.first else {
+            return .missing
+        }
+        guard
+            value.attributeID == attributeID,
+            value.fieldID == fieldID
+        else {
+            return .conflicted
+        }
+        return .authoritative(value)
+    }
+
     func detailValues(
         attributeID: UUID,
         in scope: GraphScope
@@ -345,7 +391,7 @@ actor GraphReadRepository {
         try checkCancellation()
         let definitions = try fetchDetailFieldDefinitions(in: scope, context: context)
         try checkCancellation()
-        let values = try fetchDetailValues(
+        let valueAuthority = try fetchDetailValueAuthority(
             in: scope,
             context: context,
             prefetchedDefinitions: definitions,
@@ -367,8 +413,10 @@ actor GraphReadRepository {
             attributes: attributes,
             links: links,
             detailFieldDefinitions: definitions,
-            detailValues: values,
-            attachments: attachments
+            detailValues: valueAuthority.values,
+            attachments: attachments,
+            integrityConflictedValueKeys:
+                valueAuthority.conflictedKeys
         )
     }
 

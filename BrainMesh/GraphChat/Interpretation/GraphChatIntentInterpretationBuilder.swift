@@ -12,6 +12,10 @@ nonisolated enum GraphChatIntentInterpretationExecutionWitness:
     Sendable
 {
     case query(ValidatedGraphQueryPlan)
+    case composableRead(
+        ValidatedGraphChatComposableReadPlan,
+        continuationPlan: ValidatedGraphQueryPlan
+    )
     case search
     case node(GraphChatTypedNodeIdentity)
     case comparison([NodeRefKey])
@@ -40,6 +44,18 @@ nonisolated struct GraphChatIntentInterpretationBuilder:
             return queryInterpretation(
                 intent: intent,
                 plan: plan,
+                correctionOrigin:
+                    correctionOrigin
+            )
+        case .composableRead(
+            let plan,
+            let continuationPlan
+        ):
+            return composableReadInterpretation(
+                intent: intent,
+                plan: plan,
+                continuationPlan:
+                    continuationPlan,
                 correctionOrigin:
                     correctionOrigin
             )
@@ -165,6 +181,186 @@ nonisolated struct GraphChatIntentInterpretationBuilder:
                     correctionOrigin
             )
         }
+    }
+
+    private func composableReadInterpretation(
+        intent: GraphChatTypedIntent,
+        plan: ValidatedGraphChatComposableReadPlan,
+        continuationPlan: ValidatedGraphQueryPlan,
+        correctionOrigin:
+            GraphChatInterpretationCorrectionOrigin?
+    ) -> GraphChatIntentInterpretation? {
+        let readPlan = plan.plan
+        guard
+            intent.kind == .entityCollection,
+            intent.expectedCardinality == .zeroOrMore,
+            intent.factExpectation == .none,
+            readPlan.version == .current,
+            readPlan.resultContract
+                == .composableNodeCollection,
+            readPlan.binding == intent.binding,
+            readPlan.graphScope
+                == intent.scope.graphScope,
+            readPlan.chatScope
+                == intent.scope.chatScope,
+            readPlan.queryScope
+                == intent.scope.queryScope,
+            readPlan.limits.resultLimit
+                == intent.limits.resultLimit,
+            readPlan.limits.maximumResultLimit
+                == intent.limits.maximumResultLimit,
+            case .entityCollection(let collection) =
+                intent.payload
+        else {
+            return nil
+        }
+        let root = readPlan.operations.compactMap {
+            operation
+                -> GraphChatTypedEntityIdentity? in
+            guard case .select(.entity(let reference)) =
+                    operation.payload else {
+                return nil
+            }
+            return reference.identity
+        }.first
+        let traversals = readPlan.operations.compactMap {
+            operation
+                -> GraphChatComposableReadTraversalStage? in
+            guard case .traverseRelationships(let stage) =
+                    operation.payload else {
+                return nil
+            }
+            return stage
+        }
+        let projection = readPlan.operations.compactMap {
+            operation
+                -> GraphChatComposableReadTraversalProjection? in
+            guard case .projectTraversalNodes(let value) =
+                    operation.payload else {
+                return nil
+            }
+            return value
+        }.first
+        let sortDirection = readPlan.operations.compactMap {
+            operation -> GraphQuerySortDirection? in
+            guard case .sort(let sort) =
+                    operation.payload else {
+                return nil
+            }
+            return sort.descriptors.first {
+                $0.key == .nodeName
+            }?.direction
+        }.first
+        let resultEntity = projection?.target
+            == .startNodes
+            ? root
+            : traversals.last?.counterpartEntity
+        guard
+            root == collection.entity,
+            traversals.isEmpty == false,
+            traversals.map(\.counterpartEntity)
+                == collection.relatedEntities,
+            projection?.deduplicatesNodes == true,
+            let sortDirection,
+            let resultEntity,
+            continuationPlan.version
+                == GraphQueryPlan.currentVersion,
+            continuationPlan.graphScope
+                == readPlan.graphScope,
+            continuationPlan.entityID
+                == resultEntity.id,
+            case .selection = continuationPlan.scope,
+            continuationPlan.filters.isEmpty,
+            continuationPlan.sorting == [
+                GraphValidatedQuerySort(
+                    key: .nodeName,
+                    direction: sortDirection
+                ),
+            ],
+            continuationPlan.projection
+                == [.nodeIdentity],
+            continuationPlan.aggregation == nil,
+            continuationPlan.limit
+                == readPlan.limits.resultLimit
+        else {
+            return nil
+        }
+
+        let fields = uniqueFields(
+            intent.payload.fields
+        )
+        let fieldsByID = Dictionary(
+            uniqueKeysWithValues:
+                fields.map { ($0.id, $0) }
+        )
+        let filters = plan.validatedFilterStages
+            .flatMap(\.filters)
+            .compactMap { filter
+                -> GraphChatIntentInterpretationFilter? in
+                guard let field = fieldsByID[
+                    filter.fieldID
+                ], field.type == filter.fieldType else {
+                    return nil
+                }
+                return GraphChatIntentInterpretationFilter(
+                    field: field,
+                    operation: filter.operation,
+                    value: filter.value
+                )
+            }
+        guard filters.count
+                == plan.validatedFilterStages
+                    .flatMap(\.filters).count
+        else {
+            return nil
+        }
+        let interpretation = GraphChatIntentInterpretation(
+            version: .v1,
+            intentKind: intent.kind,
+            scopeBinding: scopeBinding(intent),
+            turnBinding: turnBinding(intent),
+            responseLanguage: intent.responseLanguage,
+            entities: intent.payload.entities.map(
+                GraphChatIntentInterpretationEntity.init
+            ),
+            nodes: intent.payload.nodes.map(
+                GraphChatIntentInterpretationNode.init
+            ),
+            fields: fields,
+            projectedFields: [],
+            filters: filters,
+            sorting: [
+                GraphChatIntentInterpretationSort(
+                    key: .nodeName,
+                    direction: sortDirection
+                ),
+            ],
+            grouping: nil,
+            aggregation: nil,
+            resultExtent: resultExtent(
+                intent: intent,
+                kind: .boundedCollection,
+                resultLimit:
+                    readPlan.limits.resultLimit,
+                subjectCount: nil,
+                includesAllAuthorizedResults: false
+            ),
+            graphStateAspect: nil,
+            relationship: nil,
+            resolutionSource:
+                intent.resolution.source,
+            resolutionOrigin:
+                intent.resolution.origin,
+            resolutionQuality:
+                intent.resolution.quality,
+            editableComponents: [],
+            formattingTimeZoneIdentifier:
+                timeZone.identifier,
+            correctionOrigin: correctionOrigin
+        )
+        return interpretation.isInternallyConsistent
+            ? interpretation
+            : nil
     }
 
     func queryInterpretation(

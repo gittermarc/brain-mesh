@@ -40,6 +40,9 @@ nonisolated struct GraphChatSemanticIntentExecutor:
         relationshipExecutor:
             any GraphChatLocalIntentRelationshipExecuting =
                 GraphChatRelationshipExecutor(),
+        composableReadExecutor:
+            any GraphChatLocalIntentComposableReadExecuting =
+                GraphChatComposableReadExecutor(),
         conversationStateReducer:
             GraphChatConversationStateReducer,
         calendar: Calendar,
@@ -61,6 +64,8 @@ nonisolated struct GraphChatSemanticIntentExecutor:
                 statsExecutor: statsExecutor,
                 relationshipExecutor:
                     relationshipExecutor,
+                composableReadExecutor:
+                    composableReadExecutor,
                 conversationStateReducer:
                     conversationStateReducer,
                 calendar: calendar,

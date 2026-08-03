@@ -22,6 +22,28 @@ extension GraphChatQueryEngine:
     GraphChatLocalIntentQueryExecuting
 {}
 
+nonisolated protocol GraphChatComposableReadSnapshotReading:
+    Sendable
+{
+    func sourceSnapshot(
+        in scope: GraphScope
+    ) async throws -> GraphSourceSnapshotDTO
+}
+
+extension GraphReadRepository:
+    GraphChatComposableReadSnapshotReading
+{}
+
+nonisolated protocol GraphChatLocalIntentComposableReadExecuting:
+    Sendable
+{
+    func execute(
+        _ plan: ValidatedGraphChatComposableReadPlan,
+        context: GraphChatToolContext
+    ) async throws
+        -> GraphChatToolResult<GraphChatComposableReadExecutionOutput>
+}
+
 nonisolated protocol GraphChatLocalIntentSearchExecuting:
     Sendable
 {
@@ -170,6 +192,7 @@ nonisolated enum GraphChatLocalIntentAction: Hashable, Sendable {
     case compareNodes(GraphChatComparisonPlan)
     case inspectGraphState(GraphChatLocalGraphStateAction)
     case relationships(GraphChatRelationshipPlan)
+    case composableRead(GraphChatComposableReadPlan)
 }
 
 nonisolated struct GraphChatTypedIntentAdaptation:

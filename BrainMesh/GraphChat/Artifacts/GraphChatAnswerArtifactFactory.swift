@@ -35,13 +35,16 @@ nonisolated enum GraphChatAnswerArtifactFactory {
         plan: ValidatedGraphQueryPlan,
         schemaContext: GraphSchemaContext,
         language: GraphChatResponseLanguage = .english,
-        budget: GraphChatAnswerArtifactFactoryBudget = .default
+        budget: GraphChatAnswerArtifactFactoryBudget = .default,
+        querySummary suppliedSummary:
+            GraphChatAnswerArtifactQuerySummary? = nil
     ) -> GraphChatAnswerArtifactDraft? {
-        let summary = querySummary(
-            plan: plan,
-            schemaContext: schemaContext,
-            language: language
-        )
+        let summary = suppliedSummary
+            ?? querySummary(
+                plan: plan,
+                schemaContext: schemaContext,
+                language: language
+            )
         if let aggregation = result.aggregation {
             switch aggregation.kind {
             case .groupCount:

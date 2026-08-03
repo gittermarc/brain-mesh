@@ -696,26 +696,67 @@ nonisolated struct GraphChatAnswerArtifactStrings: Sendable {
         guard truncation.isTruncated else {
             return nil
         }
+        let sourceDescription = truncation.reasons
+            .map(truncationReasonLabel)
+            .joined(separator: ", ")
+        let suffix = sourceDescription.isEmpty
+            ? ""
+            : " (\(sourceDescription))"
         if let omittedCount = truncation.omittedCount, omittedCount > 0 {
             switch language {
             case .german:
-                return "Ergebnismenge gekürzt, \(omittedCount) weitere Einträge nicht enthalten"
+                return "Ergebnismenge gekürzt, \(omittedCount) weitere Einträge nicht enthalten\(suffix)"
             case .english:
-                return "Result set truncated, \(omittedCount) additional items not included"
+                return "Result set truncated, \(omittedCount) additional items not included\(suffix)"
             }
         }
         if let omittedColumnCount = truncation.omittedColumnCount,
            omittedColumnCount > 0 {
             switch language {
             case .german:
-                return "Tabelle gekürzt, \(omittedColumnCount) weitere Spalten nicht enthalten"
+                return "Tabelle gekürzt, \(omittedColumnCount) weitere Spalten nicht enthalten\(suffix)"
             case .english:
-                return "Table truncated, \(omittedColumnCount) additional columns not included"
+                return "Table truncated, \(omittedColumnCount) additional columns not included\(suffix)"
             }
         }
         return language == .german
-            ? "Ergebnismenge wurde gekürzt"
-            : "Result set was truncated"
+            ? "Ergebnismenge wurde gekürzt\(suffix)"
+            : "Result set was truncated\(suffix)"
+    }
+
+    private func truncationReasonLabel(
+        _ reason: GraphChatAnswerArtifactTruncationReason
+    ) -> String {
+        switch (language, reason) {
+        case (.german, .toolLimit):
+            return "Tool-Limit"
+        case (.english, .toolLimit):
+            return "tool limit"
+        case (.german, .queryLimit):
+            return "Query-Limit"
+        case (.english, .queryLimit):
+            return "query limit"
+        case (.german, .appPolicy):
+            return "App-Sicherheitsbudget"
+        case (.english, .appPolicy):
+            return "app safety budget"
+        case (.german, .uiLimit):
+            return "UI-Limit"
+        case (.english, .uiLimit):
+            return "UI limit"
+        case (.german, .registryBudget):
+            return "Artifact-Budget"
+        case (.english, .registryBudget):
+            return "artifact budget"
+        case (.german, .sourceLimited):
+            return "Datenquellenlimit"
+        case (.english, .sourceLimited):
+            return "source limit"
+        case (.german, .unknown):
+            return "unbekannte Limitquelle"
+        case (.english, .unknown):
+            return "unknown limit source"
+        }
     }
 
     func sortDirection(

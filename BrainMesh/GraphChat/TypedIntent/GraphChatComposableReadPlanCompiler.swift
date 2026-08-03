@@ -14,6 +14,9 @@ nonisolated enum GraphChatComposableReadPlanCompiler {
         action: GraphChatLocalIntentAction,
         policy: GraphChatIntentLimitPolicy = .default
     ) -> GraphChatComposableReadPlan {
+        if case .composableRead(let plan) = action {
+            return plan
+        }
         var builder = OperationBuilder()
         let resultContract: GraphChatComposableReadResultContract
         let evidence:
@@ -459,6 +462,11 @@ nonisolated enum GraphChatComposableReadPlanCompiler {
             compiledResultLimit =
                 relationship.limits
                     .resultLimit
+
+        case .composableRead:
+            preconditionFailure(
+                "Composable Read Plans werden vor dem Legacy-Compiler-Gate direkt übernommen."
+            )
         }
 
         builder.append(
@@ -513,7 +521,16 @@ nonisolated enum GraphChatComposableReadPlanCompiler {
                             .maximumComposableReadOperationCount,
                     maximumTraversalHopCount:
                         policy
-                            .maximumComposableReadTraversalHopCount
+                            .maximumComposableReadTraversalHopCount,
+                    selectedStartNodeLimit:
+                        policy
+                            .maximumComposableReadSelectedStartNodeCount,
+                    visitedNodeLimit:
+                        policy
+                            .maximumComposableReadVisitedNodeCount,
+                    checkedLinkLimit:
+                        policy
+                            .maximumComposableReadCheckedLinkCount
                 ),
             queryReferenceDate:
                 queryReferenceDate

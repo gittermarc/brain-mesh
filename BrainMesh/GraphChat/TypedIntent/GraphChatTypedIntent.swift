@@ -153,15 +153,21 @@ nonisolated struct GraphChatTypedEntityCollectionIntent:
     Sendable
 {
     let entity: GraphChatTypedEntityIdentity
+    let relatedEntities: [GraphChatTypedEntityIdentity]
+    let relatedNodes: [GraphChatTypedNodeIdentity]
     let projectedFields: [GraphChatTypedFieldIdentity]
     let referencedFields: [GraphChatTypedFieldIdentity]
 
     init(
         entity: GraphChatTypedEntityIdentity,
+        relatedEntities: [GraphChatTypedEntityIdentity] = [],
+        relatedNodes: [GraphChatTypedNodeIdentity] = [],
         projectedFields: [GraphChatTypedFieldIdentity],
         referencedFields: [GraphChatTypedFieldIdentity]? = nil
     ) {
         self.entity = entity
+        self.relatedEntities = relatedEntities
+        self.relatedNodes = relatedNodes
         self.projectedFields = projectedFields
         self.referencedFields =
             referencedFields ?? projectedFields
@@ -288,7 +294,7 @@ nonisolated enum GraphChatTypedIntentPayload: Hashable, Sendable {
         case .findNodes(let value):
             return value.entity.map { [$0] } ?? []
         case .entityCollection(let value):
-            return [value.entity]
+            return [value.entity] + value.relatedEntities
         case .countOrGroup(let value):
             return [value.entity]
         case .nodeDetails(let value):
@@ -336,7 +342,9 @@ nonisolated enum GraphChatTypedIntentPayload: Hashable, Sendable {
         switch self {
         case .findNodes(let value):
             return value.nodeScope
-        case .entityCollection, .countOrGroup, .inspectGraphState:
+        case .entityCollection(let value):
+            return value.relatedNodes
+        case .countOrGroup, .inspectGraphState:
             return []
         case .nodeDetails(let value):
             return [value.node]

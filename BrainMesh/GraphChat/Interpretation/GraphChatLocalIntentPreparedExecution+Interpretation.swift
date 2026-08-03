@@ -105,6 +105,44 @@ nonisolated extension GraphChatLocalIntentPreparedExecution {
             witness = .query(plan)
 
         case (
+            .entityCollection,
+            .getNeighbors
+        ):
+            guard
+                let latestResult,
+                latestResult.kind == .query,
+                let continuationPlan =
+                    state.lastValidatedQueryPlan,
+                validatedReadPlan.plan
+                    .resultContract
+                    == .composableNodeCollection
+            else {
+                return nil
+            }
+            let resultNodes = latestResult.references
+                .compactMap { reference
+                    -> NodeRefKey? in
+                    guard case .node(let node) =
+                            reference.reference else {
+                        return nil
+                    }
+                    return node
+                }
+            guard
+                resultNodes.count
+                    == latestResult.references.count,
+                case .selection(let continuationNodes) =
+                    continuationPlan.scope,
+                continuationNodes == resultNodes
+            else {
+                return nil
+            }
+            witness = .composableRead(
+                validatedReadPlan,
+                continuationPlan: continuationPlan
+            )
+
+        case (
             .nodeDetails,
             .queryDetailValues
         ):

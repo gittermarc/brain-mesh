@@ -34,6 +34,10 @@ nonisolated enum GraphChatComposableReadPlanLegacyActionAdapter {
     static func validatedAction(
         from plan: GraphChatComposableReadPlan
     ) throws -> GraphChatLocalIntentAction {
+        if plan.resultContract
+            == .composableNodeCollection {
+            return .composableRead(plan)
+        }
         if let search = operation(
             in: plan,
             extract: {
@@ -336,7 +340,8 @@ nonisolated enum GraphChatComposableReadPlanLegacyActionAdapter {
         case .comparison:
             return .comparison
         case .search, .nodeProfile,
-            .graphState, .relationships:
+            .graphState, .relationships,
+            .composableNodeCollection:
             throw GraphChatComposableReadPlanLegacyActionAdapterError
                 .malformedPlan
         }

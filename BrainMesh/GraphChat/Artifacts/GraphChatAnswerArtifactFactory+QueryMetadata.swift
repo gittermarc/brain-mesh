@@ -173,6 +173,8 @@ nonisolated extension GraphChatAnswerArtifactFactory {
             return .queryLimit
         case .source:
             return .sourceLimited
+        case .appPolicy:
+            return .appPolicy
         case nil:
             return fallback
         }

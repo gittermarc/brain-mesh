@@ -34,6 +34,8 @@ nonisolated struct GraphChatOrchestratorComposition: Sendable {
             any GraphChatLocalIntentStatsExecuting,
         semanticRelationshipExecutor:
             any GraphChatLocalIntentRelationshipExecuting,
+        semanticComposableReadExecutor:
+            any GraphChatLocalIntentComposableReadExecuting,
         toolRunnerFactory: any GraphChatModelToolRunnerFactory,
         toolBudgetPolicy: GraphChatToolBudgetPolicy,
         conversationStatePolicy: GraphChatConversationStatePolicy,
@@ -100,6 +102,11 @@ nonisolated struct GraphChatOrchestratorComposition: Sendable {
                             GraphChatQueryIntentCompiler(
                                 calendar: calendar,
                                 timeZone: timeZone
+                            ),
+                        composableReadCompiler:
+                            GraphChatComposableReadIntentCompiler(
+                                calendar: calendar,
+                                timeZone: timeZone
                             )
                     ),
                 referenceResolver:
@@ -120,6 +127,8 @@ nonisolated struct GraphChatOrchestratorComposition: Sendable {
                     semanticStatsExecutor,
                 relationshipExecutor:
                     semanticRelationshipExecutor,
+                composableReadExecutor:
+                    semanticComposableReadExecutor,
                 conversationStateReducer:
                     stateReducer,
                 calendar: calendar,

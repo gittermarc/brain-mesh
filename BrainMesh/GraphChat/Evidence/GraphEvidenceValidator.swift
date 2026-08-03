@@ -13,6 +13,11 @@ nonisolated protocol GraphEvidenceSourceReading: Sendable {
     func attribute(id: UUID, in scope: GraphScope) async throws -> GraphAttributeDTO?
     func detailFieldDefinition(id: UUID, in scope: GraphScope) async throws -> GraphDetailFieldDefinitionDTO?
     func detailValue(id: UUID, in scope: GraphScope) async throws -> GraphDetailValueDTO?
+    func detailValueAuthority(
+        attributeID: UUID,
+        fieldID: UUID,
+        in scope: GraphScope
+    ) async throws -> GraphDetailValueAuthorityDTO
     func link(id: UUID, in scope: GraphScope) async throws -> GraphLinkDTO?
     func attachmentMetadata(id: UUID, in scope: GraphScope) async throws -> GraphAttachmentMetadataDTO?
 }
@@ -216,15 +221,70 @@ actor GraphEvidenceSourceValidator: GraphEvidenceValidating {
                 owners.insert(ownerEntityID)
                 nodes.insert(NodeRefKey(kind: .entity, id: ownerEntityID))
             }
+            let authoritativeFieldValue:
+                GraphEvidenceFieldValue?
+            if let fieldID = reference.fieldID {
+                guard
+                    let ownerEntityID =
+                        attribute.ownerEntityID,
+                    let field = try await repository
+                        .detailFieldDefinition(
+                            id: fieldID,
+                            in: graphScope
+                        ),
+                    field.scope == graphScope,
+                    field.entityID == ownerEntityID
+                else {
+                    return nil
+                }
+                let authority = try await repository
+                    .detailValueAuthority(
+                        attributeID: attribute.id,
+                        fieldID: field.id,
+                        in: graphScope
+                    )
+                switch authority {
+                case .missing:
+                    authoritativeFieldValue =
+                        GraphEvidenceFieldValue(
+                            fieldID: field.id,
+                            fieldName: field.name,
+                            value: .missing,
+                            unit: field.unit
+                        )
+                case .authoritative(let value):
+                    guard
+                        value.scope == graphScope,
+                        value.attributeID == attribute.id,
+                        value.fieldID == field.id
+                    else {
+                        return nil
+                    }
+                    authoritativeFieldValue =
+                        GraphEvidenceFieldValue(
+                            fieldID: field.id,
+                            fieldName: field.name,
+                            value:
+                                value.value
+                                    .graphEvidenceValue,
+                            unit: field.unit
+                        )
+                case .conflicted:
+                    return nil
+                }
+            } else {
+                authoritativeFieldValue = nil
+            }
             return ResolvedSource(
                 graphScope: graphScope,
                 sourceKind: .attribute,
                 sourceID: attribute.id,
-                fieldID: nil,
+                fieldID: reference.fieldID,
                 attachmentID: nil,
                 relatedNodes: nodes,
                 ownerEntityIDs: owners,
-                authoritativeFieldValue: nil,
+                authoritativeFieldValue:
+                    authoritativeFieldValue,
                 authoritativeLink: nil,
                 nodeProfileSnapshot:
                     Self.nodeProfileSnapshot(

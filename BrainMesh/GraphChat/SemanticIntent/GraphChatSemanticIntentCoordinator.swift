@@ -44,6 +44,8 @@ nonisolated struct GraphChatSemanticIntentCoordinator:
         GraphChatSemanticDraftValidator
     private let relationshipFastPath:
         GraphChatRelationshipFastPathCompiler
+    private let composableReadFastPath:
+        GraphChatComposableReadFastPathCompiler
     private let resolver:
         GraphChatSemanticIntentResolver
     private let referenceResolver:
@@ -72,6 +74,9 @@ nonisolated struct GraphChatSemanticIntentCoordinator:
         relationshipFastPath:
             GraphChatRelationshipFastPathCompiler =
                 GraphChatRelationshipFastPathCompiler(),
+        composableReadFastPath:
+            GraphChatComposableReadFastPathCompiler =
+                GraphChatComposableReadFastPathCompiler(),
         resolver:
             GraphChatSemanticIntentResolver =
                 GraphChatSemanticIntentResolver(),
@@ -95,6 +100,8 @@ nonisolated struct GraphChatSemanticIntentCoordinator:
         self.draftValidator = draftValidator
         self.relationshipFastPath =
             relationshipFastPath
+        self.composableReadFastPath =
+            composableReadFastPath
         self.resolver = resolver
         self.referenceResolver = referenceResolver
         self.localAnswerBuilder = localAnswerBuilder
@@ -139,6 +146,8 @@ nonisolated struct GraphChatSemanticIntentCoordinator:
         let selectedEntityID: UUID?
         let selectedRelationshipCounterpartEntityID:
             UUID?
+        let selectedComposableIntermediateEntityID:
+            UUID?
         let selectedFields:
             [GraphChatSemanticSelectedField]
         let selectedNodes:
@@ -155,6 +164,9 @@ nonisolated struct GraphChatSemanticIntentCoordinator:
                 selectedRelationshipCounterpartEntityID =
                     continuation.selection
                         .selectedRelationshipCounterpartEntityID
+                selectedComposableIntermediateEntityID =
+                    continuation.selection
+                        .selectedComposableIntermediateEntityID
                 selectedFields =
                     continuation.selection
                         .selectedFields
@@ -191,7 +203,19 @@ nonisolated struct GraphChatSemanticIntentCoordinator:
                 InterpreterRecoveryResolution
             do {
                 if let fastDraft =
-                    relationshipFastPath.compile(
+                    composableReadFastPath.compile(
+                        question:
+                            providerPlan
+                                .normalizedQuestion,
+                        language:
+                            providerPlan
+                                .responseLanguage,
+                        schemaContext: schemaContext,
+                        chatScope:
+                            providerPlan.scopeKey
+                                .chatScope
+                    )
+                    ?? relationshipFastPath.compile(
                         question:
                             providerPlan
                                 .normalizedQuestion,
@@ -291,6 +315,8 @@ nonisolated struct GraphChatSemanticIntentCoordinator:
                 selectedEntityID = nil
                 selectedRelationshipCounterpartEntityID =
                     nil
+                selectedComposableIntermediateEntityID =
+                    nil
                 selectedFields = []
                 selectedNodes = []
             }
@@ -343,6 +369,8 @@ nonisolated struct GraphChatSemanticIntentCoordinator:
                         selectedEntityID,
                     selectedRelationshipCounterpartEntityID:
                         selectedRelationshipCounterpartEntityID,
+                    selectedComposableIntermediateEntityID:
+                        selectedComposableIntermediateEntityID,
                     selectedFields:
                         selectedFields,
                     selectedNodes:
@@ -394,6 +422,8 @@ nonisolated struct GraphChatSemanticIntentCoordinator:
                         selectedEntityID,
                     selectedRelationshipCounterpartEntityID:
                         selectedRelationshipCounterpartEntityID,
+                    selectedComposableIntermediateEntityID:
+                        selectedComposableIntermediateEntityID,
                     selectedFields:
                         selectedFields,
                     selectedNodes:
@@ -675,6 +705,8 @@ nonisolated struct GraphChatSemanticIntentCoordinator:
         selectedEntityID: UUID?,
         selectedRelationshipCounterpartEntityID:
             UUID?,
+        selectedComposableIntermediateEntityID:
+            UUID?,
         selectedFields:
             [GraphChatSemanticSelectedField],
         selectedNodes:
@@ -780,6 +812,8 @@ nonisolated struct GraphChatSemanticIntentCoordinator:
                                         selectedEntityID,
                                     selectedRelationshipCounterpartEntityID:
                                         selectedRelationshipCounterpartEntityID,
+                                    selectedComposableIntermediateEntityID:
+                                        selectedComposableIntermediateEntityID,
                                     selectedFields:
                                         selectedFields,
                                     selectedNodes:
@@ -860,6 +894,12 @@ nonisolated struct GraphChatSemanticIntentCoordinator:
                                 ? candidate.entityID
                                 : candidate
                                     .preservedRelationshipCounterpartEntityID,
+                            selectedComposableIntermediateEntityID:
+                                candidate.selectionRole
+                                    == .composableIntermediate
+                                ? candidate.entityID
+                                : candidate
+                                    .preservedComposableIntermediateEntityID,
                             selectedFields:
                                 candidate
                                     .selectedFields,

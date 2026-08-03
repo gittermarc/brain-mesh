@@ -17,6 +17,9 @@ struct GraphChatComposableReadPlanTests {
             GraphChatComposableReadPlanVersion.v1
         )
         requireHashableSendable(
+            GraphChatComposableReadPlanVersion.v2
+        )
+        requireHashableSendable(
             GraphChatComposableReadPlanVersion.allCases
         )
         requireHashableSendable(plan)
@@ -24,7 +27,7 @@ struct GraphChatComposableReadPlanTests {
         requireHashableSendable(plan.limits)
         #expect(
             GraphChatComposableReadPlanVersion.current
-                == .v1
+                == .v2
         )
         #expect(plan.version == .current)
         #expect(
@@ -424,6 +427,44 @@ struct GraphChatComposableReadPlanTests {
             )
         }
 
+        let raisedArtifactBudget =
+            source.replacingLimits(
+                GraphChatComposableReadLimits(
+                    resultLimit:
+                        source.limits.resultLimit,
+                    maximumResultLimit:
+                        source.limits.maximumResultLimit,
+                    intermediateResultLimit:
+                        source.limits.intermediateResultLimit,
+                    maximumEvidenceCount:
+                        source.limits.maximumEvidenceCount,
+                    maximumArtifactCount:
+                        source.limits.maximumArtifactCount + 1,
+                    maximumOperationCount:
+                        source.limits.maximumOperationCount,
+                    maximumTraversalHopCount:
+                        source.limits.maximumTraversalHopCount,
+                    selectedStartNodeLimit:
+                        source.limits.selectedStartNodeLimit,
+                    visitedNodeLimit:
+                        source.limits.visitedNodeLimit,
+                    checkedLinkLimit:
+                        source.limits.checkedLinkLimit
+                )
+            )
+        #expect(
+            throws:
+                GraphChatComposableReadPlanValidationError
+                    .invalidLimits
+        ) {
+            _ = try fixture.validator.validate(
+                raisedArtifactBudget,
+                for: mapped.adaptation.intent,
+                schemaContext: fixture.schemaContext,
+                providerPlan: fixture.providerPlan
+            )
+        }
+
         let payloads =
             source.operations.map(\.payload)
         let filterIndex = try #require(
@@ -665,7 +706,7 @@ struct GraphChatComposableReadPlanTests {
                                 .readPlan
                                 .limits
                                 .maximumOperationCount,
-                        maximumTraversalHopCount: 2
+                        maximumTraversalHopCount: 3
                     )
                 )
         #expect(

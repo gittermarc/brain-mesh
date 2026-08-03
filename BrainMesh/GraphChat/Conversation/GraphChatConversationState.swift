@@ -325,7 +325,8 @@ nonisolated struct GraphChatConversationStatePolicy: Hashable, Sendable {
         maximumEntityReferences: 24,
         maximumFieldReferences: 64,
         maximumResultContexts: 8,
-        maximumResultReferences: 64,
+        maximumResultReferences:
+            GraphQueryPlanLimits.maximumResultLimit,
         maximumGroupReferences: 24,
         maximumComparisonReferences: 12,
         maximumEvidenceIDsPerReference: 12,

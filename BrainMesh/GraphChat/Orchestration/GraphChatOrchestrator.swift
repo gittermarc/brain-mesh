@@ -53,6 +53,9 @@ actor GraphChatOrchestrator {
         semanticRelationshipExecutor:
             any GraphChatLocalIntentRelationshipExecuting =
                 GraphChatRelationshipExecutor(),
+        semanticComposableReadExecutor:
+            any GraphChatLocalIntentComposableReadExecuting =
+                GraphChatComposableReadExecutor(),
         toolRunnerFactory: any GraphChatModelToolRunnerFactory,
         toolBudgetPolicy: GraphChatToolBudgetPolicy = .default,
         concurrentRequestPolicy: GraphChatConcurrentRequestPolicy = .cancelPrevious,
@@ -87,6 +90,8 @@ actor GraphChatOrchestrator {
                 semanticStatsExecutor,
             semanticRelationshipExecutor:
                 semanticRelationshipExecutor,
+            semanticComposableReadExecutor:
+                semanticComposableReadExecutor,
             toolRunnerFactory: toolRunnerFactory,
             toolBudgetPolicy: toolBudgetPolicy,
             conversationStatePolicy: conversationStatePolicy,

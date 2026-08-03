@@ -474,6 +474,14 @@ private actor MutableArtifactEvidenceSourceRepository: GraphEvidenceSourceReadin
         nil
     }
 
+    func detailValueAuthority(
+        attributeID: UUID,
+        fieldID: UUID,
+        in scope: GraphScope
+    ) async throws -> GraphDetailValueAuthorityDTO {
+        .missing
+    }
+
     func link(id: UUID, in scope: GraphScope) async throws -> GraphLinkDTO? {
         nil
     }

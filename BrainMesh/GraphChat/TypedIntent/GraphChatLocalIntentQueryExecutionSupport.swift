@@ -133,7 +133,8 @@ nonisolated struct GraphChatLocalIntentQueryExecutionSupport:
         case .searchGraph, .nodeDetails,
             .compareNodes,
             .inspectGraphState,
-            .relationships:
+            .relationships,
+            .composableRead:
             throw GraphChatLocalIntentExecutionError
                 .invalidCompiledAction
         }
@@ -304,7 +305,9 @@ nonisolated struct GraphChatLocalIntentQueryExecutionSupport:
         presentationRegistry:
             GraphChatPresentationRegistry,
         transactionID:
-            GraphChatAnswerArtifactTransactionID
+            GraphChatAnswerArtifactTransactionID,
+        querySummary:
+            GraphChatAnswerArtifactQuerySummary? = nil
     ) async throws -> [GraphChatAnswerArtifactID] {
         guard result.state == .success else {
             return []
@@ -320,11 +323,12 @@ nonisolated struct GraphChatLocalIntentQueryExecutionSupport:
         switch action.resultContract {
         case .authoritativeSingleField:
             let summary =
-                GraphChatAnswerArtifactFactory.querySummary(
-                    plan: plan,
-                    schemaContext: schemaContext,
-                    language: language
-                )
+                querySummary
+                ?? GraphChatAnswerArtifactFactory.querySummary(
+                        plan: plan,
+                        schemaContext: schemaContext,
+                        language: language
+                    )
             sourceDraft =
                 GraphChatAnswerArtifactFactory.table(
                     result: result,
@@ -343,7 +347,8 @@ nonisolated struct GraphChatLocalIntentQueryExecutionSupport:
                     plan: plan,
                     schemaContext: schemaContext,
                     language: language,
-                    budget: budget
+                    budget: budget,
+                    querySummary: querySummary
                 )
         }
         guard let sourceDraft else {

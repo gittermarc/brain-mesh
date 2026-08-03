@@ -327,7 +327,8 @@ nonisolated struct GraphChatInterpretationCorrectionSchemaSnapshot:
             }
         case .nodeDetails, .compareNodes,
              .inspectGraphState,
-             .relationships:
+             .relationships,
+             .composableRead:
             break
         }
 

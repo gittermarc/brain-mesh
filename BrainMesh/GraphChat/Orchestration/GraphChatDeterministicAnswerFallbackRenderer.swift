@@ -452,6 +452,15 @@ nonisolated struct GraphChatDeterministicAnswerFallbackRenderer: Sendable {
                 return " Not every item could be revalidated against the current data source."
             }
         }
+        if metadata.truncation.reasons
+            .contains(.appPolicy) {
+            switch language {
+            case .german:
+                return " Die Ausgabe ist durch das app-eigene Sicherheitsbudget begrenzt."
+            case .english:
+                return " The output is capped by the app-owned safety budget."
+            }
+        }
         guard metadata.truncation.reasons.contains(.queryLimit),
               queryLimit == GraphQueryPlanLimits.maximumResultLimit else {
             return ""

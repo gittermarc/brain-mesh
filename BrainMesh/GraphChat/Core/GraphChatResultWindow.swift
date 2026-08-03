@@ -11,6 +11,7 @@ nonisolated enum GraphChatResultLimitSource: String, CaseIterable, Hashable, Sen
     case tool
     case query
     case source
+    case appPolicy
 }
 
 nonisolated struct GraphChatResultWindow: Hashable, Sendable {

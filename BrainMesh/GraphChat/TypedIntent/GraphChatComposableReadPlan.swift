@@ -14,9 +14,10 @@ nonisolated enum GraphChatComposableReadPlanVersion:
     Sendable
 {
     case v1 = 1
+    case v2 = 2
 
     static let current =
-        GraphChatComposableReadPlanVersion.v1
+        GraphChatComposableReadPlanVersion.v2
 }
 
 nonisolated struct GraphChatComposableReadStepID:
@@ -206,6 +207,41 @@ nonisolated struct GraphChatComposableReadTraversal:
     let sourceRelationshipContextID: UUID?
 }
 
+nonisolated struct GraphChatComposableReadTraversalStage:
+    Hashable,
+    Sendable
+{
+    let counterpartEntity:
+        GraphChatTypedEntityIdentity
+    let counterpartNode:
+        GraphChatTypedNodeIdentity?
+    let direction:
+        GraphChatRelationshipDirection
+    let notePredicate:
+        GraphChatRelationshipNotePredicate?
+    let nodePredicates:
+        [GraphChatComposableReadPredicate]
+}
+
+nonisolated enum GraphChatComposableReadTraversalResultTarget:
+    String,
+    CaseIterable,
+    Hashable,
+    Sendable
+{
+    case startNodes
+    case terminalNodes
+}
+
+nonisolated struct GraphChatComposableReadTraversalProjection:
+    Hashable,
+    Sendable
+{
+    let target:
+        GraphChatComposableReadTraversalResultTarget
+    let deduplicatesNodes: Bool
+}
+
 nonisolated struct GraphChatComposableReadRelationshipProjection:
     Hashable,
     Sendable
@@ -245,6 +281,12 @@ nonisolated enum GraphChatComposableReadOperationPayload:
     case traverseDirectRelationships(
         GraphChatComposableReadTraversal
     )
+    case traverseRelationships(
+        GraphChatComposableReadTraversalStage
+    )
+    case projectTraversalNodes(
+        GraphChatComposableReadTraversalProjection
+    )
     case projectRelationships(
         GraphChatComposableReadRelationshipProjection
     )
@@ -278,6 +320,7 @@ nonisolated enum GraphChatComposableReadResultContract:
     case comparison
     case graphState
     case relationships
+    case composableNodeCollection
 }
 
 nonisolated enum GraphChatComposableReadEvidenceRequirement:
@@ -293,6 +336,7 @@ nonisolated enum GraphChatComposableReadEvidenceRequirement:
     case comparisonFeatureValues
     case graphStateSnapshot
     case directRelationshipBinding
+    case composableTraversalPath
 }
 
 nonisolated enum GraphChatComposableReadArtifactContract:
@@ -319,7 +363,41 @@ nonisolated struct GraphChatComposableReadLimits:
     let maximumEvidenceCount: Int
     let maximumArtifactCount: Int
     let maximumOperationCount: Int
+    let selectedStartNodeLimit: Int
+    let visitedNodeLimit: Int
+    let checkedLinkLimit: Int
     let maximumTraversalHopCount: Int
+
+    init(
+        resultLimit: Int,
+        maximumResultLimit: Int,
+        intermediateResultLimit: Int,
+        maximumEvidenceCount: Int,
+        maximumArtifactCount: Int,
+        maximumOperationCount: Int,
+        maximumTraversalHopCount: Int,
+        selectedStartNodeLimit: Int =
+            GraphChatIntentLimitPolicy.default
+                .maximumComposableReadSelectedStartNodeCount,
+        visitedNodeLimit: Int =
+            GraphChatIntentLimitPolicy.default
+                .maximumComposableReadVisitedNodeCount,
+        checkedLinkLimit: Int =
+            GraphChatIntentLimitPolicy.default
+                .maximumComposableReadCheckedLinkCount
+    ) {
+        self.resultLimit = resultLimit
+        self.maximumResultLimit = maximumResultLimit
+        self.intermediateResultLimit = intermediateResultLimit
+        self.maximumEvidenceCount = maximumEvidenceCount
+        self.maximumArtifactCount = maximumArtifactCount
+        self.maximumOperationCount = maximumOperationCount
+        self.selectedStartNodeLimit = selectedStartNodeLimit
+        self.visitedNodeLimit = visitedNodeLimit
+        self.checkedLinkLimit = checkedLinkLimit
+        self.maximumTraversalHopCount =
+            maximumTraversalHopCount
+    }
 }
 
 /// The semantic interpreter never creates this value. It is assembled only

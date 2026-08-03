@@ -200,6 +200,7 @@ nonisolated extension GraphChatAnswerArtifactNavigationTarget {
 nonisolated enum GraphChatAnswerArtifactTruncationReason: String, CaseIterable, Hashable, Sendable {
     case toolLimit
     case queryLimit
+    case appPolicy
     case uiLimit
     case registryBudget
     case sourceLimited
@@ -635,6 +636,36 @@ nonisolated struct GraphChatAnswerArtifactQuerySummary: Hashable, Sendable {
     let limit: Int
     let aggregation: GraphChatAnswerArtifactQueryAggregationSummary?
     let displayText: String
+    let allowsFilterNavigation: Bool
+
+    init(
+        language: GraphChatResponseLanguage,
+        entityID: UUID,
+        entityLabel: String,
+        filters: [GraphChatAnswerArtifactQueryFilterSummary],
+        grouping: GraphChatAnswerArtifactQueryFieldSummary?,
+        sorting: [GraphChatAnswerArtifactQuerySortSummary],
+        projection: [GraphChatAnswerArtifactQueryFieldSummary],
+        includesNodeIdentity: Bool,
+        limit: Int,
+        aggregation: GraphChatAnswerArtifactQueryAggregationSummary?,
+        displayText: String,
+        allowsFilterNavigation: Bool = true
+    ) {
+        self.language = language
+        self.entityID = entityID
+        self.entityLabel = entityLabel
+        self.filters = filters
+        self.grouping = grouping
+        self.sorting = sorting
+        self.projection = projection
+        self.includesNodeIdentity = includesNodeIdentity
+        self.limit = limit
+        self.aggregation = aggregation
+        self.displayText = displayText
+        self.allowsFilterNavigation =
+            allowsFilterNavigation
+    }
 }
 
 nonisolated struct GraphChatAnswerArtifactDraft: Hashable, Sendable {
@@ -749,7 +780,8 @@ nonisolated struct GraphChatAnswerArtifact: Hashable, Sendable, Identifiable {
         ]
 
         if let querySummary {
-            let filters = querySummary.filters.map { filter in
+            let filters = querySummary.allowsFilterNavigation
+                ? querySummary.filters.map { filter in
                 GraphChatAnswerArtifactFilterValue(
                     fieldID: filter.field.fieldID,
                     fieldName: filter.field.label,
@@ -757,6 +789,7 @@ nonisolated struct GraphChatAnswerArtifact: Hashable, Sendable, Identifiable {
                     values: filter.values
                 )
             }
+                : []
             targets.append(
                 .openResultFilter(
                     graphScope: graphScope,
