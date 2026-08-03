@@ -55,6 +55,27 @@ private extension GraphChatAccessDecision {
 @MainActor
 struct GraphChatMessageActionViewModelTests {
     @Test
+    func starterSuggestionOnlyPrefillsComposerWithoutSending() async throws {
+        let setup = GraphChatUITestSupport.makeViewModel(
+            scripts: []
+        )
+        await setup.viewModel.load()
+        let suggestion = try #require(
+            setup.viewModel.suggestions.first
+        )
+
+        setup.viewModel.useSuggestion(suggestion)
+
+        let runtime = await setup.orchestrator.snapshot()
+        #expect(
+            setup.viewModel.composerState.text
+                == suggestion.prompt
+        )
+        #expect(setup.viewModel.messages.isEmpty)
+        #expect(runtime.questions.isEmpty)
+    }
+
+    @Test
     func copyWritesOnlyTheReadablePayloadAndAnnouncesSuccess() async throws {
         let evidence = GraphChatProviderTestSupport.makeEvidence(
             sourceID: UUID(uuidString: "F2000000-0000-0000-0000-000000000001")!,

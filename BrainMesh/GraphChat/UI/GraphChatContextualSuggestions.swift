@@ -2,7 +2,7 @@
 //  GraphChatContextualSuggestions.swift
 //  BrainMesh
 //
-//  Scope-aware, deterministic starter questions backed by productive tools.
+//  Scope-aware starter questions proven by the production compiler path.
 //
 
 import Foundation
@@ -29,26 +29,32 @@ nonisolated enum GraphChatSuggestionKind: String, CaseIterable, Hashable, Sendab
 
 nonisolated struct GraphChatEmptyStateSuggestion: Hashable, Sendable, Identifiable {
     let id: String
+    let capabilityID: GraphChatCapabilityID
     let title: String
     let prompt: String
     let kind: GraphChatSuggestionKind
     let accessibilityLabel: String
     let accessibilityHint: String
+    let validation: GraphChatCapabilityQuestionValidation
 
     init(
         id: String,
+        capabilityID: GraphChatCapabilityID,
         title: String,
         prompt: String,
         kind: GraphChatSuggestionKind = .detail,
         accessibilityLabel: String? = nil,
-        accessibilityHint: String? = nil
+        accessibilityHint: String? = nil,
+        validation: GraphChatCapabilityQuestionValidation
     ) {
         self.id = id
+        self.capabilityID = capabilityID
         self.title = title
         self.prompt = prompt
         self.kind = kind
         self.accessibilityLabel = accessibilityLabel ?? "\(title): \(prompt)"
         self.accessibilityHint = accessibilityHint ?? "Übernimmt diese Frage in das Eingabefeld."
+        self.validation = validation
     }
 }
 
@@ -78,8 +84,10 @@ nonisolated struct GraphChatSuggestionContext: Sendable {
 }
 
 nonisolated enum GraphChatEmptyStateSuggestionBuilder {
-    static let maximumSuggestions = 4
-    static let maximumDirectNodeInspections = GraphChatToolBudgetPolicy.default.maximumCalls
+    static let maximumSuggestions = 3
+    static let maximumCandidateAttemptsPerCapability =
+        GraphChatIntentLimitPolicy
+            .default.maximumClarificationOptionCount
 
     static func suggestions(
         for context: GraphChatSuggestionContext
@@ -107,28 +115,15 @@ nonisolated enum GraphChatEmptyStateSuggestionBuilder {
         return ranked(candidates, context: context)
     }
 
-    /// Compatibility entry used by previews and older callers that only own a snapshot.
-    /// Contextual production callers should pass a full `GraphChatSuggestionContext`.
+    /// A prompt-only snapshot cannot prove current UUID-backed bindings.
+    /// Callers without the complete app-side catalog therefore receive no
+    /// tappable question instead of an unverified compatibility suggestion.
     static func suggestions(
         for snapshot: GraphSchemaSnapshot,
         scope: GraphChatScope
     ) -> [GraphChatEmptyStateSuggestion] {
-        let aliases = GraphSchemaAliasMap(
-            graphScope: scope.graphScope,
-            entitiesByAlias: [:],
-            fieldsByAlias: [:],
-            nodeEntityIDs: [:]
-        )
-        return suggestions(
-            for: GraphChatSuggestionContext(
-                schema: GraphSchemaContext(
-                    graphScope: scope.graphScope,
-                    snapshot: snapshot,
-                    aliases: aliases
-                ),
-                scope: scope,
-                launchContext: .inferred(from: scope)
-            )
-        )
+        _ = snapshot
+        _ = scope
+        return []
     }
 }

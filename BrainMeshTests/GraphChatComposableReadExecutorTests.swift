@@ -997,6 +997,42 @@ struct GraphChatComposableReadExecutorTests {
     }
 
     @Test
+    func deterministicFastPathRecognizesRelationshipCueBeforeQuestionMark()
+        async throws
+    {
+        let fixture = ExecutionFixture.domain(
+            root: "Aufgaben",
+            target: "Teams",
+            note: "dreimal"
+        )
+        let schemaContext = try await GraphSchemaService(
+            repository:
+                SnapshotReader(snapshot: fixture.source)
+        ).makeSnapshot(in: fixture.graphScope)
+        let draft = try #require(
+            GraphChatComposableReadFastPathCompiler()
+                .compile(
+                    question:
+                        "Welche Aufgaben sind mit Teams dreimal verbunden?",
+                    language: .german,
+                    schemaContext: schemaContext,
+                    chatScope:
+                        .entireGraph(fixture.graphScope)
+                )
+        )
+
+        #expect(draft.entityTerm == "Aufgaben")
+        #expect(
+            draft.relationshipCounterpartEntityTerm
+                == "Teams"
+        )
+        #expect(draft.relationshipNoteTerm == "dreimal")
+        #expect(
+            draft.relationshipResultTarget == .startNodes
+        )
+    }
+
+    @Test
     func invalidComposableDraftAndNarrowChatScopeFailClosed()
         async throws
     {

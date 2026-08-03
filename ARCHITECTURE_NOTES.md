@@ -24,6 +24,7 @@ BrainMesh besitzt bereits mehrere wichtige Schutzlinien:
 - INTENT-COMPILER-7 schließt Ausbaustufe 2 mit einer expliziten Cutover-Policy ab: Alle neun unterstützten Familien enden lokal oder in einer fachlichen Clarification. Freie Provider-Toolwahl, modellbestimmte Query-Pläne, Limits und finaler Fachtext sind in diesem Pfad nicht mehr erreichbar.
 - Eine gemeinsame `GraphChatIntentLimitPolicy` besitzt die fachlich gleichen Grenzen. Der Interpreter verwendet ein begrenztes Standardprofil und ausschließlich bei Context-Window-Überlauf genau einen Compact-Retry; manipulierte oder schemawidrige Drafts scheitern ohne Tool-Repair oder Provider-Rettung.
 - GRAPH-CHAT-COMPOSABLE-READ-EXECUTION-1 ergänzt einen nativen, providerfreien Executor für vollständig revalidierte `v2`-Pläne. Ein einziger graphgescopter value-only Snapshot, höchstens zwei Hops, getrennte Budgets für jede Ausführungsstufe, pfadvollständige Live-Evidence, sichtbare App-Policy-Truncation und exakte `CURRENT`-Fortsetzung bilden die neue kontrollierte Read-Grenze.
+- GRAPH-CHAT-CAPABILITY-GUIDANCE-1 führt eine einzige app-owned Capability-Quelle für stabile Nutzerführung ein. Antippbare Starterfragen werden gegen den vollständigen App-Katalog durch die realen Resolver-, Compiler- und Read-Plan-Validator-Pfade bewiesen; Toolverfügbarkeit oder ein grober UI-Kontext allein reichen nicht mehr aus.
 
 Die höchsten Architektur-Risiken liegen trotzdem an drei Systemgrenzen:
 
@@ -1059,6 +1060,41 @@ Bewusst nicht enthalten:
 - `GraphFactBundle`;
 - modellgestützte finale Antwortplanung.
 
+### Graph Chat Capability Guidance (GRAPH-CHAT-CAPABILITY-GUIDANCE-1)
+
+Pfade:
+
+- `BrainMesh/GraphChat/Presentation/GraphChatCapabilityCatalog.swift`
+- `BrainMesh/GraphChat/Presentation/GraphChatCapabilityQuestionValidator.swift`
+- `BrainMesh/GraphChat/UI/GraphChatContextualSuggestions.swift`
+- `BrainMesh/GraphChat/UI/GraphChatContextualSuggestionRanking.swift`
+- `BrainMesh/GraphChat/UI/GraphChatContextualSuggestionCandidates+Graph.swift`
+- `BrainMesh/GraphChat/UI/GraphChatContextualSuggestionCandidates+Nodes.swift`
+- `BrainMesh/GraphChat/UI/GraphChatContextualSuggestionCopy.swift`
+- `BrainMeshTests/GraphChatCapabilityCatalogTests.swift`
+- `BrainMeshTests/GraphChatEmptyStateSuggestionTests.swift`
+
+Autoritative Quelle:
+
+- `GraphChatCapabilityCatalog.stable` ist die einzige Registry für die stabile Nutzerführung. Jede Capability besitzt eine stabile ID, fachliche Kategorie, vollständige deutsche und englische Presentation, explizite Schema-/Scope-Voraussetzungen, produktive Compiler-/Typed-Intent-/Read-Plan-Familie, generisches Beispiel, konkrete Starterregel, Toolmenge und Platzierung als Starter beziehungsweise allgemeine Hilfe.
+- Sämtliche Werte sind immutable, value-only, `Hashable` und `Sendable`. UI-Dateien enthalten nur noch konkrete lokalisierte Shells; Titel, Beschreibung, Capability-Semantik und Produktionsnachweis werden nicht parallel dupliziert.
+- Die aktuelle stabile Matrix enthält Entity Collection, vollständiges Node Profile und direkte Relationships als Starter und Hilfe. Der deterministische häufigkeitsgebundene Composable-Read-Pfad ist Hilfe-only, weil das Schema allein keinen tatsächlich vorhandenen Link-Notizwert für eine konkrete Starterfrage belegt.
+- Filter, Sortierung, Count, Group Count, Comparison, Graph State und Refinement besitzen zwar lokale Typed-Intent-Ausführung, ihre natürliche Sprache erreicht aktuell jedoch nur den freien Semantic Interpreter. Sie werden deshalb nicht als garantiert funktionierende Starter oder stabile Hilfecapability behauptet. Minimum, Maximum, Ranking und nicht definierte Aggregationen bleiben ausgeschlossen.
+
+Produktionsnachweis vor Rendering:
+
+- Kandidatennamen kommen aus dem vollständigen `GraphSchemaContext.foundationalAliases`-Katalog, nicht nur aus dem begrenzten Provider-Snapshot oder untrusted Launch-Labels. Graph-, Entity-, Node- und Selection-Scope werden vor der Compilation exakt abgeglichen.
+- `GraphChatCapabilityQuestionValidator` akzeptiert keine verkürzte Simulation. Foundational Entity Collection und Node Profile durchlaufen `GraphChatFoundationalIntentCompiler`, `GraphMentionResolver` und `GraphChatFoundationalIntentAdapter`. Direkte Connections durchlaufen `GraphChatRelationshipFastPathCompiler`, den produktiven Draft Validator, Semantic Resolver und Relationship Compiler. Die Hilfe-only Beziehungskette durchläuft entsprechend `GraphChatComposableReadFastPathCompiler` und `GraphChatComposableReadIntentCompiler`.
+- Jeder erzeugte `GraphChatTypedIntentAdaptation.readPlan` läuft anschließend durch `GraphChatComposableReadPlanValidator`. Erwartete Typed-Intent-Art, Result Contract und rekonstruierte `GraphChatLocalIntentAction` müssen exakt zur Capability passen. Clarification, falscher Scope, falsche Sprache, technischer Identifier, Compiler-Fallback oder jede Validierungsabweichung liefern `nil` und damit keinen tappbaren Vorschlag.
+- Ranking, gefaltete Prompt-Deduplikation, Capability-Deduplikation, Kind-Diversität und ein sichtbares Maximum von drei sind deterministisch. Die Zahl der Kandidatenversuche pro Familie verwendet das zentrale Clarification-Limit, während Sortierung und Bindung auf dem vollständigen Katalog bleiben.
+- Wenn kein sicherer Kandidat existiert, bleibt die bestehende neutrale Empty-State-Führung sichtbar. Der Kompatibilitätseinstieg mit nur einem `GraphSchemaSnapshot` liefert bewusst keine Frage, weil er keine UUID-backed Bindung beweisen kann. Ein Tap übernimmt unverändert nur den Prompt in den Composer.
+
+Tests:
+
+- `GraphChatCapabilityCatalogTests` sichert eindeutige IDs, stabile Reihenfolge, vollständige DE-/EN-Copy, identifierfreie Nutzertexte, value-only Concurrency-Verträge und einen real validierten Produktionspfad für jede Katalogzeile.
+- `GraphChatEmptyStateSuggestionTests` revalidiert jeden sichtbaren Prompt erneut mit demselben Produktionsvalidator und prüft erwartete Compiler-, Typed-Intent- und Read-Plan-Familien, Toolgating, vollständige Kataloge jenseits des Prompt-Snapshots, Mehrdeutigkeit, UUID-Unterdrückung, Empty Graph, identische Wiederholungsreihenfolge und ausgeschlossene Superlative/Aggregationen.
+- Fachlich getrennte Planning- und Publishing-Fixtures enthalten skalare Choice-/Date-/Textfelder beziehungsweise Nodes und Relationship-Kontext sowie Umlaute, Plural, Interpunktion und einen Graphen ohne geeignete Felder. Keine Assertion setzt Patienten-, Medikamenten- oder andere Produktionsdomänen voraus.
+
 ### Graph Chat Semantic Intent Interpreter
 
 Pfade:
@@ -1881,6 +1917,7 @@ Die realistischen Obergrenzen sind **UNKNOWN U7** und müssen produktseitig fest
 - Interpretation-Correction-Verträge, intent-spezifische Editorfelder, vollständige Schema-/Scope-/Session-Revalidation, typisierte Choice-/Toggle-/Zahl-/Datum-Filter, Operator-Kompatibilität, Entity-/Node-/Comparison-/Refinement-/Graph-State-Sicherheitsgrenzen, Doppelbestätigungs-Latch, Checkpoint-/Suffix-/Feedback-Replacement, deferred Artifact-Swap, Cancellation-/Commit-Rollback und Single-Terminal-Vertrag. Der End-to-End-Pfad ersetzt „Offene Projekte, sortiert nach Name“ durch die lokal ausgeführte Fälligkeitsdatum-Sortierung; Interpreter bleibt bei einem Aufruf, Answer Provider bei null und `CURRENT` enthält nur das neue Resultset.
 - Versionierter Composable-Read-Plan mit Domain-/Hashable-/Sendable-Verträgen, vollständiger Familienabbildung, Validator-/Normalizer-Matrix, Text-/Integer-/Double-/Date-/Bool-/Choice-Kompatibilität, Cross-Graph-/Scope-/Limit-/Hop-Manipulationsabwehr, stabilem Tie-Breaker, Correction-Neukompilierung und Parität zu den bestehenden Evidence-/Artifact-/Result-Window-/`CURRENT`-/Terminal-/Rollback-Suiten.
 - Native Composable-Read-Ausführung aus einem einzigen graphgescopten value-only Snapshot: ein und zwei Hops, incoming/outgoing/both, Gegen-Entity/-Node, Link-Notiz- und Root-/Zwischen-/Terminal-Detailfilter vor jedem Stufenlimit, deutsche/englische Häufigkeitsnormalisierung, Zyklen, parallele Links, stabile Node-Deduplikation sowie getrennte Startnode-, Visited-Node-, Checked-Link-, Zwischen-, Ergebnis-, Evidence- und Artifact-Budgets. Live-Evidence-Regressionen decken geänderte Node-/Link-Notizwerte, Detailkonflikte und einen nach dem Snapshot hinzugekommenen, zuvor fehlenden Detailwert ab. Medizin, Bibliothek, IT-Operations und Rezepte belegen Domänenunabhängigkeit; der medizinische End-to-End-Turn prüft zusätzlich exaktes `CURRENT`-Refinement, sichtbare App-Policy-Truncation, Cancellation jeder Stufe, atomaren Rollback, genau ein Terminal Event, null freie Provider-Sessions und UUID-/Alias-freie UI-/Copy-Parität.
+- Autoritativer Capability-Katalog und Starterfragen: eindeutige stabile IDs, deterministische Reihenfolge, vollständige deutsche/englische Presentation, keine technischen Namen, echter Foundational-/Relationship-/Composable-Fast-Path, erwartete Typed-Intent-/Read-Plan-Familie, produktive Planvalidierung, vollständige Kataloge, Mehrdeutigkeit, UUID-Unterdrückung, kompatibles Toolgating, Empty Graph und zwei fachlich getrennte generische Fixtures mit Umlauten und Interpunktion.
 - `GraphChatTypedIntentPlannerAcceptanceTests` bündelt 18 benannte In-Memory-Akzeptanzszenarien: Foundational Single Fact, Natural Find/List, Filter/Sort, Count, Group, Refinement, Node Details, Comparison, Graph State, Clarification, Interpretation/Copy, Correction, Draft-Manipulation, Open-Ended-Fallback, Sicherheitsbindungen, Cancellation und große Schemas mit Standard-/Compact-Recovery. Zusätzliche End-to-End-Tests belegen genau zwei Interpreter-Aufrufe beim Compact-Retry, keinen Retry nach Draft, keinen Provider bei Draft-Manipulation sowie keinen verspäteten Comparison-Commit.
 
 ### Ergänzungen

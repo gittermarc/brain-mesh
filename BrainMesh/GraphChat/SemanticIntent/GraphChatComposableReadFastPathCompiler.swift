@@ -312,32 +312,33 @@ nonisolated struct GraphChatComposableReadFastPathCompiler:
         _ question: String,
         language: GraphChatResponseLanguage
     ) -> Bool {
-        let canonical = BMSearch.fold(question)
-        let terms: [String]
+        let terms: Set<String>
         switch language {
         case .german:
             terms = [
-                " nehmen ",
-                " nimmt ",
-                " einnehmen ",
-                " erhalten ",
-                " bekommt ",
-                " verbunden ",
-                " verknupft ",
+                "nehmen",
+                "nimmt",
+                "einnehmen",
+                "erhalten",
+                "bekommt",
+                "verbunden",
+                "verknupft",
             ]
         case .english:
             terms = [
-                " take ",
-                " takes ",
-                " receive ",
-                " receives ",
-                " connected ",
-                " linked ",
+                "take",
+                "takes",
+                "receive",
+                "receives",
+                "connected",
+                "linked",
             ]
         }
-        let padded = " \(canonical) "
-        return terms.contains {
-            padded.contains($0)
+        let tokens = GraphMentionTextNormalization.tokens(
+            BMSearch.fold(question)
+        )
+        return tokens.contains {
+            terms.contains($0)
         }
     }
 }

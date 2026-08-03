@@ -19,9 +19,21 @@ struct GraphChatTabUIContractTests {
         ]
         let suggestion = GraphChatEmptyStateSuggestion(
             id: "preview:open-projects",
+            capabilityID: .entityEntries,
             title: "Offene Projekte",
             prompt: "Welche Projekte sind noch offen?",
-            kind: .list
+            kind: .list,
+            validation:
+                GraphChatCapabilityQuestionValidation(
+                    capabilityID: .entityEntries,
+                    compilerFamily:
+                        .foundationalEntityCollection,
+                    typedIntentKind: .entityCollection,
+                    readPlanFamily: .entityCollection,
+                    readPlanVersion: .current,
+                    queryPlanVersion:
+                        GraphQueryPlan.currentVersion
+                )
         )
 
         for configuration in configurations {

@@ -3,34 +3,67 @@ import Testing
 @testable import BrainMesh
 
 struct GraphChatEmptyStateSuggestionTests {
-    private let graphID = UUID(uuidString: "10000000-0000-0000-0000-000000000001")!
-    private let projectEntityID = UUID(uuidString: "20000000-0000-0000-0000-000000000001")!
-    private let personEntityID = UUID(uuidString: "20000000-0000-0000-0000-000000000002")!
-    private let statusFieldID = UUID(uuidString: "30000000-0000-0000-0000-000000000001")!
-    private let dueDateFieldID = UUID(uuidString: "30000000-0000-0000-0000-000000000002")!
-    private let budgetFieldID = UUID(uuidString: "30000000-0000-0000-0000-000000000003")!
-    private let firstNodeID = UUID(uuidString: "40000000-0000-0000-0000-000000000001")!
-    private let secondNodeID = UUID(uuidString: "40000000-0000-0000-0000-000000000002")!
+    private let graphID = UUID(
+        uuidString: "10000000-0000-0000-0000-000000000001"
+    )!
+    private let projectEntityID = UUID(
+        uuidString: "20000000-0000-0000-0000-000000000001"
+    )!
+    private let personEntityID = UUID(
+        uuidString: "20000000-0000-0000-0000-000000000002"
+    )!
+    private let statusFieldID = UUID(
+        uuidString: "30000000-0000-0000-0000-000000000001"
+    )!
+    private let dueDateFieldID = UUID(
+        uuidString: "30000000-0000-0000-0000-000000000002"
+    )!
+    private let budgetFieldID = UUID(
+        uuidString: "30000000-0000-0000-0000-000000000003"
+    )!
+    private let firstNodeID = UUID(
+        uuidString: "40000000-0000-0000-0000-000000000001"
+    )!
+    private let secondNodeID = UUID(
+        uuidString: "40000000-0000-0000-0000-000000000002"
+    )!
 
     @Test
     func graphScopeOffersOnlySupportedGraphQuestionsAndIsDeterministic() {
         let context = makeSuggestionContext(
-            scope: .entireGraph(GraphScope(graphID: graphID)),
+            scope: .entireGraph(
+                GraphScope(graphID: graphID)
+            ),
             launchContext: .graph(name: "Portfolio")
         )
 
-        let first = GraphChatEmptyStateSuggestionBuilder.suggestions(for: context)
-        let second = GraphChatEmptyStateSuggestionBuilder.suggestions(for: context)
+        let first = GraphChatEmptyStateSuggestionBuilder
+            .suggestions(for: context)
+        let second = GraphChatEmptyStateSuggestionBuilder
+            .suggestions(for: context)
 
         #expect(first == second)
-        #expect(first.count <= GraphChatEmptyStateSuggestionBuilder.maximumSuggestions)
-        #expect(first.contains { $0.id == "graph-overview" })
-        #expect(first.contains { $0.id == "graph-links" })
+        #expect(
+            first.count
+                <= GraphChatEmptyStateSuggestionBuilder
+                    .maximumSuggestions
+        )
+        #expect(first.map(\.capabilityID) == [
+            .entityEntries,
+            .nodeProfile,
+            .directRelationships,
+        ])
         #expect(Set(first.map(\.prompt)).count == first.count)
+        #expect(
+            first.allSatisfy {
+                $0.validation.capabilityID
+                    == $0.capabilityID
+            }
+        )
     }
 
     @Test
-    func entityScopeUsesConcreteEntityAndExistingFields() {
+    func entityScopeUsesConcreteEntityWithoutUnprovenFieldQuestions() {
         let scope = GraphChatScope.entity(
             projectEntityID,
             in: GraphScope(graphID: graphID)
@@ -38,20 +71,41 @@ struct GraphChatEmptyStateSuggestionTests {
         let context = makeSuggestionContext(
             scope: scope,
             launchContext: .entity(
-                GraphChatEntityContextReference(id: projectEntityID, name: "Projekte")
+                GraphChatEntityContextReference(
+                    id: projectEntityID,
+                    name: "Untrusted name"
+                )
             )
         )
 
-        let suggestions = GraphChatEmptyStateSuggestionBuilder.suggestions(for: context)
+        let suggestions = GraphChatEmptyStateSuggestionBuilder
+            .suggestions(for: context)
 
         #expect(suggestions.isEmpty == false)
-        #expect(suggestions.allSatisfy { $0.prompt.contains("Projekte") })
-        #expect(suggestions.contains { $0.prompt.contains("Status") })
-        #expect(suggestions.contains { $0.prompt.contains("Zieldatum") })
+        #expect(
+            suggestions.allSatisfy {
+                $0.prompt.contains("Status") == false
+                    && $0.prompt.contains("Zieldatum")
+                        == false
+                    && $0.prompt.contains("Budget")
+                        == false
+            }
+        )
+        #expect(
+            suggestions.contains {
+                $0.capabilityID == .entityEntries
+                    && $0.prompt.contains("Projekte")
+            }
+        )
+        #expect(
+            suggestions.contains {
+                $0.prompt.contains("Untrusted name")
+            } == false
+        )
     }
 
     @Test
-    func detailFieldScopeUsesConcreteField() {
+    func detailFieldScopeDoesNotPromiseProviderDependentFieldOperations() {
         let entity = GraphChatEntityContextReference(
             id: projectEntityID,
             name: "Projekte"
@@ -72,76 +126,87 @@ struct GraphChatEmptyStateSuggestionTests {
             launchContext: .detailField(field)
         )
 
-        let suggestions = GraphChatEmptyStateSuggestionBuilder.suggestions(for: context)
-
-        #expect(suggestions.isEmpty == false)
-        #expect(suggestions.allSatisfy { $0.prompt.contains("Status") })
-        #expect(suggestions.contains { $0.id == "field-distribution-F-status" })
-        #expect(suggestions.contains { $0.id == "field-common-F-status" } == false)
+        // Field filtering, sorting, and grouping currently require the free
+        // semantic interpreter, so no guaranteed starter is displayed.
+        #expect(
+            GraphChatEmptyStateSuggestionBuilder
+                .suggestions(for: context)
+                .isEmpty
+        )
     }
 
     @Test
     func nodeScopeNeverOffersGraphStatistics() {
-        let node = NodeRefKey(kind: .attribute, id: UUID())
-        let scope = GraphChatScope.node(node, in: GraphScope(graphID: graphID))
+        let node = firstNode
+        let scope = GraphChatScope.node(
+            node,
+            in: GraphScope(graphID: graphID)
+        )
         let context = makeSuggestionContext(
             scope: scope,
             launchContext: .node(
-                GraphChatNodeContextReference(
-                    node: node,
-                    label: "Apollo",
-                    entityID: projectEntityID,
-                    entityName: "Projekte"
-                )
+                nodeReference(node, label: "Untrusted label")
             )
         )
 
-        let suggestions = GraphChatEmptyStateSuggestionBuilder.suggestions(for: context)
+        let suggestions = GraphChatEmptyStateSuggestionBuilder
+            .suggestions(for: context)
 
-        #expect(suggestions.contains { $0.prompt.contains("Apollo") })
-        #expect(suggestions.contains { $0.id == "graph-overview" } == false)
-        #expect(suggestions.contains { $0.id == "graph-links" } == false)
+        #expect(suggestions.map(\.capabilityID) == [
+            .nodeProfile,
+            .directRelationships,
+        ])
+        #expect(
+            suggestions.allSatisfy {
+                $0.prompt.contains("Apollo")
+            }
+        )
+        #expect(
+            suggestions.contains {
+                $0.kind == .statistics
+            } == false
+        )
     }
 
     @Test
-    func selectionScopeUsesActualSelectionAndSupportsComparison() throws {
-        let first = GraphChatNodeContextReference(
-            node: NodeRefKey(kind: .attribute, id: UUID()),
-            label: "Apollo",
-            entityID: projectEntityID,
-            entityName: "Projekte"
-        )
-        let second = GraphChatNodeContextReference(
-            node: NodeRefKey(kind: .attribute, id: UUID()),
-            label: "Hermes",
-            entityID: projectEntityID,
-            entityName: "Projekte"
-        )
+    func selectionScopeUsesActualSelectionAndDoesNotPromiseComparison() throws {
+        let first = nodeReference(firstNode, label: "Apollo")
+        let second = nodeReference(secondNode, label: "Hermes")
         let scope = try GraphChatScope.selection(
             [first.node, second.node],
             in: GraphScope(graphID: graphID)
         )
         let context = makeSuggestionContext(
             scope: scope,
-            launchContext: .selection([first, second]),
-            nodeEntityIDs: [first.node: projectEntityID, second.node: projectEntityID]
+            launchContext: .selection([first, second])
         )
 
-        let suggestions = GraphChatEmptyStateSuggestionBuilder.suggestions(for: context)
+        let suggestions = GraphChatEmptyStateSuggestionBuilder
+            .suggestions(for: context)
 
-        #expect(suggestions.contains { $0.prompt.contains("2") })
-        #expect(suggestions.contains { $0.id == "selection-compare" })
-        #expect(suggestions.contains { $0.id == "selection-choice-F-status" })
+        #expect(suggestions.map(\.capabilityID) == [
+            .nodeProfile,
+            .directRelationships,
+        ])
+        #expect(
+            suggestions.contains {
+                $0.prompt.contains("Apollo")
+                    && $0.prompt.contains("Hermes")
+            }
+        )
+        #expect(
+            suggestions.contains {
+                BMSearch.fold($0.prompt)
+                    .contains("vergleich")
+                    || BMSearch.fold($0.prompt)
+                        .contains("compare")
+            } == false
+        )
     }
 
     @Test
-    func healthFindingScopeUsesFindingAndAffectedNodes() throws {
-        let node = GraphChatNodeContextReference(
-            node: NodeRefKey(kind: .attribute, id: UUID()),
-            label: "Apollo",
-            entityID: projectEntityID,
-            entityName: "Projekte"
-        )
+    func healthFindingScopeDoesNotPromiseProviderInterpretation() throws {
+        let node = nodeReference(firstNode, label: "Apollo")
         let finding = GraphChatHealthFindingContext(
             id: "missing-status",
             title: "Fehlender Status",
@@ -156,14 +221,14 @@ struct GraphChatEmptyStateSuggestionTests {
         )
         let context = makeSuggestionContext(
             scope: scope,
-            launchContext: .healthFinding(finding),
-            nodeEntityIDs: [node.node: projectEntityID]
+            launchContext: .healthFinding(finding)
         )
 
-        let suggestions = GraphChatEmptyStateSuggestionBuilder.suggestions(for: context)
-
-        #expect(suggestions.contains { $0.prompt.contains("Fehlender Status") })
-        #expect(suggestions.contains { $0.id == "health-list-missing-status" })
+        #expect(
+            GraphChatEmptyStateSuggestionBuilder
+                .suggestions(for: context)
+                .isEmpty
+        )
     }
 
     @Test
@@ -187,16 +252,23 @@ struct GraphChatEmptyStateSuggestionTests {
             launchContext: .detailField(unknownField)
         )
 
-        #expect(GraphChatEmptyStateSuggestionBuilder.suggestions(for: context).isEmpty)
+        #expect(
+            GraphChatEmptyStateSuggestionBuilder
+                .suggestions(for: context)
+                .isEmpty
+        )
     }
-
 
     @Test
     func largeSelectionDoesNotOfferBudgetExceedingDirectInspectionStarters() throws {
-        let count = GraphChatToolBudgetPolicy.default.maximumCalls + 1
+        let count =
+            GraphChatToolBudgetPolicy.default.maximumCalls + 1
         let references = (0..<count).map { index in
             GraphChatNodeContextReference(
-                node: NodeRefKey(kind: .attribute, id: UUID()),
+                node: NodeRefKey(
+                    kind: .attribute,
+                    id: UUID()
+                ),
                 label: "Node \(index)"
             )
         }
@@ -210,31 +282,46 @@ struct GraphChatEmptyStateSuggestionTests {
             availableTools: [.getNode, .getNeighbors]
         )
 
-        let suggestions = GraphChatEmptyStateSuggestionBuilder.suggestions(for: context)
-
-        #expect(suggestions.isEmpty)
+        #expect(
+            GraphChatEmptyStateSuggestionBuilder
+                .suggestions(for: context)
+                .isEmpty
+        )
     }
 
     @Test
     func englishSuggestionsExposeCompleteVoiceOverText() {
-        let scope = GraphChatScope.entireGraph(GraphScope(graphID: graphID))
+        let scope = GraphChatScope.entireGraph(
+            GraphScope(graphID: graphID)
+        )
         let context = makeSuggestionContext(
             scope: scope,
             launchContext: .graph(name: "Portfolio"),
             language: .english
         )
 
-        let suggestions = GraphChatEmptyStateSuggestionBuilder.suggestions(for: context)
+        let suggestions = GraphChatEmptyStateSuggestionBuilder
+            .suggestions(for: context)
 
         #expect(suggestions.isEmpty == false)
-        #expect(suggestions.allSatisfy { $0.accessibilityLabel.isEmpty == false })
-        #expect(suggestions.allSatisfy { $0.accessibilityHint.contains("supported") })
+        #expect(
+            suggestions.allSatisfy {
+                $0.accessibilityLabel.isEmpty == false
+            }
+        )
+        #expect(
+            suggestions.allSatisfy {
+                $0.accessibilityHint.contains("verified")
+            }
+        )
     }
 
     @Test
     func unavailableToolsAndModelSuppressUnsupportedSuggestions() {
-        let scope = GraphChatScope.entireGraph(GraphScope(graphID: graphID))
-        let noStats = makeSuggestionContext(
+        let scope = GraphChatScope.entireGraph(
+            GraphScope(graphID: graphID)
+        )
+        let queryOnly = makeSuggestionContext(
             scope: scope,
             launchContext: .graph(name: "Portfolio"),
             availableTools: [.queryDetailValues]
@@ -242,13 +329,21 @@ struct GraphChatEmptyStateSuggestionTests {
         let unavailableModel = makeSuggestionContext(
             scope: scope,
             launchContext: .graph(name: "Portfolio"),
-            modelAvailability: .unavailable(reason: .modelNotReady)
+            modelAvailability:
+                .unavailable(reason: .modelNotReady)
         )
 
-        let noStatsSuggestions = GraphChatEmptyStateSuggestionBuilder.suggestions(for: noStats)
-        #expect(noStatsSuggestions.contains { $0.id == "graph-overview" } == false)
-        #expect(noStatsSuggestions.contains { $0.id == "graph-links" } == false)
-        #expect(GraphChatEmptyStateSuggestionBuilder.suggestions(for: unavailableModel).isEmpty)
+        let querySuggestions =
+            GraphChatEmptyStateSuggestionBuilder
+                .suggestions(for: queryOnly)
+        #expect(querySuggestions.map(\.capabilityID) == [
+            .entityEntries,
+        ])
+        #expect(
+            GraphChatEmptyStateSuggestionBuilder
+                .suggestions(for: unavailableModel)
+                .isEmpty
+        )
     }
 
     @Test
@@ -264,52 +359,45 @@ struct GraphChatEmptyStateSuggestionTests {
             type: .singleChoice,
             entity: entityReference
         )
-        let firstNode = GraphChatNodeContextReference(
-            node: NodeRefKey(kind: .attribute, id: firstNodeID),
-            label: "Apollo",
-            entityID: projectEntityID,
-            entityName: "Projekte"
-        )
-        let secondNode = GraphChatNodeContextReference(
-            node: NodeRefKey(kind: .attribute, id: secondNodeID),
-            label: "Hermes",
-            entityID: projectEntityID,
-            entityName: "Projekte"
-        )
+        let first = nodeReference(firstNode, label: "Apollo")
+        let second = nodeReference(secondNode, label: "Hermes")
         let finding = GraphChatHealthFindingContext(
             id: "missing-status",
             title: "Fehlender Status",
             message: "Einträge besitzen keinen Status.",
             count: 2,
-            affectedNodes: [firstNode, secondNode]
+            affectedNodes: [first, second]
         )
-        let nodeEntityIDs = [
-            firstNode.node: projectEntityID,
-            secondNode.node: projectEntityID
-        ]
-        let fixtures: [(GraphChatSuggestionContext, [String])] = [
+        let fixtures: [(
+            GraphChatSuggestionContext,
+            [String]
+        )] = [
             (
                 makeSuggestionContext(
                     scope: .entireGraph(graphScope),
-                    launchContext: .graph(name: "Portfolio")
+                    launchContext:
+                        .graph(name: "Portfolio")
                 ),
                 [
-                    "graph-overview",
-                    "graph-choice-F-status",
-                    "graph-entity-list-E-projects",
-                    "graph-links"
+                    "graph-entity-entries-20000000-0000-0000-0000-000000000001",
+                    "node-profile-40000000-0000-0000-0000-000000000001",
+                    "node-relationships-40000000-0000-0000-0000-000000000001",
                 ]
             ),
             (
                 makeSuggestionContext(
-                    scope: .entity(projectEntityID, in: graphScope),
-                    launchContext: .entity(entityReference)
+                    scope: .entity(
+                        projectEntityID,
+                        in: graphScope
+                    ),
+                    launchContext: .entity(
+                        entityReference
+                    )
                 ),
                 [
-                    "entity-list-E-projects",
-                    "entity-choice-F-status",
-                    "entity-missing-F-status",
-                    "entity-newest-F-due"
+                    "entity-entries-20000000-0000-0000-0000-000000000001",
+                    "node-profile-40000000-0000-0000-0000-000000000001",
+                    "node-relationships-40000000-0000-0000-0000-000000000001",
                 ]
             ),
             (
@@ -319,129 +407,137 @@ struct GraphChatEmptyStateSuggestionTests {
                         entityID: projectEntityID,
                         in: graphScope
                     ),
-                    launchContext: .detailField(fieldReference)
+                    launchContext:
+                        .detailField(fieldReference)
                 ),
-                [
-                    "field-distribution-F-status",
-                    "field-missing-F-status",
-                    "field-nodes-F-status"
-                ]
+                []
             ),
             (
                 makeSuggestionContext(
-                    scope: .node(firstNode.node, in: graphScope),
-                    launchContext: .node(firstNode),
-                    nodeEntityIDs: nodeEntityIDs
+                    scope: .node(
+                        first.node,
+                        in: graphScope
+                    ),
+                    launchContext: .node(first)
                 ),
                 [
-                    "node-describe-40000000-0000-0000-0000-000000000001",
-                    "node-neighbors-40000000-0000-0000-0000-000000000001",
-                    "node-directions-40000000-0000-0000-0000-000000000001",
-                    "node-details-40000000-0000-0000-0000-000000000001"
+                    "node-profile-40000000-0000-0000-0000-000000000001",
+                    "node-relationships-40000000-0000-0000-0000-000000000001",
                 ]
             ),
             (
                 makeSuggestionContext(
                     scope: try .selection(
-                        [firstNode.node, secondNode.node],
+                        [first.node, second.node],
                         in: graphScope
                     ),
-                    launchContext: .selection([firstNode, secondNode]),
-                    nodeEntityIDs: nodeEntityIDs
+                    launchContext:
+                        .selection([first, second])
                 ),
                 [
-                    "selection-summary",
-                    "selection-choice-F-status",
-                    "selection-compare",
-                    "selection-connections"
+                    "selection-node-profile-40000000-0000-0000-0000-000000000001",
+                    "selection-direct-relationships",
                 ]
             ),
             (
                 makeSuggestionContext(
                     scope: try .healthFinding(
                         id: finding.id,
-                        affectedNodes: [firstNode.node, secondNode.node],
+                        affectedNodes: [
+                            first.node,
+                            second.node,
+                        ],
                         in: graphScope
                     ),
-                    launchContext: .healthFinding(finding),
-                    nodeEntityIDs: nodeEntityIDs
+                    launchContext:
+                        .healthFinding(finding)
                 ),
-                [
-                    "health-explain-missing-status",
-                    "health-list-missing-status",
-                    "health-group-missing-status",
-                    "health-details-missing-status"
-                ]
-            )
+                []
+            ),
         ]
 
         for (context, expectedIDs) in fixtures {
-            let actualIDs = GraphChatEmptyStateSuggestionBuilder
-                .suggestions(for: context)
-                .map(\.id)
+            let actualIDs =
+                GraphChatEmptyStateSuggestionBuilder
+                    .suggestions(for: context)
+                    .map(\.id)
             #expect(actualIDs == expectedIDs)
         }
     }
 
     @Test
     func germanAndEnglishGraphCopyRemainsExact() {
-        let scope = GraphChatScope.entireGraph(GraphScope(graphID: graphID))
-        let german = GraphChatEmptyStateSuggestionBuilder.suggestions(
-            for: makeSuggestionContext(
-                scope: scope,
-                launchContext: .graph(name: "Portfolio"),
-                language: .german
-            )
+        let scope = GraphChatScope.entireGraph(
+            GraphScope(graphID: graphID)
         )
-        let english = GraphChatEmptyStateSuggestionBuilder.suggestions(
-            for: makeSuggestionContext(
-                scope: scope,
-                launchContext: .graph(name: "Portfolio"),
-                language: .english
+        let german = GraphChatEmptyStateSuggestionBuilder
+            .suggestions(
+                for: makeSuggestionContext(
+                    scope: scope,
+                    launchContext:
+                        .graph(name: "Portfolio"),
+                    language: .german
+                )
             )
-        )
+        let english = GraphChatEmptyStateSuggestionBuilder
+            .suggestions(
+                for: makeSuggestionContext(
+                    scope: scope,
+                    launchContext:
+                        .graph(name: "Portfolio"),
+                    language: .english
+                )
+            )
 
         #expect(german.map(copySignature) == [
-            "graph-overview|Graph überblicken|Gib mir einen Überblick über „Portfolio“ mit Anzahl der Entities, Attribute und direkten Verbindungen.|Übernimmt diese ausführbare Frage in das Eingabefeld.",
-            "graph-choice-F-status|Werte verteilen|Wie verteilen sich die Werte von „Status“ bei „Projekte“?|Übernimmt diese ausführbare Frage in das Eingabefeld.",
-            "graph-entity-list-E-projects|Einträge auflisten|Liste die ersten Einträge der Entity „Projekte“ mit ihren verfügbaren Details auf.|Übernimmt diese ausführbare Frage in das Eingabefeld.",
-            "graph-links|Stärkste Verknüpfungen|Welche Nodes haben im gesamten Graphen die meisten direkten Verbindungen?|Übernimmt diese ausführbare Frage in das Eingabefeld."
+            "graph-entity-entries-20000000-0000-0000-0000-000000000001|Einträge auflisten|Zeige mir alle „Projekte“.|Übernimmt diese geprüfte Frage in das Eingabefeld.",
+            "node-profile-40000000-0000-0000-0000-000000000001|Profil anzeigen|Zeige mir Details zu „Apollo“.|Übernimmt diese geprüfte Frage in das Eingabefeld.",
+            "node-relationships-40000000-0000-0000-0000-000000000001|Direkte Verbindungen|Zeige alle direkten Verbindungen von „Apollo“.|Übernimmt diese geprüfte Frage in das Eingabefeld.",
         ])
         #expect(english.map(copySignature) == [
-            "graph-overview|Review graph|Give me an overview of “Portfolio” with counts of entities, attributes, and direct links.|Places this supported question in the composer.",
-            "graph-choice-F-status|Show distribution|How are the values of “Status” distributed across “Projekte”?|Places this supported question in the composer.",
-            "graph-entity-list-E-projects|List entries|List the first entries of the “Projekte” entity with their available details.|Places this supported question in the composer.",
-            "graph-links|Strongest links|Which nodes have the most direct links in the entire graph?|Places this supported question in the composer."
+            "graph-entity-entries-20000000-0000-0000-0000-000000000001|List entries|Show me all “Projekte”.|Places this verified question in the composer.",
+            "node-profile-40000000-0000-0000-0000-000000000001|Show profile|Show me details about “Apollo”.|Places this verified question in the composer.",
+            "node-relationships-40000000-0000-0000-0000-000000000001|Direct connections|Show all direct links for “Apollo”.|Places this verified question in the composer.",
         ])
     }
 
     @Test
     func rankingUsesPriorityThenDeterministicTieBreakers() {
-        let context = makeSuggestionContext(
-            scope: .entireGraph(GraphScope(graphID: graphID)),
-            launchContext: .graph(name: "Portfolio")
-        )
         let candidates = [
-            makeCandidate(id: "late", priority: 30, kind: .detail),
-            makeCandidate(id: "zeta", priority: 10, kind: .detail),
-            makeCandidate(id: "alpha", priority: 10, kind: .detail),
-            makeCandidate(id: "middle", priority: 20, kind: .detail)
+            makeCandidate(
+                id: "late",
+                priority: 30,
+                kind: .detail
+            ),
+            makeCandidate(
+                id: "zeta",
+                priority: 10,
+                kind: .detail
+            ),
+            makeCandidate(
+                id: "alpha",
+                priority: 10,
+                kind: .detail
+            ),
+            makeCandidate(
+                id: "middle",
+                priority: 20,
+                kind: .detail
+            ),
         ]
 
-        let suggestions = GraphChatEmptyStateSuggestionBuilder.ranked(
-            candidates,
-            context: context
-        )
+        let selected = GraphChatEmptyStateSuggestionBuilder
+            .selectedCandidates(candidates)
 
-        #expect(suggestions.map(\.id) == ["alpha", "zeta", "middle", "late"])
+        #expect(selected.map(\.id) == [
+            "alpha",
+            "zeta",
+            "middle",
+        ])
     }
 
     @Test
     func rankingRemovesSemanticAndFoldedPromptDuplicates() {
-        let context = makeSuggestionContext(
-            scope: .entireGraph(GraphScope(graphID: graphID)),
-            launchContext: .graph(name: "Portfolio")
-        )
         let candidates = [
             makeCandidate(
                 id: "semantic-first",
@@ -466,50 +562,74 @@ struct GraphChatEmptyStateSuggestionTests {
                 semanticKey: "prompt-two",
                 priority: 40,
                 prompt: "uberblick"
-            )
+            ),
         ]
 
-        let suggestions = GraphChatEmptyStateSuggestionBuilder.ranked(
-            candidates,
-            context: context
-        )
+        let selected = GraphChatEmptyStateSuggestionBuilder
+            .selectedCandidates(candidates)
 
-        #expect(suggestions.map(\.id) == ["semantic-first", "prompt-first"])
+        #expect(selected.map(\.id) == [
+            "semantic-first",
+            "prompt-first",
+        ])
     }
 
     @Test
-    func rankingPrefersKindDiversityAndCapsTheResultAtFour() {
-        let context = makeSuggestionContext(
-            scope: .entireGraph(GraphScope(graphID: graphID)),
-            launchContext: .graph(name: "Portfolio")
-        )
+    func rankingPrefersKindDiversityAndCapsTheResultAtVisibleLimit() {
         let candidates = [
-            makeCandidate(id: "detail-first", priority: 10, kind: .detail),
-            makeCandidate(id: "detail-second", priority: 20, kind: .detail),
-            makeCandidate(id: "statistics", priority: 30, kind: .statistics),
-            makeCandidate(id: "list", priority: 40, kind: .list),
-            makeCandidate(id: "structure", priority: 50, kind: .structure),
-            makeCandidate(id: "detail-third", priority: 60, kind: .detail)
+            makeCandidate(
+                id: "detail-first",
+                priority: 10,
+                kind: .detail
+            ),
+            makeCandidate(
+                id: "detail-second",
+                priority: 20,
+                kind: .detail
+            ),
+            makeCandidate(
+                id: "statistics",
+                priority: 30,
+                kind: .statistics
+            ),
+            makeCandidate(
+                id: "list",
+                priority: 40,
+                kind: .list
+            ),
+            makeCandidate(
+                id: "structure",
+                priority: 50,
+                kind: .structure
+            ),
+            makeCandidate(
+                id: "detail-third",
+                priority: 60,
+                kind: .detail
+            ),
         ]
 
-        let suggestions = GraphChatEmptyStateSuggestionBuilder.ranked(
-            candidates,
-            context: context
-        )
+        let selected = GraphChatEmptyStateSuggestionBuilder
+            .selectedCandidates(candidates)
 
-        #expect(suggestions.map(\.id) == [
+        #expect(selected.map(\.id) == [
             "detail-first",
             "statistics",
             "list",
-            "structure"
         ])
-        #expect(suggestions.count == GraphChatEmptyStateSuggestionBuilder.maximumSuggestions)
+        #expect(
+            selected.count
+                == GraphChatEmptyStateSuggestionBuilder
+                    .maximumSuggestions
+        )
     }
 
     @Test
     func rankingSuppressesOnlyCandidatesWhoseToolsAreUnavailable() {
         let context = makeSuggestionContext(
-            scope: .entireGraph(GraphScope(graphID: graphID)),
+            scope: .entireGraph(
+                GraphScope(graphID: graphID)
+            ),
             launchContext: .graph(name: "Portfolio"),
             availableTools: [.queryDetailValues]
         )
@@ -518,43 +638,52 @@ struct GraphChatEmptyStateSuggestionTests {
                 id: "query",
                 priority: 10,
                 kind: .list,
-                requiredTools: [.queryDetailValues]
+                capabilityID: .entityEntries
             ),
             makeCandidate(
-                id: "stats",
+                id: "node",
                 priority: 20,
-                kind: .statistics,
-                requiredTools: [.graphStats]
+                kind: .detail,
+                capabilityID: .nodeProfile
             ),
             makeCandidate(
-                id: "both",
+                id: "links",
                 priority: 30,
-                kind: .detail,
-                requiredTools: [.queryDetailValues, .graphStats]
-            )
+                kind: .structure,
+                capabilityID: .directRelationships
+            ),
         ]
 
-        let suggestions = GraphChatEmptyStateSuggestionBuilder.ranked(
-            candidates,
-            context: context
-        )
+        let eligible = GraphChatEmptyStateSuggestionBuilder
+            .toolEligibleCandidates(
+                candidates,
+                context: context
+            )
 
-        #expect(suggestions.map(\.id) == ["query"])
+        #expect(eligible.map(\.id) == ["query"])
     }
 
     @Test
     func mismatchedEntityFieldNodeAndSelectionReferencesProduceNoStarters() throws {
         let graphScope = GraphScope(graphID: graphID)
-        let foreignEntityID = UUID(uuidString: "20000000-0000-0000-0000-000000000099")!
+        let foreignEntityID = UUID(
+            uuidString:
+                "20000000-0000-0000-0000-000000000099"
+        )!
         let foreignNode = GraphChatNodeContextReference(
-            node: NodeRefKey(kind: .attribute, id: secondNodeID),
+            node: secondNode,
             label: "Fremd"
         )
-        let scopedNode = NodeRefKey(kind: .attribute, id: firstNodeID)
         let entityContext = makeSuggestionContext(
-            scope: .entity(foreignEntityID, in: graphScope),
+            scope: .entity(
+                foreignEntityID,
+                in: graphScope
+            ),
             launchContext: .entity(
-                GraphChatEntityContextReference(id: foreignEntityID, name: "Gelöscht")
+                GraphChatEntityContextReference(
+                    id: foreignEntityID,
+                    name: "Gelöscht"
+                )
             )
         )
         let fieldContext = makeSuggestionContext(
@@ -568,36 +697,57 @@ struct GraphChatEmptyStateSuggestionTests {
                     id: statusFieldID,
                     name: "Status",
                     type: .singleChoice,
-                    entity: GraphChatEntityContextReference(
-                        id: foreignEntityID,
-                        name: "Fremd"
-                    )
+                    entity:
+                        GraphChatEntityContextReference(
+                            id: foreignEntityID,
+                            name: "Fremd"
+                        )
                 )
             )
         )
         let nodeContext = makeSuggestionContext(
-            scope: .node(scopedNode, in: graphScope),
+            scope: .node(firstNode, in: graphScope),
             launchContext: .node(foreignNode)
         )
         let selectionContext = makeSuggestionContext(
-            scope: try .selection([scopedNode], in: graphScope),
+            scope: try .selection(
+                [firstNode],
+                in: graphScope
+            ),
             launchContext: .selection([foreignNode])
         )
 
-        #expect(GraphChatEmptyStateSuggestionBuilder.suggestions(for: entityContext).isEmpty)
-        #expect(GraphChatEmptyStateSuggestionBuilder.suggestions(for: fieldContext).isEmpty)
-        #expect(GraphChatEmptyStateSuggestionBuilder.suggestions(for: nodeContext).isEmpty)
-        #expect(GraphChatEmptyStateSuggestionBuilder.suggestions(for: selectionContext).isEmpty)
+        #expect(
+            GraphChatEmptyStateSuggestionBuilder
+                .suggestions(for: entityContext)
+                .isEmpty
+        )
+        #expect(
+            GraphChatEmptyStateSuggestionBuilder
+                .suggestions(for: fieldContext)
+                .isEmpty
+        )
+        #expect(
+            GraphChatEmptyStateSuggestionBuilder
+                .suggestions(for: nodeContext)
+                .isEmpty
+        )
+        #expect(
+            GraphChatEmptyStateSuggestionBuilder
+                .suggestions(for: selectionContext)
+                .isEmpty
+        )
     }
 
     @Test
     func healthFindingAboveDirectInspectionBudgetProducesNoSelectionStarter() throws {
         let graphScope = GraphScope(graphID: graphID)
-        let references = (0...GraphChatToolBudgetPolicy.default.maximumCalls).map { index in
+        let references = (0...GraphChatToolBudgetPolicy
+            .default.maximumCalls).map { index in
             GraphChatNodeContextReference(
                 node: NodeRefKey(
                     kind: .attribute,
-                    id: UUID(uuidString: String(format: "40000000-0000-0000-0000-%012d", index + 10))!
+                    id: UUID()
                 ),
                 label: "Node \(index)"
             )
@@ -619,33 +769,346 @@ struct GraphChatEmptyStateSuggestionTests {
             availableTools: [.getNode]
         )
 
-        #expect(GraphChatEmptyStateSuggestionBuilder.suggestions(for: context).isEmpty)
+        #expect(
+            GraphChatEmptyStateSuggestionBuilder
+                .suggestions(for: context)
+                .isEmpty
+        )
     }
 
     @Test
     func compatibilityEntryRemainsDeterministic() {
-        let scope = GraphChatScope.entireGraph(GraphScope(graphID: graphID))
+        let scope = GraphChatScope.entireGraph(
+            GraphScope(graphID: graphID)
+        )
         let context = makeSuggestionContext(
             scope: scope,
             launchContext: .graph(name: "Portfolio")
         )
 
-        let first = GraphChatEmptyStateSuggestionBuilder.suggestions(
-            for: context.schema.snapshot,
-            scope: scope
-        )
-        let second = GraphChatEmptyStateSuggestionBuilder.suggestions(
-            for: context.schema.snapshot,
-            scope: scope
-        )
+        let first = GraphChatEmptyStateSuggestionBuilder
+            .suggestions(
+                for: context.schema.snapshot,
+                scope: scope
+            )
+        let second = GraphChatEmptyStateSuggestionBuilder
+            .suggestions(
+                for: context.schema.snapshot,
+                scope: scope
+            )
 
         #expect(first == second)
-        #expect(first.map(\.id) == [
-            "graph-overview",
-            "graph-choice-F-status",
-            "graph-entity-list-E-projects",
-            "graph-links"
-        ])
+        #expect(first.isEmpty)
+    }
+
+    @Test
+    func everyVisibleQuestionRevalidatesThroughProductionCode() {
+        let context = makeSuggestionContext(
+            scope: .entireGraph(
+                GraphScope(graphID: graphID)
+            ),
+            launchContext: .graph(name: "Portfolio")
+        )
+        let validator =
+            GraphChatCapabilityQuestionValidator()
+
+        for suggestion in
+            GraphChatEmptyStateSuggestionBuilder
+                .suggestions(for: context)
+        {
+            let capability =
+                GraphChatCapabilityCatalog.capability(
+                    withID: suggestion.capabilityID
+                )
+            #expect(capability != nil)
+            let validation = capability.flatMap {
+                validator.validate(
+                    question: suggestion.prompt,
+                    capability: $0,
+                    schemaContext: context.schema,
+                    chatScope: context.scope,
+                    language: context.language
+                )
+            }
+            #expect(validation == suggestion.validation)
+        }
+    }
+
+    @Test
+    func ambiguousNamesAreSkippedWithoutSelectingAnInternalIdentity() {
+        let context = makeSuggestionContext(
+            scope: .entireGraph(
+                GraphScope(graphID: graphID)
+            ),
+            launchContext: .graph(name: "Portfolio"),
+            duplicateNodeName: true
+        )
+
+        let suggestions = GraphChatEmptyStateSuggestionBuilder
+            .suggestions(for: context)
+
+        #expect(
+            suggestions.contains {
+                $0.prompt.contains("Apollo")
+            } == false
+        )
+        #expect(
+            suggestions.allSatisfy {
+                containsTechnicalIdentifier($0.prompt)
+                    == false
+            }
+        )
+    }
+
+    @Test
+    func ambiguousEntityNamesNeverProduceAnEntityStarter() {
+        let context = makeSuggestionContext(
+            scope: .entireGraph(
+                GraphScope(graphID: graphID)
+            ),
+            launchContext: .graph(name: "Portfolio"),
+            duplicateEntityName: true
+        )
+
+        let suggestions = GraphChatEmptyStateSuggestionBuilder
+            .suggestions(for: context)
+
+        #expect(
+            suggestions.contains {
+                $0.capabilityID == .entityEntries
+            } == false
+        )
+    }
+
+    @Test
+    func uuidLikeDisplayNamesAreNeverRendered() {
+        let scope = GraphChatScope.entireGraph(
+            GraphScope(graphID: graphID)
+        )
+        let base = makeSuggestionContext(
+            scope: scope,
+            launchContext: .graph(name: "Portfolio")
+        )
+        let unsafeName = firstNodeID.uuidString
+        var nodes = base.schema.foundationalAliases
+            .nodesByKey
+        nodes[firstNode] = GraphSchemaNodeResolution(
+            node: firstNode,
+            ownerEntityID: projectEntityID,
+            displayName: unsafeName
+        )
+        let aliases = GraphSchemaAliasMap(
+            graphScope: scope.graphScope,
+            entitiesByAlias: base.schema
+                .foundationalAliases.entitiesByAlias,
+            fieldsByAlias: base.schema
+                .foundationalAliases.fieldsByAlias,
+            nodeEntityIDs: base.schema
+                .foundationalAliases.nodeEntityIDs,
+            nodesByKey: nodes
+        )
+        let context = GraphChatSuggestionContext(
+            schema: GraphSchemaContext(
+                graphScope: scope.graphScope,
+                snapshot: base.schema.snapshot,
+                aliases: aliases
+            ),
+            scope: scope,
+            launchContext: .graph(name: "Portfolio"),
+            language: .german
+        )
+
+        let suggestions = GraphChatEmptyStateSuggestionBuilder
+            .suggestions(for: context)
+
+        #expect(
+            suggestions.contains {
+                $0.prompt.contains(unsafeName)
+            } == false
+        )
+        #expect(
+            suggestions.allSatisfy {
+                containsTechnicalIdentifier($0.prompt)
+                    == false
+            }
+        )
+    }
+
+    @Test
+    func fullFoundationalCatalogIsUsedBeyondPromptSnapshot() {
+        let context = makeFoundationalOnlyEntityContext()
+
+        let suggestions = GraphChatEmptyStateSuggestionBuilder
+            .suggestions(for: context)
+
+        #expect(
+            suggestions.contains {
+                $0.capabilityID == .entityEntries
+                    && $0.prompt.contains("Ärger & Öl")
+            }
+        )
+    }
+
+    @Test
+    func unsupportedSuperlativesAndAggregationsAreNeverSuggested() {
+        let context = makeSuggestionContext(
+            scope: .entireGraph(
+                GraphScope(graphID: graphID)
+            ),
+            launchContext: .graph(name: "Portfolio")
+        )
+        let folded = GraphChatEmptyStateSuggestionBuilder
+            .suggestions(for: context)
+            .map { BMSearch.fold($0.prompt) }
+            .joined(separator: " ")
+
+        for forbidden in [
+            "minimum",
+            "maximum",
+            "meisten",
+            "wenigsten",
+            "ranking",
+            "verteilung",
+            "distribution",
+            "durchschnitt",
+            "average",
+            "compare",
+            "vergleich",
+        ] {
+            #expect(folded.contains(forbidden) == false)
+        }
+    }
+
+    @Test
+    func emptyGraphProducesSafeEmptyGuidance() {
+        let graphScope = GraphScope(graphID: graphID)
+        let emptyAliases = GraphSchemaAliasMap(
+            graphScope: graphScope,
+            entitiesByAlias: [:],
+            fieldsByAlias: [:],
+            nodeEntityIDs: [:]
+        )
+        let context = GraphChatSuggestionContext(
+            schema: GraphSchemaContext(
+                graphScope: graphScope,
+                snapshot: GraphSchemaSnapshot(
+                    graphName: "Leer",
+                    entities: [],
+                    truncation: emptyTruncation
+                ),
+                aliases: emptyAliases
+            ),
+            scope: .entireGraph(graphScope),
+            launchContext: .graph(name: "Leer"),
+            language: .german
+        )
+
+        #expect(
+            GraphChatEmptyStateSuggestionBuilder
+                .suggestions(for: context)
+                .isEmpty
+        )
+    }
+
+    @Test
+    func singleEntityGraphProducesOneValidatedCollectionStarter() {
+        let graphScope = GraphScope(graphID: graphID)
+        let alias = GraphEntityAlias("E-single")
+        let entity = GraphSchemaEntityResolution(
+            alias: alias,
+            entityID: projectEntityID,
+            name: "Sammlungen"
+        )
+        let aliases = GraphSchemaAliasMap(
+            graphScope: graphScope,
+            entitiesByAlias: [alias: entity],
+            fieldsByAlias: [:],
+            nodeEntityIDs: [:]
+        )
+        let context = GraphChatSuggestionContext(
+            schema: GraphSchemaContext(
+                graphScope: graphScope,
+                snapshot: GraphSchemaSnapshot(
+                    graphName: "Klein",
+                    entities: [
+                        GraphSchemaEntity(
+                            alias: alias,
+                            name: entity.name,
+                            attributeCount: 0,
+                            fields: [],
+                            fieldsWereTruncated: false
+                        ),
+                    ],
+                    truncation:
+                        GraphSchemaTruncation(
+                            sourceEntityCount: 1,
+                            includedEntityCount: 1,
+                            sourceFieldCount: 0,
+                            includedFieldCount: 0,
+                            sourceChoiceOptionCount: 0,
+                            includedChoiceOptionCount: 0,
+                            sourceExampleValueCount: 0,
+                            includedExampleValueCount: 0,
+                            stringsWereTruncated: false
+                        )
+                ),
+                aliases: aliases
+            ),
+            scope: .entireGraph(graphScope),
+            launchContext: .graph(name: "Klein"),
+            language: .german
+        )
+
+        let suggestions = GraphChatEmptyStateSuggestionBuilder
+            .suggestions(for: context)
+
+        #expect(suggestions.count == 1)
+        #expect(suggestions[0].capabilityID == .entityEntries)
+        #expect(suggestions[0].prompt.contains("Sammlungen"))
+        #expect(
+            suggestions[0].validation.readPlanFamily
+                == .entityCollection
+        )
+    }
+
+    private var firstNode: NodeRefKey {
+        NodeRefKey(
+            kind: .attribute,
+            id: firstNodeID
+        )
+    }
+
+    private var secondNode: NodeRefKey {
+        NodeRefKey(
+            kind: .attribute,
+            id: secondNodeID
+        )
+    }
+
+    private var emptyTruncation: GraphSchemaTruncation {
+        GraphSchemaTruncation(
+            sourceEntityCount: 0,
+            includedEntityCount: 0,
+            sourceFieldCount: 0,
+            includedFieldCount: 0,
+            sourceChoiceOptionCount: 0,
+            includedChoiceOptionCount: 0,
+            sourceExampleValueCount: 0,
+            includedExampleValueCount: 0,
+            stringsWereTruncated: false
+        )
+    }
+
+    private func nodeReference(
+        _ node: NodeRefKey,
+        label: String
+    ) -> GraphChatNodeContextReference {
+        GraphChatNodeContextReference(
+            node: node,
+            label: label,
+            entityID: projectEntityID,
+            entityName: "Projekte"
+        )
     }
 
     private func makeCandidate(
@@ -653,8 +1116,7 @@ struct GraphChatEmptyStateSuggestionTests {
         semanticKey: String? = nil,
         priority: Int,
         kind: GraphChatSuggestionKind = .detail,
-        requiredTools: Set<GraphChatToolKind> = [],
-        title: String = "Titel",
+        capabilityID: GraphChatCapabilityID = .nodeProfile,
         prompt: String? = nil
     ) -> GraphChatEmptyStateSuggestionBuilder.Candidate {
         GraphChatEmptyStateSuggestionBuilder.Candidate(
@@ -662,8 +1124,7 @@ struct GraphChatEmptyStateSuggestionTests {
             semanticKey: semanticKey ?? id,
             priority: priority,
             kind: kind,
-            requiredTools: requiredTools,
-            title: title,
+            capabilityID: capabilityID,
             prompt: prompt ?? "Prompt \(id)"
         )
     }
@@ -675,17 +1136,30 @@ struct GraphChatEmptyStateSuggestionTests {
             suggestion.id,
             suggestion.title,
             suggestion.prompt,
-            suggestion.accessibilityHint
+            suggestion.accessibilityHint,
         ].joined(separator: "|")
+    }
+
+    private func containsTechnicalIdentifier(
+        _ value: String
+    ) -> Bool {
+        GraphChatSemanticSafety
+            .containsTechnicalIdentifier(value)
+            || value.contains("E-")
+            || value.contains("F-")
     }
 
     private func makeSuggestionContext(
         scope: GraphChatScope,
         launchContext: GraphChatLaunchContext,
-        nodeEntityIDs: [NodeRefKey: UUID] = [:],
-        availableTools: Set<GraphChatToolKind> = Set(GraphChatToolKind.allCases),
-        modelAvailability: GraphChatAvailabilityPresentationState = .available,
-        language: GraphChatResponseLanguage = .german
+        availableTools: Set<GraphChatToolKind> =
+            Set(GraphChatToolKind.allCases),
+        modelAvailability:
+            GraphChatAvailabilityPresentationState =
+                .available,
+        language: GraphChatResponseLanguage = .german,
+        duplicateNodeName: Bool = false,
+        duplicateEntityName: Bool = false
     ) -> GraphChatSuggestionContext {
         let projectAlias = GraphEntityAlias("E-projects")
         let personAlias = GraphEntityAlias("E-people")
@@ -698,17 +1172,22 @@ struct GraphChatEmptyStateSuggestionTests {
                 GraphSchemaEntity(
                     alias: projectAlias,
                     name: "Projekte",
-                    attributeCount: 20,
+                    attributeCount: 2,
                     fields: [
                         GraphSchemaField(
                             alias: statusAlias,
                             name: "Status",
                             type: .singleChoice,
                             unit: nil,
-                            choiceOptions: ["Offen", "Fertig"],
+                            choiceOptions: [
+                                "Offen",
+                                "Fertig",
+                            ],
                             isPinned: true,
                             sortIndex: 0,
-                            exampleValues: [.choice("Offen")],
+                            exampleValues: [
+                                .choice("Offen"),
+                            ],
                             optionsWereTruncated: false,
                             examplesWereTruncated: false
                         ),
@@ -732,20 +1211,24 @@ struct GraphChatEmptyStateSuggestionTests {
                             choiceOptions: [],
                             isPinned: false,
                             sortIndex: 2,
-                            exampleValues: [.decimal(1_000)],
+                            exampleValues: [
+                                .decimal(1_000),
+                            ],
                             optionsWereTruncated: false,
                             examplesWereTruncated: false
-                        )
+                        ),
                     ],
                     fieldsWereTruncated: false
                 ),
                 GraphSchemaEntity(
                     alias: personAlias,
-                    name: "Personen",
-                    attributeCount: 5,
+                    name: duplicateEntityName
+                        ? "Projekte"
+                        : "Personen",
+                    attributeCount: 0,
                     fields: [],
                     fieldsWereTruncated: false
-                )
+                ),
             ],
             truncation: GraphSchemaTruncation(
                 sourceEntityCount: 2,
@@ -759,19 +1242,64 @@ struct GraphChatEmptyStateSuggestionTests {
                 stringsWereTruncated: false
             )
         )
+        let project = GraphSchemaEntityResolution(
+            alias: projectAlias,
+            entityID: projectEntityID,
+            name: "Projekte"
+        )
+        let person = GraphSchemaEntityResolution(
+            alias: personAlias,
+            entityID: personEntityID,
+            name: duplicateEntityName
+                ? "Projekte"
+                : "Personen"
+        )
+        let projectNode = NodeRefKey(
+            kind: .entity,
+            id: projectEntityID
+        )
+        let personNode = NodeRefKey(
+            kind: .entity,
+            id: personEntityID
+        )
+        let nodeEntityIDs: [NodeRefKey: UUID] = [
+            projectNode: projectEntityID,
+            personNode: personEntityID,
+            firstNode: projectEntityID,
+            secondNode: projectEntityID,
+        ]
+        let nodesByKey: [
+            NodeRefKey: GraphSchemaNodeResolution
+        ] = [
+            projectNode: GraphSchemaNodeResolution(
+                node: projectNode,
+                ownerEntityID: projectEntityID,
+                displayName: "Projekte"
+            ),
+            personNode: GraphSchemaNodeResolution(
+                node: personNode,
+                ownerEntityID: personEntityID,
+                displayName: duplicateEntityName
+                    ? "Projekte"
+                    : "Personen"
+            ),
+            firstNode: GraphSchemaNodeResolution(
+                node: firstNode,
+                ownerEntityID: projectEntityID,
+                displayName: "Apollo"
+            ),
+            secondNode: GraphSchemaNodeResolution(
+                node: secondNode,
+                ownerEntityID: projectEntityID,
+                displayName:
+                    duplicateNodeName ? "Apollo" : "Hermes"
+            ),
+        ]
         let aliases = GraphSchemaAliasMap(
             graphScope: scope.graphScope,
             entitiesByAlias: [
-                projectAlias: GraphSchemaEntityResolution(
-                    alias: projectAlias,
-                    entityID: projectEntityID,
-                    name: "Projekte"
-                ),
-                personAlias: GraphSchemaEntityResolution(
-                    alias: personAlias,
-                    entityID: personEntityID,
-                    name: "Personen"
-                )
+                projectAlias: project,
+                personAlias: person,
             ],
             fieldsByAlias: [
                 statusAlias: GraphSchemaFieldResolution(
@@ -782,7 +1310,10 @@ struct GraphChatEmptyStateSuggestionTests {
                     name: "Status",
                     type: .singleChoice,
                     unit: nil,
-                    choiceOptions: ["Offen", "Fertig"]
+                    choiceOptions: [
+                        "Offen",
+                        "Fertig",
+                    ]
                 ),
                 dueDateAlias: GraphSchemaFieldResolution(
                     alias: dueDateAlias,
@@ -803,9 +1334,10 @@ struct GraphChatEmptyStateSuggestionTests {
                     type: .numberDouble,
                     unit: "EUR",
                     choiceOptions: []
-                )
+                ),
             ],
-            nodeEntityIDs: nodeEntityIDs
+            nodeEntityIDs: nodeEntityIDs,
+            nodesByKey: nodesByKey
         )
         return GraphChatSuggestionContext(
             schema: GraphSchemaContext(
@@ -818,6 +1350,79 @@ struct GraphChatEmptyStateSuggestionTests {
             availableTools: availableTools,
             modelAvailability: modelAvailability,
             language: language
+        )
+    }
+
+    private func makeFoundationalOnlyEntityContext()
+        -> GraphChatSuggestionContext {
+        let graphScope = GraphScope(graphID: graphID)
+        let visibleAlias = GraphEntityAlias("E-visible")
+        let hiddenAlias = GraphEntityAlias("E-hidden")
+        let hiddenEntityID = UUID(
+            uuidString:
+                "20000000-0000-0000-0000-000000000003"
+        )!
+        let snapshot = GraphSchemaSnapshot(
+            graphName: "Sprachzeichen",
+            entities: [
+                GraphSchemaEntity(
+                    alias: visibleAlias,
+                    name: "Ziele",
+                    attributeCount: 0,
+                    fields: [],
+                    fieldsWereTruncated: false
+                ),
+            ],
+            truncation: GraphSchemaTruncation(
+                sourceEntityCount: 2,
+                includedEntityCount: 1,
+                sourceFieldCount: 0,
+                includedFieldCount: 0,
+                sourceChoiceOptionCount: 0,
+                includedChoiceOptionCount: 0,
+                sourceExampleValueCount: 0,
+                includedExampleValueCount: 0,
+                stringsWereTruncated: false
+            )
+        )
+        let visible = GraphSchemaEntityResolution(
+            alias: visibleAlias,
+            entityID: projectEntityID,
+            name: "Ziele"
+        )
+        let hidden = GraphSchemaEntityResolution(
+            alias: hiddenAlias,
+            entityID: hiddenEntityID,
+            name: "Ärger & Öl"
+        )
+        let promptAliases = GraphSchemaAliasMap(
+            graphScope: graphScope,
+            entitiesByAlias: [visibleAlias: visible],
+            fieldsByAlias: [:],
+            nodeEntityIDs: [:]
+        )
+        let foundationalAliases = GraphSchemaAliasMap(
+            graphScope: graphScope,
+            entitiesByAlias: [
+                visibleAlias: visible,
+                hiddenAlias: hidden,
+            ],
+            fieldsByAlias: [:],
+            nodeEntityIDs: [:]
+        )
+        return GraphChatSuggestionContext(
+            schema: GraphSchemaContext(
+                graphScope: graphScope,
+                snapshot: snapshot,
+                aliases: promptAliases,
+                foundationalAliases:
+                    foundationalAliases
+            ),
+            scope: .entireGraph(graphScope),
+            launchContext:
+                .graph(name: "Sprachzeichen"),
+            availableTools: [.queryDetailValues],
+            language: .german
         )
     }
 }
