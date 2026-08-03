@@ -15,6 +15,7 @@ struct GraphChatComposer: View {
     let canSend: Bool
     let editingState: GraphChatEditingState?
     let isPerformingSessionMutation: Bool
+    let focusRequestID: UUID?
     let onSend: () -> Void
     let onCancel: () -> Void
     let onCancelEditing: () -> Void
@@ -126,6 +127,14 @@ struct GraphChatComposer: View {
                 }
                 .accessibilityIdentifier("graph-chat-dismiss-keyboard")
             }
+        }
+        .onChange(of: focusRequestID) { _, requestID in
+            guard requestID != nil,
+                  isGenerating == false,
+                  isPerformingSessionMutation == false else {
+                return
+            }
+            isComposerFocused = true
         }
     }
 

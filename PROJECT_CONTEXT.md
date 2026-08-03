@@ -1,6 +1,6 @@
 # BrainMesh – Project Context
 
-> Start Here für neue Entwickler:innen. Stand: GRAPH-CHAT-CAPABILITY-GUIDANCE-1 nach GRAPH-CHAT-COMPOSABLE-READ-EXECUTION-1, mit einer autoritativen app-owned Capability-Grundlage und ausschließlich schema-, scope-, compiler- und planvalidierten Starterfragen.
+> Start Here für neue Entwickler:innen. Stand: GRAPH-CHAT-BETA-EXPERIENCE-1 nach GRAPH-CHAT-CAPABILITY-GUIDANCE-1, mit dauerhaft sichtbarer Beta-Kennzeichnung, app-owned DE-/EN-Hilfe und ausschließlich katalog- und produktionspfadvalidierten antippbaren Beispielen.
 
 ## TL;DR
 
@@ -35,6 +35,7 @@ BrainMesh ist eine native SwiftUI-App für iPhone und iPad, in der Nutzer:innen 
 - **Search Index**: Pro App lokaler SQLite-/FTS-Index; aus SwiftData vollständig rekonstruierbar.
 - **Graph Chat**: On-Device-LLM-Flow mit sechs read-only Tools und graphgebundener Evidenz.
 - **Stable Graph Chat Capability Catalog**: Eine einzige app-owned, value-only und concurrency-sichere Quelle für stabile Nutzerführung. Sie bindet fachliche Kategorie, deutsche/englische Präsentation, Schema-/Scope-Voraussetzungen, produktive Compiler-/Typed-Intent-/Read-Plan-Familie, konkrete Starterregel und erlaubte Platzierung. Ein Tool allein belegt keine natürlichsprachliche Capability.
+- **Graph Chat Beta Experience**: Eine presentation-only Ebene aus dauerhaftem Header-Badge und Info-Aktion, kompakter Einstiegskarte und wiederverwendbarem scrollbaren Info-Sheet. Capability-Text kommt ausschließlich aus `GraphChatCapabilityCatalog.stable`; antippbare Beispiele müssen zusätzlich den aktuellen Starter- und Planvertrag erfüllen und übernehmen Text nur fokussiert in den Composer, ohne einen Turn zu senden.
 - **Graph Mention Resolver**: Versionierte, value-only, `Hashable`- und `Sendable`-fähige appseitige Grounding-Schicht für Entity-, Node- und Feldanzeigenamen. Sie arbeitet ausschließlich auf dem vollständigen aktuellen `foundationalAliases`-Katalog des aktiven Graphen, berücksichtigt den Chat-/Owner-/Selection-/Conversation-Scope nur als Eingrenzung und liefert eine eindeutige Bindung, eine fachliche Mehrdeutigkeit oder einen geschlossenen technischen Fehler.
 - **Typed Conversation Scope**: Appseitig revalidierte, an Graph, Chat-Scope und Conversation gebundene Auflösung von `CURRENT` und gleichwertigen Conversation-Referenzen; enthält eine konkrete Entity sowie die zulässigen Nodes und wird vor der Query-Ausführung erneut geprüft.
 - **Presentation Firewall**: Turn-gebundene Trust Boundary, die interne Chat-Aliase und technische IDs vor Streaming, finaler UI-Ausgabe und Copy deterministisch auf validierte Anzeigenamen abbildet oder durch eine lokalisierte Ersatzantwort ersetzt.
@@ -182,6 +183,16 @@ Die gebündelte `GraphChatTypedIntentPlannerAcceptanceTests`-Suite verknüpft 18
 - Detailfeldfilter, freie Sortierung, Count, Gruppierung, Comparison, Graph State und Result-Refinement bleiben produktive Typed-Intent-Familien, sind ohne deterministischen natürlichsprachlichen Fast Path aber nicht Teil der garantierten Starterführung. Minimum, Maximum, Ranking und andere nicht definierte Aggregationen sind vollständig ausgeschlossen.
 - Detailfeld- und Health-Kontexte ohne sicher ausführbare Frage sowie leere oder nicht vollständig gebundene Graphen verwenden die vorhandene neutrale Empty-State-Führung. Ein Tap setzt weiterhin nur den Composer-Text und sendet keinen Turn.
 - `GraphChatCapabilityCatalogTests` und `GraphChatEmptyStateSuggestionTests` prüfen Katalogverträge, echte Compilation und Planvalidierung, Toolgating, vollständige Kataloge, Mehrdeutigkeit, technische IDs, deterministische Auswahl sowie fachlich getrennte generische Graph-Fixtures.
+
+### Graph Chat Beta Experience – ehrliche, dauerhafte Orientierung
+
+- `GraphChatTabView` besitzt die einzige Sheet- und Navigationskomposition. Das gemeinsame „Graph Chat, Beta“-Element und der lokalisierte Info-Button bleiben dadurch im iPhone-Tab, im iPad-Copilot-Inspector sowie in Empty-, Conversation-, Pro-, Modell-, Index- und Lock-Zuständen erreichbar; der Root-Tab heißt weiterhin „Chat“.
+- `GraphChatBetaCopy` und `GraphChatBetaInfoPresentation` sind app-owned, value-only, vollständig deutsch/englisch und enthalten Trust-, Grenzen- und Entwicklungsabschnitte ohne interne Architekturbegriffe oder Liefertermine. Heutige Capabilities werden direkt aus den `.generalHelp`-Platzierungen von `GraphChatCapabilityCatalog.stable` projiziert.
+- `GraphChatBetaCompactNoticeCard` erscheint ausschließlich vor der Nutzung im regulären Empty State und in der memory-only Free Preview. Nach Beginn einer Conversation bleibt nur die dauerhafte Navigation sichtbar.
+- Beide Info-Einstiege routen in dasselbe `GraphChatBetaInfoSheet` mit Medium-/Large-Detent, Drag Indicator, explizitem Schließen und vollständig scrollbarem Dynamic-Type-Layout. Es gibt weder automatisches Öffnen noch Seen-State, SwiftData- oder CloudKit-Persistenz.
+- Dynamische Beispiele werden nochmals gegen aktuelle Capability-ID, Starter-Platzierung, Compiler-/Typed-Intent-/Read-Plan-Familie, Planversion, Query-Plan-Version, Längenlimit, technische Identifier und Duplikate geprüft. Bei fehlenden sicheren Fragen rendert das Sheet ausschließlich nicht antippbare Katalogbeispiele mit sichtbaren Platzhaltern.
+- Eine Auswahl wird bis zum Sheet-Dismissal graph- und requestgebunden zwischengespeichert, danach erneut gegen die aktuelle Composition geprüft und nur als begrenzter Draft in den vorhandenen Composer übernommen und fokussiert. Sie startet keinen Sendepfad, setzt keine Conversation zurück und schreibt keine Graphdaten.
+- `GraphChatBetaPresentationTests` und `GraphChatBetaUIContractTests` sichern Copy, Abschnittsreihenfolge, Katalogprojektion, Filterung, Routing, Badge-/Info-Sichtbarkeit, Sheet-Verträge, Composer-No-Send sowie Phone-/Pad-, Dynamic-Type-, Light-/Dark- und Increased-Contrast-Rendering.
 
 ### Graph Chat Composable Read Execution – gemeinsame lokale Read-Semantik
 

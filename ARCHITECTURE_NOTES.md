@@ -25,6 +25,7 @@ BrainMesh besitzt bereits mehrere wichtige Schutzlinien:
 - Eine gemeinsame `GraphChatIntentLimitPolicy` besitzt die fachlich gleichen Grenzen. Der Interpreter verwendet ein begrenztes Standardprofil und ausschließlich bei Context-Window-Überlauf genau einen Compact-Retry; manipulierte oder schemawidrige Drafts scheitern ohne Tool-Repair oder Provider-Rettung.
 - GRAPH-CHAT-COMPOSABLE-READ-EXECUTION-1 ergänzt einen nativen, providerfreien Executor für vollständig revalidierte `v2`-Pläne. Ein einziger graphgescopter value-only Snapshot, höchstens zwei Hops, getrennte Budgets für jede Ausführungsstufe, pfadvollständige Live-Evidence, sichtbare App-Policy-Truncation und exakte `CURRENT`-Fortsetzung bilden die neue kontrollierte Read-Grenze.
 - GRAPH-CHAT-CAPABILITY-GUIDANCE-1 führt eine einzige app-owned Capability-Quelle für stabile Nutzerführung ein. Antippbare Starterfragen werden gegen den vollständigen App-Katalog durch die realen Resolver-, Compiler- und Read-Plan-Validator-Pfade bewiesen; Toolverfügbarkeit oder ein grober UI-Kontext allein reichen nicht mehr aus.
+- GRAPH-CHAT-BETA-EXPERIENCE-1 ergänzt eine rein presentation-seitige Beta-Kommunikation: dauerhaftes Badge und Info-Aktion in der gemeinsamen iPhone-/iPad-Komposition, eine nur vor der Nutzung sichtbare Orientierungskarte und ein app-owned DE-/EN-Info-Sheet. Capability-Aussagen bleiben aus dem stabilen Katalog abgeleitet; auswählbare Beispiele bleiben produktionsvalidiert und senden nie automatisch.
 
 Die höchsten Architektur-Risiken liegen trotzdem an drei Systemgrenzen:
 
@@ -1094,6 +1095,40 @@ Tests:
 - `GraphChatCapabilityCatalogTests` sichert eindeutige IDs, stabile Reihenfolge, vollständige DE-/EN-Copy, identifierfreie Nutzertexte, value-only Concurrency-Verträge und einen real validierten Produktionspfad für jede Katalogzeile.
 - `GraphChatEmptyStateSuggestionTests` revalidiert jeden sichtbaren Prompt erneut mit demselben Produktionsvalidator und prüft erwartete Compiler-, Typed-Intent- und Read-Plan-Familien, Toolgating, vollständige Kataloge jenseits des Prompt-Snapshots, Mehrdeutigkeit, UUID-Unterdrückung, Empty Graph, identische Wiederholungsreihenfolge und ausgeschlossene Superlative/Aggregationen.
 - Fachlich getrennte Planning- und Publishing-Fixtures enthalten skalare Choice-/Date-/Textfelder beziehungsweise Nodes und Relationship-Kontext sowie Umlaute, Plural, Interpunktion und einen Graphen ohne geeignete Felder. Keine Assertion setzt Patienten-, Medikamenten- oder andere Produktionsdomänen voraus.
+
+### Graph Chat Beta Experience (GRAPH-CHAT-BETA-EXPERIENCE-1)
+
+Pfade:
+
+- `BrainMesh/GraphChat/Presentation/GraphChatBetaPresentation.swift`
+- `BrainMesh/GraphChat/UI/GraphChatBetaComponents.swift`
+- `BrainMesh/GraphChat/UI/GraphChatBetaInfoSheet.swift`
+- `BrainMesh/GraphChat/UI/GraphChatTabView.swift`
+- `BrainMesh/GraphChat/UI/GraphChatEmptyState.swift`
+- `BrainMesh/GraphChat/UI/GraphChatTabFreePreviewView.swift`
+- `BrainMesh/GraphChat/UI/GraphChatViewModel.swift`
+- `BrainMeshTests/GraphChatBetaPresentationTests.swift`
+- `BrainMeshTests/GraphChatBetaUIContractTests.swift`
+
+Presentation und Navigation:
+
+- `GraphChatBetaCopy` ist die einzige neue Nutzertextquelle und vollständig deutsch/englisch. Sie trennt den belegten aktuellen Umfang, bessere Frageführung, aktuelle Grenzen und unverbindliche Entwicklungsrichtungen. Der Trust-Hinweis nennt den aktiven Graphen als einzige Datenquelle und den unveränderten read-only Vertrag.
+- `GraphChatBetaNavigationModifier` sitzt am gemeinsamen `GraphChatTabView`-Composition-Root. Damit werden Badge und Info-Aktion unabhängig vom Access-/Model-/Index-/Conversation-Zustand sowohl im Root-Tab als auch im wiederverwendeten iPad-Copilot-Workspace gerendert. Die gemeinsame Accessibility-Ausgabe ignoriert das Badge als separates Element und spricht „Graph Chat, Beta“ genau einmal.
+- Die kompakte Materialkarte ist auf Empty Chat und Free Preview begrenzt. Sie erscheint nie zwischen Messages. Beide Einstiegspunkte werden durch `GraphChatBetaInfoRoutingPolicy` auf dieselbe Sheet-Destination geführt; das Sheet öffnet ausschließlich durch Nutzeraktion.
+- Das wiederverwendbare Sheet besitzt ScrollView, geordnete semantische Abschnitte, explizite Schließen-Aktion, Medium-/Large-Detent und Drag Indicator. Multiline-Text erhält keine feste Höhe; die Komponenten verwenden semantische Fonts, vorhandene Materials und kontrastadaptive Amber-/Orange-Flächen ohne Warnsymbolik oder eigene Motion.
+
+Capability- und Selection-Grenze:
+
+- Die „heute“-Liste wird direkt und in stabiler Reihenfolge aus `GraphChatCapabilityCatalog.stable` mit `.generalHelp`-Platzierung erzeugt. Die Sheet-View enthält keine zweite Capability-Matrix.
+- Tappable Beispiele können nur aus vorhandenen `GraphChatEmptyStateSuggestion`-Werten entstehen und werden zusätzlich auf aktuelle Catalog-ID, `.starterQuestion`, Produktions-Compiler-, Typed-Intent- und Read-Plan-Familie, aktuelle Planversionen, Question-Limit, technische Identifier und Promptduplikate geprüft. Maximal vier werden gerendert. Fehlt ein sicherer Kandidat, erscheinen ausschließlich nicht antippbare generische Katalogbeispiele mit Platzhaltern.
+- Der Tap staged den Prompt zusammen mit aktuellem Graph und Launch Request, schließt das Sheet und revalidiert die Composition beim Dismissal. Erst danach wird der Text über den vorhandenen begrenzenden Composer-Setter übernommen und ein Focus-Token emittiert. `send`, Orchestrator, Session Store, Conversation und Graphmutationen werden nicht aufgerufen.
+- Für die Free Preview bleibt dieselbe Auswahl memory-only im vorhandenen Launch-Draft. Pro-Gating, Systemmodellprüfung, Compiler, Read-Plan-Ausführung, Resolver, Antworten, SwiftData, CloudKit und Persistenz sind unverändert.
+
+Tests:
+
+- `GraphChatBetaPresentationTests` prüft vollständige DE-/EN-Werte, Trust-/read-only-Text, Abschnittsreihenfolge, getrennte Limits und Entwicklungsrichtungen, verbotene Architektur-/Domänen-/Termintexte, exakte Katalogprojektion, current-plan Starterfilterung, maximale Anzahl, sicheren Fallback, einheitliches Routing, VoiceOver-Vertrag und Sheet-Präsentationsvertrag.
+- `GraphChatBetaComposerIntegrationTests` beweist mit dem vorhandenen Orchestrator-Testsupport, dass eine Auswahl Draft und Focus-Token setzt, aber weder Message noch Question erzeugt.
+- `GraphChatBetaUIContractTests` rendert Badge, Empty-/Free-Notice und Sheet auf Phone-/Pad-Breiten mit Accessibility Dynamic Type, Light/Dark Mode und Standard/Increased Contrast. Die bestehende Free-Preview-UI-Suite wurde auf die neue Karte erweitert.
 
 ### Graph Chat Semantic Intent Interpreter
 

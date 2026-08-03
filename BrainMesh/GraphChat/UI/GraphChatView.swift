@@ -11,9 +11,19 @@ struct GraphChatView: View {
     @StateObject private var viewModel: GraphChatViewModel
     @State private var isConfirmingNewChat = false
     @State private var presentationID = UUID()
+    private let betaCopy: GraphChatBetaCopy
+    private let onOpenBetaInfo: () -> Void
 
-    init(viewModel: @autoclosure @escaping () -> GraphChatViewModel) {
+    init(
+        viewModel: @autoclosure @escaping () -> GraphChatViewModel,
+        betaCopy: GraphChatBetaCopy = GraphChatBetaCopy(
+            language: GraphChatResponseLanguageSelector.systemFallback()
+        ),
+        onOpenBetaInfo: @escaping () -> Void = {}
+    ) {
         _viewModel = StateObject(wrappedValue: viewModel())
+        self.betaCopy = betaCopy
+        self.onOpenBetaInfo = onOpenBetaInfo
     }
 
     var body: some View {
@@ -32,6 +42,7 @@ struct GraphChatView: View {
                 canSend: viewModel.canSend,
                 editingState: viewModel.editingState,
                 isPerformingSessionMutation: viewModel.isPerformingSessionMutation,
+                focusRequestID: viewModel.composerFocusRequestID,
                 onSend: viewModel.send,
                 onCancel: viewModel.cancelGeneration,
                 onCancelEditing: viewModel.cancelEditing
@@ -46,7 +57,6 @@ struct GraphChatView: View {
             }
         }
         .animation(.easeInOut(duration: 0.2), value: viewModel.actionNotice?.id)
-        .navigationTitle("Graph Chat")
         .navigationBarTitleDisplayMode(.inline)
         .confirmationDialog(
             "Neuen Chat beginnen?",
@@ -165,7 +175,9 @@ struct GraphChatView: View {
                             schemaErrorMessage: viewModel.schemaErrorMessage,
                             isLoadingSuggestions: viewModel.schemaContext == nil
                                 && viewModel.schemaErrorMessage == nil,
-                            onSelectSuggestion: viewModel.useSuggestion
+                            betaCopy: betaCopy,
+                            onSelectSuggestion: viewModel.useSuggestion,
+                            onOpenBetaInfo: onOpenBetaInfo
                         )
                     } else {
                         ForEach(viewModel.messages) { message in

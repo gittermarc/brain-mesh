@@ -8,6 +8,12 @@
 import SwiftData
 import SwiftUI
 
+private struct GraphChatPendingBetaQuestionSelection {
+    let selection: GraphChatBetaQuestionSelection
+    let graphID: UUID?
+    let requestID: UUID?
+}
+
 struct GraphChatTabView: View {
     @Environment(\.modelContext) private var modelContext
     @EnvironmentObject private var launchCoordinator: GraphChatLaunchCoordinator
@@ -23,9 +29,14 @@ struct GraphChatTabView: View {
     @Query(sort: \MetaGraph.name) private var graphs: [MetaGraph]
 
     @State private var isShowingPaywall = false
+    @State private var isShowingBetaInfo =
+        GraphChatBetaSheetPresentationContract.opensAutomatically
+    @State private var pendingBetaQuestion:
+        GraphChatPendingBetaQuestionSelection?
     @State private var previewSuggestions: [GraphChatEmptyStateSuggestion] = []
     @State private var previewGraphID: UUID?
     @State private var previewErrorMessage: String?
+    @State private var previewFocusRequestID: UUID?
     @State private var launchValidationState: GraphChatTabLaunchValidationState = .noRequest
     @State private var presentedViewModel: GraphChatViewModel?
     @State private var presentedViewModelRequestID: UUID?
@@ -111,24 +122,36 @@ struct GraphChatTabView: View {
 
     var body: some View {
         let presentation = presentationModel
+        let betaCopy = GraphChatBetaCopy(
+            language: presentation.language
+        )
 
         NavigationStack {
             GraphChatTabContent(
                 state: presentation.contentState,
                 language: presentation.language,
+                betaCopy: betaCopy,
                 presentedViewModel: presentedViewModel,
                 previewDraft: previewDraftBinding(
                     for: presentation.effectiveRequest
                 ),
+                previewFocusRequestID: previewFocusRequestID,
                 onSelectPreviewSuggestion: selectPreviewSuggestion,
+                onOpenBetaInfo: {
+                    openBetaInfo(from: .compactNotice)
+                },
                 onOpenPaywall: {
                     isShowingPaywall = true
                 },
                 onUnlockGraph: unlockActiveGraph,
                 onContinueWithWholeGraph: continueWithWholeGraph
             )
-            .navigationTitle("Graph Chat")
-            .navigationBarTitleDisplayMode(.inline)
+            .graphChatBetaNavigation(
+                copy: betaCopy,
+                onOpenInfo: {
+                    openBetaInfo(from: .navigationInfoButton)
+                }
+            )
         }
         .task(id: presentation.launchValidationTaskIdentity) {
             validateLaunchRequest()
@@ -156,6 +179,20 @@ struct GraphChatTabView: View {
         }
         .sheet(isPresented: $isShowingPaywall, onDismiss: refreshAfterPaywall) {
             ProPaywallView(feature: .chatWithGraph)
+        }
+        .sheet(
+            isPresented: $isShowingBetaInfo,
+            onDismiss: applyPendingBetaQuestion
+        ) {
+            GraphChatBetaInfoSheet(
+                presentation: GraphChatBetaInfoPresentation(
+                    copy: betaCopy,
+                    suggestions: betaSuggestions(
+                        for: presentationModel
+                    )
+                ),
+                onSelectQuestion: stageBetaQuestion
+            )
         }
         .accessibilityIdentifier("graph-chat-tab")
     }
@@ -296,6 +333,95 @@ struct GraphChatTabView: View {
         )
     }
 
+    private func openBetaInfo(
+        from entryPoint: GraphChatBetaInfoEntryPoint
+    ) {
+        guard GraphChatBetaInfoRoutingPolicy.destination(
+            for: entryPoint
+        ) == .infoSheet else {
+            return
+        }
+        isShowingBetaInfo = true
+    }
+
+    private func stageBetaQuestion(
+        _ selection: GraphChatBetaQuestionSelection
+    ) {
+        let presentation = presentationModel
+        pendingBetaQuestion = GraphChatPendingBetaQuestionSelection(
+            selection: selection,
+            graphID: presentation.activeGraphID,
+            requestID: presentation.effectiveRequest?.id
+        )
+    }
+
+    private func applyPendingBetaQuestion() {
+        guard let pendingBetaQuestion else {
+            return
+        }
+        self.pendingBetaQuestion = nil
+
+        let presentation = presentationModel
+        guard pendingBetaQuestion.graphID == presentation.activeGraphID,
+              pendingBetaQuestion.requestID
+                == presentation.effectiveRequest?.id,
+              pendingBetaQuestion.selection.submitsAutomatically == false else {
+            return
+        }
+
+        switch presentation.accessDecision.route {
+        case .ready:
+            guard let graphID = pendingBetaQuestion.graphID,
+                  let presentedViewModel,
+                  presentedViewModelRequestID
+                    == pendingBetaQuestion.requestID,
+                  presentedViewModel.graphScope.graphID
+                    == graphID else {
+                return
+            }
+            presentedViewModel.useBetaQuestion(
+                pendingBetaQuestion.selection
+            )
+
+        case .proRequired:
+            guard let request = presentation.effectiveRequest else {
+                return
+            }
+            launchCoordinator.updateDraft(
+                pendingBetaQuestion.selection.composerText,
+                for: request.scope
+            )
+            if pendingBetaQuestion.selection.requestsComposerFocus {
+                previewFocusRequestID = UUID()
+            }
+
+        default:
+            return
+        }
+    }
+
+    private func betaSuggestions(
+        for presentation: GraphChatTabPresentationModel
+    ) -> [GraphChatEmptyStateSuggestion] {
+        switch presentation.accessDecision.route {
+        case .ready:
+            guard presentedViewModelRequestID
+                    == presentation.effectiveRequest?.id else {
+                return []
+            }
+            return presentedViewModel?.suggestions ?? []
+
+        case .proRequired:
+            guard previewGraphID == presentation.activeGraphID else {
+                return []
+            }
+            return previewSuggestions
+
+        default:
+            return []
+        }
+    }
+
     private func unlockActiveGraph() {
         guard let activeGraph else {
             return
@@ -319,6 +445,9 @@ struct GraphChatTabView: View {
         previewSuggestions = []
         previewGraphID = nil
         previewErrorMessage = nil
+        previewFocusRequestID = nil
+        pendingBetaQuestion = nil
+        isShowingBetaInfo = false
         launchValidationState = .afterActiveGraphChange()
         presentedViewModel = nil
         presentedViewModelRequestID = nil

@@ -14,7 +14,9 @@ struct GraphChatEmptyState: View {
     let suggestions: [GraphChatEmptyStateSuggestion]
     let schemaErrorMessage: String?
     let isLoadingSuggestions: Bool
+    let betaCopy: GraphChatBetaCopy
     let onSelectSuggestion: (GraphChatEmptyStateSuggestion) -> Void
+    let onOpenBetaInfo: () -> Void
 
     private var localizer: GraphChatUILocalizer {
         GraphChatUILocalizer(language: language)
@@ -38,6 +40,12 @@ struct GraphChatEmptyState: View {
                     .foregroundStyle(.secondary)
                     .multilineTextAlignment(.center)
             }
+
+            GraphChatBetaCompactNoticeCard(
+                copy: betaCopy,
+                surface: .emptyChat,
+                onOpenInfo: onOpenBetaInfo
+            )
 
             if let schemaErrorMessage {
                 Label(schemaErrorMessage, systemImage: "exclamationmark.triangle")

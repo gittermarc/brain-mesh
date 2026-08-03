@@ -22,6 +22,7 @@ final class GraphChatViewModel: ObservableObject {
     @Published private(set) var feedbackByMessageID: [UUID: GraphChatFeedbackCategory] = [:]
     @Published private(set) var actionNotice: GraphChatActionNotice?
     @Published private(set) var isPerformingSessionMutation = false
+    @Published private(set) var composerFocusRequestID: UUID?
     @Published private(set) var correctionEditorSession:
         GraphChatInterpretationCorrectionEditorSession?
 
@@ -402,14 +403,38 @@ final class GraphChatViewModel: ObservableObject {
     }
 
     func useSuggestion(_ suggestion: GraphChatEmptyStateSuggestion) {
+        useComposerPrompt(
+            suggestion.prompt,
+            requestsFocus: false
+        )
+    }
+
+    func useBetaQuestion(
+        _ selection: GraphChatBetaQuestionSelection
+    ) {
+        guard selection.submitsAutomatically == false else {
+            return
+        }
+        useComposerPrompt(
+            selection.composerText,
+            requestsFocus: selection.requestsComposerFocus
+        )
+    }
+
+    private func useComposerPrompt(
+        _ prompt: String,
+        requestsFocus: Bool
+    ) {
         guard isGenerating == false,
               isPerformingSessionMutation == false,
               correctionEditorSession == nil else {
             return
         }
         cancelEditing(clearComposer: false)
-        composerState.text = suggestion.prompt
-        draftChangeHandler(suggestion.prompt)
+        setComposerText(prompt)
+        if requestsFocus {
+            composerFocusRequestID = UUID()
+        }
     }
 
     func useFollowUp(_ suggestion: GraphChatFollowUpSuggestion) {

@@ -52,9 +52,13 @@ nonisolated struct GraphChatTabFreePreviewLoader: Sendable {
 
 struct GraphChatTabFreePreviewView: View {
     @Binding var draft: String
+    @FocusState private var isDraftFocused: Bool
 
     let presentation: GraphChatTabFreePreviewPresentation
+    let betaCopy: GraphChatBetaCopy
+    var focusRequestID: UUID? = nil
     let onSelectSuggestion: (GraphChatEmptyStateSuggestion) -> Void
+    let onOpenBetaInfo: () -> Void
     let onOpenPaywall: () -> Void
 
     var body: some View {
@@ -75,6 +79,7 @@ struct GraphChatTabFreePreviewView: View {
                             text: $draft,
                             axis: .vertical
                         )
+                        .focused($isDraftFocused)
                         .lineLimit(2...6)
                         .textFieldStyle(.roundedBorder)
                         .accessibilityIdentifier("graph-chat-free-draft")
@@ -83,6 +88,12 @@ struct GraphChatTabFreePreviewView: View {
                             .foregroundStyle(.secondary)
                     }
                 }
+
+                GraphChatBetaCompactNoticeCard(
+                    copy: betaCopy,
+                    surface: .freePreview,
+                    onOpenInfo: onOpenBetaInfo
+                )
 
                 if presentation.suggestions.isEmpty == false {
                     VStack(alignment: .leading, spacing: 10) {
@@ -124,6 +135,12 @@ struct GraphChatTabFreePreviewView: View {
             .frame(maxWidth: 720, alignment: .leading)
             .padding(20)
             .frame(maxWidth: .infinity)
+        }
+        .onChange(of: focusRequestID) { _, requestID in
+            guard requestID != nil, presentation.showsDraft else {
+                return
+            }
+            isDraftFocused = true
         }
     }
 }

@@ -58,7 +58,9 @@ struct GraphChatTabUIContractTests {
                             suggestions: [suggestion],
                             errorMessage: nil
                         ),
+                        betaCopy: GraphChatBetaCopy(language: .german),
                         onSelectSuggestion: { _ in },
+                        onOpenBetaInfo: {},
                         onOpenPaywall: {}
                     ),
                     width: configuration.width,

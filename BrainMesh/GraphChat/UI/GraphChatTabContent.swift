@@ -10,10 +10,13 @@ import SwiftUI
 struct GraphChatTabContent: View {
     let state: GraphChatTabContentState
     let language: GraphChatResponseLanguage
+    let betaCopy: GraphChatBetaCopy
     let presentedViewModel: GraphChatViewModel?
     @Binding var previewDraft: String
+    let previewFocusRequestID: UUID?
 
     let onSelectPreviewSuggestion: (GraphChatEmptyStateSuggestion) -> Void
+    let onOpenBetaInfo: () -> Void
     let onOpenPaywall: () -> Void
     let onUnlockGraph: () -> Void
     let onContinueWithWholeGraph: () -> Void
@@ -75,7 +78,10 @@ struct GraphChatTabContent: View {
             GraphChatTabFreePreviewView(
                 draft: $previewDraft,
                 presentation: presentation,
+                betaCopy: betaCopy,
+                focusRequestID: previewFocusRequestID,
                 onSelectSuggestion: onSelectPreviewSuggestion,
+                onOpenBetaInfo: onOpenBetaInfo,
                 onOpenPaywall: onOpenPaywall
             )
 
@@ -133,7 +139,11 @@ struct GraphChatTabContent: View {
         switch state {
         case .chat(let requestID):
             if let presentedViewModel {
-                GraphChatView(viewModel: presentedViewModel)
+                GraphChatView(
+                    viewModel: presentedViewModel,
+                    betaCopy: betaCopy,
+                    onOpenBetaInfo: onOpenBetaInfo
+                )
                     .id(requestID)
             } else {
                 preparingSessionView
