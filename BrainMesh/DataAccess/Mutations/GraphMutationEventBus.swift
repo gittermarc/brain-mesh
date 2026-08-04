@@ -100,6 +100,37 @@ nonisolated protocol GraphMutationSubscribing: Sendable {
     ) async -> AsyncStream<GraphMutationDelivery>
 }
 
+nonisolated struct GraphSchemaRevisionToken: Hashable, Sendable {
+    let generation: UUID
+    let value: UInt64
+}
+
+nonisolated struct GraphSchemaExampleFieldRevision: Hashable, Sendable {
+    let fieldID: UUID
+    let token: GraphSchemaRevisionToken
+}
+
+/// Cheap, graph-specific authority used by the schema cache key.
+nonisolated struct GraphSchemaRevision: Hashable, Sendable {
+    let graphID: UUID
+    let structure: GraphSchemaRevisionToken
+    let exampleFields: [GraphSchemaExampleFieldRevision]
+}
+
+nonisolated protocol GraphSchemaRevisionProviding: Sendable {
+    func schemaRevision(
+        in scope: GraphScope,
+        sourceScope: GraphSchemaSourceScope
+    ) async -> GraphSchemaRevision
+
+    func recordExternalSchemaChange(in scope: GraphScope) async
+
+    func recordExternalExampleValueChanges(
+        fieldIDs: Set<UUID>,
+        in scope: GraphScope
+    ) async
+}
+
 extension GraphMutationSubscribing {
     func mutationBatches() async -> AsyncStream<GraphMutationDelivery> {
         await mutationBatches(bufferingPolicy: .default)
@@ -112,12 +143,23 @@ extension GraphMutationSubscribing {
 /// synchronous `yield` calls while actor-isolated and never awaits subscriber work. The bus keeps
 /// no persistent history, and local delivery does not replace reconciliation for CloudKit changes
 /// received from another device.
-actor GraphMutationEventBus: GraphMutationPublishing, GraphMutationSubscribing {
+actor GraphMutationEventBus:
+    GraphMutationPublishing,
+    GraphMutationSubscribing,
+    GraphSchemaRevisionProviding
+{
     static let shared = GraphMutationEventBus()
 
     private var continuations: [UUID: AsyncStream<GraphMutationDelivery>.Continuation] = [:]
     private var nextSequenceNumber: UInt64?
     private var isFinished = false
+    private var schemaRevisionGeneration = UUID()
+    private var schemaRevisionStates: [UUID: SchemaRevisionState] = [:]
+
+    private struct SchemaRevisionState {
+        var structure: GraphSchemaRevisionToken
+        var exampleFields: [UUID: GraphSchemaRevisionToken]
+    }
 
     init(startingSequenceNumber: UInt64 = 1) {
         nextSequenceNumber = startingSequenceNumber
@@ -156,6 +198,7 @@ actor GraphMutationEventBus: GraphMutationPublishing, GraphMutationSubscribing {
     func publishCommitted(
         _ batch: GraphMutationBatch
     ) async -> GraphMutationPublishReceipt {
+        advanceSchemaRevision(for: batch)
         guard isFinished == false else {
             logFinishedPublishIgnored()
             return .busFinished
@@ -238,12 +281,124 @@ actor GraphMutationEventBus: GraphMutationPublishing, GraphMutationSubscribing {
         nextSequenceNumber
     }
 
+    func schemaRevision(
+        in scope: GraphScope,
+        sourceScope: GraphSchemaSourceScope
+    ) -> GraphSchemaRevision {
+        let state = schemaRevisionState(for: scope.graphID)
+        return GraphSchemaRevision(
+            graphID: scope.graphID,
+            structure: state.structure,
+            exampleFields: sourceScope.exampleFieldIDs.map { fieldID in
+                GraphSchemaExampleFieldRevision(
+                    fieldID: fieldID,
+                    token: state.exampleFields[fieldID]
+                        ?? GraphSchemaRevisionToken(
+                            generation: schemaRevisionGeneration,
+                            value: 0
+                        )
+                )
+            }
+        )
+    }
+
+    func recordExternalSchemaChange(in scope: GraphScope) {
+        var state = schemaRevisionState(for: scope.graphID)
+        state.structure = advanced(state.structure)
+        schemaRevisionStates[scope.graphID] = state
+    }
+
+    func recordExternalExampleValueChanges(
+        fieldIDs: Set<UUID>,
+        in scope: GraphScope
+    ) {
+        guard fieldIDs.isEmpty == false else { return }
+        var state = schemaRevisionState(for: scope.graphID)
+        for fieldID in fieldIDs {
+            let token = state.exampleFields[fieldID]
+                ?? GraphSchemaRevisionToken(
+                    generation: schemaRevisionGeneration,
+                    value: 0
+                )
+            state.exampleFields[fieldID] = advanced(token)
+        }
+        schemaRevisionStates[scope.graphID] = state
+    }
+
     /// Reopens an instance with a fresh sequence for deterministic isolated tests.
     func resetForTesting() {
         finishActiveSubscriptions()
         nextSequenceNumber = 1
         isFinished = false
+        schemaRevisionGeneration = UUID()
+        schemaRevisionStates.removeAll(keepingCapacity: false)
         logReset()
+    }
+
+    private func schemaRevisionState(
+        for graphID: UUID
+    ) -> SchemaRevisionState {
+        if let state = schemaRevisionStates[graphID] {
+            return state
+        }
+        let state = SchemaRevisionState(
+            structure: GraphSchemaRevisionToken(
+                generation: schemaRevisionGeneration,
+                value: 0
+            ),
+            exampleFields: [:]
+        )
+        schemaRevisionStates[graphID] = state
+        return state
+    }
+
+    private func advanceSchemaRevision(
+        for batch: GraphMutationBatch
+    ) {
+        var changesStructure = false
+        var changedExampleFieldIDs = Set<UUID>()
+        for event in batch.events {
+            switch event.schemaImpact {
+            case .none:
+                continue
+            case .structure:
+                changesStructure = true
+            case .exampleFields(let fieldIDs):
+                changedExampleFieldIDs.formUnion(fieldIDs)
+            }
+        }
+        guard changesStructure || changedExampleFieldIDs.isEmpty == false else {
+            return
+        }
+
+        var state = schemaRevisionState(for: batch.graphID)
+        if changesStructure {
+            state.structure = advanced(state.structure)
+        }
+        for fieldID in changedExampleFieldIDs {
+            let token = state.exampleFields[fieldID]
+                ?? GraphSchemaRevisionToken(
+                    generation: schemaRevisionGeneration,
+                    value: 0
+                )
+            state.exampleFields[fieldID] = advanced(token)
+        }
+        schemaRevisionStates[batch.graphID] = state
+    }
+
+    private func advanced(
+        _ token: GraphSchemaRevisionToken
+    ) -> GraphSchemaRevisionToken {
+        if token.value == UInt64.max {
+            return GraphSchemaRevisionToken(
+                generation: UUID(),
+                value: 0
+            )
+        }
+        return GraphSchemaRevisionToken(
+            generation: token.generation,
+            value: token.value + 1
+        )
     }
 
     private func removeSubscriber(id: UUID) {

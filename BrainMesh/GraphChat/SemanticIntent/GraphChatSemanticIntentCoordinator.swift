@@ -509,6 +509,8 @@ nonisolated struct GraphChatSemanticIntentCoordinator:
                     )
                     let executionContext =
                         GraphSchemaContext(
+                            identity:
+                                schemaContext.identity,
                             graphScope:
                                 schemaContext
                                     .graphScope,

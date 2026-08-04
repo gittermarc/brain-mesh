@@ -449,6 +449,8 @@ nonisolated struct GraphChatInterpretationCorrectionCompiler:
             adaptation: adaptation,
             schemaContext:
                 GraphSchemaContext(
+                    identity:
+                        schemaContext.identity,
                     graphScope:
                         schemaContext.graphScope,
                     snapshot:
@@ -718,6 +720,8 @@ nonisolated struct GraphChatInterpretationCorrectionCompiler:
             adaptation: adaptation,
             schemaContext:
                 GraphSchemaContext(
+                    identity:
+                        schemaContext.identity,
                     graphScope:
                         schemaContext.graphScope,
                     snapshot:

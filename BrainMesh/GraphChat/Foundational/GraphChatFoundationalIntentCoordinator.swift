@@ -2,7 +2,7 @@
 //  GraphChatFoundationalIntentCoordinator.swift
 //  BrainMesh
 //
-//  Schema-loading trust boundary between request preflight and provider use.
+//  Intent trust boundary consuming the request pipeline's authoritative schema context.
 //
 
 import Foundation
@@ -19,51 +19,30 @@ nonisolated enum GraphChatFoundationalIntentResolution: Sendable {
 }
 
 nonisolated struct GraphChatFoundationalIntentCoordinator: Sendable {
-    private let schemaProvider: any GraphSchemaSnapshotProviding
     private let compiler: GraphChatFoundationalIntentCompiler
     private let observability:
         any GraphChatObservabilityRecording
 
     init(
-        schemaProvider: any GraphSchemaSnapshotProviding,
         compiler: GraphChatFoundationalIntentCompiler =
             GraphChatFoundationalIntentCompiler(),
         observability:
             any GraphChatObservabilityRecording =
                 NoOpGraphChatObservabilityRecorder()
     ) {
-        self.schemaProvider = schemaProvider
         self.compiler = compiler
         self.observability = observability
     }
 
+    /// The coordinator has no repository or schema-service dependency. The request pipeline owns
+    /// the one turn-scoped load and supplies that exact context here.
     func resolve(
         providerPlan: GraphChatProviderTurnPlan,
         requestID: UUID,
-        requestedAt: Date
+        requestedAt: Date,
+        schemaContext: GraphSchemaContext
     ) async throws -> GraphChatFoundationalIntentResolution {
-        let schemaContext: GraphSchemaContext
-        do {
-            try Task.checkCancellation()
-            schemaContext = try await schemaProvider.makeSnapshot(
-                in: providerPlan.scopeKey.graphScope,
-                exampleFieldIDs: []
-            )
-            try Task.checkCancellation()
-        } catch is CancellationError {
-            throw CancellationError()
-        } catch {
-            if Task.isCancelled {
-                throw CancellationError()
-            }
-            throw GraphChatError(
-                code: .schemaUnavailable,
-                message:
-                    "Das Schema des aktiven Graphen konnte für die lokale Intent-Prüfung nicht geladen werden.",
-                recoverySuggestion:
-                    "Öffne den Graphen erneut und versuche es noch einmal."
-            )
-        }
+        try Task.checkCancellation()
         guard schemaContext.graphScope == providerPlan.scopeKey.graphScope,
               schemaContext.aliases.graphScope
                 == providerPlan.scopeKey.graphScope,
@@ -76,9 +55,11 @@ nonisolated struct GraphChatFoundationalIntentCoordinator: Sendable {
             )
         }
         let foundationalSchemaContext = GraphSchemaContext(
+            identity: schemaContext.identity,
             graphScope: schemaContext.graphScope,
             snapshot: schemaContext.snapshot,
-            aliases: schemaContext.foundationalAliases
+            aliases: schemaContext.foundationalAliases,
+            foundationalAliases: schemaContext.foundationalAliases
         )
 
         let continuation = providerPlan.foundationalContinuation

@@ -236,6 +236,7 @@ struct GraphMutationEventBusTests {
                 "graphID",
                 "kind",
                 "references",
+                "schemaImpact",
                 "createdAt",
             ])
         #expect(

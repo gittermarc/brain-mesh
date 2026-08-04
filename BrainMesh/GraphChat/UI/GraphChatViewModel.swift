@@ -354,6 +354,14 @@ final class GraphChatViewModel: ObservableObject {
         }
     }
 
+    func refreshSchemaAfterAuthoritativeChange() async {
+        schemaContext = nil
+        schemaSnapshot = nil
+        schemaErrorMessage = nil
+        invalidateSuggestionsSnapshot()
+        await load()
+    }
+
     func refreshRuntimeStates() async {
         let availability = await availabilityProvider.availability()
         let resolvedAvailability: GraphChatAvailabilityPresentationState

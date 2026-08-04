@@ -2,30 +2,40 @@ import Foundation
 import Testing
 @testable import BrainMesh
 
-private actor GraphChatThrowingSchemaProvider: GraphSchemaSnapshotProviding {
-    func makeSnapshot(
-        in scope: GraphScope,
-        exampleFieldIDs: Set<UUID>
-    ) throws -> GraphSchemaContext {
-        throw GraphChatError(
-            code: .toolFailure,
-            message: "Synthetic schema failure"
-        )
-    }
-}
-
-private actor GraphChatForeignSchemaProvider: GraphSchemaSnapshotProviding {
-    func makeSnapshot(
-        in scope: GraphScope,
-        exampleFieldIDs: Set<UUID>
-    ) -> GraphSchemaContext {
-        GraphChatTestSupport.makeSchemaContext(
-            graphID: GraphChatTestSupport.otherGraphID
-        )
-    }
-}
-
 struct GraphChatProviderSessionFactoryTests {
+    @Test
+    func suppliedTurnSchemaIsUsedWithoutAnotherSchemaProviderCall() async throws {
+        let provider = FakeGraphChatModelProvider()
+        let schema = GraphChatTestSupport.makeSchemaContext(
+            graphID: GraphChatTestSupport.graphID
+        )
+        let factory = GraphChatProviderTestSupport.makeProviderSessionFactory(
+            provider: provider,
+            toolRunnerFactory: EvidenceRegisteringFakeToolRunnerFactory()
+        )
+        let input = GraphChatProviderTestSupport.makeProviderAttemptInput()
+
+        let resources = try await factory.makeInitialSession(
+            for: input.key,
+            schemaContext: schema,
+            artifactSession: input.artifactSession,
+            conversationBaseState: input.baseState,
+            conversationContext: input.context,
+            responseLanguage: .english
+        )
+
+        #expect(resources.schemaContext.identity == schema.identity)
+        let providerSnapshot = await provider.snapshot()
+        let configuration = try #require(
+            providerSnapshot.sessionConfigurations[resources.sessionID]
+        )
+        #expect(configuration.schemaContext.identity == schema.identity)
+        await factory.cleanupFailedAttempt(
+            resources,
+            requestProviderCancellation: false
+        )
+    }
+
     @Test
     func unavailableModelKeepsTheExistingAvailabilityMapping() async throws {
         let provider = FakeGraphChatModelProvider(
@@ -49,44 +59,24 @@ struct GraphChatProviderSessionFactoryTests {
     }
 
     @Test
-    func schemaFailureRemainsSchemaUnavailable() async throws {
-        let provider = FakeGraphChatModelProvider()
-        let factory = GraphChatProviderTestSupport.makeProviderSessionFactory(
-            provider: provider,
-            schemaProvider: GraphChatThrowingSchemaProvider(),
-            toolRunnerFactory: EvidenceRegisteringFakeToolRunnerFactory()
-        )
-
-        do {
-            _ = try await GraphChatProviderTestSupport.makeInitialProviderResources(
-                sessionFactory: factory
-            )
-            Issue.record("Expected schema failure.")
-        } catch let error as GraphChatError {
-            #expect(error.code == .schemaUnavailable)
-            #expect(
-                error.message
-                    == "Das Schema des aktiven Graphen konnte nicht geladen werden."
-            )
-            #expect(
-                error.recoverySuggestion
-                    == "Öffne den Graphen erneut und versuche es noch einmal."
-            )
-        }
-    }
-
-    @Test
     func foreignSchemaIsRejectedBeforeSessionCreation() async throws {
         let provider = FakeGraphChatModelProvider()
         let factory = GraphChatProviderTestSupport.makeProviderSessionFactory(
             provider: provider,
-            schemaProvider: GraphChatForeignSchemaProvider(),
             toolRunnerFactory: EvidenceRegisteringFakeToolRunnerFactory()
         )
+        let input = GraphChatProviderTestSupport.makeProviderAttemptInput()
 
         do {
-            _ = try await GraphChatProviderTestSupport.makeInitialProviderResources(
-                sessionFactory: factory
+            _ = try await factory.makeInitialSession(
+                for: input.key,
+                schemaContext: GraphChatTestSupport.makeSchemaContext(
+                    graphID: GraphChatTestSupport.otherGraphID
+                ),
+                artifactSession: input.artifactSession,
+                conversationBaseState: input.baseState,
+                conversationContext: input.context,
+                responseLanguage: .english
             )
             Issue.record("Expected foreign schema rejection.")
         } catch let error as GraphChatError {
@@ -307,13 +297,6 @@ struct GraphChatProviderSessionFactoryTests {
     ) -> GraphChatProviderSessionFactory {
         GraphChatProviderTestSupport.makeProviderSessionFactory(
             provider: provider,
-            schemaProvider: FakeGraphSchemaSnapshotProvider(
-                contexts: [
-                    GraphChatTestSupport.makeSchemaContext(
-                        graphID: GraphChatTestSupport.graphID
-                    )
-                ]
-            ),
             toolRunnerFactory: runnerFactory,
             budgetPolicy: budgetPolicy
         )

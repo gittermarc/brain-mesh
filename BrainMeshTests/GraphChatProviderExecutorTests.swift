@@ -267,13 +267,6 @@ struct GraphChatProviderExecutorTests {
     ) {
         let sessionFactory = GraphChatProviderTestSupport.makeProviderSessionFactory(
             provider: provider,
-            schemaProvider: FakeGraphSchemaSnapshotProvider(
-                contexts: [
-                    GraphChatTestSupport.makeSchemaContext(
-                        graphID: GraphChatTestSupport.graphID
-                    )
-                ]
-            ),
             toolRunnerFactory: EvidenceRegisteringFakeToolRunnerFactory()
         )
         let resources = try await GraphChatProviderTestSupport

@@ -201,18 +201,26 @@ nonisolated struct GraphSchemaAliasMap: Sendable {
     }
 }
 
+nonisolated enum GraphSchemaContextIdentity: Hashable, Sendable {
+    case cached(GraphSchemaContextCacheKey)
+    case transient(UUID)
+}
+
 nonisolated struct GraphSchemaContext: Sendable {
+    let identity: GraphSchemaContextIdentity
     let graphScope: GraphScope
     let snapshot: GraphSchemaSnapshot
     let aliases: GraphSchemaAliasMap
     let foundationalAliases: GraphSchemaAliasMap
 
     init(
+        identity: GraphSchemaContextIdentity = .transient(UUID()),
         graphScope: GraphScope,
         snapshot: GraphSchemaSnapshot,
         aliases: GraphSchemaAliasMap,
         foundationalAliases: GraphSchemaAliasMap? = nil
     ) {
+        self.identity = identity
         self.graphScope = graphScope
         self.snapshot = snapshot
         self.aliases = aliases

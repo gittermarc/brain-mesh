@@ -1,6 +1,6 @@
 # BrainMesh – Project Context
 
-> Start Here für neue Entwickler:innen. Stand: GRAPH-CHAT-BETA-EXPERIENCE-1 nach GRAPH-CHAT-CAPABILITY-GUIDANCE-1, mit dauerhaft sichtbarer Beta-Kennzeichnung, app-owned DE-/EN-Hilfe und ausschließlich katalog- und produktionspfadvalidierten antippbaren Beispielen.
+> Start Here für neue Entwickler:innen. Stand: GRAPH-CHAT-SCHEMA-PIPELINE-1 nach GRAPH-CHAT-INTERACTION-HOTPATH-1, mit schmalem autoritativem Chat-Schema-Read, revisionsgebundenem Single-Flight-Cache und turnweiter Context-Wiederverwendung.
 
 ## TL;DR
 
@@ -34,6 +34,8 @@ BrainMesh ist eine native SwiftUI-App für iPhone und iPad, in der Nutzer:innen 
 - **Mutation Batch**: Datenminimaler Event nach erfolgreichem Save; invalidiert Index und Caches.
 - **Search Index**: Pro App lokaler SQLite-/FTS-Index; aus SwiftData vollständig rekonstruierbar.
 - **Graph Chat**: On-Device-LLM-Flow mit sechs read-only Tools und graphgebundener Evidenz.
+- **Graph Chat Schema Source**: `GraphSchemaSourceSnapshotDTO` ist der einzige Schema-Input des Chats. Der Repository-Pfad lädt ausschließlich Graph-Metadaten, Entities, Attribute-Nodes und Felddefinitionen; Detailwerte nur für explizite `exampleFieldIDs`. Links, Attachments, Medien, Backlinks, Statistiken und gewöhnliche Detailwerte sind in diesem DTO nicht darstellbar. Der vollständige `GraphSourceSnapshotDTO` bleibt ausschließlich für fachlich vollständige Reads wie den Composable Read Executor erhalten.
+- **Graph Schema Context Cache**: Actor-isolierter Single-Flight-Cache mit Schlüssel aus Graph-ID, autoritativer Struktur-/Beispielwert-Revision, exakt sortiertem Example-Field-Scope, Schema-Limits und Builder-Version. Strukturmutationen invalidieren alle fachlich betroffenen Schlüssel; Link-, Attachment- und normale Wertmutationen verändern den Basisschema-Schlüssel nicht. Suggestions, Preflight, Intent-Prüfung und Provider-Session verwenden dieselbe `GraphSchemaContextIdentity` eines Turns.
 - **Stable Graph Chat Capability Catalog**: Eine einzige app-owned, value-only und concurrency-sichere Quelle für stabile Nutzerführung. Sie bindet fachliche Kategorie, deutsche/englische Präsentation, Schema-/Scope-Voraussetzungen, produktive Compiler-/Typed-Intent-/Read-Plan-Familie, konkrete Starterregel und erlaubte Platzierung. Ein Tool allein belegt keine natürlichsprachliche Capability.
 - **Graph Chat Beta Experience**: Eine presentation-only Ebene aus dauerhaftem Header-Badge und Info-Aktion, kompakter Einstiegskarte und wiederverwendbarem scrollbaren Info-Sheet. Capability-Text kommt ausschließlich aus `GraphChatCapabilityCatalog.stable`; antippbare Beispiele müssen zusätzlich den aktuellen Starter- und Planvertrag erfüllen und übernehmen Text nur fokussiert in den Composer, ohne einen Turn zu senden.
 - **Graph Mention Resolver**: Versionierte, value-only, `Hashable`- und `Sendable`-fähige appseitige Grounding-Schicht für Entity-, Node- und Feldanzeigenamen. Sie arbeitet ausschließlich auf dem vollständigen aktuellen `foundationalAliases`-Katalog des aktiven Graphen, berücksichtigt den Chat-/Owner-/Selection-/Conversation-Scope nur als Eingrenzung und liefert eine eindeutige Bindung, eine fachliche Mehrdeutigkeit oder einen geschlossenen technischen Fehler.
@@ -93,7 +95,7 @@ BrainMesh ist eine native SwiftUI-App für iPhone und iPad, in der Nutzer:innen 
 
 ### Read Models, Index und Caches
 
-- `BrainMesh/DataAccess/GraphReadRepository.swift` erzeugt graphweite Value-Snapshots; `GraphReadRepository+NodeProfile.swift` implementiert den engen `GraphNodeProfileReading`-Vertrag für vollständige, unabhängig begrenzte Node-Profile.
+- `BrainMesh/DataAccess/GraphReadRepository.swift` erzeugt graphweite Value-Snapshots; `GraphReadRepository+SchemaSource.swift` besitzt den separaten schmalen Chat-Schema-Fetch, und `GraphReadRepository+NodeProfile.swift` implementiert den engen `GraphNodeProfileReading`-Vertrag für vollständige, unabhängig begrenzte Node-Profile.
 - `BrainMesh/Search/Index/` verwaltet SQLite-Schema, Dokumente, Manifeste und Reconciliation.
 - `BrainMesh/Mainscreen/EntitiesHome/` besitzt Loader und abgeleitete Home-Caches.
 - `BrainMesh/Stats/` berechnet Graphstatistiken und Health-Ergebnisse.

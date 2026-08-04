@@ -389,11 +389,27 @@ final class GraphChatSessionStore: ObservableObject {
     }
 
     func handleActiveGraphChange() {
+        let previousGraphID = currentScope?.graphScope.graphID
         indexState = .loading
         invalidate(
             removeHistory: true,
             resetReason: .graphChanged
         )
+        Task {
+            await GraphSchemaService.shared.invalidateForGraphSwitch(
+                from: previousGraphID
+            )
+        }
+    }
+
+    func handleExternalSchemaReconciliation(graphID: UUID) {
+        guard currentScope?.graphScope.graphID == graphID,
+              let currentViewModel else {
+            return
+        }
+        Task { @MainActor in
+            await currentViewModel.refreshSchemaAfterAuthoritativeChange()
+        }
     }
 
     func handleEntitlementRevocation() {
@@ -494,7 +510,16 @@ final class GraphChatSessionStore: ObservableObject {
                 return false
             }
         }
-        guard invalidatesSession else {
+        if invalidatesSession == false {
+            let changesSchema = delivery.batch.events.contains {
+                $0.schemaImpact == .structure
+            }
+            if changesSchema, let currentViewModel {
+                Task { @MainActor in
+                    await currentViewModel
+                        .refreshSchemaAfterAuthoritativeChange()
+                }
+            }
             return
         }
         let resetReason: GraphChatConversationResetReason =

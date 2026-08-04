@@ -301,13 +301,6 @@ struct GraphChatProviderContextRetryTests {
     ) {
         let sessionFactory = GraphChatProviderTestSupport.makeProviderSessionFactory(
             provider: provider,
-            schemaProvider: FakeGraphSchemaSnapshotProvider(
-                contexts: [
-                    GraphChatTestSupport.makeSchemaContext(
-                        graphID: GraphChatTestSupport.graphID
-                    )
-                ]
-            ),
             toolRunnerFactory: runnerFactory
         )
         let executor = GraphChatProviderExecutor(

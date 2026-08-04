@@ -2017,6 +2017,8 @@ nonisolated struct GraphChatComposableReadPlanValidator:
         }
         let executionSchema =
             GraphSchemaContext(
+                identity:
+                    schemaContext.identity,
                 graphScope:
                     schemaContext.graphScope,
                 snapshot:
@@ -2157,6 +2159,7 @@ nonisolated struct GraphChatComposableReadPlanValidator:
             limit: 1
         )
         let executionSchema = GraphSchemaContext(
+            identity: schemaContext.identity,
             graphScope: schemaContext.graphScope,
             snapshot: schemaContext.snapshot,
             aliases:

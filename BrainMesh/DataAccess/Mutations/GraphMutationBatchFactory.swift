@@ -145,7 +145,8 @@ nonisolated enum GraphMutationBatchFactory {
                 nodeEvent(
                     graphID: graphID,
                     kind: .entityCreated,
-                    node: NodeRefKey(kind: .entity, id: entityID)
+                    node: NodeRefKey(kind: .entity, id: entityID),
+                    schemaImpact: .structure
                 )
             ]
         )
@@ -181,7 +182,8 @@ nonisolated enum GraphMutationBatchFactory {
                 nodeEvent(
                     graphID: graphID,
                     kind: updatedKind(for: node.kind),
-                    node: node
+                    node: node,
+                    schemaImpact: GraphMutationSchemaImpact.none
                 )
             ]
         )
@@ -200,7 +202,8 @@ nonisolated enum GraphMutationBatchFactory {
             nodeEvent(
                 graphID: graphID,
                 kind: updatedKind(for: node.kind),
-                node: node
+                node: node,
+                schemaImpact: .structure
             )
         ]
         events.append(contentsOf: orderedLinks.map { link in
@@ -488,14 +491,16 @@ nonisolated enum GraphMutationBatchFactory {
             nodeEvent(
                 graphID: graphID,
                 kind: .attributeDeleted,
-                node: NodeRefKey(kind: .attribute, id: attributeID)
+                node: NodeRefKey(kind: .attribute, id: attributeID),
+                schemaImpact: .structure
             )
         })
         events.append(contentsOf: orderedEntityIDs.map { entityID in
             nodeEvent(
                 graphID: graphID,
                 kind: .entityDeleted,
-                node: NodeRefKey(kind: .entity, id: entityID)
+                node: NodeRefKey(kind: .entity, id: entityID),
+                schemaImpact: .structure
             )
         })
 
@@ -526,12 +531,14 @@ nonisolated enum GraphMutationBatchFactory {
     private static func nodeEvent(
         graphID: UUID,
         kind: GraphMutationKind,
-        node: NodeRefKey
+        node: NodeRefKey,
+        schemaImpact: GraphMutationSchemaImpact
     ) -> GraphMutationEvent {
         GraphMutationEvent(
             graphID: graphID,
             kind: kind,
-            references: [.node(node)]
+            references: [.node(node)],
+            schemaImpact: schemaImpact
         )
     }
 

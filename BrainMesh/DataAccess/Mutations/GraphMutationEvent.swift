@@ -54,6 +54,13 @@ nonisolated enum GraphMutationKind: Hashable, Sendable {
     }
 }
 
+/// The precise portion of the graph-chat schema source affected by a committed mutation.
+nonisolated enum GraphMutationSchemaImpact: Hashable, Sendable {
+    case none
+    case structure
+    case exampleFields(Set<UUID>)
+}
+
 /// An affected source record or graph node, expressed only through technical identifiers.
 nonisolated enum GraphMutationReference: Hashable, Sendable {
     case graph
@@ -87,17 +94,23 @@ nonisolated struct GraphMutationEvent: Hashable, Sendable {
     let graphID: UUID
     let kind: GraphMutationKind
     let references: [GraphMutationReference]
+    let schemaImpact: GraphMutationSchemaImpact
     let createdAt: Date
 
     init(
         graphID: UUID,
         kind: GraphMutationKind,
         references: [GraphMutationReference] = [],
+        schemaImpact: GraphMutationSchemaImpact? = nil,
         createdAt: Date = Date()
     ) {
         self.graphID = graphID
         self.kind = kind
         self.references = references
+        self.schemaImpact = schemaImpact ?? Self.defaultSchemaImpact(
+            kind: kind,
+            references: references
+        )
         self.createdAt = createdAt
     }
 
@@ -105,12 +118,14 @@ nonisolated struct GraphMutationEvent: Hashable, Sendable {
         scope: GraphScope,
         kind: GraphMutationKind,
         references: [GraphMutationReference] = [],
+        schemaImpact: GraphMutationSchemaImpact? = nil,
         createdAt: Date = Date()
     ) {
         self.init(
             graphID: scope.graphID,
             kind: kind,
             references: references,
+            schemaImpact: schemaImpact,
             createdAt: createdAt
         )
     }
@@ -121,6 +136,35 @@ nonisolated struct GraphMutationEvent: Hashable, Sendable {
 
     var fullRebuildReason: GraphMutationFullRebuildReason? {
         kind.fullRebuildReason
+    }
+
+    private static func defaultSchemaImpact(
+        kind: GraphMutationKind,
+        references: [GraphMutationReference]
+    ) -> GraphMutationSchemaImpact {
+        switch kind {
+        case .entityCreated, .entityUpdated, .entityDeleted,
+             .attributeCreated, .attributeUpdated, .attributeDeleted,
+             .detailSchemaChanged,
+             .graphCreated, .graphUpdated, .graphImported,
+             .graphReplaced, .graphDeleted,
+             .graphRequiresFullRebuild:
+            return .structure
+
+        case .detailValueChanged, .detailValueDeleted:
+            let fieldIDs = Set<UUID>(references.compactMap { reference -> UUID? in
+                guard case .detailValue(_, _, let fieldID) = reference else {
+                    return nil
+                }
+                return fieldID
+            })
+            return fieldIDs.isEmpty ? .none : .exampleFields(fieldIDs)
+
+        case .linkCreated, .linkUpdated, .linkDeleted,
+             .attachmentCreated, .attachmentUpdated, .attachmentDeleted,
+             .detailTemplateCreated:
+            return .none
+        }
     }
 }
 

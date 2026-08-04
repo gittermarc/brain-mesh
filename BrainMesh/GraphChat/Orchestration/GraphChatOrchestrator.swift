@@ -145,9 +145,18 @@ actor GraphChatOrchestrator {
         let conversationContext = conversationContextBuilder.makeSnapshot(
             from: turn.state.snapshot
         )
+        let schemaContext = try await schemaProvider.makeSnapshot(
+            in: key.graphScope,
+            exampleFieldIDs: []
+        )
+        _ = try requestPreflight.validatedSchemaContext(
+            schemaContext,
+            for: key
+        )
 
         if resources.preparedSessionMatches(
             key: key,
+            schemaContextIdentity: schemaContext.identity,
             conversationBaseState: turn.state,
             conversationContext: conversationContext,
             responseLanguage: responseLanguage
@@ -158,6 +167,7 @@ actor GraphChatOrchestrator {
 
         let sessionResources = try await makeSessionResources(
             for: key,
+            schemaContext: schemaContext,
             conversationBaseState: turn.state,
             conversationContext: conversationContext,
             responseLanguage: responseLanguage
@@ -1038,12 +1048,13 @@ actor GraphChatOrchestrator {
                     key: key,
                     turnStateSnapshot: turnStateSnapshot
                 ),
-                sessionResources: { [weak self] plan in
+                sessionResources: { [weak self] plan, schemaContext in
                     guard let self else {
                         throw CancellationError()
                     }
                     return try await self.takeOrCreateSessionResources(
                         for: plan,
+                        schemaContext: schemaContext,
                         requestID: generation.requestID
                     )
                 },
@@ -1132,10 +1143,12 @@ actor GraphChatOrchestrator {
 
     private func takeOrCreateSessionResources(
         for plan: GraphChatProviderTurnPlan,
+        schemaContext: GraphSchemaContext,
         requestID: UUID
     ) async throws -> GraphChatProviderSessionResources {
         switch resources.takePreparedSession(
             matching: plan.scopeKey,
+            schemaContextIdentity: schemaContext.identity,
             conversationBaseState: plan.requestBaseState,
             conversationContext: plan.conversationContext,
             responseLanguage: plan.responseLanguage
@@ -1143,6 +1156,7 @@ actor GraphChatOrchestrator {
         case .missing:
             return try await makeSessionResources(
                 for: plan.scopeKey,
+                schemaContext: schemaContext,
                 conversationBaseState: plan.requestBaseState,
                 conversationContext: plan.conversationContext,
                 responseLanguage: plan.responseLanguage
@@ -1164,6 +1178,7 @@ actor GraphChatOrchestrator {
             await cleanupPreparedSession(prepared)
             return try await makeSessionResources(
                 for: plan.scopeKey,
+                schemaContext: schemaContext,
                 conversationBaseState: plan.requestBaseState,
                 conversationContext: plan.conversationContext,
                 responseLanguage: plan.responseLanguage
@@ -1173,6 +1188,7 @@ actor GraphChatOrchestrator {
 
     private func makeSessionResources(
         for key: GraphChatOrchestrationScopeKey,
+        schemaContext: GraphSchemaContext,
         conversationBaseState: GraphChatConversationState,
         conversationContext: GraphChatConversationContextSnapshot,
         responseLanguage: GraphChatResponseLanguage
@@ -1180,6 +1196,7 @@ actor GraphChatOrchestrator {
         let artifactSession = await artifactSessionResources(for: key)
         return try await sessionFactory.makeInitialSession(
             for: key,
+            schemaContext: schemaContext,
             artifactSession: artifactSession,
             conversationBaseState: conversationBaseState,
             conversationContext: conversationContext,

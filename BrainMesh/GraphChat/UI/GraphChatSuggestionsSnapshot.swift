@@ -7,119 +7,14 @@
 
 import Foundation
 
-nonisolated struct GraphChatSuggestionsAliasMapRevision:
-    Hashable,
-    Sendable
-{
-    nonisolated struct EntityBinding:
-        Hashable,
-        Sendable
-    {
-        let alias: GraphEntityAlias
-        let resolution: GraphSchemaEntityResolution
-    }
-
-    nonisolated struct FieldBinding:
-        Hashable,
-        Sendable
-    {
-        let alias: GraphFieldAlias
-        let resolution: GraphSchemaFieldResolution
-    }
-
-    nonisolated struct NodeEntityBinding:
-        Hashable,
-        Sendable
-    {
-        let node: NodeRefKey
-        let entityID: UUID
-    }
-
-    nonisolated struct NodeResolutionBinding:
-        Hashable,
-        Sendable
-    {
-        let node: NodeRefKey
-        let resolution: GraphSchemaNodeResolution
-    }
-
-    let graphScope: GraphScope
-    let entities: [EntityBinding]
-    let fields: [FieldBinding]
-    let nodeEntityBindings: [NodeEntityBinding]
-    let nodes: [NodeResolutionBinding]
-
-    init(_ aliases: GraphSchemaAliasMap) {
-        graphScope = aliases.graphScope
-        entities = aliases.entitiesByAlias.map {
-            EntityBinding(alias: $0.key, resolution: $0.value)
-        }.sorted {
-            if $0.alias.rawValue != $1.alias.rawValue {
-                return $0.alias.rawValue < $1.alias.rawValue
-            }
-            return $0.resolution.entityID.uuidString <
-                $1.resolution.entityID.uuidString
-        }
-        fields = aliases.fieldsByAlias.map {
-            FieldBinding(alias: $0.key, resolution: $0.value)
-        }.sorted {
-            if $0.alias.rawValue != $1.alias.rawValue {
-                return $0.alias.rawValue < $1.alias.rawValue
-            }
-            if $0.resolution.entityID
-                != $1.resolution.entityID {
-                return $0.resolution.entityID.uuidString <
-                    $1.resolution.entityID.uuidString
-            }
-            return $0.resolution.fieldID.uuidString <
-                $1.resolution.fieldID.uuidString
-        }
-        nodeEntityBindings = aliases.nodeEntityIDs.map {
-            NodeEntityBinding(node: $0.key, entityID: $0.value)
-        }.sorted {
-            Self.nodeOrder($0.node, $1.node)
-        }
-        nodes = aliases.nodesByKey.map {
-            NodeResolutionBinding(
-                node: $0.key,
-                resolution: $0.value
-            )
-        }.sorted {
-            if $0.node != $1.node {
-                return Self.nodeOrder($0.node, $1.node)
-            }
-            return $0.resolution.ownerEntityID.uuidString <
-                $1.resolution.ownerEntityID.uuidString
-        }
-    }
-
-    private static func nodeOrder(
-        _ lhs: NodeRefKey,
-        _ rhs: NodeRefKey
-    ) -> Bool {
-        if lhs.kind.rawValue != rhs.kind.rawValue {
-            return lhs.kind.rawValue < rhs.kind.rawValue
-        }
-        return lhs.id.uuidString < rhs.id.uuidString
-    }
-}
-
 nonisolated struct GraphChatSuggestionsSchemaRevision:
     Hashable,
     Sendable
 {
-    let snapshot: GraphSchemaSnapshot
-    let promptAliases: GraphChatSuggestionsAliasMapRevision
-    let foundationalAliases: GraphChatSuggestionsAliasMapRevision
+    let contextIdentity: GraphSchemaContextIdentity
 
     init(_ context: GraphSchemaContext) {
-        snapshot = context.snapshot
-        promptAliases = GraphChatSuggestionsAliasMapRevision(
-            context.aliases
-        )
-        foundationalAliases = GraphChatSuggestionsAliasMapRevision(
-            context.foundationalAliases
-        )
+        contextIdentity = context.identity
     }
 }
 

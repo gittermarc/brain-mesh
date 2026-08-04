@@ -26,6 +26,7 @@ BrainMesh besitzt bereits mehrere wichtige Schutzlinien:
 - GRAPH-CHAT-COMPOSABLE-READ-EXECUTION-1 ergänzt einen nativen, providerfreien Executor für vollständig revalidierte `v2`-Pläne. Ein einziger graphgescopter value-only Snapshot, höchstens zwei Hops, getrennte Budgets für jede Ausführungsstufe, pfadvollständige Live-Evidence, sichtbare App-Policy-Truncation und exakte `CURRENT`-Fortsetzung bilden die neue kontrollierte Read-Grenze.
 - GRAPH-CHAT-CAPABILITY-GUIDANCE-1 führt eine einzige app-owned Capability-Quelle für stabile Nutzerführung ein. Antippbare Starterfragen werden gegen den vollständigen App-Katalog durch die realen Resolver-, Compiler- und Read-Plan-Validator-Pfade bewiesen; Toolverfügbarkeit oder ein grober UI-Kontext allein reichen nicht mehr aus.
 - GRAPH-CHAT-BETA-EXPERIENCE-1 ergänzt eine rein presentation-seitige Beta-Kommunikation: dauerhaftes Badge und Info-Aktion in der gemeinsamen iPhone-/iPad-Komposition, eine nur vor der Nutzung sichtbare Orientierungskarte und ein app-owned DE-/EN-Info-Sheet. Capability-Aussagen bleiben aus dem stabilen Katalog abgeleitet; auswählbare Beispiele bleiben produktionsvalidiert und senden nie automatisch.
+- GRAPH-CHAT-SCHEMA-PIPELINE-1 trennt den Chat-Schema-Read vom vollständigen `GraphSourceSnapshotDTO`. `GraphReadRepository+SchemaSource` materialisiert auf Fetch-Ebene nur Graph, Entities, Attribute-Nodes, Felddefinitionen und gezielt angeforderte Beispielwerte. Ein actor-isolierter, revisionsgebundener Single-Flight-Cache reicht dieselbe `GraphSchemaContextIdentity` durch Suggestions, Preflight, beide Intent-Stufen und Provider-Session; Composable Reads behalten ihren vollständigen autoritativen Snapshot.
 
 Die höchsten Architektur-Risiken liegen trotzdem an drei Systemgrenzen:
 
@@ -973,6 +974,33 @@ Cutover und Lifecycle:
 - Der gemeinsame `GraphChatLocalIntentExecutionKernel` besitzt weiterhin genau eine Conversation-, Evidence-, Presentation-, Artifact- und Ledger-Transaktion. Relationship-Ausführung registriert `getNeighbors` nur als lokalen Ledger-Tooltyp, verlangt genau ein typisiertes Artifact und verwendet dieselbe lokale Finalisierung, Interpretation, Presentation Firewall, deferred Publication, Cancellation und atomare Rollback-Grenze.
 - Klare Fast-Path-Fragen erzeugen weder Semantic-Interpreter- noch `GraphChatModelProvider`-Session. Eine nicht durch den Fast Path erkannte, aber erfolgreich toolfrei interpretierte Relationship-Frage verwendet höchstens einen Semantic-Interpreter-Aufruf und weiterhin null Answer-Provider-Aufrufe. Jeder Stream endet genau einmal.
 - Dieser Relationship-PR enthielt noch keine allgemeine Multi-Hop-Ausführung. Der aktuelle PR 6 ergänzt ausschließlich die nachfolgend dokumentierte kontrollierte Ein-/Zwei-Hop-Ausführung; `GraphFactBundle` und modellgestützte finale Antwortplanung bleiben ausgeschlossen.
+
+### Graph Chat Schema Pipeline (GRAPH-CHAT-SCHEMA-PIPELINE-1)
+
+Read-Grenze:
+
+- `GraphSchemaSourceSnapshotDTO` ist value-only, `Hashable` und `Sendable`. Der Typ kann ausschließlich Graph-Metadaten, Entities, Attribute-Nodes, Felddefinitionen und Werte aus seinem expliziten `GraphSchemaSourceScope.exampleFieldIDs` enthalten. Für Links, Link-Notizen, Attachments, Medien, Backlinks oder Statistiken existieren keine Properties.
+- `GraphReadRepository+SchemaSource` verwendet einen eigenen `ModelContext` und eigene graphgescopte Fetch Descriptors. Es lädt nie zuerst `GraphSourceSnapshotDTO`. Ohne Example-Scope werden keine `MetaDetailFieldValue`-Rows gefetcht; mit Scope enthält der Value-Predicate sowohl die angeforderten Field-IDs als auch die bereits validierten Attribute-IDs. Die zentrale `DetailDataIntegrityPolicy` entscheidet weiterhin Authority und Konflikte.
+- `GraphSourceSnapshotDTO` und `sourceSnapshot(in:)` bleiben unverändert für Composable Reads und andere fachlich vollständige Antwortpfade. Schema-Optimierung ist keine Datenreduktion dieser Ausführungs-Snapshots.
+
+Revision und Cache:
+
+- `GraphMutationEventBus` führt eine prozesslokale, graphgescopte `GraphSchemaRevision` mit getrenntem Struktur-Token und feldspezifischen Example-Value-Tokens. Prozessneustart ist sicher, weil der Memory-Cache ebenfalls leer startet.
+- Entity-/Attribute-Anlage und -Löschung, explizite Node-Renames, Detail-Schema-Änderungen, Graph-Renames, Import, Replacement und Full-Rebuild ändern den Struktur-Token. Notes-/Header-Media-Updates werden durch `nodeUpdated` ausdrücklich als nicht schemawirksam klassifiziert. Links, Attachments und Templates sind nicht schemawirksam; Detailwerte ändern nur den Token ihres Field-Scopes.
+- `GraphSchemaContextCacheKey` enthält Graph-ID, `GraphSchemaRevision`, exakt sortierten `GraphSchemaSourceScope`, `GraphSchemaLimits` und Builder-Version. Locale und Modell-Capabilities fehlen bewusst, weil sie nicht Teil des `GraphSchemaContext` sind.
+- `GraphSchemaContextCache` besitzt genau eine Context-Cache-Schicht und je Schlüssel einen Single Flight. Waiter haben eigene Continuations: Einzel-Cancellation entfernt nur den betroffenen Waiter; der Loader wird erst beim letzten Waiter abgebrochen. Ersetzte Flights dürfen weder Ergebnis noch Cache-Eintrag publizieren. Repository-Read, Builder und Rückgabe prüfen die Revision erneut und retryen einen mutierenden Graphen begrenzt.
+
+Turn und externe Änderungen:
+
+- Der Suggestions-Snapshot verwendet die `GraphSchemaContextIdentity` statt erneut Snapshot und Alias-Maps tief zu hashen. `GraphMentionCatalog` wird weiterhin ausschließlich aus `foundationalAliases` dieses Contexts gebaut.
+- Die Request-Pipeline lädt für einen Provider-Turn genau einen Context, validiert ihn im Preflight und übergibt ihn an Foundational Intent, Semantic Intent und die Provider-Session. Prepared Sessions sind zusätzlich an dieselbe Context-Identity gebunden. Foundational Coordinator und Provider Session Factory besitzen keine eigene Schema-Service-Abhängigkeit mehr und verlangen den bereits geladenen Context in ihrem Vertrag.
+- Lokale Mutation-Batches ändern die Revision synchron bei der Bus-Publikation. Für CloudKit-/out-of-process-Änderungen vergleicht die Foreground-Reconciliation ausschließlich Fingerprints des schmalen Struktur-Sources und zuvor verwendeter Example-Scopes. Link-/Attachment-Änderungen sind darin nicht sichtbar und lösen deshalb keine Schema-Invalidierung aus; ein Schemaunterschied erhöht die externe Strukturrevision und verwirft die Graph-Cache-Einträge.
+
+Tests:
+
+- `GraphReadRepositoryTests` prüft Fetch-Instrumentierung ohne Examples, den exakten Field-ID-Value-Fetch und Schema-Parität zum vollständigen autoritativen Source.
+- `GraphSchemaContextCacheTests` prüft Turn-Wiederverwendung, Single Flight, Graph-/Revisionsgrenzen, Mutationseinordnung, Import/Remote-Reconciliation, partielle und vollständige Waiter-Cancellation sowie stale-result publication.
+- `GraphChatLargeGraphTests` belegt als Regression, dass Schema-Vorladung plus Chat-Turn genau einen schmalen Graph-Fetch und keinen vollständigen Schemazweck-`GraphSourceSnapshotDTO` auslösen.
 
 ### Graph Chat Composable Read Execution (GRAPH-CHAT-COMPOSABLE-READ-EXECUTION-1)
 

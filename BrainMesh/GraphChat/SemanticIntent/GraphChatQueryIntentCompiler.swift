@@ -165,6 +165,8 @@ nonisolated struct GraphChatQueryIntentCompiler:
         }
         let executionSchemaContext =
             GraphSchemaContext(
+                identity:
+                    schemaContext.identity,
                 graphScope:
                     schemaContext.graphScope,
                 snapshot:

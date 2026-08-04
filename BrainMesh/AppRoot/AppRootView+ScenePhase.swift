@@ -129,6 +129,16 @@ extension AppRootView {
                 scope: scope,
                 reason: .foreground
             )
+            let schemaChanged = (try? await GraphSchemaService.shared
+                .reconcileExternalChanges(in: scope)) ?? false
+            if schemaChanged {
+                await MainActor.run {
+                    graphChatSessionStore
+                        .handleExternalSchemaReconciliation(
+                            graphID: scope.graphID
+                        )
+                }
+            }
         }
     }
 }

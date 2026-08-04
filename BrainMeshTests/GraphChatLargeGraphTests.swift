@@ -11,8 +11,12 @@ struct GraphChatLargeGraphTests {
         let fixture = fixtures.makeGraphChatLargeGraphFixture(attributeCount: 2_400)
         try fixtures.save()
 
+        let schemaFetches = GraphChatLargeGraphSchemaFetchRecorder()
         let repository = GraphReadRepository(
-            container: AnyModelContainer(store.container)
+            container: AnyModelContainer(store.container),
+            schemaSourceInstrumentation: GraphSchemaSourceInstrumentation {
+                schemaFetches.record($0)
+            }
         )
         let schemaService = GraphSchemaService(repository: repository)
         let graphScope = GraphScope(graphID: fixture.graph.id)
@@ -90,6 +94,9 @@ struct GraphChatLargeGraphTests {
         let snapshot = await provider.snapshot()
         let request = try #require(snapshot.streamedRequests.first)
         let response = try #require(snapshot.toolResponses.first)
+        let configuration = try #require(
+            snapshot.sessionConfigurations.values.first
+        )
 
         #expect(
             request.schemaPrompt.count
@@ -106,8 +113,14 @@ struct GraphChatLargeGraphTests {
         #expect(response.evidenceIDs.count <= GraphChatToolBudgetPolicy.default.maximumEvidenceCount)
         #expect(response.content.contains("Large Item 0000"))
         #expect(response.content.contains("Large Item 2399") == false)
+        #expect(configuration.schemaContext.identity == schema.identity)
         #expect(fixture.detailValueCount == 4_800)
         #expect(fixture.linkCount == 2_399)
+        #expect(schemaFetches.count(.graph) == 1)
+        #expect(schemaFetches.count(.fullSourceSnapshot) == 0)
+        #expect(schemaFetches.count(.links) == 0)
+        #expect(schemaFetches.count(.attachments) == 0)
+        #expect(schemaFetches.count(.exampleValues) == 0)
     }
 
     @Test
@@ -124,5 +137,22 @@ struct GraphChatLargeGraphTests {
         #expect(GraphChatModelContextProfile.recovery.maximumSchemaCharacters == 900)
         #expect(GraphChatModelToolOutputBudget.default.maximumSchemaCharacters == 2_400)
         #expect(GraphChatModelToolOutputBudget.default.maximumCollectionCharacters == 3_200)
+    }
+}
+
+private nonisolated final class GraphChatLargeGraphSchemaFetchRecorder:
+    @unchecked Sendable
+{
+    private let lock = NSLock()
+    private var counts: [GraphSchemaSourceFetchKind: Int] = [:]
+
+    func record(_ kind: GraphSchemaSourceFetchKind) {
+        lock.withLock {
+            counts[kind, default: 0] += 1
+        }
+    }
+
+    func count(_ kind: GraphSchemaSourceFetchKind) -> Int {
+        lock.withLock { counts[kind, default: 0] }
     }
 }

@@ -416,6 +416,191 @@ struct GraphReadRepositoryTests {
     }
 
     @Test
+    func schemaSourceWithoutExamplesPerformsOnlyNarrowFetches() async throws {
+        let store = try BrainMeshTestContainer.makeInMemoryStore()
+        let fixtures = BrainMeshFixtureBuilder(context: store.context)
+        let graph = fixtures.makeGraph(name: "Schema")
+        let entity = fixtures.makeEntity(name: "Projects", in: graph)
+        let attribute = fixtures.makeAttribute(name: "Atlas", owner: entity)
+        let field = fixtures.makeDetailField(
+            owner: entity,
+            name: "Status",
+            type: .singleChoice,
+            sortIndex: 0,
+            options: ["Open", "Done"]
+        )
+        _ = fixtures.makeDetailValue(
+            attribute: attribute,
+            field: field,
+            stringValue: "Open"
+        )
+        _ = fixtures.makeLink(
+            source: .entity(entity),
+            target: .attribute(attribute),
+            note: "must not load",
+            graphID: graph.id
+        )
+        _ = fixtures.makeAttachment(
+            owner: .attribute(attribute),
+            title: "must not load",
+            fileData: Data([1, 2, 3])
+        )
+        try fixtures.save()
+
+        let recorder = GraphSchemaFetchRecorder()
+        let repository = GraphReadRepository(
+            container: AnyModelContainer(store.container),
+            schemaSourceInstrumentation: GraphSchemaSourceInstrumentation {
+                recorder.record($0)
+            }
+        )
+        let snapshot = try await repository.schemaSourceSnapshot(
+            in: GraphScope(graphID: graph.id)
+        )
+
+        #expect(snapshot.exampleValues.isEmpty)
+        #expect(recorder.count(.graph) == 1)
+        #expect(recorder.count(.entities) == 1)
+        #expect(recorder.count(.nodes) == 1)
+        #expect(recorder.count(.fieldDefinitions) == 1)
+        for forbidden in [
+            GraphSchemaSourceFetchKind.exampleValues,
+            .fullSourceSnapshot,
+            .links,
+            .attachments,
+            .media,
+            .backlinks,
+            .statistics,
+        ] {
+            #expect(recorder.count(forbidden) == 0)
+        }
+        #expect(
+            Set(Mirror(reflecting: snapshot).children.compactMap(\.label))
+                == Set([
+                    "scope", "sourceScope", "graph", "entities", "nodes",
+                    "fieldDefinitions", "exampleValues",
+                ])
+        )
+    }
+
+    @Test
+    func schemaSourceFetchesOnlyExplicitExampleFields() async throws {
+        let store = try BrainMeshTestContainer.makeInMemoryStore()
+        let fixtures = BrainMeshFixtureBuilder(context: store.context)
+        let graph = fixtures.makeGraph(name: "Examples")
+        let entity = fixtures.makeEntity(name: "Projects", in: graph)
+        let attribute = fixtures.makeAttribute(name: "Atlas", owner: entity)
+        let requested = fixtures.makeDetailField(
+            owner: entity,
+            name: "Status",
+            type: .singleLineText,
+            sortIndex: 0
+        )
+        let unrequested = fixtures.makeDetailField(
+            owner: entity,
+            name: "Secret",
+            type: .singleLineText,
+            sortIndex: 1
+        )
+        _ = fixtures.makeDetailValue(
+            attribute: attribute,
+            field: requested,
+            stringValue: "Open"
+        )
+        _ = fixtures.makeDetailValue(
+            attribute: attribute,
+            field: unrequested,
+            stringValue: "Not requested"
+        )
+        try fixtures.save()
+
+        let recorder = GraphSchemaFetchRecorder()
+        let repository = GraphReadRepository(
+            container: AnyModelContainer(store.container),
+            schemaSourceInstrumentation: GraphSchemaSourceInstrumentation {
+                recorder.record($0)
+            }
+        )
+        let snapshot = try await repository.schemaSourceSnapshot(
+            in: GraphScope(graphID: graph.id),
+            exampleFieldIDs: [requested.id]
+        )
+
+        #expect(recorder.count(.exampleValues) == 1)
+        #expect(snapshot.exampleValues.map(\.fieldID) == [requested.id])
+        #expect(snapshot.exampleValues.map(\.value) == [.text("Open")])
+        #expect(
+            snapshot.exampleValues.contains {
+                $0.fieldID == unrequested.id
+            } == false
+        )
+    }
+
+    @Test
+    func narrowAndFullSourcesHaveSchemaParity() async throws {
+        let store = try BrainMeshTestContainer.makeInMemoryStore()
+        let fixtures = BrainMeshFixtureBuilder(context: store.context)
+        let graph = fixtures.makeGraph(name: "Parity")
+        let firstEntity = fixtures.makeEntity(name: "Projects", in: graph)
+        _ = fixtures.makeAttribute(name: "Atlas", owner: firstEntity)
+        _ = fixtures.makeDetailField(
+            owner: firstEntity,
+            name: "Status",
+            type: .singleChoice,
+            sortIndex: 0,
+            options: ["Open", "Done"]
+        )
+        let secondEntity = fixtures.makeEntity(name: "People", in: graph)
+        _ = fixtures.makeAttribute(name: "Ada", owner: secondEntity)
+        _ = fixtures.makeDetailField(
+            owner: secondEntity,
+            name: "Role",
+            type: .singleLineText,
+            sortIndex: 0
+        )
+        try fixtures.save()
+
+        let repository = GraphReadRepository(
+            container: AnyModelContainer(store.container)
+        )
+        let scope = GraphScope(graphID: graph.id)
+        let narrow = try await repository.schemaSourceSnapshot(in: scope)
+        let full = try await repository.sourceSnapshot(in: scope)
+
+        #expect(
+            narrow.entities.map { [$0.id.uuidString, $0.name] }
+                == full.entities.map { [$0.id.uuidString, $0.name] }
+        )
+        #expect(
+            narrow.nodes.map {
+                [$0.id.uuidString, $0.ownerEntityID.uuidString, $0.name]
+            } == full.attributes.compactMap { attribute in
+                guard let ownerID = attribute.ownerEntityID else { return nil }
+                return [attribute.id.uuidString, ownerID.uuidString, attribute.name]
+            }
+        )
+        #expect(
+            narrow.fieldDefinitions.map {
+                [
+                    $0.id.uuidString,
+                    $0.entityID.uuidString,
+                    $0.name,
+                    String($0.typeRaw),
+                    String($0.sortIndex),
+                ]
+            } == full.detailFieldDefinitions.map {
+                [
+                    $0.id.uuidString,
+                    $0.entityID.uuidString,
+                    $0.name,
+                    String($0.typeRaw),
+                    String($0.sortIndex),
+                ]
+            }
+        )
+    }
+
+    @Test
     func cancelledLargeSnapshotDoesNotReturnPartialData() async throws {
         let store = try BrainMeshTestContainer.makeInMemoryStore()
         let fixtures = BrainMeshFixtureBuilder(context: store.context)
@@ -454,6 +639,23 @@ struct GraphReadRepositoryTests {
 
         #expect(receivedCancellation)
         #expect(cancellationTrigger.checkCount >= 10)
+    }
+}
+
+private nonisolated final class GraphSchemaFetchRecorder:
+    @unchecked Sendable
+{
+    private let lock = NSLock()
+    private var counts: [GraphSchemaSourceFetchKind: Int] = [:]
+
+    func record(_ kind: GraphSchemaSourceFetchKind) {
+        lock.withLock {
+            counts[kind, default: 0] += 1
+        }
+    }
+
+    func count(_ kind: GraphSchemaSourceFetchKind) -> Int {
+        lock.withLock { counts[kind, default: 0] }
     }
 }
 

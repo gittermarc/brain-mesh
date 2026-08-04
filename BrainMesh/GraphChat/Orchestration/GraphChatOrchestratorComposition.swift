@@ -62,7 +62,6 @@ nonisolated struct GraphChatOrchestratorComposition: Sendable {
         let errorMapper = GraphChatProviderErrorMapper()
         let sessionFactory = GraphChatProviderSessionFactory(
             provider: provider,
-            schemaProvider: schemaProvider,
             toolRunnerFactory: toolRunnerFactory,
             standardToolBudgetPolicy: toolBudgetPolicy,
             conversationStateReducer: stateReducer,
@@ -80,7 +79,6 @@ nonisolated struct GraphChatOrchestratorComposition: Sendable {
         )
         let foundationalCoordinator =
             GraphChatFoundationalIntentCoordinator(
-                schemaProvider: schemaProvider,
                 observability: observability
             )
         let foundationalExecutor =
@@ -167,6 +165,7 @@ nonisolated struct GraphChatOrchestratorComposition: Sendable {
         self.sessionFactory = sessionFactory
         self.requestPipeline = GraphChatRequestPipeline(
             preflight: requestPreflight,
+            schemaProvider: schemaProvider,
             foundationalCoordinator: foundationalCoordinator,
             foundationalExecutor: foundationalExecutor,
             semanticCoordinator:

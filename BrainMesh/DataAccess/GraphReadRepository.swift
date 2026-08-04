@@ -32,18 +32,22 @@ actor GraphReadRepository {
 
     private var containerState: ContainerState
     let additionalCancellationCheck: @Sendable () throws -> Void
+    let schemaSourceInstrumentation: GraphSchemaSourceInstrumentation
 
     init() {
         containerState = .awaitingConfiguration
         additionalCancellationCheck = {}
+        schemaSourceInstrumentation = .disabled
     }
 
     init(
         container: AnyModelContainer,
-        cancellationCheck: @escaping @Sendable () throws -> Void = {}
+        cancellationCheck: @escaping @Sendable () throws -> Void = {},
+        schemaSourceInstrumentation: GraphSchemaSourceInstrumentation = .disabled
     ) {
         containerState = .ready(container)
         additionalCancellationCheck = cancellationCheck
+        self.schemaSourceInstrumentation = schemaSourceInstrumentation
     }
 
     func configure(container: AnyModelContainer) {
@@ -371,6 +375,9 @@ actor GraphReadRepository {
     }
 
     func sourceSnapshot(in scope: GraphScope) async throws -> GraphSourceSnapshotDTO {
+        schemaSourceInstrumentation.record(.fullSourceSnapshot)
+        schemaSourceInstrumentation.record(.links)
+        schemaSourceInstrumentation.record(.attachments)
         let context = try await makeReadContext()
         try checkCancellation()
 

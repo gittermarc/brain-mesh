@@ -1129,6 +1129,65 @@ private nonisolated struct SnapshotReader:
     ) async throws -> GraphSourceSnapshotDTO {
         snapshot
     }
+
+    func schemaSourceSnapshot(
+        in scope: GraphScope,
+        exampleFieldIDs: Set<UUID>
+    ) async throws -> GraphSchemaSourceSnapshotDTO {
+        let sourceScope = GraphSchemaSourceScope(
+            exampleFieldIDs: exampleFieldIDs
+        )
+        return GraphSchemaSourceSnapshotDTO(
+            scope: snapshot.scope,
+            sourceScope: sourceScope,
+            graph: snapshot.graph,
+            entities: snapshot.entities.map {
+                GraphSchemaSourceEntityDTO(
+                    id: $0.id,
+                    scope: $0.scope,
+                    name: $0.name,
+                    createdAt: $0.createdAt
+                )
+            },
+            nodes: snapshot.attributes.compactMap { attribute in
+                guard let ownerEntityID = attribute.ownerEntityID else {
+                    return nil
+                }
+                return GraphSchemaSourceNodeDTO(
+                    id: attribute.id,
+                    scope: attribute.scope,
+                    ownerEntityID: ownerEntityID,
+                    name: attribute.name,
+                    displayName: attribute.displayLabel
+                )
+            },
+            fieldDefinitions: snapshot.detailFieldDefinitions.map {
+                GraphSchemaSourceFieldDefinitionDTO(
+                    id: $0.id,
+                    scope: $0.scope,
+                    entityID: $0.entityID,
+                    name: $0.name,
+                    typeRaw: $0.typeRaw,
+                    sortIndex: $0.sortIndex,
+                    isPinned: $0.isPinned,
+                    unit: $0.unit,
+                    options: $0.options
+                )
+            },
+            exampleValues: snapshot.detailValues.compactMap { value in
+                guard exampleFieldIDs.contains(value.fieldID) else {
+                    return nil
+                }
+                return GraphSchemaSourceExampleValueDTO(
+                    id: value.id,
+                    scope: value.scope,
+                    attributeID: value.attributeID,
+                    fieldID: value.fieldID,
+                    value: value.value
+                )
+            }
+        )
+    }
 }
 
 private nonisolated struct CancellingSnapshotReader:

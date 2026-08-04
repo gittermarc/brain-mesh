@@ -371,6 +371,21 @@ nonisolated struct GraphChatRequestPreflight: Sendable {
         )
     }
 
+    func validatedSchemaContext(
+        _ context: GraphSchemaContext,
+        for key: GraphChatOrchestrationScopeKey
+    ) throws -> GraphSchemaContext {
+        guard context.graphScope == key.graphScope,
+              context.aliases.graphScope == key.graphScope,
+              context.foundationalAliases.graphScope == key.graphScope else {
+            throw GraphChatError(
+                code: .schemaUnavailable,
+                message: "Das geladene Schema gehört nicht zum aktiven Graphen."
+            )
+        }
+        return context
+    }
+
     func evaluate(
         _ input: GraphChatRequestPreflightInput
     ) async throws -> GraphChatRequestPreflightResult {

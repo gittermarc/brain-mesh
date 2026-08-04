@@ -413,7 +413,6 @@ nonisolated enum GraphChatProviderTestSupport {
 extension GraphChatProviderTestSupport {
     static func makeProviderSessionFactory(
         provider: any GraphChatModelProvider,
-        schemaProvider: any GraphSchemaSnapshotProviding,
         toolRunnerFactory: any GraphChatModelToolRunnerFactory,
         budgetPolicy: GraphChatToolBudgetPolicy = .default,
         observability: any GraphChatObservabilityRecording =
@@ -421,7 +420,6 @@ extension GraphChatProviderTestSupport {
     ) -> GraphChatProviderSessionFactory {
         GraphChatProviderSessionFactory(
             provider: provider,
-            schemaProvider: schemaProvider,
             toolRunnerFactory: toolRunnerFactory,
             standardToolBudgetPolicy: budgetPolicy,
             conversationStateReducer: GraphChatConversationStateReducer(),
@@ -483,6 +481,9 @@ extension GraphChatProviderTestSupport {
         )
         return try await sessionFactory.makeInitialSession(
             for: input.key,
+            schemaContext: GraphChatTestSupport.makeSchemaContext(
+                graphID: graphID
+            ),
             artifactSession: input.artifactSession,
             conversationBaseState: input.baseState,
             conversationContext: input.context,

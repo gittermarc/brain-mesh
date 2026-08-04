@@ -317,6 +317,8 @@ nonisolated struct GraphChatSemanticIntentResolver:
             .count, .groupCount, .refinement:
             let executionSchemaContext =
                 GraphSchemaContext(
+                    identity:
+                        schemaContext.identity,
                     graphScope:
                         schemaContext.graphScope,
                     snapshot:
@@ -460,6 +462,8 @@ nonisolated struct GraphChatSemanticIntentResolver:
             )
             let executionSchemaContext =
                 GraphSchemaContext(
+                    identity:
+                        schemaContext.identity,
                     graphScope:
                         schemaContext.graphScope,
                     snapshot: schemaContext.snapshot,

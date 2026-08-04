@@ -23,7 +23,6 @@ nonisolated struct GraphChatProviderSessionFactory: Sendable {
     ]
 
     private let provider: any GraphChatModelProvider
-    private let schemaProvider: any GraphSchemaSnapshotProviding
     private let toolRunnerFactory: any GraphChatModelToolRunnerFactory
     private let standardToolBudgetPolicy: GraphChatToolBudgetPolicy
     private let conversationStateReducer: GraphChatConversationStateReducer
@@ -37,7 +36,6 @@ nonisolated struct GraphChatProviderSessionFactory: Sendable {
 
     init(
         provider: any GraphChatModelProvider,
-        schemaProvider: any GraphSchemaSnapshotProviding,
         toolRunnerFactory: any GraphChatModelToolRunnerFactory,
         standardToolBudgetPolicy: GraphChatToolBudgetPolicy,
         conversationStateReducer: GraphChatConversationStateReducer,
@@ -51,7 +49,6 @@ nonisolated struct GraphChatProviderSessionFactory: Sendable {
         timeZone: TimeZone
     ) {
         self.provider = provider
-        self.schemaProvider = schemaProvider
         self.toolRunnerFactory = toolRunnerFactory
         self.standardToolBudgetPolicy = standardToolBudgetPolicy
         self.conversationStateReducer = conversationStateReducer
@@ -66,12 +63,16 @@ nonisolated struct GraphChatProviderSessionFactory: Sendable {
 
     func makeInitialSession(
         for key: GraphChatOrchestrationScopeKey,
+        schemaContext: GraphSchemaContext,
         artifactSession: GraphChatArtifactSessionResources,
         conversationBaseState: GraphChatConversationState,
         conversationContext: GraphChatConversationContextSnapshot,
         responseLanguage: GraphChatResponseLanguage
     ) async throws -> GraphChatProviderSessionResources {
-        let schemaContext = try await loadSchema(for: key)
+        let availability = await provider.availability()
+        guard availability.isAvailable else {
+            throw errorMapper.availabilityError(availability)
+        }
         let primaryResultLedger = GraphChatPrimaryResultLedger(
             graphScope: key.graphScope,
             chatScope: key.chatScope,
@@ -213,43 +214,6 @@ nonisolated struct GraphChatProviderSessionFactory: Sendable {
             maximumEvidenceCount:
                 standardToolBudgetPolicy.maximumEvidenceCount
         )
-    }
-
-    private func loadSchema(
-        for key: GraphChatOrchestrationScopeKey
-    ) async throws -> GraphSchemaContext {
-        let availability = await provider.availability()
-        guard availability.isAvailable else {
-            throw errorMapper.availabilityError(availability)
-        }
-        let schemaContext: GraphSchemaContext
-        do {
-            try Task.checkCancellation()
-            schemaContext = try await schemaProvider.makeSnapshot(
-                in: key.graphScope,
-                exampleFieldIDs: []
-            )
-            try Task.checkCancellation()
-        } catch is CancellationError {
-            throw CancellationError()
-        } catch {
-            if Task.isCancelled {
-                throw CancellationError()
-            }
-            throw GraphChatError(
-                code: .schemaUnavailable,
-                message: "Das Schema des aktiven Graphen konnte nicht geladen werden.",
-                recoverySuggestion:
-                    "Öffne den Graphen erneut und versuche es noch einmal."
-            )
-        }
-        guard schemaContext.graphScope == key.graphScope else {
-            throw GraphChatError(
-                code: .schemaUnavailable,
-                message: "Das geladene Schema gehört nicht zum aktiven Graphen."
-            )
-        }
-        return schemaContext
     }
 
     private func makeSession(

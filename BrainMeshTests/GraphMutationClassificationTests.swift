@@ -495,6 +495,42 @@ struct GraphMutationClassificationTests {
     }
 
     @Test
+    func nodeContentUpdatesAndRenamesHaveExplicitSchemaImpacts() throws {
+        let graphID = testUUID(460)
+        let nodes = [
+            NodeRefKey(kind: .entity, id: testUUID(461)),
+            NodeRefKey(kind: .attribute, id: testUUID(462))
+        ]
+
+        for node in nodes {
+            let contentUpdate = try GraphMutationBatchFactory.nodeUpdated(
+                graphID: graphID,
+                node: node
+            )
+            let contentUpdateEvent = try #require(
+                contentUpdate.events.first
+            )
+            #expect(contentUpdate.events.count == 1)
+            #expect(
+                contentUpdateEvent.schemaImpact
+                    == GraphMutationSchemaImpact.none
+            )
+
+            let rename = try GraphMutationBatchFactory.nodeRenamed(
+                graphID: graphID,
+                node: node,
+                relabeledLinks: []
+            )
+            let renameEvent = try #require(rename.events.first)
+            #expect(rename.events.count == 1)
+            #expect(
+                renameEvent.schemaImpact
+                    == GraphMutationSchemaImpact.structure
+            )
+        }
+    }
+
+    @Test
     func classificationMatrixCoversPR05CGraphwideMutations() throws {
         let graphID = testUUID(470)
         let templateID = testUUID(471)

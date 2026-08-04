@@ -42,6 +42,7 @@ nonisolated struct GraphChatOrchestratorResourceStore {
 
     func preparedSessionMatches(
         key: GraphChatOrchestrationScopeKey,
+        schemaContextIdentity: GraphSchemaContextIdentity,
         conversationBaseState: GraphChatConversationState,
         conversationContext: GraphChatConversationContextSnapshot,
         responseLanguage: GraphChatResponseLanguage
@@ -50,6 +51,7 @@ nonisolated struct GraphChatOrchestratorResourceStore {
             return false
         }
         return preparedSession.key == key
+            && preparedSession.schemaContext.identity == schemaContextIdentity
             && preparedSession.conversationBaseState == conversationBaseState
             && preparedSession.conversationContext == conversationContext
             && preparedSession.responseLanguage == responseLanguage
@@ -57,6 +59,7 @@ nonisolated struct GraphChatOrchestratorResourceStore {
 
     mutating func takePreparedSession(
         matching key: GraphChatOrchestrationScopeKey,
+        schemaContextIdentity: GraphSchemaContextIdentity,
         conversationBaseState: GraphChatConversationState,
         conversationContext: GraphChatConversationContextSnapshot,
         responseLanguage: GraphChatResponseLanguage
@@ -66,6 +69,7 @@ nonisolated struct GraphChatOrchestratorResourceStore {
         }
         self.preparedSession = nil
         guard preparedSession.key == key,
+              preparedSession.schemaContext.identity == schemaContextIdentity,
               preparedSession.conversationBaseState == conversationBaseState,
               preparedSession.conversationContext == conversationContext,
               preparedSession.responseLanguage == responseLanguage else {

@@ -100,7 +100,8 @@ nonisolated struct GraphChatInterpretationCorrectionPipelineInput:
 
 nonisolated struct GraphChatRequestPipeline: Sendable {
     typealias SessionResourcesProvider = @Sendable (
-        GraphChatProviderTurnPlan
+        GraphChatProviderTurnPlan,
+        GraphSchemaContext
     ) async throws -> GraphChatProviderSessionResources
     typealias FoundationalArtifactSessionProvider = @Sendable (
         GraphChatOrchestrationScopeKey
@@ -117,6 +118,7 @@ nonisolated struct GraphChatRequestPipeline: Sendable {
     ) -> Void
 
     private let preflight: GraphChatRequestPreflight
+    private let schemaProvider: any GraphSchemaSnapshotProviding
     private let foundationalCoordinator:
         GraphChatFoundationalIntentCoordinator
     private let foundationalExecutor: GraphChatFoundationalIntentExecutor
@@ -136,6 +138,7 @@ nonisolated struct GraphChatRequestPipeline: Sendable {
 
     init(
         preflight: GraphChatRequestPreflight,
+        schemaProvider: any GraphSchemaSnapshotProviding,
         foundationalCoordinator: GraphChatFoundationalIntentCoordinator,
         foundationalExecutor: GraphChatFoundationalIntentExecutor,
         semanticCoordinator:
@@ -152,6 +155,7 @@ nonisolated struct GraphChatRequestPipeline: Sendable {
                 NoOpGraphChatObservabilityRecorder()
     ) {
         self.preflight = preflight
+        self.schemaProvider = schemaProvider
         self.foundationalCoordinator = foundationalCoordinator
         self.foundationalExecutor = foundationalExecutor
         self.semanticCoordinator = semanticCoordinator
@@ -257,6 +261,12 @@ nonisolated struct GraphChatRequestPipeline: Sendable {
             )
 
         case .provider(let plan):
+            let schemaContext = try await loadSchema(for: plan.scopeKey)
+            let turnSchemaContext = try preflight.validatedSchemaContext(
+                schemaContext,
+                for: plan.scopeKey
+            )
+            try await validateCurrentRequest()
             await record(
                 input.requestID,
                 stage: .foundationalIntent,
@@ -267,7 +277,8 @@ nonisolated struct GraphChatRequestPipeline: Sendable {
                 try await foundationalCoordinator.resolve(
                     providerPlan: plan,
                     requestID: input.requestID,
-                    requestedAt: input.requestedAt
+                    requestedAt: input.requestedAt,
+                    schemaContext: turnSchemaContext
                 )
             await record(
                 input.requestID,
@@ -528,7 +539,10 @@ nonisolated struct GraphChatRequestPipeline: Sendable {
                 phase: .started,
                 usesProvider: true
             )
-            let initialResources = try await sessionResources(plan)
+            let initialResources = try await sessionResources(
+                plan,
+                turnSchemaContext
+            )
             await record(
                 input.requestID,
                 stage: .sessionResources,
@@ -930,6 +944,32 @@ nonisolated struct GraphChatRequestPipeline: Sendable {
             phase: .completed,
             usesProvider: usesProvider
         )
+    }
+
+    private func loadSchema(
+        for key: GraphChatOrchestrationScopeKey
+    ) async throws -> GraphSchemaContext {
+        do {
+            try Task.checkCancellation()
+            let context = try await schemaProvider.makeSnapshot(
+                in: key.graphScope,
+                exampleFieldIDs: []
+            )
+            try Task.checkCancellation()
+            return context
+        } catch is CancellationError {
+            throw CancellationError()
+        } catch {
+            if Task.isCancelled {
+                throw CancellationError()
+            }
+            throw GraphChatError(
+                code: .schemaUnavailable,
+                message: "Das Schema des aktiven Graphen konnte nicht geladen werden.",
+                recoverySuggestion:
+                    "Öffne den Graphen erneut und versuche es noch einmal."
+            )
+        }
     }
 
     private func record(

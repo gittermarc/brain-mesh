@@ -2,480 +2,205 @@
 //  GraphSchemaService.swift
 //  BrainMesh
 //
-//  Deterministic graph schema snapshots built from the centralized read repository.
+//  Revision-aware graph-chat schema loading through the narrow source repository.
 //
 
 import Foundation
 
 nonisolated enum GraphSchemaServiceError: LocalizedError, Equatable, Sendable {
     case repositoryScopeMismatch(expected: GraphScope, actual: GraphScope)
+    case sourceScopeMismatch
+    case schemaChangedDuringLoad
 
     var errorDescription: String? {
         switch self {
         case .repositoryScopeMismatch:
             return "Das geladene Graph-Schema gehört nicht zum angeforderten Graphen."
+        case .sourceScopeMismatch:
+            return "Der geladene Schema-Scope entspricht nicht der Anfrage."
+        case .schemaChangedDuringLoad:
+            return "Das Graph-Schema wurde während des Ladens geändert."
         }
     }
 }
 
 nonisolated protocol GraphSchemaReading: Sendable {
-    func sourceSnapshot(in scope: GraphScope) async throws -> GraphSourceSnapshotDTO
+    func schemaSourceSnapshot(
+        in scope: GraphScope,
+        exampleFieldIDs: Set<UUID>
+    ) async throws -> GraphSchemaSourceSnapshotDTO
 }
 
 extension GraphReadRepository: GraphSchemaReading {}
 
 actor GraphSchemaService {
-    static let shared = GraphSchemaService(repository: GraphReadRepository.shared)
+    static let shared = GraphSchemaService(
+        repository: GraphReadRepository.shared
+    )
 
     private let repository: any GraphSchemaReading
-    private let limits: GraphSchemaLimits
+    private let revisionProvider: any GraphSchemaRevisionProviding
+    private let cache: GraphSchemaContextCache
+    private let builder: GraphSchemaContextBuilder
+    private let fingerprintStore: GraphSchemaSourceFingerprintStore
 
     init(
         repository: any GraphSchemaReading,
-        limits: GraphSchemaLimits = .default
+        limits: GraphSchemaLimits = .default,
+        revisionProvider: any GraphSchemaRevisionProviding =
+            GraphMutationEventBus.shared,
+        cache: GraphSchemaContextCache = GraphSchemaContextCache(),
+        fingerprintStore: GraphSchemaSourceFingerprintStore =
+            GraphSchemaSourceFingerprintStore()
     ) {
         self.repository = repository
-        self.limits = limits
+        self.revisionProvider = revisionProvider
+        self.cache = cache
+        builder = GraphSchemaContextBuilder(limits: limits)
+        self.fingerprintStore = fingerprintStore
     }
 
     func makeSnapshot(
         in scope: GraphScope,
         exampleFieldIDs: Set<UUID> = []
     ) async throws -> GraphSchemaContext {
-        try Task.checkCancellation()
-        let source = try await repository.sourceSnapshot(in: scope)
-        try Task.checkCancellation()
+        let sourceScope = GraphSchemaSourceScope(
+            exampleFieldIDs: exampleFieldIDs
+        )
 
-        guard source.scope == scope, source.graph.scope == scope else {
-            throw GraphSchemaServiceError.repositoryScopeMismatch(
-                expected: scope,
-                actual: source.scope
+        // A mutation racing the read is retried under its new authoritative key. The bound keeps
+        // a continuously mutating graph from monopolizing the caller indefinitely.
+        for _ in 0..<4 {
+            try Task.checkCancellation()
+            let revision = await revisionProvider.schemaRevision(
+                in: scope,
+                sourceScope: sourceScope
             )
-        }
-
-        return try buildContext(
-            source: source,
-            requestedExampleFieldIDs: exampleFieldIDs
-        )
-    }
-
-    private func buildContext(
-        source: GraphSourceSnapshotDTO,
-        requestedExampleFieldIDs: Set<UUID>
-    ) throws -> GraphSchemaContext {
-        let includedEntities = Array(source.entities.prefix(limits.maximumEntities))
-        let includedEntityIDs = Set(includedEntities.map(\.id))
-        let sourceEntityIDs = Set(source.entities.map(\.id))
-
-        var attributesByEntityID: [UUID: [GraphAttributeDTO]] = [:]
-        attributesByEntityID.reserveCapacity(includedEntities.count)
-        for (index, attribute) in source.attributes.enumerated() {
-            try checkCancellation(at: index)
-            guard
-                let ownerEntityID = attribute.ownerEntityID,
-                sourceEntityIDs.contains(ownerEntityID)
-            else {
-                continue
-            }
-            attributesByEntityID[ownerEntityID, default: []].append(attribute)
-        }
-
-        var definitionsByEntityID: [UUID: [GraphDetailFieldDefinitionDTO]] = [:]
-        definitionsByEntityID.reserveCapacity(includedEntities.count)
-        for (index, definition) in source.detailFieldDefinitions.enumerated() {
-            try checkCancellation(at: index)
-            guard sourceEntityIDs.contains(definition.entityID) else {
-                continue
-            }
-            definitionsByEntityID[definition.entityID, default: []].append(definition)
-        }
-        for entityID in definitionsByEntityID.keys {
-            definitionsByEntityID[entityID]?.sort(by: Self.fieldSort)
-        }
-
-        let valuesByFieldID = try groupedExampleValues(
-            source.detailValues,
-            requestedFieldIDs: requestedExampleFieldIDs
-        )
-
-        var entities: [GraphSchemaEntity] = []
-        entities.reserveCapacity(includedEntities.count)
-        var entityResolutions: [GraphEntityAlias: GraphSchemaEntityResolution] = [:]
-        entityResolutions.reserveCapacity(includedEntities.count)
-        var fieldResolutions: [GraphFieldAlias: GraphSchemaFieldResolution] = [:]
-        fieldResolutions.reserveCapacity(
-            min(source.detailFieldDefinitions.count, limits.maximumFieldsTotal)
-        )
-        var nodeEntityIDs: [NodeRefKey: UUID] = [:]
-        nodeEntityIDs.reserveCapacity(
-            includedEntities.count + attributesByEntityID.values.reduce(0) { $0 + $1.count }
-        )
-        var nodesByKey: [NodeRefKey: GraphSchemaNodeResolution] = [:]
-        nodesByKey.reserveCapacity(
-            source.entities.count + source.attributes.count
-        )
-
-        var nextFieldNumber = 1
-        var includedFieldCount = 0
-        var includedChoiceOptionCount = 0
-        var sourceChoiceOptionCount = 0
-        var includedExampleCount = 0
-        var sourceExampleCount = 0
-        var stringsWereTruncated = false
-
-        for (entityIndex, entity) in includedEntities.enumerated() {
-            try checkCancellation(at: entityIndex)
-            let entityAlias = GraphEntityAlias("E\(entityIndex + 1)")
-            let entityName = truncate(entity.name, didTruncate: &stringsWereTruncated)
-            let entityResolution = GraphSchemaEntityResolution(
-                alias: entityAlias,
-                entityID: entity.id,
-                name: entity.name
+            let key = GraphSchemaContextCacheKey(
+                graphID: scope.graphID,
+                revision: revision,
+                sourceScope: sourceScope,
+                limits: builder.limits
             )
-            entityResolutions[entityAlias] = entityResolution
-            nodeEntityIDs[entity.nodeKey] = entity.id
-            nodesByKey[entity.nodeKey] = GraphSchemaNodeResolution(
-                node: entity.nodeKey,
-                ownerEntityID: entity.id,
-                displayName: entity.name
-            )
+            let repository = self.repository
+            let revisionProvider = self.revisionProvider
+            let builder = self.builder
+            let fingerprintStore = self.fingerprintStore
 
-            let entityAttributes = attributesByEntityID[entity.id] ?? []
-            for attribute in entityAttributes {
-                nodeEntityIDs[attribute.nodeKey] = entity.id
-                nodesByKey[attribute.nodeKey] = GraphSchemaNodeResolution(
-                    node: attribute.nodeKey,
-                    ownerEntityID: entity.id,
-                    displayName: attribute.displayLabel
-                )
-            }
-
-            let sourceDefinitions = definitionsByEntityID[entity.id] ?? []
-            let remainingGlobalCapacity = limits.maximumFieldsTotal - includedFieldCount
-            let entityCapacity = min(
-                limits.maximumFieldsPerEntity,
-                max(remainingGlobalCapacity, 0)
-            )
-            let includedDefinitions = Array(sourceDefinitions.prefix(entityCapacity))
-            var schemaFields: [GraphSchemaField] = []
-            schemaFields.reserveCapacity(includedDefinitions.count)
-
-            for (fieldIndex, definition) in includedDefinitions.enumerated() {
-                try checkCancellation(at: fieldIndex)
-                let fieldAlias = GraphFieldAlias("F\(nextFieldNumber)")
-                nextFieldNumber += 1
-                includedFieldCount += 1
-
-                sourceChoiceOptionCount += definition.options.count
-                let includedOptions = Array(
-                    definition.options.prefix(limits.maximumChoiceOptionsPerField)
-                )
-                includedChoiceOptionCount += includedOptions.count
-                let choiceOptions = includedOptions.map {
-                    truncate($0, didTruncate: &stringsWereTruncated)
-                }
-
-                let allExamples = valuesByFieldID[definition.id] ?? []
-                sourceExampleCount += allExamples.count
-                let includedExamples = Array(
-                    allExamples.prefix(limits.maximumExampleValuesPerField)
-                )
-                includedExampleCount += includedExamples.count
-                let exampleValues = includedExamples.map {
-                    truncate($0, didTruncate: &stringsWereTruncated)
-                }
-
-                let fieldName = truncate(
-                    definition.name,
-                    didTruncate: &stringsWereTruncated
-                )
-                let unit = definition.unit.map {
-                    truncate($0, didTruncate: &stringsWereTruncated)
-                }
-
-                schemaFields.append(
-                    GraphSchemaField(
-                        alias: fieldAlias,
-                        name: fieldName,
-                        type: definition.type,
-                        unit: unit,
-                        choiceOptions: choiceOptions,
-                        isPinned: definition.isPinned,
-                        sortIndex: definition.sortIndex,
-                        exampleValues: exampleValues,
-                        optionsWereTruncated: definition.options.count > includedOptions.count,
-                        examplesWereTruncated: allExamples.count > includedExamples.count
+            do {
+                let context = try await cache.value(for: key) {
+                    try Task.checkCancellation()
+                    let source = try await repository.schemaSourceSnapshot(
+                        in: scope,
+                        exampleFieldIDs: sourceScope.exampleFieldIDSet
                     )
-                )
-
-                fieldResolutions[fieldAlias] = GraphSchemaFieldResolution(
-                    alias: fieldAlias,
-                    entityAlias: entityAlias,
-                    entityID: entity.id,
-                    fieldID: definition.id,
-                    name: definition.name,
-                    type: definition.type,
-                    unit: definition.unit,
-                    choiceOptions: includedOptions,
-                    isPinned: definition.isPinned,
-                    sortIndex: definition.sortIndex
-                )
-            }
-
-            entities.append(
-                GraphSchemaEntity(
-                    alias: entityAlias,
-                    name: entityName,
-                    attributeCount: entityAttributes.count,
-                    fields: schemaFields,
-                    fieldsWereTruncated: sourceDefinitions.count > includedDefinitions.count
-                )
-            )
-        }
-
-        let promptAliasMap = GraphSchemaAliasMap(
-            graphScope: source.scope,
-            entitiesByAlias: entityResolutions,
-            fieldsByAlias: fieldResolutions,
-            nodeEntityIDs: nodeEntityIDs,
-            nodesByKey: nodesByKey
-        )
-
-        // The provider-facing alias map remains compact. A separate app-only
-        // map is complete so foundational compilation does not expand or
-        // otherwise change the existing provider contract.
-        var foundationalEntityResolutions = entityResolutions
-        var foundationalFieldResolutions = fieldResolutions
-        var foundationalNodeEntityIDs = nodeEntityIDs
-        var foundationalNodesByKey = nodesByKey
-        var resolvedFieldIDs = Set(
-            foundationalFieldResolutions.values.map(\.fieldID)
-        )
-        for (entityIndex, entity) in source.entities.enumerated() {
-            try checkCancellation(at: entityIndex)
-            let entityAlias = GraphEntityAlias("E\(entityIndex + 1)")
-            if foundationalEntityResolutions[entityAlias] == nil {
-                foundationalEntityResolutions[entityAlias] =
-                    GraphSchemaEntityResolution(
-                        alias: entityAlias,
-                        entityID: entity.id,
-                        name: entity.name
+                    try Task.checkCancellation()
+                    guard source.scope == scope,
+                          source.graph.scope == scope else {
+                        throw GraphSchemaServiceError.repositoryScopeMismatch(
+                            expected: scope,
+                            actual: source.scope
+                        )
+                    }
+                    guard source.sourceScope == sourceScope else {
+                        throw GraphSchemaServiceError.sourceScopeMismatch
+                    }
+                    let revisionAfterRead = await revisionProvider.schemaRevision(
+                        in: scope,
+                        sourceScope: sourceScope
                     )
-            }
-            foundationalNodeEntityIDs[entity.nodeKey] = entity.id
-            foundationalNodesByKey[entity.nodeKey] =
-                GraphSchemaNodeResolution(
-                    node: entity.nodeKey,
-                    ownerEntityID: entity.id,
-                    displayName: entity.name
-                )
-            for attribute in attributesByEntityID[entity.id] ?? [] {
-                foundationalNodeEntityIDs[attribute.nodeKey] = entity.id
-                foundationalNodesByKey[attribute.nodeKey] =
-                    GraphSchemaNodeResolution(
-                        node: attribute.nodeKey,
-                        ownerEntityID: entity.id,
-                        displayName: attribute.name
-                    )
-            }
+                    guard revisionAfterRead == revision else {
+                        throw GraphSchemaContextCacheError.staleRevision
+                    }
 
-            for definition in definitionsByEntityID[entity.id] ?? [] {
-                guard resolvedFieldIDs.insert(definition.id).inserted else {
+                    let context = try builder.build(
+                        source: source,
+                        cacheKey: key
+                    )
+                    try Task.checkCancellation()
+                    let revisionAfterBuild = await revisionProvider.schemaRevision(
+                        in: scope,
+                        sourceScope: sourceScope
+                    )
+                    guard revisionAfterBuild == revision else {
+                        throw GraphSchemaContextCacheError.staleRevision
+                    }
+                    await fingerprintStore.record(source)
+                    return context
+                }
+                try Task.checkCancellation()
+                let currentRevision = await revisionProvider.schemaRevision(
+                    in: scope,
+                    sourceScope: sourceScope
+                )
+                guard currentRevision == revision else {
                     continue
                 }
-                let fieldAlias = GraphFieldAlias("F\(nextFieldNumber)")
-                nextFieldNumber += 1
-                foundationalFieldResolutions[fieldAlias] =
-                    GraphSchemaFieldResolution(
-                        alias: fieldAlias,
-                        entityAlias: entityAlias,
-                        entityID: entity.id,
-                        fieldID: definition.id,
-                        name: definition.name,
-                        type: definition.type,
-                        unit: definition.unit,
-                        choiceOptions: definition.options,
-                        isPinned: definition.isPinned,
-                        sortIndex: definition.sortIndex
-                    )
-            }
-        }
-
-        let sourceFieldCount = source.detailFieldDefinitions.filter {
-            includedEntityIDs.contains($0.entityID)
-        }.count
-        let truncation = GraphSchemaTruncation(
-            sourceEntityCount: source.entities.count,
-            includedEntityCount: entities.count,
-            sourceFieldCount: sourceFieldCount,
-            includedFieldCount: includedFieldCount,
-            sourceChoiceOptionCount: sourceChoiceOptionCount,
-            includedChoiceOptionCount: includedChoiceOptionCount,
-            sourceExampleValueCount: sourceExampleCount,
-            includedExampleValueCount: includedExampleCount,
-            stringsWereTruncated: stringsWereTruncated
-        )
-        let graphName = truncate(
-            source.graph.name,
-            didTruncate: &stringsWereTruncated
-        )
-        let finalTruncation = GraphSchemaTruncation(
-            sourceEntityCount: truncation.sourceEntityCount,
-            includedEntityCount: truncation.includedEntityCount,
-            sourceFieldCount: truncation.sourceFieldCount,
-            includedFieldCount: truncation.includedFieldCount,
-            sourceChoiceOptionCount: truncation.sourceChoiceOptionCount,
-            includedChoiceOptionCount: truncation.includedChoiceOptionCount,
-            sourceExampleValueCount: truncation.sourceExampleValueCount,
-            includedExampleValueCount: truncation.includedExampleValueCount,
-            stringsWereTruncated: stringsWereTruncated
-        )
-        let snapshot = GraphSchemaSnapshot(
-            graphName: graphName,
-            entities: entities,
-            truncation: finalTruncation
-        )
-        let foundationalAliasMap = GraphSchemaAliasMap(
-            graphScope: source.scope,
-            entitiesByAlias: foundationalEntityResolutions,
-            fieldsByAlias: foundationalFieldResolutions,
-            nodeEntityIDs: foundationalNodeEntityIDs,
-            nodesByKey: foundationalNodesByKey
-        )
-
-        return GraphSchemaContext(
-            graphScope: source.scope,
-            snapshot: snapshot,
-            aliases: promptAliasMap,
-            foundationalAliases: foundationalAliasMap
-        )
-    }
-
-    private func groupedExampleValues(
-        _ values: [GraphDetailValueDTO],
-        requestedFieldIDs: Set<UUID>
-    ) throws -> [UUID: [GraphSchemaExampleValue]] {
-        guard requestedFieldIDs.isEmpty == false,
-            limits.maximumExampleValuesPerField > 0
-        else {
-            return [:]
-        }
-
-        var result: [UUID: [GraphSchemaExampleValue]] = [:]
-        var seen: [UUID: Set<GraphSchemaExampleValue>] = [:]
-
-        for (index, value) in values.enumerated() {
-            try checkCancellation(at: index)
-            guard requestedFieldIDs.contains(value.fieldID) else {
+                return context
+            } catch GraphSchemaContextCacheError.staleRevision {
                 continue
             }
-            guard let example = Self.exampleValue(from: value.value) else {
-                continue
-            }
-            guard seen[value.fieldID, default: []].insert(example).inserted else {
-                continue
-            }
-            result[value.fieldID, default: []].append(example)
         }
-
-        for fieldID in result.keys {
-            result[fieldID]?.sort(by: Self.exampleSort)
-        }
-        return result
+        throw GraphSchemaServiceError.schemaChangedDuringLoad
     }
 
-    private func truncate(
-        _ value: String,
-        didTruncate: inout Bool
-    ) -> String {
-        guard value.count > limits.maximumStringLength else {
-            return value
+    /// Reconciles CloudKit or import writes that did not traverse the local mutation bus.
+    /// Only the narrow schema rows and previously requested example-field scopes are fetched.
+    @discardableResult
+    func reconcileExternalChanges(
+        in scope: GraphScope
+    ) async throws -> Bool {
+        try Task.checkCancellation()
+        var sourceScopes = await fingerprintStore.sourceScopes(
+            for: scope.graphID
+        )
+        let baseScope = GraphSchemaSourceScope()
+        if sourceScopes.contains(baseScope) == false {
+            sourceScopes.insert(baseScope, at: 0)
         }
-        didTruncate = true
-        return String(value.prefix(limits.maximumStringLength))
-    }
 
-    private func truncate(
-        _ value: GraphSchemaExampleValue,
-        didTruncate: inout Bool
-    ) -> GraphSchemaExampleValue {
-        switch value {
-        case .text(let text):
-            return .text(truncate(text, didTruncate: &didTruncate))
-        case .choice(let choice):
-            return .choice(truncate(choice, didTruncate: &didTruncate))
-        case .integer, .decimal, .date, .boolean:
-            return value
-        }
-    }
-
-    private func checkCancellation(at index: Int) throws {
-        if index.isMultiple(of: 64) {
+        var loadedSources: [GraphSchemaSourceSnapshotDTO] = []
+        loadedSources.reserveCapacity(sourceScopes.count)
+        var structureChanged = false
+        var changedExampleFieldIDs = Set<UUID>()
+        for sourceScope in sourceScopes {
             try Task.checkCancellation()
+            let source = try await repository.schemaSourceSnapshot(
+                in: scope,
+                exampleFieldIDs: sourceScope.exampleFieldIDSet
+            )
+            guard source.scope == scope,
+                  source.graph.scope == scope else {
+                throw GraphSchemaServiceError.repositoryScopeMismatch(
+                    expected: scope,
+                    actual: source.scope
+                )
+            }
+            let changes = await fingerprintStore.changes(in: source)
+            structureChanged = structureChanged || changes.structure
+            changedExampleFieldIDs.formUnion(
+                changes.exampleFieldIDs
+            )
+            loadedSources.append(source)
         }
+
+        if structureChanged {
+            await revisionProvider.recordExternalSchemaChange(in: scope)
+            await cache.invalidate(graphID: scope.graphID)
+        } else if changedExampleFieldIDs.isEmpty == false {
+            await revisionProvider.recordExternalExampleValueChanges(
+                fieldIDs: changedExampleFieldIDs,
+                in: scope
+            )
+        }
+        for source in loadedSources {
+            await fingerprintStore.record(source)
+        }
+        return structureChanged || changedExampleFieldIDs.isEmpty == false
     }
 
-    private static func fieldSort(
-        _ lhs: GraphDetailFieldDefinitionDTO,
-        _ rhs: GraphDetailFieldDefinitionDTO
-    ) -> Bool {
-        if lhs.sortIndex != rhs.sortIndex {
-            return lhs.sortIndex < rhs.sortIndex
-        }
-        let lhsName = BMSearch.fold(lhs.name)
-        let rhsName = BMSearch.fold(rhs.name)
-        if lhsName != rhsName {
-            return lhsName < rhsName
-        }
-        return lhs.id.uuidString < rhs.id.uuidString
-    }
-
-    private static func exampleValue(
-        from payload: GraphDetailValuePayload
-    ) -> GraphSchemaExampleValue? {
-        switch payload {
-        case .text(let value):
-            let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
-            return trimmed.isEmpty ? nil : .text(trimmed)
-        case .integer(let value):
-            return .integer(value)
-        case .decimal(let value):
-            return value.isFinite ? .decimal(value) : nil
-        case .date(let value):
-            return .date(value)
-        case .boolean(let value):
-            return .boolean(value)
-        case .choice(let value):
-            let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
-            return trimmed.isEmpty ? nil : .choice(trimmed)
-        case .empty:
-            return nil
-        }
-    }
-
-    private static func exampleSort(
-        _ lhs: GraphSchemaExampleValue,
-        _ rhs: GraphSchemaExampleValue
-    ) -> Bool {
-        exampleSortKey(lhs) < exampleSortKey(rhs)
-    }
-
-    private static func exampleSortKey(
-        _ value: GraphSchemaExampleValue
-    ) -> String {
-        switch value {
-        case .text(let text):
-            return "0:\(BMSearch.fold(text))"
-        case .integer(let integer):
-            return "1:\(String(format: "%020d", integer))"
-        case .decimal(let decimal):
-            return "2:\(String(format: "%024.8f", decimal))"
-        case .date(let date):
-            return "3:\(date.timeIntervalSinceReferenceDate)"
-        case .boolean(let boolean):
-            return "4:\(boolean ? 1 : 0)"
-        case .choice(let choice):
-            return "5:\(BMSearch.fold(choice))"
-        }
+    func invalidateForGraphSwitch(from graphID: UUID?) async {
+        guard let graphID else { return }
+        await cache.invalidate(graphID: graphID)
     }
 }
