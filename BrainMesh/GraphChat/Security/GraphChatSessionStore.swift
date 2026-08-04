@@ -178,9 +178,19 @@ final class GraphChatSessionStore: ObservableObject {
             let existingRequestSatisfiesCurrent =
                 indexRefreshRequest.graphScope == request.graphScope
                 && (indexRefreshRequest.prepareIfNeeded || request.prepareIfNeeded == false)
-            await indexRefreshTask.value
             if existingRequestSatisfiesCurrent {
+                await withTaskCancellationHandler {
+                    await indexRefreshTask.value
+                } onCancel: {
+                    indexRefreshTask.cancel()
+                }
                 return
+            }
+            indexRefreshTask.cancel()
+            await indexRefreshTask.value
+            if self.indexRefreshRequest == indexRefreshRequest {
+                self.indexRefreshTask = nil
+                self.indexRefreshRequest = nil
             }
         }
 
@@ -218,7 +228,11 @@ final class GraphChatSessionStore: ObservableObject {
         }
         indexRefreshRequest = request
         indexRefreshTask = refreshTask
-        await refreshTask.value
+        await withTaskCancellationHandler {
+            await refreshTask.value
+        } onCancel: {
+            refreshTask.cancel()
+        }
         if indexRefreshRequest == request {
             indexRefreshTask = nil
             indexRefreshRequest = nil
@@ -366,6 +380,9 @@ final class GraphChatSessionStore: ObservableObject {
         resetReason: GraphChatConversationResetReason = .sessionDiscarded
     ) {
         let discardedScope = currentScope
+        indexRefreshTask?.cancel()
+        indexRefreshTask = nil
+        indexRefreshRequest = nil
         executionGate.revoke()
         accessDecision = .denied
         isGenerationAuthorized = false

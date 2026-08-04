@@ -50,6 +50,9 @@ nonisolated enum GraphSearchIndexStoreError: Error, Sendable {
     case incompatibleSourceManifest(formatVersion: Int, indexSchemaVersion: Int)
     case sourceManifestChangedDuringReconciliation(graphID: UUID)
     case invalidSourceManifest(reason: String)
+    case stagingGenerationMissing(graphID: UUID, generationID: UUID)
+    case stagingGenerationIncomplete(graphID: UUID, generationID: UUID)
+    case activeGenerationChangedDuringRebuild(graphID: UUID)
     case invalidStoredValue(column: String)
     case metadataEncoding(type: String)
     case metadataDecoding(type: String)
@@ -78,6 +81,12 @@ extension GraphSearchIndexStoreError: LocalizedError {
             return "The graph search source manifest for \(graphID.uuidString) changed during reconciliation."
         case .invalidSourceManifest(let reason):
             return "The graph search source manifest is invalid: \(reason)"
+        case .stagingGenerationMissing(let graphID, let generationID):
+            return "The staging generation \(generationID.uuidString) for graph \(graphID.uuidString) is missing."
+        case .stagingGenerationIncomplete(let graphID, let generationID):
+            return "The staging generation \(generationID.uuidString) for graph \(graphID.uuidString) is incomplete."
+        case .activeGenerationChangedDuringRebuild(let graphID):
+            return "The active search index generation for \(graphID.uuidString) changed during rebuild."
         case .invalidStoredValue(let column):
             return "The graph search index contains an invalid value in column \(column)."
         case .metadataEncoding(let type):
@@ -164,6 +173,14 @@ actor GraphSearchIndexStore {
         try withTransaction(operation: "clear-store") { store in
             let connection = try store.requireConnection()
             try store.cancellationCheck()
+            try connection.execute(
+                "DELETE FROM graph_search_staging_generations",
+                operation: "clear-staging-generations"
+            )
+            try connection.execute(
+                "DELETE FROM graph_search_index_lifecycle",
+                operation: "clear-index-lifecycle"
+            )
             try connection.execute(
                 "DELETE FROM graph_search_source_manifests",
                 operation: "clear-source-manifests"

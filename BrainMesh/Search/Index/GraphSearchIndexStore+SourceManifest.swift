@@ -126,6 +126,10 @@ extension GraphSearchIndexStore {
                 sourceManifest,
                 connection: transactionConnection
             )
+            try store.deleteLifecycleRows(
+                graphID: graphID,
+                connection: transactionConnection
+            )
         }
 
         BMLog.search.info(
@@ -376,6 +380,10 @@ extension GraphSearchIndexStore {
             }
             try store.writeSourceManifest(
                 sourceManifest,
+                connection: transactionConnection
+            )
+            try store.deleteLifecycleRows(
+                graphID: graphID,
                 connection: transactionConnection
             )
         }

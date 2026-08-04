@@ -133,11 +133,23 @@ nonisolated struct LiveGraphChatIndexStatusProvider: GraphChatIndexStatusProvidi
     func presentationState(
         for scope: GraphScope
     ) async -> GraphChatIndexPresentationState {
-        let status = await indexer.status(for: scope)
         let readiness = await reconciler.readiness(for: scope)
+        let status = await indexer.status(for: scope)
 
         if readiness.state == .reconciling {
             return .reconciling(documentCount: readiness.documentCount)
+        }
+        if readiness.state == .notReady {
+            return readiness.isIndexUsable
+                ? .stale(documentCount: readiness.documentCount)
+                : .notReady(documentCount: readiness.documentCount)
+        }
+        if readiness.state == .unavailable {
+            return .failed(
+                message: "Der lokale Index ist nicht verfügbar.",
+                isUsable: readiness.isIndexUsable,
+                documentCount: readiness.documentCount
+            )
         }
 
         switch status.state {

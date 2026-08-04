@@ -435,26 +435,54 @@ extension GraphSearchDocumentBuilder {
                 + snapshot.attachments.count
         )
 
-        builds.append(contentsOf: try snapshot.entities.map { try sourceBuild(for: $0) })
-        builds.append(contentsOf: try snapshot.attributes.map { try sourceBuild(for: $0) })
-        builds.append(contentsOf: try snapshot.links.map { try sourceBuild(for: $0) })
-        builds.append(contentsOf: try snapshot.detailFieldDefinitions.map { try sourceBuild(for: $0) })
-        builds.append(contentsOf: try snapshot.detailValues.map { try sourceBuild(for: $0) })
-        builds.append(contentsOf: try snapshot.attachments.map { try sourceBuild(for: $0) })
+        for entity in snapshot.entities {
+            try checkBuildCancellation(processedSourceCount: builds.count)
+            builds.append(try sourceBuild(for: entity))
+        }
+        for attribute in snapshot.attributes {
+            try checkBuildCancellation(processedSourceCount: builds.count)
+            builds.append(try sourceBuild(for: attribute))
+        }
+        for link in snapshot.links {
+            try checkBuildCancellation(processedSourceCount: builds.count)
+            builds.append(try sourceBuild(for: link))
+        }
+        for definition in snapshot.detailFieldDefinitions {
+            try checkBuildCancellation(processedSourceCount: builds.count)
+            builds.append(try sourceBuild(for: definition))
+        }
+        for value in snapshot.detailValues {
+            try checkBuildCancellation(processedSourceCount: builds.count)
+            builds.append(try sourceBuild(for: value))
+        }
+        for attachment in snapshot.attachments {
+            try checkBuildCancellation(processedSourceCount: builds.count)
+            builds.append(try sourceBuild(for: attachment))
+        }
+        try Task.checkCancellation()
         builds.sort {
             if $0.reference.sourceKind.rawValue != $1.reference.sourceKind.rawValue {
                 return $0.reference.sourceKind.rawValue < $1.reference.sourceKind.rawValue
             }
             return $0.reference.sourceID.uuidString < $1.reference.sourceID.uuidString
         }
+        try Task.checkCancellation()
 
-        let documents = builds
-            .flatMap(\.documents)
-            .sorted { $0.documentID < $1.documentID }
+        var documents: [GraphSearchDocument] = []
+        documents.reserveCapacity(builds.reduce(0) { $0 + $1.documents.count })
+        for (index, build) in builds.enumerated() {
+            if index.isMultiple(of: 64) {
+                try Task.checkCancellation()
+            }
+            documents.append(contentsOf: build.documents)
+        }
+        documents.sort { $0.documentID < $1.documentID }
+        try Task.checkCancellation()
         let manifest = try GraphSearchSourceManifest(
             graphID: snapshot.scope.graphID,
             entries: builds.map(\.manifestEntry)
         )
+        try Task.checkCancellation()
 
         return GraphSearchIndexBuildSnapshot(
             graphID: snapshot.scope.graphID,
@@ -464,11 +492,22 @@ extension GraphSearchDocumentBuilder {
         )
     }
 
+    private nonisolated func checkBuildCancellation(
+        processedSourceCount: Int
+    ) throws {
+        if processedSourceCount.isMultiple(of: 64) {
+            try Task.checkCancellation()
+        }
+    }
+
     private nonisolated func makeSourceBuild(
         reference: GraphSearchSourceReference,
         documents: [GraphSearchDocument]
     ) throws -> GraphSearchSourceBuild {
+        workInstrumentation.record(.sourceDocumentsBuilt)
+        workInstrumentation.record(.sourceDocumentsSorted)
         let sortedDocuments = documents.sorted { $0.documentID < $1.documentID }
+        workInstrumentation.record(.sourceHashed)
         return GraphSearchSourceBuild(
             reference: reference,
             documents: sortedDocuments,

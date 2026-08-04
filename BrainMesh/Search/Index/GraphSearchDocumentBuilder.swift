@@ -7,6 +7,28 @@
 
 import Foundation
 
+nonisolated enum GraphSearchIndexWorkPhase: Hashable, Sendable {
+    case sourceDocumentsBuilt
+    case sourceDocumentsSorted
+    case sourceHashed
+}
+
+nonisolated struct GraphSearchIndexWorkInstrumentation: Sendable {
+    private let recorder: @Sendable (GraphSearchIndexWorkPhase) -> Void
+
+    static let disabled = GraphSearchIndexWorkInstrumentation { _ in }
+
+    init(
+        recorder: @escaping @Sendable (GraphSearchIndexWorkPhase) -> Void
+    ) {
+        self.recorder = recorder
+    }
+
+    func record(_ phase: GraphSearchIndexWorkPhase) {
+        recorder(phase)
+    }
+}
+
 nonisolated enum GraphSearchDocumentBuilderError: LocalizedError, Equatable, Sendable {
     case mismatchedGraphScope(expected: UUID, actual: UUID)
     case missingAttributeOwner(attributeID: UUID)
@@ -34,6 +56,14 @@ nonisolated enum GraphSearchDocumentBuilderError: LocalizedError, Equatable, Sen
 }
 
 nonisolated struct GraphSearchDocumentBuilder: Sendable {
+    let workInstrumentation: GraphSearchIndexWorkInstrumentation
+
+    init(
+        workInstrumentation: GraphSearchIndexWorkInstrumentation = .disabled
+    ) {
+        self.workInstrumentation = workInstrumentation
+    }
+
     func documents(
         for snapshot: GraphSourceSnapshotDTO
     ) throws -> [GraphSearchDocument] {

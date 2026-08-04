@@ -2,7 +2,7 @@
 //  SearchGraphTool.swift
 //  BrainMesh
 //
-//  Local-index search with mandatory SwiftData source revalidation.
+//  Local-index search gated by graph-scoped persistent index readiness.
 //
 
 import Foundation

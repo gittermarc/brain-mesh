@@ -17,7 +17,9 @@ nonisolated enum GraphSearchIndexerTestFailure: LocalizedError, Sendable {
 }
 
 nonisolated enum GraphSearchIndexerTestRead: Hashable, Sendable {
+    case sourceRevision(UUID)
     case snapshot(UUID)
+    case sourcePage(UUID)
     case entity(UUID, UUID)
     case attribute(UUID, UUID)
     case attributes(UUID, UUID)
@@ -33,6 +35,7 @@ nonisolated enum GraphSearchIndexerTestRead: Hashable, Sendable {
 
 actor GraphSearchIndexerTestSource {
     private var snapshots: [UUID: GraphSourceSnapshotDTO]
+    private var sourceRevisions: [UUID: UUID]
     private var reads: [GraphSearchIndexerTestRead: Int] = [:]
     private var failingGraphIDs: Set<UUID> = []
     private var snapshotDelayNanoseconds: UInt64 = 0
@@ -41,14 +44,26 @@ actor GraphSearchIndexerTestSource {
         self.snapshots = Dictionary(
             uniqueKeysWithValues: snapshots.map { ($0.scope.graphID, $0) }
         )
+        sourceRevisions = Dictionary(
+            uniqueKeysWithValues: snapshots.map { ($0.scope.graphID, UUID()) }
+        )
     }
 
-    func setSnapshot(_ snapshot: GraphSourceSnapshotDTO) {
+    func setSnapshot(
+        _ snapshot: GraphSourceSnapshotDTO,
+        sourceRevision: UUID = UUID()
+    ) {
         snapshots[snapshot.scope.graphID] = snapshot
+        sourceRevisions[snapshot.scope.graphID] = sourceRevision
     }
 
     func removeSnapshot(graphID: UUID) {
         snapshots.removeValue(forKey: graphID)
+        sourceRevisions.removeValue(forKey: graphID)
+    }
+
+    func setSourceRevision(_ revision: UUID?, graphID: UUID) {
+        sourceRevisions[graphID] = revision
     }
 
     func setFailure(_ enabled: Bool, graphID: UUID) {
@@ -75,6 +90,11 @@ actor GraphSearchIndexerTestSource {
         reads.values.reduce(0, +)
     }
 
+    func searchSourceRevision(in scope: GraphScope) async throws -> UUID? {
+        record(.sourceRevision(scope.graphID))
+        return sourceRevisions[scope.graphID]
+    }
+
     func sourceSnapshot(in scope: GraphScope) async throws -> GraphSourceSnapshotDTO {
         record(.snapshot(scope.graphID))
         if failingGraphIDs.contains(scope.graphID) {
@@ -87,6 +107,56 @@ actor GraphSearchIndexerTestSource {
             throw GraphSearchIndexerTestFailure.missingSnapshot(scope.graphID)
         }
         return snapshot
+    }
+
+    func searchIndexSourcePage(
+        in scope: GraphScope,
+        cursor: GraphSearchIndexSourceCursor?,
+        limit: Int
+    ) async throws -> GraphSearchIndexSourcePage {
+        record(.sourcePage(scope.graphID))
+        if cursor == nil {
+            record(.snapshot(scope.graphID))
+            if failingGraphIDs.contains(scope.graphID) {
+                throw GraphSearchIndexerTestFailure.injected
+            }
+            if snapshotDelayNanoseconds > 0 {
+                try await Task.sleep(nanoseconds: snapshotDelayNanoseconds)
+            }
+        }
+        guard let snapshot = snapshots[scope.graphID] else {
+            throw GraphSearchIndexerTestFailure.missingSnapshot(scope.graphID)
+        }
+        var sources: [GraphSearchIndexSource] = []
+        sources.reserveCapacity(
+            snapshot.entities.count
+                + snapshot.attributes.count
+                + snapshot.links.count
+                + snapshot.detailFieldDefinitions.count
+                + snapshot.detailValues.count
+                + snapshot.attachments.count
+        )
+        sources.append(contentsOf: snapshot.entities.map(GraphSearchIndexSource.entity))
+        sources.append(contentsOf: snapshot.attributes.map(GraphSearchIndexSource.attribute))
+        sources.append(contentsOf: snapshot.links.map(GraphSearchIndexSource.link))
+        sources.append(
+            contentsOf: snapshot.detailFieldDefinitions.map(
+                GraphSearchIndexSource.detailFieldDefinition
+            )
+        )
+        sources.append(contentsOf: snapshot.detailValues.map(GraphSearchIndexSource.detailValue))
+        sources.append(contentsOf: snapshot.attachments.map(GraphSearchIndexSource.attachment))
+
+        let safeLimit = max(1, limit)
+        let offset = min(cursor?.offset ?? 0, sources.count)
+        let end = min(sources.count, offset + safeLimit)
+        return GraphSearchIndexSourcePage(
+            sources: Array(sources[offset..<end]),
+            nextCursor: end < sources.count
+                ? GraphSearchIndexSourceCursor(offset: end)
+                : nil,
+            estimatedSourceCount: sources.count
+        )
     }
 
     func entity(id: UUID, in scope: GraphScope) async throws -> GraphEntityDTO? {
@@ -632,6 +702,9 @@ struct GraphSearchIndexerFixture {
 func withGraphSearchIndexerTestEnvironment<T>(
     snapshots: [GraphSourceSnapshotDTO],
     sourceBatchSize: Int = GraphSearchIndexer.defaultSourceBatchSize,
+    storeCancellationCheck: @escaping @Sendable () throws -> Void = {
+        try Task.checkCancellation()
+    },
     operation: (
         GraphSearchIndexer,
         GraphSearchIndexerTestSource,
@@ -641,7 +714,8 @@ func withGraphSearchIndexerTestEnvironment<T>(
     let location = try GraphSearchIndexTestSupport.makeLocation()
     let store = GraphSearchIndexStore(
         databaseURL: location.databaseURL,
-        backendPreference: .indexedFallback
+        backendPreference: .indexedFallback,
+        cancellationCheck: storeCancellationCheck
     )
     let source = GraphSearchIndexerTestSource(snapshots: snapshots)
     let bus = GraphMutationEventBus()
@@ -715,7 +789,7 @@ actor GraphSearchIndexReadinessInvalidationRecorder: GraphSearchIndexReadinessIn
 
 func withGraphSearchReconcilerTestEnvironment<T>(
     snapshots: [GraphSourceSnapshotDTO],
-    foregroundMinimumInterval: TimeInterval = GraphSearchIndexReconciler.defaultForegroundMinimumInterval,
+    workInstrumentation: GraphSearchIndexWorkInstrumentation = .disabled,
     operation: (
         GraphSearchIndexReconciler,
         GraphSearchIndexer,
@@ -731,16 +805,20 @@ func withGraphSearchReconcilerTestEnvironment<T>(
     )
     let source = GraphSearchIndexerTestSource(snapshots: snapshots)
     let bus = GraphMutationEventBus()
+    let builder = GraphSearchDocumentBuilder(
+        workInstrumentation: workInstrumentation
+    )
     let indexer = GraphSearchIndexer(
         sourceReader: source,
         store: store,
-        subscriber: bus
+        subscriber: bus,
+        builder: builder
     )
     let reconciler = GraphSearchIndexReconciler(
         sourceReader: source,
         store: store,
         indexer: indexer,
-        foregroundMinimumInterval: foregroundMinimumInterval
+        builder: builder
     )
     await indexer.setReadinessInvalidator(reconciler)
 
@@ -767,5 +845,26 @@ func withGraphSearchReconcilerTestEnvironment<T>(
         }
         location.remove()
         throw error
+    }
+}
+
+nonisolated final class GraphSearchIndexWorkRecorder: @unchecked Sendable {
+    private let lock = NSLock()
+    private var counts: [GraphSearchIndexWorkPhase: Int] = [:]
+
+    func record(_ phase: GraphSearchIndexWorkPhase) {
+        lock.withLock {
+            counts[phase, default: 0] += 1
+        }
+    }
+
+    func count(_ phase: GraphSearchIndexWorkPhase) -> Int {
+        lock.withLock { counts[phase, default: 0] }
+    }
+
+    func reset() {
+        lock.withLock {
+            counts.removeAll(keepingCapacity: true)
+        }
     }
 }

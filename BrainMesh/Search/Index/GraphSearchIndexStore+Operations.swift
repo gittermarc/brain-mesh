@@ -31,6 +31,10 @@ extension GraphSearchIndexStore {
                     graphID: graphID,
                     connection: transactionConnection
                 )
+                try store.deleteLifecycleRows(
+                    graphID: graphID,
+                    connection: transactionConnection
+                )
             }
         }
 
@@ -63,6 +67,10 @@ extension GraphSearchIndexStore {
             try statement.stepExpectingDone()
             let deletedDocuments = try transactionConnection.changes()
             try store.deleteSourceManifest(
+                graphID: sourceReference.graphID,
+                connection: transactionConnection
+            )
+            try store.deleteLifecycleRows(
                 graphID: sourceReference.graphID,
                 connection: transactionConnection
             )
@@ -111,6 +119,10 @@ extension GraphSearchIndexStore {
                 graphID: sourceReference.graphID,
                 connection: transactionConnection
             )
+            try store.deleteLifecycleRows(
+                graphID: sourceReference.graphID,
+                connection: transactionConnection
+            )
         }
 
         BMLog.search.info(
@@ -148,6 +160,10 @@ extension GraphSearchIndexStore {
                 graphID: graphID,
                 connection: transactionConnection
             )
+            try store.deleteLifecycleRows(
+                graphID: graphID,
+                connection: transactionConnection
+            )
         }
 
         BMLog.search.info(
@@ -165,6 +181,10 @@ extension GraphSearchIndexStore {
             let transactionConnection = try store.requireConnection()
             try store.cancellationCheck()
             try store.deleteSourceManifest(
+                graphID: graphID,
+                connection: transactionConnection
+            )
+            try store.deleteLifecycleRows(
                 graphID: graphID,
                 connection: transactionConnection
             )
@@ -637,6 +657,14 @@ extension GraphSearchIndexStore {
         _ document: GraphSearchDocument,
         to statement: GraphSearchSQLiteStatement
     ) throws {
+        try bindDocument(document, to: statement, startingAt: 1)
+    }
+
+    func bindDocument(
+        _ document: GraphSearchDocument,
+        to statement: GraphSearchSQLiteStatement,
+        startingAt startIndex: Int32
+    ) throws {
         let rankingJSON = try encodeMetadata(
             document.ranking,
             type: "ranking"
@@ -663,27 +691,27 @@ extension GraphSearchIndexStore {
             attachmentJSON = nil
         }
 
-        try statement.bind(document.documentID, at: 1)
-        try statement.bind(document.graphID.uuidString.lowercased(), at: 2)
-        try statement.bind(document.documentKind.rawValue, at: 3)
-        try statement.bind(document.sourceKind.rawValue, at: 4)
-        try statement.bind(document.sourceID.uuidString.lowercased(), at: 5)
-        try statement.bind(document.ownerKindRaw, at: 6)
-        try statement.bind(document.ownerID?.uuidString.lowercased(), at: 7)
-        try statement.bind(document.nodeKindRaw, at: 8)
-        try statement.bind(document.nodeID?.uuidString.lowercased(), at: 9)
-        try statement.bind(document.fieldID?.uuidString.lowercased(), at: 10)
-        try statement.bind(document.title, at: 11)
-        try statement.bind(document.subtitle, at: 12)
-        try statement.bind(document.normalizedSearchText, at: 13)
-        try statement.bind(document.ranking.boost, at: 14)
-        try statement.bind(rankingJSON, at: 15)
-        try statement.bind(presentationJSON, at: 16)
-        try statement.bind(navigationJSON, at: 17)
-        try statement.bind(evidenceJSON, at: 18)
-        try statement.bind(attachmentJSON, at: 19)
-        try statement.bind(document.contentHash, at: 20)
-        try statement.bind(document.indexSchemaVersion, at: 21)
+        try statement.bind(document.documentID, at: startIndex)
+        try statement.bind(document.graphID.uuidString.lowercased(), at: startIndex + 1)
+        try statement.bind(document.documentKind.rawValue, at: startIndex + 2)
+        try statement.bind(document.sourceKind.rawValue, at: startIndex + 3)
+        try statement.bind(document.sourceID.uuidString.lowercased(), at: startIndex + 4)
+        try statement.bind(document.ownerKindRaw, at: startIndex + 5)
+        try statement.bind(document.ownerID?.uuidString.lowercased(), at: startIndex + 6)
+        try statement.bind(document.nodeKindRaw, at: startIndex + 7)
+        try statement.bind(document.nodeID?.uuidString.lowercased(), at: startIndex + 8)
+        try statement.bind(document.fieldID?.uuidString.lowercased(), at: startIndex + 9)
+        try statement.bind(document.title, at: startIndex + 10)
+        try statement.bind(document.subtitle, at: startIndex + 11)
+        try statement.bind(document.normalizedSearchText, at: startIndex + 12)
+        try statement.bind(document.ranking.boost, at: startIndex + 13)
+        try statement.bind(rankingJSON, at: startIndex + 14)
+        try statement.bind(presentationJSON, at: startIndex + 15)
+        try statement.bind(navigationJSON, at: startIndex + 16)
+        try statement.bind(evidenceJSON, at: startIndex + 17)
+        try statement.bind(attachmentJSON, at: startIndex + 18)
+        try statement.bind(document.contentHash, at: startIndex + 19)
+        try statement.bind(document.indexSchemaVersion, at: startIndex + 20)
     }
 
     func searchDocuments(

@@ -4,6 +4,66 @@ import Testing
 
 struct GraphSearchIndexPerformanceTests {
     @Test
+    func repeatedReadyChecksOnLargeGraphDoNoLinearSourceWork() async throws {
+        let fixture = GraphSearchIndexerFixture()
+        let entities = (0..<1_000).map { index in
+            GraphEntityDTO(
+                id: graphSearchIndexerTestUUID(
+                    graphID: fixture.graphID,
+                    value: 50_000 + index
+                ),
+                scope: fixture.scope,
+                name: "Ready Entity \(index)",
+                notes: "",
+                iconSymbolName: "circle",
+                createdAt: Date(
+                    timeIntervalSince1970: 1_700_500_000 + Double(index)
+                )
+            )
+        }
+        let snapshot = GraphSourceSnapshotDTO(
+            scope: fixture.scope,
+            graph: fixture.graph,
+            entities: entities,
+            attributes: [],
+            links: [],
+            detailFieldDefinitions: [],
+            detailValues: [],
+            attachments: []
+        )
+        let workRecorder = GraphSearchIndexWorkRecorder()
+
+        try await withGraphSearchReconcilerTestEnvironment(
+            snapshots: [snapshot],
+            workInstrumentation: GraphSearchIndexWorkInstrumentation {
+                workRecorder.record($0)
+            }
+        ) { reconciler, _, source, _, _ in
+            _ = await reconciler.ensureReady(
+                scope: fixture.scope,
+                reason: .firstSearch
+            )
+            await source.clearReads()
+            workRecorder.reset()
+
+            for _ in 0..<20 {
+                let result = await reconciler.ensureReady(
+                    scope: fixture.scope,
+                    reason: .chatSession
+                )
+                #expect(result.outcome == .ready)
+                #expect(result.metrics?.checkedSourceCount == 0)
+            }
+
+            #expect(await source.readCount(for: .snapshot(fixture.graphID)) == 0)
+            #expect(await source.readCount(for: .sourcePage(fixture.graphID)) == 0)
+            #expect(workRecorder.count(.sourceDocumentsBuilt) == 0)
+            #expect(workRecorder.count(.sourceDocumentsSorted) == 0)
+            #expect(workRecorder.count(.sourceHashed) == 0)
+        }
+    }
+
+    @Test
     func severalThousandDocumentsStayBehindBoundedIndexCandidateLimit() async throws {
         let graphID = UUID()
         let location = try GraphSearchIndexTestSupport.makeLocation()

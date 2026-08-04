@@ -331,4 +331,112 @@ nonisolated enum GraphScopedFetches {
             sortBy: [SortDescriptor(\MetaAttachment.createdAt)]
         )
     }
+
+    // MARK: - Search-index rebuild pages
+
+    static func searchIndexEntitiesPage(
+        in scope: GraphScope,
+        offset: Int,
+        limit: Int
+    ) -> FetchDescriptor<MetaEntity> {
+        let graphID = scope.graphID
+        var descriptor = FetchDescriptor<MetaEntity>(
+            predicate: #Predicate<MetaEntity> { value in
+                value.graphID == graphID
+            },
+            sortBy: [SortDescriptor(\MetaEntity.id)]
+        )
+        descriptor.fetchOffset = max(0, offset)
+        descriptor.fetchLimit = max(1, limit)
+        return descriptor
+    }
+
+    static func searchIndexAttributesPage(
+        in scope: GraphScope,
+        offset: Int,
+        limit: Int
+    ) -> FetchDescriptor<MetaAttribute> {
+        let graphID = scope.graphID
+        var descriptor = FetchDescriptor<MetaAttribute>(
+            predicate: #Predicate<MetaAttribute> { value in
+                value.graphID == graphID
+            },
+            sortBy: [SortDescriptor(\MetaAttribute.id)]
+        )
+        descriptor.fetchOffset = max(0, offset)
+        descriptor.fetchLimit = max(1, limit)
+        return descriptor
+    }
+
+    static func searchIndexLinksPage(
+        in scope: GraphScope,
+        offset: Int,
+        limit: Int
+    ) -> FetchDescriptor<MetaLink> {
+        let graphID = scope.graphID
+        var descriptor = FetchDescriptor<MetaLink>(
+            predicate: #Predicate<MetaLink> { value in
+                value.graphID == graphID
+            },
+            sortBy: [SortDescriptor(\MetaLink.id)]
+        )
+        descriptor.fetchOffset = max(0, offset)
+        descriptor.fetchLimit = max(1, limit)
+        return descriptor
+    }
+
+    static func searchIndexDetailFieldDefinitionsPage(
+        in scope: GraphScope,
+        offset: Int,
+        limit: Int
+    ) -> FetchDescriptor<MetaDetailFieldDefinition> {
+        let graphID = scope.graphID
+        var descriptor = FetchDescriptor<MetaDetailFieldDefinition>(
+            predicate: #Predicate<MetaDetailFieldDefinition> { value in
+                value.graphID == graphID
+            },
+            sortBy: [SortDescriptor(\MetaDetailFieldDefinition.id)]
+        )
+        descriptor.fetchOffset = max(0, offset)
+        descriptor.fetchLimit = max(1, limit)
+        return descriptor
+    }
+
+    static func searchIndexDetailValuesPage(
+        in scope: GraphScope,
+        offset: Int,
+        limit: Int
+    ) -> FetchDescriptor<MetaDetailFieldValue> {
+        let graphID = scope.graphID
+        var descriptor = FetchDescriptor<MetaDetailFieldValue>(
+            predicate: #Predicate<MetaDetailFieldValue> { value in
+                value.graphID == graphID
+            },
+            sortBy: [
+                SortDescriptor(\MetaDetailFieldValue.attributeID),
+                SortDescriptor(\MetaDetailFieldValue.fieldID),
+                SortDescriptor(\MetaDetailFieldValue.id),
+            ]
+        )
+        descriptor.fetchOffset = max(0, offset)
+        descriptor.fetchLimit = max(1, limit)
+        return descriptor
+    }
+
+    static func searchIndexAttachmentsPage(
+        in scope: GraphScope,
+        offset: Int,
+        limit: Int
+    ) -> FetchDescriptor<MetaAttachment> {
+        let graphID = scope.graphID
+        var descriptor = FetchDescriptor<MetaAttachment>(
+            predicate: #Predicate<MetaAttachment> { value in
+                value.graphID == graphID
+            },
+            sortBy: [SortDescriptor(\MetaAttachment.id)]
+        )
+        descriptor.fetchOffset = max(0, offset)
+        descriptor.fetchLimit = max(1, limit)
+        return descriptor
+    }
 }

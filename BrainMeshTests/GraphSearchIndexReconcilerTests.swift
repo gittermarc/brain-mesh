@@ -4,6 +4,49 @@ import Testing
 
 struct GraphSearchIndexReconcilerTests {
     @Test
+    func readyIndexUsesOnlyRevisionAndMetadataWithoutSourceWork() async throws {
+        let fixture = GraphSearchIndexerFixture()
+        let workRecorder = GraphSearchIndexWorkRecorder()
+
+        try await withGraphSearchReconcilerTestEnvironment(
+            snapshots: [fixture.snapshot],
+            workInstrumentation: GraphSearchIndexWorkInstrumentation {
+                workRecorder.record($0)
+            }
+        ) { reconciler, _, source, _, _ in
+            _ = await reconciler.ensureReady(
+                scope: fixture.scope,
+                reason: .firstSearch
+            )
+            await source.clearReads()
+            workRecorder.reset()
+
+            for _ in 0..<3 {
+                let result = await reconciler.ensureReady(
+                    scope: fixture.scope,
+                    reason: .chatSession
+                )
+                #expect(result.outcome == .ready)
+                #expect(result.metrics?.checkedSourceCount == 0)
+            }
+
+            #expect(await source.readCount(for: .snapshot(fixture.graphID)) == 0)
+            #expect(await source.readCount(for: .sourcePage(fixture.graphID)) == 0)
+            #expect(
+                await source.readCount(for: .sourceRevision(fixture.graphID)) == 3
+            )
+            #expect(workRecorder.count(.sourceDocumentsBuilt) == 0)
+            #expect(workRecorder.count(.sourceDocumentsSorted) == 0)
+            #expect(workRecorder.count(.sourceHashed) == 0)
+            #expect(
+                await reconciler.completedOperationCountForTesting(
+                    graphID: fixture.graphID
+                ) == 1
+            )
+        }
+    }
+
+    @Test
     func firstEnsureReadyBuildsACompatibleSourceManifest() async throws {
         let fixture = GraphSearchIndexerFixture()
 
@@ -55,7 +98,7 @@ struct GraphSearchIndexReconcilerTests {
 
             let result = await reconciler.ensureReady(
                 scope: fixture.scope,
-                reason: .explicit
+                reason: .chatSession
             )
             let documents = try await store.documents(
                 for: GraphSearchSourceReference(
@@ -88,6 +131,173 @@ struct GraphSearchIndexReconcilerTests {
     }
 
     @Test
+    func mutationDrivenUpdateAdvancesPersistentReadinessToken() async throws {
+        var fixture = GraphSearchIndexerFixture()
+
+        try await withGraphSearchReconcilerTestEnvironment(
+            snapshots: [fixture.snapshot]
+        ) { reconciler, indexer, source, store, _ in
+            _ = await reconciler.ensureReady(
+                scope: fixture.scope,
+                reason: .firstSearch
+            )
+            let oldRevision = try #require(
+                try await source.searchSourceRevision(in: fixture.scope)
+            )
+
+            fixture.updatePrimaryEntityNotes("Mutation driven token")
+            let batch = try GraphMutationBatchFactory.nodeUpdated(
+                graphID: fixture.graphID,
+                node: NodeRefKey(
+                    kind: .entity,
+                    id: fixture.primaryEntityID
+                )
+            )
+            await source.setSnapshot(
+                fixture.snapshot,
+                sourceRevision: batch.id
+            )
+            await indexer.processCommittedBatch(batch)
+
+            let newRevision = try #require(
+                try await source.searchSourceRevision(in: fixture.scope)
+            )
+            let token = try #require(
+                try await store.readinessToken(
+                    graphID: fixture.graphID,
+                    sourceRevision: newRevision
+                )
+            )
+            await source.clearReads()
+            let readiness = await reconciler.ensureReady(
+                scope: fixture.scope,
+                reason: .chatSession
+            )
+
+            #expect(newRevision != oldRevision)
+            #expect(token.isReady)
+            #expect(token.sourceRevision == newRevision)
+            #expect(token.indexedSourceRevision == newRevision)
+            #expect(readiness.outcome == .ready)
+            #expect(await source.readCount(for: .snapshot(fixture.graphID)) == 0)
+            #expect(await source.readCount(for: .sourcePage(fixture.graphID)) == 0)
+        }
+    }
+
+    @Test
+    func pendingSuccessorMutationCannotBeCoveredByEarlierBatchRevision() async throws {
+        var fixture = GraphSearchIndexerFixture()
+
+        try await withGraphSearchReconcilerTestEnvironment(
+            snapshots: [fixture.snapshot]
+        ) { reconciler, indexer, source, store, _ in
+            _ = await reconciler.ensureReady(
+                scope: fixture.scope,
+                reason: .firstSearch
+            )
+            let firstBatch = try GraphMutationBatchFactory.nodeUpdated(
+                graphID: fixture.graphID,
+                node: NodeRefKey(kind: .entity, id: fixture.primaryEntityID)
+            )
+            let successorBatch = try GraphMutationBatchFactory.nodeUpdated(
+                graphID: fixture.graphID,
+                node: NodeRefKey(kind: .entity, id: fixture.primaryEntityID)
+            )
+            fixture.updatePrimaryEntityNotes("Successor mutation")
+            await source.setSnapshot(
+                fixture.snapshot,
+                sourceRevision: successorBatch.id
+            )
+
+            await indexer.processCommittedBatch(firstBatch)
+            let prematureToken = try await store.readinessToken(
+                graphID: fixture.graphID,
+                sourceRevision: successorBatch.id
+            )
+            let intermediateReadiness = await reconciler.readiness(
+                for: fixture.scope
+            )
+            await indexer.processCommittedBatch(successorBatch)
+            let finalToken = try await store.readinessToken(
+                graphID: fixture.graphID,
+                sourceRevision: successorBatch.id
+            )
+
+            #expect(prematureToken?.isReady == false)
+            #expect(prematureToken?.indexedSourceRevision == firstBatch.id)
+            #expect(intermediateReadiness.state == .notReady)
+            #expect(intermediateReadiness.isIndexUsable)
+            #expect(finalToken?.isReady == true)
+            #expect(finalToken?.indexedSourceRevision == successorBatch.id)
+        }
+    }
+
+    @Test
+    func externalRevisionChangeCannotRemainReadyWithoutReconciliation() async throws {
+        var fixture = GraphSearchIndexerFixture()
+
+        try await withGraphSearchReconcilerTestEnvironment(
+            snapshots: [fixture.snapshot]
+        ) { reconciler, _, source, store, _ in
+            _ = await reconciler.ensureReady(
+                scope: fixture.scope,
+                reason: .firstSearch
+            )
+            fixture.updatePrimaryEntityNotes("Imported from CloudKit")
+            await source.setSnapshot(fixture.snapshot)
+            await source.clearReads()
+
+            let result = await reconciler.ensureReady(
+                scope: fixture.scope,
+                reason: .chatSession
+            )
+            let documents = try await store.documents(
+                for: GraphSearchSourceReference(
+                    graphID: fixture.graphID,
+                    sourceKind: .entity,
+                    sourceID: fixture.primaryEntityID
+                )
+            )
+
+            #expect(result.outcome == .reconciled)
+            #expect(await source.readCount(for: .snapshot(fixture.graphID)) == 1)
+            #expect(documents.contains {
+                $0.normalizedSearchText.contains(BMSearch.fold("Imported from CloudKit"))
+            })
+        }
+    }
+
+    @Test
+    func unknownSourceRevisionNeverUsesPersistentFastPath() async throws {
+        let fixture = GraphSearchIndexerFixture()
+
+        try await withGraphSearchReconcilerTestEnvironment(
+            snapshots: [fixture.snapshot]
+        ) { reconciler, _, source, _, _ in
+            _ = await reconciler.ensureReady(
+                scope: fixture.scope,
+                reason: .firstSearch
+            )
+            await source.setSourceRevision(nil, graphID: fixture.graphID)
+            await source.clearReads()
+
+            let first = await reconciler.ensureReady(
+                scope: fixture.scope,
+                reason: .chatSession
+            )
+            let second = await reconciler.ensureReady(
+                scope: fixture.scope,
+                reason: .chatSession
+            )
+
+            #expect(first.outcome == .ready)
+            #expect(second.outcome == .ready)
+            #expect(await source.readCount(for: .snapshot(fixture.graphID)) == 2)
+            #expect(await source.readCount(for: .sourcePage(fixture.graphID)) == 0)
+        }
+    }
+
+    @Test
     func externalDeletionRemovesStaleDocumentsAndManifestEntry() async throws {
         let fixture = GraphSearchIndexerFixture()
 
@@ -107,7 +317,7 @@ struct GraphSearchIndexReconcilerTests {
 
             let result = await reconciler.ensureReady(
                 scope: fixture.scope,
-                reason: .explicit
+                reason: .chatSession
             )
             let deletedReference = GraphSearchSourceReference(
                 graphID: fixture.graphID,
@@ -256,7 +466,7 @@ struct GraphSearchIndexReconcilerTests {
 
             let result = await reconciler.ensureReady(
                 scope: fixture.scope,
-                reason: .explicit
+                reason: .chatSession
             )
             let repaired = try await store.sourceManifest(in: fixture.graphID)
 
@@ -298,7 +508,7 @@ struct GraphSearchIndexReconcilerTests {
 
             let result = await reconciler.ensureReady(
                 scope: fixture.scope,
-                reason: .explicit
+                reason: .chatSession
             )
             let repairedManifest = try await store.sourceManifest(
                 in: fixture.graphID
@@ -344,7 +554,7 @@ struct GraphSearchIndexReconcilerTests {
 
             let result = await reconciler.ensureReady(
                 scope: fixture.scope,
-                reason: .explicit
+                reason: .chatSession
             )
             let repairedDocuments = try await store.documents(
                 in: fixture.graphID
@@ -361,6 +571,121 @@ struct GraphSearchIndexReconcilerTests {
                     graphID: fixture.graphID
                 ) == rebuildCount + 1
             )
+        }
+    }
+
+    @Test
+    func corruptLifecycleMetadataTriggersSafeAtomicRebuild() async throws {
+        let fixture = GraphSearchIndexerFixture()
+
+        try await withGraphSearchReconcilerTestEnvironment(
+            snapshots: [fixture.snapshot]
+        ) { reconciler, indexer, _, store, location in
+            _ = await reconciler.ensureReady(
+                scope: fixture.scope,
+                reason: .firstSearch
+            )
+            let expectedDocuments = try await store.documents(in: fixture.graphID)
+            let rebuildCount = await indexer.completedRebuildCountForTesting(
+                graphID: fixture.graphID
+            )
+            try updateStoredLifecycle(
+                databaseURL: location.databaseURL,
+                graphID: fixture.graphID,
+                column: "active_generation",
+                textValue: "not-a-generation"
+            )
+
+            let result = await reconciler.ensureReady(
+                scope: fixture.scope,
+                reason: .chatSession
+            )
+            let repairedLifecycle = try await store.storedLifecycle(
+                graphID: fixture.graphID
+            )
+
+            #expect(result.outcome == .rebuilt)
+            #expect(result.isIndexUsable)
+            #expect(try await store.documents(in: fixture.graphID) == expectedDocuments)
+            #expect(repairedLifecycle?.lifecycleState == .ready)
+            #expect(repairedLifecycle?.activeGeneration != nil)
+            #expect(repairedLifecycle?.stagingGeneration == nil)
+            #expect(
+                await indexer.completedRebuildCountForTesting(
+                    graphID: fixture.graphID
+                ) == rebuildCount + 1
+            )
+        }
+    }
+
+    @Test
+    func missingActiveGenerationTriggersSafeAtomicRebuild() async throws {
+        let fixture = GraphSearchIndexerFixture()
+
+        try await withGraphSearchReconcilerTestEnvironment(
+            snapshots: [fixture.snapshot]
+        ) { reconciler, _, _, store, location in
+            _ = await reconciler.ensureReady(
+                scope: fixture.scope,
+                reason: .firstSearch
+            )
+            try updateStoredLifecycle(
+                databaseURL: location.databaseURL,
+                graphID: fixture.graphID,
+                column: "active_generation",
+                textValue: nil
+            )
+
+            let result = await reconciler.ensureReady(
+                scope: fixture.scope,
+                reason: .chatSession
+            )
+            let lifecycle = try await store.storedLifecycle(
+                graphID: fixture.graphID
+            )
+
+            #expect(result.outcome == .rebuilt)
+            #expect(result.isIndexUsable)
+            #expect(lifecycle?.activeGeneration != nil)
+            #expect(lifecycle?.lifecycleState == .ready)
+        }
+    }
+
+    @Test
+    func missingIndexRevisionForcesValidatedReconciliation() async throws {
+        let fixture = GraphSearchIndexerFixture()
+
+        try await withGraphSearchReconcilerTestEnvironment(
+            snapshots: [fixture.snapshot]
+        ) { reconciler, _, source, store, location in
+            _ = await reconciler.ensureReady(
+                scope: fixture.scope,
+                reason: .firstSearch
+            )
+            try updateStoredLifecycle(
+                databaseURL: location.databaseURL,
+                graphID: fixture.graphID,
+                column: "index_revision",
+                textValue: nil
+            )
+            await source.clearReads()
+
+            let result = await reconciler.ensureReady(
+                scope: fixture.scope,
+                reason: .chatSession
+            )
+            let lifecycle = try await store.storedLifecycle(
+                graphID: fixture.graphID
+            )
+
+            #expect(result.outcome == .ready)
+            #expect(
+                result.metrics?.checkedSourceCount
+                    == fixture.snapshot.searchSourceCountForTesting
+            )
+            #expect(await source.readCount(for: .snapshot(fixture.graphID)) == 1)
+            #expect(lifecycle?.indexRevision != nil)
+            #expect(lifecycle?.lifecycleState == .ready)
         }
     }
 
@@ -556,12 +881,11 @@ struct GraphSearchIndexReconcilerTests {
     }
 
     @Test
-    func foregroundThrottleDoesNotSuppressAnExplicitIndexInvalidation() async throws {
+    func readinessTokenDoesNotSuppressAnExplicitIndexInvalidation() async throws {
         let fixture = GraphSearchIndexerFixture()
 
         try await withGraphSearchReconcilerTestEnvironment(
-            snapshots: [fixture.snapshot],
-            foregroundMinimumInterval: 60 * 60
+            snapshots: [fixture.snapshot]
         ) { reconciler, _, source, _, _ in
             _ = await reconciler.ensureReady(
                 scope: fixture.scope,
@@ -753,6 +1077,132 @@ struct GraphSearchIndexReconcilerTests {
     }
 
     @Test
+    func cancellingLastRequestWaiterCancelsWorkerAndNeverPublishesStage() async throws {
+        let fixture = GraphSearchIndexerFixture()
+
+        try await withGraphSearchReconcilerTestEnvironment(
+            snapshots: [fixture.snapshot]
+        ) { reconciler, indexer, source, store, _ in
+            await source.setSnapshotDelay(nanoseconds: 500_000_000)
+            let request = Task {
+                await reconciler.ensureReady(
+                    scope: fixture.scope,
+                    reason: .firstSearch
+                )
+            }
+            try await waitForGraphSearchIndexerCondition {
+                await source.readCount(for: .snapshot(fixture.graphID)) == 1
+            }
+            request.cancel()
+            let result = await request.value
+
+            try await waitForGraphSearchIndexerCondition {
+                let status = await indexer.status(for: fixture.scope)
+                return status.state != .building
+            }
+            let lifecycle = try await store.storedLifecycle(
+                graphID: fixture.graphID
+            )
+            let documents = try await store.documents(in: fixture.graphID)
+
+            #expect(result.outcome == .cancelled)
+            #expect(lifecycle?.activeGeneration == nil)
+            #expect(lifecycle?.stagingGeneration == nil)
+            #expect(documents.isEmpty)
+            #expect(
+                await indexer.completedRebuildCountForTesting(
+                    graphID: fixture.graphID
+                ) == 0
+            )
+        }
+    }
+
+    @Test
+    func requestArrivingWhileCancelledWorkerDrainsStartsFreshWorker() async throws {
+        let fixture = GraphSearchIndexerFixture()
+
+        try await withGraphSearchReconcilerTestEnvironment(
+            snapshots: [fixture.snapshot]
+        ) { reconciler, indexer, source, store, _ in
+            await source.setSnapshotDelay(nanoseconds: 5_000_000_000)
+            let cancelledRequest = Task {
+                await reconciler.ensureReady(
+                    scope: fixture.scope,
+                    reason: .firstSearch
+                )
+            }
+            try await waitForGraphSearchIndexerCondition {
+                await source.readCount(for: .snapshot(fixture.graphID)) == 1
+            }
+            cancelledRequest.cancel()
+            let cancelledResult = await cancelledRequest.value
+            await source.setSnapshotDelay(nanoseconds: 0)
+
+            let retryResult = await reconciler.ensureReady(
+                scope: fixture.scope,
+                reason: .chatSession
+            )
+
+            #expect(cancelledResult.outcome == .cancelled)
+            #expect(retryResult.outcome == .rebuilt)
+            #expect(retryResult.isIndexUsable)
+            #expect(try await store.documentCount(in: fixture.graphID) == 22)
+            #expect(
+                await indexer.completedRebuildCountForTesting(
+                    graphID: fixture.graphID
+                ) == 1
+            )
+        }
+    }
+
+    @Test
+    func explicitMaintenanceOwnerKeepsWorkerAliveAfterRequestCancellation() async throws {
+        let fixture = GraphSearchIndexerFixture()
+
+        try await withGraphSearchReconcilerTestEnvironment(
+            snapshots: [fixture.snapshot]
+        ) { reconciler, indexer, source, _, _ in
+            await source.setSnapshotDelay(nanoseconds: 300_000_000)
+            let request = Task {
+                await reconciler.ensureReady(
+                    scope: fixture.scope,
+                    reason: .firstSearch
+                )
+            }
+            try await waitForGraphSearchIndexerCondition {
+                await reconciler.hasActiveOperationForTesting(
+                    graphID: fixture.graphID
+                )
+            }
+            let maintenance = Task {
+                await reconciler.performMaintenance(
+                    scope: fixture.scope,
+                    reason: .explicit
+                )
+            }
+            try await waitForGraphSearchIndexerCondition {
+                let counts = await reconciler.waiterCountsForTesting(
+                    graphID: fixture.graphID
+                )
+                return counts.request == 1 && counts.maintenance == 1
+            }
+            request.cancel()
+
+            let requestResult = await request.value
+            let maintenanceResult = await maintenance.value
+
+            #expect(requestResult.outcome == .cancelled)
+            #expect(maintenanceResult.outcome == .rebuilt)
+            #expect(maintenanceResult.isIndexUsable)
+            #expect(
+                await indexer.completedRebuildCountForTesting(
+                    graphID: fixture.graphID
+                ) == 1
+            )
+        }
+    }
+
+    @Test
     func twoGraphsReconcileIndependentlyWithoutCrossGraphLeakage() async throws {
         let firstFixture = GraphSearchIndexerFixture()
         var secondFixture = GraphSearchIndexerFixture()
@@ -795,12 +1245,11 @@ struct GraphSearchIndexReconcilerTests {
     }
 
     @Test
-    func foregroundEnsureReadyIsThrottledPerGraph() async throws {
+    func foregroundEnsureReadyUsesPersistentFastPathPerGraph() async throws {
         let fixture = GraphSearchIndexerFixture()
 
         try await withGraphSearchReconcilerTestEnvironment(
-            snapshots: [fixture.snapshot],
-            foregroundMinimumInterval: 60 * 60
+            snapshots: [fixture.snapshot]
         ) { reconciler, _, source, _, _ in
             let first = await reconciler.ensureReady(
                 scope: fixture.scope,
@@ -816,7 +1265,11 @@ struct GraphSearchIndexReconcilerTests {
             #expect(first.outcome == .rebuilt)
             #expect(second.outcome == .ready)
             #expect(second.isIndexUsable)
-            #expect(await source.totalReadCount() == 0)
+            #expect(await source.readCount(for: .snapshot(fixture.graphID)) == 0)
+            #expect(await source.readCount(for: .sourcePage(fixture.graphID)) == 0)
+            #expect(
+                await source.readCount(for: .sourceRevision(fixture.graphID)) == 1
+            )
             #expect(
                 await reconciler.completedOperationCountForTesting(
                     graphID: fixture.graphID
@@ -895,8 +1348,7 @@ struct GraphSearchIndexReconcilerTests {
             let secondaryReconciler = GraphSearchIndexReconciler(
                 sourceReader: source,
                 store: store,
-                indexer: secondaryIndexer,
-                foregroundMinimumInterval: 0
+                indexer: secondaryIndexer
             )
             await secondaryIndexer.setReadinessInvalidator(secondaryReconciler)
             await source.setSnapshotDelay(nanoseconds: 250_000_000)
@@ -904,7 +1356,7 @@ struct GraphSearchIndexReconcilerTests {
             let operation = Task {
                 await secondaryReconciler.ensureReady(
                     scope: fixture.scope,
-                    reason: .chatSession
+                    reason: .explicit
                 )
             }
             try await waitForGraphSearchIndexerCondition {
@@ -1080,6 +1532,9 @@ struct GraphSearchIndexReconcilerTests {
             let rebuildCount = await indexer.completedRebuildCountForTesting(
                 graphID: fixture.graphID
             )
+            let initialRebuildPageCount = await source.readCount(
+                for: .sourcePage(fixture.graphID)
+            )
             await source.clearReads()
 
             let result = await reconciler.ensureReady(
@@ -1093,9 +1548,12 @@ struct GraphSearchIndexReconcilerTests {
             #expect(result.outcome == .ready)
             #expect(result.metrics?.checkedSourceCount == entityCount)
             #expect(result.metrics?.changedSourceTotal == 0)
-            #expect(await source.totalReadCount() == 1)
+            #expect(initialRebuildPageCount > 1)
             #expect(
                 await source.readCount(for: .snapshot(fixture.graphID)) == 1
+            )
+            #expect(
+                await source.readCount(for: .sourcePage(fixture.graphID)) == 0
             )
             #expect(documentCount == entityCount)
             #expect(
@@ -1258,6 +1716,42 @@ private func updateStoredDocumentTitle(
             try connection.close()
         } catch {
             Issue.record("Failed to close document title mutation connection: \(error)")
+        }
+        throw error
+    }
+}
+
+private func updateStoredLifecycle(
+    databaseURL: URL,
+    graphID: UUID,
+    column: String,
+    textValue: String?
+) throws {
+    let supportedColumns = Set(["active_generation", "index_revision"])
+    guard supportedColumns.contains(column) else {
+        throw GraphSearchIndexStoreError.invalidSourceManifest(
+            reason: "Unsupported lifecycle test mutation column."
+        )
+    }
+
+    let connection = try GraphSearchSQLiteConnection(databaseURL: databaseURL)
+    do {
+        try connection.setBusyTimeout(milliseconds: 2_000)
+        do {
+            let statement = try connection.prepare(
+                "UPDATE graph_search_index_lifecycle SET \(column) = ? WHERE graph_id = ?",
+                operation: "test-update-index-lifecycle"
+            )
+            try statement.bind(textValue, at: 1)
+            try statement.bind(graphID.uuidString.lowercased(), at: 2)
+            try statement.stepExpectingDone()
+        }
+        try connection.close()
+    } catch {
+        do {
+            try connection.close()
+        } catch {
+            Issue.record("Failed to close lifecycle mutation connection: \(error)")
         }
         throw error
     }

@@ -116,10 +116,15 @@ extension GraphSearchIndexReadinessInvalidating {
 
 actor GraphSearchIndexReconciler: GraphSearchIndexReadinessInvalidating {
     static let shared = GraphSearchIndexReconciler()
-    static let defaultForegroundMinimumInterval: TimeInterval = 15 * 60
+
+    private enum WaiterOwnership: Sendable {
+        case request
+        case maintenance
+    }
 
     private struct Waiter {
         let reason: GraphSearchIndexReconciliationReason
+        let ownership: WaiterOwnership
         let continuation: CheckedContinuation<GraphSearchIndexReadinessResult, Never>
     }
 
@@ -130,15 +135,18 @@ actor GraphSearchIndexReconciler: GraphSearchIndexReadinessInvalidating {
         var waiters: [UUID: Waiter]
     }
 
+    private struct DrainingOperation {
+        let id: UUID
+        let task: Task<Void, Never>
+    }
+
     private let worker: GraphSearchIndexReconciliationWorker
     private let indexer: GraphSearchIndexer
-    private let foregroundMinimumInterval: TimeInterval
-    private let now: @Sendable () -> Date
 
     private var configuredContainerID: ObjectIdentifier?
     private var operations: [UUID: Operation] = [:]
+    private var drainingOperations: [UUID: DrainingOperation] = [:]
     private var invalidationReasons: [UUID: GraphSearchIndexReconciliationReason] = [:]
-    private var lastForegroundAttempts: [UUID: Date] = [:]
     private var completedOperationCounts: [UUID: Int] = [:]
     private var lastResults: [UUID: GraphSearchIndexReadinessResult] = [:]
 
@@ -146,9 +154,7 @@ actor GraphSearchIndexReconciler: GraphSearchIndexReadinessInvalidating {
         sourceReader: any GraphSearchSourceReading = GraphReadRepository.shared,
         store: GraphSearchIndexStore = GraphSearchIndexStore.shared,
         indexer: GraphSearchIndexer = GraphSearchIndexer.shared,
-        builder: GraphSearchDocumentBuilder = GraphSearchDocumentBuilder(),
-        foregroundMinimumInterval: TimeInterval = GraphSearchIndexReconciler.defaultForegroundMinimumInterval,
-        now: @escaping @Sendable () -> Date = { Date() }
+        builder: GraphSearchDocumentBuilder = GraphSearchDocumentBuilder()
     ) {
         self.worker = GraphSearchIndexReconciliationWorker(
             sourceReader: sourceReader,
@@ -157,8 +163,6 @@ actor GraphSearchIndexReconciler: GraphSearchIndexReadinessInvalidating {
             builder: builder
         )
         self.indexer = indexer
-        self.foregroundMinimumInterval = max(0, foregroundMinimumInterval)
-        self.now = now
     }
 
     func configure(container: AnyModelContainer) async {
@@ -170,9 +174,10 @@ actor GraphSearchIndexReconciler: GraphSearchIndexReadinessInvalidating {
     func stop() async {
         configuredContainerID = nil
         let activeOperations = Array(operations)
+        let activeDrains = drainingOperations.values.map(\.task)
         operations.removeAll(keepingCapacity: false)
+        drainingOperations.removeAll(keepingCapacity: false)
         invalidationReasons.removeAll(keepingCapacity: false)
-        lastForegroundAttempts.removeAll(keepingCapacity: false)
         lastResults.removeAll(keepingCapacity: false)
 
         for (graphID, operation) in activeOperations {
@@ -186,8 +191,14 @@ actor GraphSearchIndexReconciler: GraphSearchIndexReadinessInvalidating {
                 )
             }
         }
+        for task in activeDrains {
+            task.cancel()
+        }
         for (_, operation) in activeOperations {
             await operation.task?.value
+        }
+        for task in activeDrains {
+            await task.value
         }
     }
 
@@ -195,15 +206,44 @@ actor GraphSearchIndexReconciler: GraphSearchIndexReadinessInvalidating {
         scope: GraphScope,
         reason: GraphSearchIndexReconciliationReason
     ) async -> GraphSearchIndexReadinessResult {
-        if reason == .foreground,
-           shouldThrottleForeground(scope: scope) {
-            return await currentResult(
-                scope: scope,
-                reason: reason
-            )
+        await waitUntilReady(
+            scope: scope,
+            reason: reason,
+            ownership: .request,
+            forceReconciliation: Self.requiresForcedReconciliation(reason)
+        )
+    }
+
+    /// Explicit owner for work that is allowed to outlive ordinary request
+    /// waiters. Cancellation of this owner still cancels the worker when no
+    /// other owner remains.
+    func performMaintenance(
+        scope: GraphScope,
+        reason: GraphSearchIndexReconciliationReason = .explicit
+    ) async -> GraphSearchIndexReadinessResult {
+        await waitUntilReady(
+            scope: scope,
+            reason: reason,
+            ownership: .maintenance,
+            forceReconciliation: true
+        )
+    }
+
+    private func waitUntilReady(
+        scope: GraphScope,
+        reason: GraphSearchIndexReconciliationReason,
+        ownership: WaiterOwnership,
+        forceReconciliation: Bool
+    ) async -> GraphSearchIndexReadinessResult {
+        if Task.isCancelled {
+            return .cancelled(graphID: scope.graphID, reason: reason)
         }
-        if reason == .foreground {
-            lastForegroundAttempts[scope.graphID] = now()
+
+        if forceReconciliation == false,
+           invalidationReasons[scope.graphID] == nil,
+           let fastResult = await worker.fastPath(scope: scope, reason: reason) {
+            lastResults[scope.graphID] = fastResult
+            return fastResult
         }
 
         let waiterID = UUID()
@@ -213,6 +253,8 @@ actor GraphSearchIndexReconciler: GraphSearchIndexReadinessInvalidating {
                     id: waiterID,
                     scope: scope,
                     reason: reason,
+                    ownership: ownership,
+                    forceReconciliation: forceReconciliation,
                     continuation: continuation
                 )
             }
@@ -234,6 +276,17 @@ actor GraphSearchIndexReconciler: GraphSearchIndexReadinessInvalidating {
             )
         }
         return result
+    }
+
+    private nonisolated static func requiresForcedReconciliation(
+        _ reason: GraphSearchIndexReconciliationReason
+    ) -> Bool {
+        switch reason {
+        case .explicit, .importOrReplace, .dedupe, .indexFailure:
+            return true
+        case .firstSearch, .chatSession, .foreground:
+            return false
+        }
     }
 
     func readiness(
@@ -267,13 +320,27 @@ actor GraphSearchIndexReconciler: GraphSearchIndexReadinessInvalidating {
             )
         }
 
-        switch status.state {
-        case .ready:
+        if let persistedReady = await worker.fastPath(
+            scope: scope,
+            reason: .chatSession
+        ) {
+            lastResults[scope.graphID] = persistedReady
             return GraphSearchIndexReadinessSnapshot(
                 graphID: scope.graphID,
                 state: .ready,
                 isIndexUsable: true,
+                documentCount: persistedReady.documentCount
+            )
+        }
+
+        switch status.state {
+        case .ready:
+            return GraphSearchIndexReadinessSnapshot(
+                graphID: scope.graphID,
+                state: .notReady,
+                isIndexUsable: knownReadiness.isUsable,
                 documentCount: status.documentCount
+                    ?? knownReadiness.documentCount
             )
         case .building, .stale, .notInitialized:
             return GraphSearchIndexReadinessSnapshot(
@@ -304,6 +371,13 @@ actor GraphSearchIndexReconciler: GraphSearchIndexReadinessInvalidating {
         if reason != .indexFailure {
             await indexer.markStale(scope: scope)
         }
+        do {
+            try await worker.persistInvalidation(scope: scope, reason: reason)
+        } catch {
+            BMLog.searchReadiness.error(
+                "index_readiness invalidation=persist_failed graph=\(scope.graphID.uuidString, privacy: .private(mask: .hash)) reason=\(reason.rawValue, privacy: .public)"
+            )
+        }
     }
 
     func didBecomeReady(
@@ -332,6 +406,23 @@ actor GraphSearchIndexReconciler: GraphSearchIndexReadinessInvalidating {
         operations[graphID] != nil
     }
 
+    func waiterCountsForTesting(
+        graphID: UUID
+    ) -> (request: Int, maintenance: Int) {
+        guard let operation = operations[graphID] else { return (0, 0) }
+        var requestCount = 0
+        var maintenanceCount = 0
+        for waiter in operation.waiters.values {
+            switch waiter.ownership {
+            case .request:
+                requestCount += 1
+            case .maintenance:
+                maintenanceCount += 1
+            }
+        }
+        return (requestCount, maintenanceCount)
+    }
+
     func resetForTesting() async {
         await stop()
         completedOperationCounts.removeAll(keepingCapacity: false)
@@ -341,6 +432,8 @@ actor GraphSearchIndexReconciler: GraphSearchIndexReadinessInvalidating {
         id: UUID,
         scope: GraphScope,
         reason: GraphSearchIndexReconciliationReason,
+        ownership: WaiterOwnership,
+        forceReconciliation: Bool,
         continuation: CheckedContinuation<GraphSearchIndexReadinessResult, Never>
     ) {
         if Task.isCancelled {
@@ -353,6 +446,7 @@ actor GraphSearchIndexReconciler: GraphSearchIndexReadinessInvalidating {
         if var operation = operations[scope.graphID] {
             operation.waiters[id] = Waiter(
                 reason: reason,
+                ownership: ownership,
                 continuation: continuation
             )
             operations[scope.graphID] = operation
@@ -360,6 +454,7 @@ actor GraphSearchIndexReconciler: GraphSearchIndexReadinessInvalidating {
         }
 
         let operationID = UUID()
+        let predecessor = drainingOperations[scope.graphID]?.task
         let forcedReason = invalidationReasons.removeValue(forKey: scope.graphID)
         operations[scope.graphID] = Operation(
             id: operationID,
@@ -368,18 +463,31 @@ actor GraphSearchIndexReconciler: GraphSearchIndexReadinessInvalidating {
             waiters: [
                 id: Waiter(
                     reason: reason,
+                    ownership: ownership,
                     continuation: continuation
                 )
             ]
         )
 
-        let task = Task.detached(priority: .utility) { [worker] in
-            let result = await worker.perform(
-                scope: scope,
-                reason: forcedReason ?? reason,
-                forceFullRebuild: forcedReason == .indexFailure
-            )
-            await self.completeOperation(
+        let task = Task(priority: .utility) { [worker] in
+            if let predecessor {
+                await predecessor.value
+            }
+            let result: GraphSearchIndexReadinessResult
+            if Task.isCancelled {
+                result = .cancelled(
+                    graphID: scope.graphID,
+                    reason: forcedReason ?? reason
+                )
+            } else {
+                result = await worker.perform(
+                    scope: scope,
+                    reason: forcedReason ?? reason,
+                    forceFullRebuild: (forcedReason ?? reason) == .indexFailure,
+                    forceReconciliation: forceReconciliation || forcedReason != nil
+                )
+            }
+            self.completeOperation(
                 graphID: scope.graphID,
                 operationID: operationID,
                 result: result
@@ -398,7 +506,6 @@ actor GraphSearchIndexReconciler: GraphSearchIndexReadinessInvalidating {
         else {
             return
         }
-        operations[graphID] = operation
         let lastResult = lastResults[graphID]
         waiter.continuation.resume(
             returning: .cancelled(
@@ -407,6 +514,29 @@ actor GraphSearchIndexReconciler: GraphSearchIndexReadinessInvalidating {
                 isIndexUsable: lastResult?.isIndexUsable ?? false,
                 documentCount: lastResult?.documentCount
             )
+        )
+        guard operation.waiters.isEmpty else {
+            operations[graphID] = operation
+            BMLog.searchCancellation.debug(
+                "index_reconciliation waiter=cancelled worker=retained graph=\(graphID.uuidString, privacy: .private(mask: .hash)) remaining=\(operation.waiters.count, privacy: .public)"
+            )
+            return
+        }
+
+        operations.removeValue(forKey: graphID)
+        if let consumedReason = operation.consumedInvalidationReason,
+           invalidationReasons[graphID] == nil {
+            invalidationReasons[graphID] = consumedReason
+        }
+        if let task = operation.task {
+            drainingOperations[graphID] = DrainingOperation(
+                id: operation.id,
+                task: task
+            )
+            task.cancel()
+        }
+        BMLog.searchCancellation.notice(
+            "index_reconciliation waiter=last_cancelled worker=cancelled graph=\(graphID.uuidString, privacy: .private(mask: .hash))"
         )
     }
 
@@ -418,15 +548,18 @@ actor GraphSearchIndexReconciler: GraphSearchIndexReadinessInvalidating {
         guard let operation = operations[graphID],
               operation.id == operationID
         else {
+            if drainingOperations[graphID]?.id == operationID {
+                drainingOperations.removeValue(forKey: graphID)
+            }
             return
         }
         operations.removeValue(forKey: graphID)
         completedOperationCounts[graphID, default: 0] += 1
         lastResults[graphID] = result
         if let consumedReason = operation.consumedInvalidationReason,
-           result.outcome == .failed
+           (result.outcome == .failed
                 || result.outcome == .cancelled
-                || result.outcome == .unavailable,
+                || result.outcome == .unavailable),
            invalidationReasons[graphID] == nil {
             invalidationReasons[graphID] = consumedReason
         }
@@ -435,59 +568,6 @@ actor GraphSearchIndexReconciler: GraphSearchIndexReadinessInvalidating {
                 returning: result.replacingReason(with: waiter.reason)
             )
         }
-    }
-
-    private func shouldThrottleForeground(scope: GraphScope) -> Bool {
-        guard invalidationReasons[scope.graphID] == nil else {
-            return false
-        }
-        guard let lastAttempt = lastForegroundAttempts[scope.graphID] else {
-            return false
-        }
-        return now().timeIntervalSince(lastAttempt) < foregroundMinimumInterval
-    }
-
-    private func currentResult(
-        scope: GraphScope,
-        reason: GraphSearchIndexReconciliationReason
-    ) async -> GraphSearchIndexReadinessResult {
-        let status = await indexer.status(for: scope)
-        if status.state == .ready {
-            return GraphSearchIndexReadinessResult(
-                graphID: scope.graphID,
-                reason: reason,
-                outcome: .ready,
-                isIndexUsable: true,
-                documentCount: status.documentCount,
-                metrics: nil,
-                failure: nil
-            )
-        }
-        if let lastResult = lastResults[scope.graphID] {
-            return GraphSearchIndexReadinessResult(
-                graphID: scope.graphID,
-                reason: reason,
-                outcome: status.state == .failed ? .failed : lastResult.outcome,
-                isIndexUsable: lastResult.isIndexUsable,
-                documentCount: status.documentCount ?? lastResult.documentCount,
-                metrics: lastResult.metrics,
-                failure: status.failure ?? lastResult.failure
-            )
-        }
-
-        let knownReadiness = await knownReadiness(
-            scope: scope,
-            status: status
-        )
-        return GraphSearchIndexReadinessResult(
-            graphID: scope.graphID,
-            reason: reason,
-            outcome: status.state == .failed ? .failed : .unavailable,
-            isIndexUsable: knownReadiness.isUsable,
-            documentCount: knownReadiness.documentCount,
-            metrics: nil,
-            failure: status.failure
-        )
     }
 
     private func knownReadiness(
@@ -523,6 +603,80 @@ private nonisolated struct GraphSearchIndexReconciliationWorker: Sendable {
     let indexer: GraphSearchIndexer
     let builder: GraphSearchDocumentBuilder
 
+    func fastPath(
+        scope: GraphScope,
+        reason: GraphSearchIndexReconciliationReason
+    ) async -> GraphSearchIndexReadinessResult? {
+        let startedAt = DispatchTime.now().uptimeNanoseconds
+        do {
+            try Task.checkCancellation()
+            if await store.isOpen == false {
+                _ = try await store.open()
+            }
+            let storedSourceRevision = try await sourceReader.searchSourceRevision(
+                in: scope
+            )
+            guard let sourceRevision = storedSourceRevision else {
+                return nil
+            }
+            try Task.checkCancellation()
+            let storedToken = try await store.readinessToken(
+                graphID: scope.graphID,
+                sourceRevision: sourceRevision
+            )
+            guard let token = storedToken, token.isReady else {
+                BMLog.searchReadiness.debug(
+                    "index_readiness path=slow graph=\(scope.graphID.uuidString, privacy: .private(mask: .hash)) reason=token_mismatch"
+                )
+                return nil
+            }
+            await indexer.acceptReconciledIndex(
+                scope: scope,
+                documentCount: token.documentCount
+            )
+            let elapsed = DispatchTime.now().uptimeNanoseconds &- startedAt
+            BMLog.searchReadiness.info(
+                "index_readiness path=fast graph=\(scope.graphID.uuidString, privacy: .private(mask: .hash)) documents=\(token.documentCount, privacy: .public) duration_ms=\(Double(elapsed) / 1_000_000, format: .fixed(precision: 2))"
+            )
+            return GraphSearchIndexReadinessResult(
+                graphID: scope.graphID,
+                reason: reason,
+                outcome: .ready,
+                isIndexUsable: true,
+                documentCount: token.documentCount,
+                metrics: GraphSearchIndexReconciliationMetrics(
+                    checkedSourceCount: 0,
+                    addedSourceCount: 0,
+                    changedSourceCount: 0,
+                    deletedSourceCount: 0,
+                    fullRebuild: false,
+                    durationMilliseconds: Double(elapsed) / 1_000_000
+                ),
+                failure: nil
+            )
+        } catch is CancellationError {
+            return nil
+        } catch {
+            BMLog.searchReadiness.error(
+                "index_readiness path=slow graph=\(scope.graphID.uuidString, privacy: .private(mask: .hash)) reason=metadata_error"
+            )
+            return nil
+        }
+    }
+
+    func persistInvalidation(
+        scope: GraphScope,
+        reason: GraphSearchIndexReconciliationReason
+    ) async throws {
+        if await store.isOpen == false {
+            _ = try await store.open()
+        }
+        try await store.invalidateLifecycle(
+            graphID: scope.graphID,
+            reason: reason
+        )
+    }
+
     func storedReadiness(
         scope: GraphScope
     ) async -> GraphSearchStoredIndexReadiness {
@@ -530,8 +684,11 @@ private nonisolated struct GraphSearchIndexReconciliationWorker: Sendable {
             if await store.isOpen == false {
                 _ = try await store.open()
             }
-            guard let manifest = try await store.sourceManifest(in: scope.graphID),
-                  manifest.isCompatible
+            let storedLifecycle = try await store.storedLifecycle(
+                graphID: scope.graphID
+            )
+            guard let lifecycle = storedLifecycle,
+                  lifecycle.hasUsableActiveGeneration
             else {
                 return GraphSearchStoredIndexReadiness(
                     isUsable: false,
@@ -540,7 +697,7 @@ private nonisolated struct GraphSearchIndexReconciliationWorker: Sendable {
             }
             return GraphSearchStoredIndexReadiness(
                 isUsable: true,
-                documentCount: manifest.documentCount
+                documentCount: lifecycle.documentCount
             )
         } catch {
             return GraphSearchStoredIndexReadiness(
@@ -553,7 +710,8 @@ private nonisolated struct GraphSearchIndexReconciliationWorker: Sendable {
     func perform(
         scope: GraphScope,
         reason: GraphSearchIndexReconciliationReason,
-        forceFullRebuild: Bool
+        forceFullRebuild: Bool,
+        forceReconciliation: Bool
     ) async -> GraphSearchIndexReadinessResult {
         let startedAt = DispatchTime.now().uptimeNanoseconds
         var previouslyUsable = false
@@ -565,6 +723,52 @@ private nonisolated struct GraphSearchIndexReconciliationWorker: Sendable {
                 _ = try await store.open()
             }
             try Task.checkCancellation()
+
+            if forceReconciliation == false,
+               let fastResult = await fastPath(scope: scope, reason: reason) {
+                return fastResult
+            }
+            try Task.checkCancellation()
+
+            let sourceRevision = try await sourceReader.searchSourceRevision(
+                in: scope
+            )
+            let storedLifecycle: GraphSearchStoredIndexLifecycle?
+            do {
+                storedLifecycle = try await store.storedLifecycle(
+                    graphID: scope.graphID
+                )
+            } catch {
+                // Unknown or undecodable lifecycle metadata must never strand
+                // an otherwise recoverable graph. Preserve active rows, discard
+                // only lifecycle/staging metadata, then rebuild transactionally.
+                try await store.resetLifecycleMetadata(graphID: scope.graphID)
+                storedLifecycle = nil
+                BMLog.searchReadiness.notice(
+                    "index_readiness path=slow graph=\(scope.graphID.uuidString, privacy: .private(mask: .hash)) reason=invalid_lifecycle_metadata"
+                )
+            }
+            if let storedLifecycle, storedLifecycle.hasUsableActiveGeneration {
+                previouslyUsable = true
+                previousDocumentCount = storedLifecycle.documentCount
+            }
+            let persistedForceFullRebuild = storedLifecycle?.invalidationReason
+                == .indexFailure
+            let lifecycleGenerationIsInconsistent = storedLifecycle.map {
+                $0.lifecycleState == .rebuilding
+                    || $0.stagingGeneration != nil
+                    || ($0.lifecycleState == .ready
+                        && $0.invalidationReason != nil)
+                    || ($0.lifecycleState == .invalidated
+                        && $0.invalidationReason == nil)
+            } ?? false
+            let lifecycleRequiresRebuild = storedLifecycle == nil
+                || storedLifecycle?.activeGeneration == nil
+                || lifecycleGenerationIsInconsistent
+                || storedLifecycle?.indexFormatVersion
+                    != GraphSearchIndexSchema.currentVersion
+                || storedLifecycle?.sourceManifestFormatVersion
+                    != GraphSearchSourceManifestSchema.currentVersion
 
             let storedManifest: GraphSearchSourceManifest?
             do {
@@ -580,11 +784,14 @@ private nonisolated struct GraphSearchIndexReconciliationWorker: Sendable {
                     checkedSourceCount: 0,
                     previousUsable: false,
                     previousDocumentCount: nil,
+                    sourceRevision: sourceRevision,
                     startedAt: startedAt
                 )
             }
 
             guard forceFullRebuild == false,
+                  persistedForceFullRebuild == false,
+                  lifecycleRequiresRebuild == false,
                   let storedManifest,
                   storedManifest.isCompatible
             else {
@@ -594,6 +801,7 @@ private nonisolated struct GraphSearchIndexReconciliationWorker: Sendable {
                     checkedSourceCount: 0,
                     previousUsable: previouslyUsable,
                     previousDocumentCount: previousDocumentCount,
+                    sourceRevision: sourceRevision,
                     startedAt: startedAt
                 )
             }
@@ -613,7 +821,23 @@ private nonisolated struct GraphSearchIndexReconciliationWorker: Sendable {
             let currentManifest = currentBuild.sourceManifest
             let checkedSourceCount = currentManifest.sourceCount
 
+            let revisionAfterBuild = try await sourceReader.searchSourceRevision(
+                in: scope
+            )
+            guard revisionAfterBuild == sourceRevision else {
+                throw GraphSearchIndexerError.sourceRevisionChangedDuringRebuild(
+                    graphID: scope.graphID
+                )
+            }
+
             if storedManifest == currentManifest {
+                if let sourceRevision {
+                    try await store.markLifecycleReady(
+                        graphID: scope.graphID,
+                        sourceRevision: sourceRevision,
+                        documentCount: currentManifest.documentCount
+                    )
+                }
                 await indexer.acceptReconciledIndex(
                     scope: scope,
                     documentCount: currentManifest.documentCount
@@ -670,6 +894,7 @@ private nonisolated struct GraphSearchIndexReconciliationWorker: Sendable {
                     deletedSourceCount: deletedReferences.count,
                     previousUsable: previouslyUsable,
                     previousDocumentCount: previousDocumentCount,
+                    sourceRevision: sourceRevision,
                     startedAt: startedAt
                 )
             }
@@ -701,6 +926,21 @@ private nonisolated struct GraphSearchIndexReconciliationWorker: Sendable {
                 expectedSourceManifest: storedManifest,
                 sourceManifest: currentManifest
             )
+            let revisionBeforePublish = try await sourceReader.searchSourceRevision(
+                in: scope
+            )
+            guard revisionBeforePublish == sourceRevision else {
+                throw GraphSearchIndexerError.sourceRevisionChangedDuringRebuild(
+                    graphID: scope.graphID
+                )
+            }
+            if let sourceRevision {
+                try await store.markLifecycleReady(
+                    graphID: scope.graphID,
+                    sourceRevision: sourceRevision,
+                    documentCount: currentManifest.documentCount
+                )
+            }
             await indexer.acceptReconciledIndex(
                 scope: scope,
                 documentCount: currentManifest.documentCount
@@ -729,8 +969,8 @@ private nonisolated struct GraphSearchIndexReconciliationWorker: Sendable {
                 isIndexUsable: previouslyUsable,
                 documentCount: previousDocumentCount
             )
-            BMLog.search.notice(
-                "Graph search reconciliation cancelled reason=\(reason.rawValue, privacy: .public) usable=\(previouslyUsable, privacy: .public)"
+            BMLog.searchCancellation.notice(
+                "index_reconciliation outcome=cancelled reason=\(reason.rawValue, privacy: .public) usable=\(previouslyUsable, privacy: .public)"
             )
             return result
         } catch {
@@ -762,11 +1002,19 @@ private nonisolated struct GraphSearchIndexReconciliationWorker: Sendable {
         deletedSourceCount: Int = 0,
         previousUsable: Bool,
         previousDocumentCount: Int?,
+        sourceRevision: UUID?,
         startedAt: UInt64
     ) async -> GraphSearchIndexReadinessResult {
         do {
             try Task.checkCancellation()
-            try await indexer.rebuild(scope: scope)
+            if let sourceRevision {
+                try await indexer.rebuild(
+                    scope: scope,
+                    sourceRevision: sourceRevision
+                )
+            } else {
+                try await indexer.rebuild(scope: scope)
+            }
             let status = await indexer.status(for: scope)
             let result = makeResult(
                 scope: scope,
@@ -861,8 +1109,8 @@ private nonisolated struct GraphSearchIndexReconciliationWorker: Sendable {
 
     private func log(_ result: GraphSearchIndexReadinessResult) {
         let metrics = result.metrics
-        BMLog.search.info(
-            "Graph search reconciliation completed graph=\(result.graphID.uuidString, privacy: .private(mask: .hash)) reason=\(result.reason.rawValue, privacy: .public) outcome=\(result.outcome.rawValue, privacy: .public) usable=\(result.isIndexUsable, privacy: .public) checked=\(metrics?.checkedSourceCount ?? 0, privacy: .public) added=\(metrics?.addedSourceCount ?? 0, privacy: .public) changed=\(metrics?.changedSourceCount ?? 0, privacy: .public) deleted=\(metrics?.deletedSourceCount ?? 0, privacy: .public) fullRebuild=\(metrics?.fullRebuild ?? false, privacy: .public) durationMS=\(metrics?.durationMilliseconds ?? 0, format: .fixed(precision: 2))"
+        BMLog.searchReconciliation.info(
+            "index_reconciliation graph=\(result.graphID.uuidString, privacy: .private(mask: .hash)) reason=\(result.reason.rawValue, privacy: .public) outcome=\(result.outcome.rawValue, privacy: .public) usable=\(result.isIndexUsable, privacy: .public) checked=\(metrics?.checkedSourceCount ?? 0, privacy: .public) added=\(metrics?.addedSourceCount ?? 0, privacy: .public) changed=\(metrics?.changedSourceCount ?? 0, privacy: .public) deleted=\(metrics?.deletedSourceCount ?? 0, privacy: .public) full_rebuild=\(metrics?.fullRebuild ?? false, privacy: .public) duration_ms=\(metrics?.durationMilliseconds ?? 0, format: .fixed(precision: 2))"
         )
     }
 }

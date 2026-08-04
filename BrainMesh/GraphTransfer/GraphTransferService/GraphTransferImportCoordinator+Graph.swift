@@ -17,6 +17,7 @@ nonisolated extension GraphTransferImportCoordinator {
         graph.id = newGraphID
         graph.createdAt = file.graph.createdAt
         context.insert(graph)
+        importedGraph = graph
     }
 
     func finalizeImport(
@@ -36,6 +37,9 @@ nonisolated extension GraphTransferImportCoordinator {
         let committer = GraphMutationCommitter(publisher: mutationPublisher)
         _ = try await committer.commitCallerIsolated(
             batch,
+            prepare: {
+                importedGraph?.searchSourceRevision = batch.id
+            },
             save: {
                 try saveContext()
             },

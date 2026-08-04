@@ -6,6 +6,59 @@ import Testing
 struct GraphMutationCommitterTests {
     @Test
     @MainActor
+    func successfulSaveAdvancesGraphSearchSourceRevisionAtomically() async throws {
+        let store = try BrainMeshTestContainer.makeInMemoryStore()
+        let graph = MetaGraph(name: "Revision")
+        graph.id = testUUID(900)
+        let oldRevision = graph.searchSourceRevision
+        store.context.insert(graph)
+        let batch = try GraphMutationBatchFactory.graphUpdated(
+            graphID: graph.id
+        )
+        let publisher = GraphMutationRecordingPublisher(
+            receipts: [.published(sequenceNumber: 900)]
+        )
+
+        _ = try await GraphMutationCommitter(publisher: publisher).commit(
+            batch,
+            in: store.context
+        )
+
+        #expect(graph.searchSourceRevision == batch.id)
+        #expect(graph.searchSourceRevision != oldRevision)
+        #expect(await publisher.recordedBatches == [batch])
+    }
+
+    @Test
+    @MainActor
+    func failedSaveRollsBackGraphSearchSourceRevision() async throws {
+        let store = try BrainMeshTestContainer.makeInMemoryStore()
+        let graph = MetaGraph(name: "Revision Rollback")
+        graph.id = testUUID(901)
+        store.context.insert(graph)
+        try store.context.save()
+        let oldRevision = graph.searchSourceRevision
+        let batch = try GraphMutationBatchFactory.graphUpdated(
+            graphID: graph.id
+        )
+        let publisher = GraphMutationRecordingPublisher(receipts: [])
+        let committer = GraphMutationCommitter(
+            publisher: publisher,
+            saveOperation: { _ in
+                throw GraphMutationCommitterTestError.saveFailed
+            }
+        )
+
+        await #expect(throws: GraphMutationCommitterTestError.saveFailed) {
+            _ = try await committer.commit(batch, in: store.context)
+        }
+
+        #expect(graph.searchSourceRevision == oldRevision)
+        #expect(await publisher.recordedBatches.isEmpty)
+    }
+
+    @Test
+    @MainActor
     func successfulSavePublishesExactlyOneExpectedBatch() async throws {
         let store = try BrainMeshTestContainer.makeInMemoryStore()
         let graphID = testUUID(1)

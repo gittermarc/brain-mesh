@@ -39,6 +39,7 @@ struct AppRootView: View {
     // Track scene phase locally so delayed tasks can reliably check the latest value.
     @State var observedScenePhase: ScenePhase = .active
     @State var pendingBackgroundLockTask: Task<Void, Never>? = nil
+    @State var searchIndexForegroundMaintenanceTask: Task<Void, Never>? = nil
 
     var body: some View {
         ContentView()
@@ -51,6 +52,7 @@ struct AppRootView: View {
                 handleScenePhaseChange(newPhase)
             }
             .onChange(of: activeGraphIDString) { _, newValue in
+                cancelSearchIndexForegroundMaintenance()
                 graphChatSessionStore.handleActiveGraphChange()
                 let graphID = UUID(uuidString: newValue)
                 graphChatLaunchCoordinator.handleActiveGraphChange(to: graphID)
@@ -65,6 +67,7 @@ struct AppRootView: View {
                     for: UIApplication.willTerminateNotification
                 )
             ) { _ in
+                cancelSearchIndexForegroundMaintenance()
                 graphChatSessionStore.handleAppTermination()
                 graphChatLaunchCoordinator.handleAppTermination()
                 graphCopilotWorkspaceCoordinator.clearTransientState()

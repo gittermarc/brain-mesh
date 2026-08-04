@@ -61,6 +61,7 @@ extension GraphSearchIndexStore {
             try verifyRequiredSchema(in: openedConnection, backend: backend)
 
             activeBackend = backend
+            try cleanupStagingGenerationsAfterOpen()
             try applyBackupExclusionIfRequired(to: databaseURL)
 
             let manifest = try readManifest(
@@ -330,6 +331,127 @@ extension GraphSearchIndexStore {
             """,
             operation: "create-source-manifest-counts-table"
         )
+        try connection.execute(
+            """
+            CREATE TABLE graph_search_index_lifecycle (
+                graph_id TEXT PRIMARY KEY NOT NULL,
+                indexed_source_revision TEXT,
+                index_revision TEXT,
+                index_format_version INTEGER NOT NULL,
+                source_manifest_format_version INTEGER NOT NULL,
+                source_manifest_hash TEXT,
+                active_generation TEXT,
+                staging_generation TEXT,
+                lifecycle_state TEXT NOT NULL,
+                invalidation_reason TEXT,
+                document_count INTEGER,
+                CHECK (document_count IS NULL OR document_count >= 0)
+            ) WITHOUT ROWID
+            """,
+            operation: "create-index-lifecycle-table"
+        )
+        try connection.execute(
+            """
+            CREATE TABLE graph_search_staging_generations (
+                generation_id TEXT PRIMARY KEY NOT NULL,
+                graph_id TEXT NOT NULL,
+                source_revision TEXT NOT NULL,
+                expected_active_generation TEXT,
+                expected_index_revision TEXT,
+                previous_state TEXT NOT NULL,
+                previous_invalidation_reason TEXT,
+                is_complete INTEGER NOT NULL DEFAULT 0,
+                source_count INTEGER,
+                document_count INTEGER,
+                aggregate_hash TEXT,
+                UNIQUE (graph_id),
+                CHECK (is_complete IN (0, 1)),
+                CHECK (source_count IS NULL OR source_count >= 0),
+                CHECK (document_count IS NULL OR document_count >= 0)
+            ) WITHOUT ROWID
+            """,
+            operation: "create-staging-generations-table"
+        )
+        try connection.execute(
+            "CREATE INDEX graph_search_staging_generations_graph_idx ON graph_search_staging_generations(graph_id, generation_id)",
+            operation: "create-staging-generations-graph-index"
+        )
+        try connection.execute(
+            """
+            CREATE TABLE graph_search_staging_documents (
+                generation_id TEXT NOT NULL,
+                document_id TEXT NOT NULL,
+                graph_id TEXT NOT NULL,
+                document_kind TEXT NOT NULL,
+                source_kind TEXT NOT NULL,
+                source_id TEXT NOT NULL,
+                owner_kind_raw INTEGER,
+                owner_id TEXT,
+                node_kind_raw INTEGER,
+                node_id TEXT,
+                field_id TEXT,
+                title TEXT NOT NULL,
+                subtitle TEXT NOT NULL,
+                normalized_search_text TEXT NOT NULL,
+                ranking_boost INTEGER NOT NULL,
+                ranking_json TEXT NOT NULL,
+                presentation_json TEXT NOT NULL,
+                navigation_json TEXT NOT NULL,
+                evidence_json TEXT NOT NULL,
+                attachment_json TEXT,
+                content_hash TEXT NOT NULL,
+                index_schema_version INTEGER NOT NULL,
+                PRIMARY KEY (generation_id, document_id),
+                FOREIGN KEY (generation_id)
+                    REFERENCES graph_search_staging_generations(generation_id)
+                    ON DELETE CASCADE,
+                CHECK ((owner_kind_raw IS NULL) = (owner_id IS NULL)),
+                CHECK ((node_kind_raw IS NULL) = (node_id IS NULL))
+            ) WITHOUT ROWID
+            """,
+            operation: "create-staging-documents-table"
+        )
+        try connection.execute(
+            "CREATE INDEX graph_search_staging_documents_source_idx ON graph_search_staging_documents(generation_id, source_kind, source_id, document_id)",
+            operation: "create-staging-documents-source-index"
+        )
+        try connection.execute(
+            """
+            CREATE TABLE graph_search_staging_ngrams (
+                generation_id TEXT NOT NULL,
+                document_id TEXT NOT NULL,
+                graph_id TEXT NOT NULL,
+                gram TEXT NOT NULL,
+                PRIMARY KEY (generation_id, document_id, gram),
+                FOREIGN KEY (generation_id, document_id)
+                    REFERENCES graph_search_staging_documents(generation_id, document_id)
+                    ON DELETE CASCADE
+            ) WITHOUT ROWID
+            """,
+            operation: "create-staging-ngrams-table"
+        )
+        try connection.execute(
+            "CREATE INDEX graph_search_staging_ngrams_generation_idx ON graph_search_staging_ngrams(generation_id, gram, document_id)",
+            operation: "create-staging-ngrams-generation-index"
+        )
+        try connection.execute(
+            """
+            CREATE TABLE graph_search_staging_source_manifest_entries (
+                generation_id TEXT NOT NULL,
+                graph_id TEXT NOT NULL,
+                source_kind TEXT NOT NULL,
+                source_id TEXT NOT NULL,
+                content_hash TEXT NOT NULL,
+                document_count INTEGER NOT NULL,
+                PRIMARY KEY (generation_id, source_kind, source_id),
+                FOREIGN KEY (generation_id)
+                    REFERENCES graph_search_staging_generations(generation_id)
+                    ON DELETE CASCADE,
+                CHECK (document_count >= 0)
+            ) WITHOUT ROWID
+            """,
+            operation: "create-staging-source-entries-table"
+        )
     }
 
     func createSearchBackend(
@@ -579,13 +701,21 @@ extension GraphSearchIndexStore {
             ("table", "graph_search_source_manifests"),
             ("table", "graph_search_source_manifest_entries"),
             ("table", "graph_search_source_manifest_counts"),
+            ("table", "graph_search_index_lifecycle"),
+            ("table", "graph_search_staging_generations"),
+            ("table", "graph_search_staging_documents"),
+            ("table", "graph_search_staging_ngrams"),
+            ("table", "graph_search_staging_source_manifest_entries"),
             ("index", "graph_search_documents_graph_idx"),
             ("index", "graph_search_documents_source_idx"),
             ("index", "graph_search_documents_owner_idx"),
             ("index", "graph_search_documents_node_idx"),
             ("index", "graph_search_documents_field_idx"),
             ("index", "graph_search_ngrams_graph_idx"),
-            ("index", "graph_search_ngrams_global_idx")
+            ("index", "graph_search_ngrams_global_idx"),
+            ("index", "graph_search_staging_generations_graph_idx"),
+            ("index", "graph_search_staging_documents_source_idx"),
+            ("index", "graph_search_staging_ngrams_generation_idx")
         ]
         if backend.usesFTS5 {
             requiredObjects.append(contentsOf: [
@@ -770,6 +900,7 @@ extension GraphSearchIndexStore {
 
     func withTransaction<T>(
         operation: String,
+        checkCancellationBeforeCommit: Bool = true,
         body: (isolated GraphSearchIndexStore) throws -> T
     ) throws -> T {
         let connection = try requireConnection()
@@ -785,6 +916,9 @@ extension GraphSearchIndexStore {
 
         do {
             let result = try body(self)
+            if checkCancellationBeforeCommit {
+                try cancellationCheck()
+            }
             try connection.execute(
                 "COMMIT TRANSACTION",
                 operation: "\(operation)-commit"

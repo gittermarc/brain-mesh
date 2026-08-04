@@ -20,6 +20,7 @@ nonisolated final class GraphTransferImportCoordinator {
     let saveOperation: GraphTransferImportSaveOperation
 
     let newGraphID = UUID()
+    var importedGraph: MetaGraph?
 
     var entityIDMap: [UUID: UUID] = [:]
     var attributeIDMap: [UUID: UUID] = [:]

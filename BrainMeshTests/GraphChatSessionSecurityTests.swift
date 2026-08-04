@@ -296,6 +296,45 @@ struct GraphChatSessionSecurityTests {
     }
 
     @Test
+    func activeGraphChangeCancelsInFlightIndexPreparation() async {
+        let graphScope = GraphScope(graphID: UUID())
+        let indexProvider = GraphChatBlockingIndexProbe()
+        let bus = GraphMutationEventBus()
+        let store = GraphChatSessionStore(
+            baseOrchestrator: GraphChatUIFakeOrchestrator(scripts: []),
+            availabilityProvider: GraphChatUIFakeAvailabilityProvider(value: .available),
+            schemaProvider: GraphChatUIFakeSchemaProvider(
+                contexts: [
+                    GraphChatTestSupport.makeSchemaContext(
+                        graphID: graphScope.graphID
+                    )
+                ]
+            ),
+            indexStatusProvider: indexProvider,
+            mutationSubscriber: bus
+        )
+        let refresh = Task { @MainActor in
+            await store.refreshIndex(
+                for: graphScope,
+                prepareIfNeeded: true
+            )
+        }
+        for _ in 0..<2_000 {
+            if await indexProvider.hasStarted {
+                break
+            }
+            await Task.yield()
+        }
+
+        store.handleActiveGraphChange()
+        await refresh.value
+
+        #expect(await indexProvider.hasStarted)
+        #expect(await indexProvider.cancellationCount == 1)
+        await bus.finish()
+    }
+
+    @Test
     func graphLockAndBackgroundSecurityCleanupHideSensitiveState() async {
         let graphID = UUID()
         let setup = makeSessionStore(
@@ -520,5 +559,35 @@ private actor GraphChatSessionIndexProbe: GraphChatIndexStatusProviding {
             await Task.yield()
         }
         return .ready(documentCount: 1)
+    }
+}
+
+private actor GraphChatBlockingIndexProbe: GraphChatIndexStatusProviding {
+    private(set) var hasStarted = false
+    private(set) var cancellationCount = 0
+
+    func presentationState(
+        for _: GraphScope
+    ) async -> GraphChatIndexPresentationState {
+        .notReady(documentCount: nil)
+    }
+
+    func prepareIndex(
+        for _: GraphScope
+    ) async -> GraphChatIndexPresentationState {
+        hasStarted = true
+        do {
+            try await Task.sleep(nanoseconds: 5_000_000_000)
+            return .ready(documentCount: 0)
+        } catch is CancellationError {
+            cancellationCount += 1
+            return .notReady(documentCount: nil)
+        } catch {
+            return .failed(
+                message: error.localizedDescription,
+                isUsable: false,
+                documentCount: nil
+            )
+        }
     }
 }

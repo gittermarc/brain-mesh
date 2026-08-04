@@ -52,7 +52,115 @@ private actor GraphChatStatsReaderSpy: GraphChatStatsReading {
     }
 }
 
+private nonisolated final class GraphChatSourceFetchRecorder: @unchecked Sendable {
+    private let lock = NSLock()
+    private var counts: [GraphSchemaSourceFetchKind: Int] = [:]
+
+    func record(_ kind: GraphSchemaSourceFetchKind) {
+        lock.withLock {
+            counts[kind, default: 0] += 1
+        }
+    }
+
+    func count(_ kind: GraphSchemaSourceFetchKind) -> Int {
+        lock.withLock { counts[kind, default: 0] }
+    }
+
+    func reset() {
+        lock.withLock {
+            counts.removeAll(keepingCapacity: true)
+        }
+    }
+}
+
 struct GraphChatToolsTests {
+    @Test
+    func repeatedSearchGraphCallsStayOnPersistentReadinessFastPath() async throws {
+        let modelStore = try BrainMeshTestContainer.makeInMemoryStore()
+        let fixtures = BrainMeshFixtureBuilder(context: modelStore.context)
+        let graph = fixtures.makeGraph(name: "Fast Search")
+        _ = fixtures.makeEntity(name: "Fast Path Entity", in: graph)
+        try fixtures.save()
+
+        let location = try GraphSearchIndexTestSupport.makeLocation()
+        let indexStore = GraphSearchIndexStore(
+            databaseURL: location.databaseURL,
+            backendPreference: .indexedFallback
+        )
+        let fetchRecorder = GraphChatSourceFetchRecorder()
+        let workRecorder = GraphSearchIndexWorkRecorder()
+        let repository = GraphReadRepository(
+            container: AnyModelContainer(modelStore.container),
+            schemaSourceInstrumentation: GraphSchemaSourceInstrumentation {
+                fetchRecorder.record($0)
+            }
+        )
+        let builder = GraphSearchDocumentBuilder(
+            workInstrumentation: GraphSearchIndexWorkInstrumentation {
+                workRecorder.record($0)
+            }
+        )
+        let indexer = GraphSearchIndexer(
+            sourceReader: repository,
+            store: indexStore,
+            subscriber: GraphMutationEventBus(),
+            builder: builder
+        )
+        let reconciler = GraphSearchIndexReconciler(
+            sourceReader: repository,
+            store: indexStore,
+            indexer: indexer,
+            builder: builder
+        )
+        await indexer.setReadinessInvalidator(reconciler)
+
+        do {
+            _ = await reconciler.ensureReady(
+                scope: GraphScope(graphID: graph.id),
+                reason: .firstSearch
+            )
+            #expect(fetchRecorder.count(.fullSourceSnapshot) == 0)
+            fetchRecorder.reset()
+            workRecorder.reset()
+
+            let tool = SearchGraphTool(
+                readinessProvider: reconciler,
+                indexedProvider: IndexedSearchCandidateProvider(store: indexStore),
+                sourceRepository: repository,
+                evidenceValidator: GraphEvidenceSourceValidator(
+                    repository: repository
+                ),
+                logger: NoOpGraphChatToolLogger()
+            )
+            let first = try await tool.execute(
+                SearchGraphInput(query: "Fast Path", limit: 5),
+                context: context(graphID: graph.id)
+            )
+            let second = try await tool.execute(
+                SearchGraphInput(query: "Fast Path", limit: 5),
+                context: context(graphID: graph.id)
+            )
+
+            #expect(first.state == .success)
+            #expect(second.state == .success)
+            #expect(fetchRecorder.count(.fullSourceSnapshot) == 0)
+            #expect(workRecorder.count(.sourceDocumentsBuilt) == 0)
+            #expect(workRecorder.count(.sourceDocumentsSorted) == 0)
+            #expect(workRecorder.count(.sourceHashed) == 0)
+
+            await reconciler.resetForTesting()
+            await indexer.resetForTesting()
+            try await indexStore.close()
+            location.remove()
+        } catch {
+            await reconciler.resetForTesting()
+            await indexer.resetForTesting()
+            try? await indexStore.close()
+            location.remove()
+            throw error
+        }
+    }
+
     @Test
     func searchRevalidatesIndexHitsAndDropsStaleDocuments() async throws {
         let store = try BrainMeshTestContainer.makeInMemoryStore()

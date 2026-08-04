@@ -79,12 +79,27 @@ nonisolated struct GraphMutationCommitter {
         _ batches: [GraphMutationBatch],
         in modelContext: ModelContext
     ) async throws -> [GraphMutationPublishReceipt] {
-        try await commitPrepared(
+        var originalSearchSourceRevisions: [(
+            graph: MetaGraph,
+            previousRevision: UUID
+        )] = []
+
+        return try await commitPrepared(
             batches,
+            prepare: {
+                originalSearchSourceRevisions = try advanceSearchSourceRevisions(
+                    for: batches,
+                    in: modelContext
+                )
+            },
             save: {
                 try saveOperation(modelContext)
             },
             rollback: {
+                // SwiftData rollback does not reliably refresh already mutated model instances.
+                for originalRevision in originalSearchSourceRevisions {
+                    originalRevision.graph.searchSourceRevision = originalRevision.previousRevision
+                }
                 modelContext.rollback()
             }
         )
@@ -99,11 +114,13 @@ nonisolated struct GraphMutationCommitter {
     @discardableResult
     nonisolated(nonsending) func commitCallerIsolated(
         _ batch: GraphMutationBatch,
+        prepare: () throws -> Void = {},
         save: () throws -> Void,
         rollback: () -> Void
     ) async throws -> GraphMutationPublishReceipt {
         let receipts = try await commitPrepared(
             [batch],
+            prepare: prepare,
             save: save,
             rollback: rollback
         )
@@ -116,6 +133,7 @@ nonisolated struct GraphMutationCommitter {
     @discardableResult
     private nonisolated(nonsending) func commitPrepared(
         _ batches: [GraphMutationBatch],
+        prepare: () throws -> Void,
         save: () throws -> Void,
         rollback: () -> Void
     ) async throws -> [GraphMutationPublishReceipt] {
@@ -129,9 +147,14 @@ nonisolated struct GraphMutationCommitter {
 
         do {
             try Task.checkCancellation()
-        } catch {
+            try prepare()
+        } catch is CancellationError {
             rollback()
             logCancelledBeforeSave()
+            throw CancellationError()
+        } catch {
+            rollback()
+            logPreparationFailure()
             throw error
         }
 
@@ -153,6 +176,46 @@ nonisolated struct GraphMutationCommitter {
         }
 
         return receipts
+    }
+
+    @MainActor
+    private func advanceSearchSourceRevisions(
+        for batches: [GraphMutationBatch],
+        in modelContext: ModelContext
+    ) throws -> [(graph: MetaGraph, previousRevision: UUID)] {
+        var revisions: [(
+            graph: MetaGraph,
+            previousRevision: UUID,
+            nextRevision: UUID
+        )] = []
+        revisions.reserveCapacity(batches.count)
+
+        for batch in batches {
+            let graphID = batch.graphID
+            var descriptor = FetchDescriptor<MetaGraph>(
+                predicate: #Predicate<MetaGraph> { graph in
+                    graph.id == graphID
+                }
+            )
+            descriptor.fetchLimit = 1
+            if let graph = try modelContext.fetch(descriptor).first {
+                revisions.append(
+                    (
+                        graph: graph,
+                        previousRevision: graph.searchSourceRevision,
+                        nextRevision: batch.id
+                    )
+                )
+            }
+        }
+
+        for revision in revisions {
+            revision.graph.searchSourceRevision = revision.nextRevision
+        }
+
+        return revisions.map { revision in
+            (graph: revision.graph, previousRevision: revision.previousRevision)
+        }
     }
 
     private func orderedUniqueBatches(
@@ -186,6 +249,14 @@ nonisolated struct GraphMutationCommitter {
         #if canImport(os)
         BMLog.mutationEvents.error(
             "Mutation SwiftData save failed; no batch was published"
+        )
+        #endif
+    }
+
+    private func logPreparationFailure() {
+        #if canImport(os)
+        BMLog.mutationEvents.error(
+            "Mutation preparation failed; SwiftData save was not attempted"
         )
         #endif
     }

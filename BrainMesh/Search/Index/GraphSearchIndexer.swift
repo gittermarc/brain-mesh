@@ -11,6 +11,7 @@ import os
 nonisolated enum GraphSearchIndexerError: LocalizedError, Equatable, Sendable {
     case impreciseMutation
     case mismatchedSnapshotScope(expected: UUID, actual: UUID)
+    case sourceRevisionChangedDuringRebuild(graphID: UUID)
 
     var errorDescription: String? {
         switch self {
@@ -18,6 +19,8 @@ nonisolated enum GraphSearchIndexerError: LocalizedError, Equatable, Sendable {
             return "Das Mutation-Event enthält keine ausreichend präzisen technischen Referenzen."
         case .mismatchedSnapshotScope:
             return "Der geladene Source-Snapshot gehört nicht zum angeforderten Graphen."
+        case .sourceRevisionChangedDuringRebuild:
+            return "Die autoritative Graph-Revision hat sich während des Indexaufbaus geändert."
         }
     }
 }
@@ -35,6 +38,7 @@ actor GraphSearchIndexer {
     private struct RebuildTicket: Sendable {
         let operationID: UUID
         let task: Task<Int, Error>
+        let ownsOperation: Bool
     }
 
     private let sourceReader: any GraphSearchSourceReading
@@ -98,7 +102,7 @@ actor GraphSearchIndexer {
         lastDeliverySequenceNumber = nil
         let stream = await subscriber.mutationBatches(bufferingPolicy: .unbounded)
 
-        subscriptionTask = Task.detached(priority: .utility) { [weak self] in
+        subscriptionTask = Task(priority: .utility) { [weak self] in
             for await delivery in stream {
                 guard Task.isCancelled == false else {
                     break
@@ -152,7 +156,23 @@ actor GraphSearchIndexer {
     }
 
     func rebuild(scope: GraphScope) async throws {
-        let ticket = startOrJoinRebuild(scope: scope, force: true)
+        let ticket = startOrJoinRebuild(
+            scope: scope,
+            force: true,
+            sourceRevision: nil
+        )
+        _ = try await awaitRebuild(ticket)
+    }
+
+    func rebuild(
+        scope: GraphScope,
+        sourceRevision: UUID
+    ) async throws {
+        let ticket = startOrJoinRebuild(
+            scope: scope,
+            force: true,
+            sourceRevision: sourceRevision
+        )
         _ = try await awaitRebuild(ticket)
     }
 
@@ -224,22 +244,28 @@ actor GraphSearchIndexer {
 
     private func startOrJoinRebuild(
         scope: GraphScope,
-        force: Bool
+        force: Bool,
+        sourceRevision: UUID? = nil
     ) -> RebuildTicket {
         if let operation = rebuildOperations[scope.graphID] {
             return RebuildTicket(
                 operationID: operation.id,
-                task: operation.task
+                task: operation.task,
+                ownsOperation: false
             )
         }
 
         if force == false,
            statuses[scope.graphID]?.state == .ready {
             let documentCount = statuses[scope.graphID]?.documentCount ?? 0
-            let task = Task.detached(priority: .utility) { () throws -> Int in
+            let task = Task(priority: .utility) { () throws -> Int in
                 documentCount
             }
-            return RebuildTicket(operationID: UUID(), task: task)
+            return RebuildTicket(
+                operationID: UUID(),
+                task: task,
+                ownsOperation: false
+            )
         }
 
         let operationID = UUID()
@@ -250,14 +276,15 @@ actor GraphSearchIndexer {
             previousDocumentCount: previousStatus.documentCount
         )
 
-        let task = Task.detached(priority: .utility) { [weak self] () throws -> Int in
+        let task = Task(priority: .utility) { [weak self] () throws -> Int in
             guard let self else {
                 throw CancellationError()
             }
             return try await self.executeRebuild(
                 scope: scope,
                 operationID: operationID,
-                previousStatus: previousStatus
+                previousStatus: previousStatus,
+                expectedSourceRevision: sourceRevision
             )
         }
         rebuildOperations[scope.graphID] = RebuildOperation(
@@ -265,26 +292,34 @@ actor GraphSearchIndexer {
             task: task,
             previousStatus: previousStatus
         )
-        return RebuildTicket(operationID: operationID, task: task)
+        return RebuildTicket(
+            operationID: operationID,
+            task: task,
+            ownsOperation: true
+        )
     }
 
     private func awaitRebuild(_ ticket: RebuildTicket) async throws -> Int {
         try await withTaskCancellationHandler {
             try await ticket.task.value
         } onCancel: {
-            ticket.task.cancel()
+            if ticket.ownsOperation {
+                ticket.task.cancel()
+            }
         }
     }
 
     private func executeRebuild(
         scope: GraphScope,
         operationID: UUID,
-        previousStatus: GraphSearchIndexStatus
+        previousStatus: GraphSearchIndexStatus,
+        expectedSourceRevision: UUID?
     ) async throws -> Int {
         do {
-            let documentCount = try await performFullRebuild(
+            let documentCount = try await performPagedRebuild(
                 scope: scope,
-                operationID: operationID
+                operationID: operationID,
+                expectedSourceRevision: expectedSourceRevision
             )
             finishRebuildSuccess(
                 graphID: scope.graphID,
@@ -314,181 +349,138 @@ actor GraphSearchIndexer {
         }
     }
 
-    private func performFullRebuild(
+    private func performPagedRebuild(
         scope: GraphScope,
-        operationID: UUID
+        operationID: UUID,
+        expectedSourceRevision: UUID?
     ) async throws -> Int {
         let duration = BMDuration()
         try Task.checkCancellation()
         try await ensureStoreOpen()
         try Task.checkCancellation()
 
-        let snapshot = try await sourceReader.sourceSnapshot(in: scope)
-        guard snapshot.scope == scope else {
-            throw GraphSearchIndexerError.mismatchedSnapshotScope(
-                expected: scope.graphID,
-                actual: snapshot.scope.graphID
+        let observedInitialRevision = try await sourceReader.searchSourceRevision(
+            in: scope
+        )
+        if let expectedSourceRevision,
+           let observedInitialRevision,
+           expectedSourceRevision != observedInitialRevision {
+            throw GraphSearchIndexerError.sourceRevisionChangedDuringRebuild(
+                graphID: scope.graphID
             )
         }
-        guard snapshot.graph.scope == scope else {
-            throw GraphSearchIndexerError.mismatchedSnapshotScope(
-                expected: scope.graphID,
-                actual: snapshot.graph.scope.graphID
-            )
-        }
-        guard snapshot.graph.id == scope.graphID else {
-            throw GraphSearchIndexerError.mismatchedSnapshotScope(
-                expected: scope.graphID,
-                actual: snapshot.graph.id
-            )
-        }
-
-        let estimatedSources = snapshot.estimatedSearchSourceCount
-        updateBuildingStatus(
+        let authoritativeRevision = expectedSourceRevision
+            ?? observedInitialRevision
+            ?? UUID()
+        let staging = try await store.beginStagingGeneration(
             graphID: scope.graphID,
-            operationID: operationID,
-            processedSources: 0,
-            estimatedSources: estimatedSources
+            sourceRevision: authoritativeRevision
         )
 
-        var documents: [GraphSearchDocument] = []
-        documents.reserveCapacity(snapshot.estimatedSearchDocumentCount)
-        var manifestEntries: [GraphSearchSourceManifestEntry] = []
-        manifestEntries.reserveCapacity(estimatedSources)
-        var processedSources = 0
+        do {
+            var cursor: GraphSearchIndexSourceCursor?
+            var estimatedSources: Int?
+            var processedSources = 0
+            var entriesByReference: [
+                GraphSearchSourceReference: GraphSearchSourceManifestEntry
+            ] = [:]
 
-        for source in snapshot.entities {
-            try validate(sourceScope: source.scope, expected: scope)
-            let build = try builder.sourceBuild(for: source)
-            documents.append(contentsOf: build.documents)
-            manifestEntries.append(build.manifestEntry)
-            processedSources += 1
-            try await completeSourceBatchIfNeeded(
-                processedSources: processedSources,
-                estimatedSources: estimatedSources,
-                graphID: scope.graphID,
-                operationID: operationID
-            )
-        }
-        for source in snapshot.attributes {
-            try validate(sourceScope: source.scope, expected: scope)
-            let build = try builder.sourceBuild(for: source)
-            documents.append(contentsOf: build.documents)
-            manifestEntries.append(build.manifestEntry)
-            processedSources += 1
-            try await completeSourceBatchIfNeeded(
-                processedSources: processedSources,
-                estimatedSources: estimatedSources,
-                graphID: scope.graphID,
-                operationID: operationID
-            )
-        }
-        for source in snapshot.links {
-            try validate(sourceScope: source.scope, expected: scope)
-            let build = try builder.sourceBuild(for: source)
-            documents.append(contentsOf: build.documents)
-            manifestEntries.append(build.manifestEntry)
-            processedSources += 1
-            try await completeSourceBatchIfNeeded(
-                processedSources: processedSources,
-                estimatedSources: estimatedSources,
-                graphID: scope.graphID,
-                operationID: operationID
-            )
-        }
-        for source in snapshot.detailFieldDefinitions {
-            try validate(sourceScope: source.scope, expected: scope)
-            let build = try builder.sourceBuild(for: source)
-            documents.append(contentsOf: build.documents)
-            manifestEntries.append(build.manifestEntry)
-            processedSources += 1
-            try await completeSourceBatchIfNeeded(
-                processedSources: processedSources,
-                estimatedSources: estimatedSources,
-                graphID: scope.graphID,
-                operationID: operationID
-            )
-        }
-        for source in snapshot.detailValues {
-            try validate(sourceScope: source.scope, expected: scope)
-            let build = try builder.sourceBuild(for: source)
-            documents.append(contentsOf: build.documents)
-            manifestEntries.append(build.manifestEntry)
-            processedSources += 1
-            try await completeSourceBatchIfNeeded(
-                processedSources: processedSources,
-                estimatedSources: estimatedSources,
-                graphID: scope.graphID,
-                operationID: operationID
-            )
-        }
-        for source in snapshot.attachments {
-            try validate(sourceScope: source.scope, expected: scope)
-            let build = try builder.sourceBuild(for: source)
-            documents.append(contentsOf: build.documents)
-            manifestEntries.append(build.manifestEntry)
-            processedSources += 1
-            try await completeSourceBatchIfNeeded(
-                processedSources: processedSources,
-                estimatedSources: estimatedSources,
-                graphID: scope.graphID,
-                operationID: operationID
-            )
-        }
+            repeat {
+                try Task.checkCancellation()
+                let page = try await sourceReader.searchIndexSourcePage(
+                    in: scope,
+                    cursor: cursor,
+                    limit: sourceBatchSize
+                )
+                try Task.checkCancellation()
+                if estimatedSources == nil {
+                    estimatedSources = page.estimatedSourceCount
+                }
 
-        if processedSources.isMultiple(of: sourceBatchSize) == false {
-            updateBuildingStatus(
-                graphID: scope.graphID,
-                operationID: operationID,
-                processedSources: processedSources,
-                estimatedSources: estimatedSources
+                var sourceBuilds: [GraphSearchSourceBuild] = []
+                sourceBuilds.reserveCapacity(page.sources.count)
+                for (index, source) in page.sources.enumerated() {
+                    if index.isMultiple(of: 16) {
+                        try Task.checkCancellation()
+                    }
+                    try validate(sourceScope: source.scope, expected: scope)
+                    let build = try builder.sourceBuild(for: source)
+                    sourceBuilds.append(build)
+                    entriesByReference[build.reference] = build.manifestEntry
+                }
+                try Task.checkCancellation()
+                try await store.append(sourceBuilds, to: staging)
+                processedSources += page.sources.count
+                updateBuildingStatus(
+                    graphID: scope.graphID,
+                    operationID: operationID,
+                    processedSources: processedSources,
+                    estimatedSources: estimatedSources
+                )
+                cursor = page.nextCursor
+                await Task.yield()
+                try Task.checkCancellation()
+            } while cursor != nil
+
+            let observedFinalRevision = try await sourceReader.searchSourceRevision(
+                in: scope
             )
+            if observedInitialRevision != observedFinalRevision
+                || (
+                    expectedSourceRevision != nil
+                        && observedFinalRevision != expectedSourceRevision
+                ) {
+                throw GraphSearchIndexerError.sourceRevisionChangedDuringRebuild(
+                    graphID: scope.graphID
+                )
+            }
+
+            try Task.checkCancellation()
+            let sourceManifest = try GraphSearchSourceManifest(
+                graphID: scope.graphID,
+                entries: Array(entriesByReference.values)
+            )
+            try Task.checkCancellation()
+            try await store.completeStagingGeneration(
+                staging,
+                sourceManifest: sourceManifest
+            )
+            try Task.checkCancellation()
+
+            let revisionBeforeCutover = try await sourceReader.searchSourceRevision(
+                in: scope
+            )
+            guard revisionBeforeCutover == observedFinalRevision else {
+                throw GraphSearchIndexerError.sourceRevisionChangedDuringRebuild(
+                    graphID: scope.graphID
+                )
+            }
+            let documentCount = try await store.cutOver(
+                staging,
+                sourceManifest: sourceManifest
+            )
+
+            BMLog.searchRebuild.info(
+                "index_rebuild outcome=success graph=\(scope.graphID.uuidString, privacy: .private(mask: .hash)) documents=\(documentCount, privacy: .public) sources=\(sourceManifest.sourceCount, privacy: .public) duration_ms=\(duration.millisecondsElapsed, format: .fixed(precision: 2))"
+            )
+            return documentCount
+        } catch {
+            do {
+                try await store.abortStagingGeneration(staging)
+            } catch {
+                BMLog.searchCancellation.error(
+                    "index_rebuild stage=abort outcome=failed graph=\(scope.graphID.uuidString, privacy: .private(mask: .hash))"
+                )
+            }
+            throw error
         }
-
-        try Task.checkCancellation()
-        documents.sort { $0.documentID < $1.documentID }
-        let sourceManifest = try GraphSearchSourceManifest(
-            graphID: scope.graphID,
-            entries: manifestEntries
-        )
-        try await store.replaceDocuments(
-            in: scope.graphID,
-            with: documents,
-            sourceManifest: sourceManifest
-        )
-
-        BMLog.search.info(
-            "Graph search index rebuild completed documents=\(documents.count, privacy: .public) sources=\(processedSources, privacy: .public) durationMS=\(duration.millisecondsElapsed, format: .fixed(precision: 2))"
-        )
-        return documents.count
-    }
-
-    private func completeSourceBatchIfNeeded(
-        processedSources: Int,
-        estimatedSources: Int,
-        graphID: UUID,
-        operationID: UUID
-    ) async throws {
-        guard processedSources.isMultiple(of: sourceBatchSize) else {
-            return
-        }
-
-        try Task.checkCancellation()
-        updateBuildingStatus(
-            graphID: graphID,
-            operationID: operationID,
-            processedSources: processedSources,
-            estimatedSources: estimatedSources
-        )
-        await Task.yield()
-        try Task.checkCancellation()
     }
 
     private func updateBuildingStatus(
         graphID: UUID,
         operationID: UUID,
         processedSources: Int,
-        estimatedSources: Int
+        estimatedSources: Int?
     ) {
         guard rebuildOperations[graphID]?.id == operationID else {
             return
@@ -634,9 +626,30 @@ actor GraphSearchIndexer {
 
         do {
             try await ensureIndexed(scope: scope)
+            try await store.invalidateLifecycle(
+                graphID: scope.graphID,
+                reason: .explicit
+            )
             try await applyPreciseEvents(batch.events, scope: scope)
             let count = try await store.documentCount(in: scope.graphID)
+            let observedSourceRevision = try await sourceReader.searchSourceRevision(
+                in: scope
+            )
+            // GraphMutationCommitter persists `batch.id` on MetaGraph in the
+            // same save as these source changes. Publishing that exact revision
+            // prevents an already-committed, but not-yet-consumed successor
+            // batch from being covered accidentally by this update.
+            try await store.markLifecycleReady(
+                graphID: scope.graphID,
+                sourceRevision: batch.id,
+                documentCount: count
+            )
             statuses[scope.graphID] = .ready(documentCount: count)
+            if observedSourceRevision != batch.id {
+                BMLog.searchReadiness.debug(
+                    "index_readiness mutation=successor_pending graph=\(scope.graphID.uuidString, privacy: .private(mask: .hash))"
+                )
+            }
         } catch GraphSearchIndexerError.impreciseMutation {
             await rebuildAfterCurrentOperation(scope: scope)
         } catch is CancellationError {
@@ -1320,25 +1333,5 @@ actor GraphSearchIndexer {
         rhs: GraphDetailValueDTO
     ) -> Bool {
         lhs.id.uuidString < rhs.id.uuidString
-    }
-}
-
-private extension GraphSourceSnapshotDTO {
-    nonisolated var estimatedSearchSourceCount: Int {
-        entities.count
-            + attributes.count
-            + links.count
-            + detailFieldDefinitions.count
-            + detailValues.count
-            + attachments.count
-    }
-
-    nonisolated var estimatedSearchDocumentCount: Int {
-        entities.count * 2
-            + attributes.count * 2
-            + links.count * 2
-            + detailFieldDefinitions.count
-            + detailValues.count
-            + attachments.count
     }
 }

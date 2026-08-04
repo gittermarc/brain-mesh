@@ -9,7 +9,7 @@ import CryptoKit
 import Foundation
 
 nonisolated enum GraphSearchIndexSchema {
-    static let currentVersion = 3
+    static let currentVersion = 4
     static let documentIDVersion = 1
     static let sqliteApplicationID = 1_112_363_859
 }

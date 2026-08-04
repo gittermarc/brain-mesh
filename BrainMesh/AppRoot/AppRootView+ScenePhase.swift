@@ -39,6 +39,7 @@ extension AppRootView {
             guard systemModals.isSystemModalPresented == false else { return }
             Task { await handleBecameActive() }
         } else if newPhase == .background {
+            cancelSearchIndexForegroundMaintenance()
             // Sensitive chat state is hidden immediately so it cannot remain in an app-switcher snapshot.
             // The graph lock itself keeps its existing debounce to avoid disrupting system pickers.
             graphChatSessionStore.handleSecurityLock()
@@ -124,13 +125,16 @@ extension AppRootView {
             return
         }
 
-        Task(priority: .utility) {
-            _ = await GraphSearchIndexReconciler.shared.ensureReady(
+        cancelSearchIndexForegroundMaintenance()
+        searchIndexForegroundMaintenanceTask = Task(priority: .utility) {
+            _ = await GraphSearchIndexReconciler.shared.performMaintenance(
                 scope: scope,
                 reason: .foreground
             )
+            guard Task.isCancelled == false else { return }
             let schemaChanged = (try? await GraphSchemaService.shared
                 .reconcileExternalChanges(in: scope)) ?? false
+            guard Task.isCancelled == false else { return }
             if schemaChanged {
                 await MainActor.run {
                     graphChatSessionStore
@@ -140,5 +144,10 @@ extension AppRootView {
                 }
             }
         }
+    }
+
+    func cancelSearchIndexForegroundMaintenance() {
+        searchIndexForegroundMaintenanceTask?.cancel()
+        searchIndexForegroundMaintenanceTask = nil
     }
 }

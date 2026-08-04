@@ -27,6 +27,26 @@ nonisolated enum BMLog {
         category: "canvas-static-render"
     )
     static let search = Logger(subsystem: subsystem, category: "search")
+    static let searchReadiness = Logger(
+        subsystem: subsystem,
+        category: "search-readiness"
+    )
+    static let searchReconciliation = Logger(
+        subsystem: subsystem,
+        category: "search-reconciliation"
+    )
+    static let searchRebuild = Logger(
+        subsystem: subsystem,
+        category: "search-rebuild"
+    )
+    static let searchCutover = Logger(
+        subsystem: subsystem,
+        category: "search-cutover"
+    )
+    static let searchCancellation = Logger(
+        subsystem: subsystem,
+        category: "search-cancellation"
+    )
     static let mutationEvents = Logger(
         subsystem: subsystem,
         category: "mutation-events"
