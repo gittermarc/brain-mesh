@@ -297,7 +297,8 @@ nonisolated struct GraphChatSemanticIntentResolver:
         referenceDate: Date =
             Date(
                 timeIntervalSinceReferenceDate: 0
-            )
+            ),
+        mentionCatalog: GraphMentionCatalog? = nil
     ) throws -> GraphChatSemanticIntentResolution {
         guard
             schemaContext.graphScope
@@ -397,7 +398,8 @@ nonisolated struct GraphChatSemanticIntentResolver:
                     requestID: requestID,
                     sourceTurnID: sourceTurnID,
                     clarificationID: clarificationID,
-                    referenceDate: referenceDate
+                    referenceDate: referenceDate,
+                    mentionCatalog: mentionCatalog
                 )
             }
             return try relationshipCompiler.compile(
@@ -417,7 +419,9 @@ nonisolated struct GraphChatSemanticIntentResolver:
                 sourceTurnID:
                     sourceTurnID,
                 clarificationID:
-                    clarificationID
+                    clarificationID,
+                mentionCatalog:
+                    mentionCatalog
             )
         case .findNodes:
             break
@@ -433,7 +437,8 @@ nonisolated struct GraphChatSemanticIntentResolver:
                     == .currentSelection
                 ? currentResolvedScope?.entityID
                 : nil,
-            schemaContext: schemaContext
+            schemaContext: schemaContext,
+            mentionCatalog: mentionCatalog
         )
         switch entityResolution {
         case .clarification(let clarification):
@@ -496,7 +501,8 @@ nonisolated struct GraphChatSemanticIntentResolver:
         draft: GraphChatUntrustedSemanticIntentDraft,
         chatScope: GraphChatScope,
         conversationEntityID: UUID?,
-        schemaContext: GraphSchemaContext
+        schemaContext: GraphSchemaContext,
+        mentionCatalog: GraphMentionCatalog?
     ) throws -> EntityResolution {
         guard let term else {
             guard selectedEntityID == nil else {
@@ -511,7 +517,7 @@ nonisolated struct GraphChatSemanticIntentResolver:
                 kind: .entity,
                 language: draft.responseLanguage,
                 graphScope: schemaContext.graphScope,
-                catalog: GraphMentionCatalog(
+                catalog: mentionCatalog ?? GraphMentionCatalog(
                     schemaContext: schemaContext
                 ),
                 constraints:

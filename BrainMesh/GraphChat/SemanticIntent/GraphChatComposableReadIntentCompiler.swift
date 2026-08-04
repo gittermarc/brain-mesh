@@ -56,7 +56,8 @@ nonisolated struct GraphChatComposableReadIntentCompiler:
         requestID: UUID,
         sourceTurnID: UUID?,
         clarificationID: UUID?,
-        referenceDate: Date
+        referenceDate: Date,
+        mentionCatalog: GraphMentionCatalog? = nil
     ) throws -> GraphChatSemanticIntentResolution {
         guard
             draft.family == .relationships,
@@ -75,7 +76,7 @@ nonisolated struct GraphChatComposableReadIntentCompiler:
             throw GraphChatSemanticIntentResolutionError
                 .scopeViolation
         }
-        let catalog = GraphMentionCatalog(
+        let catalog = mentionCatalog ?? GraphMentionCatalog(
             schemaContext: schemaContext
         )
         let rootOutcome = try resolveEntity(

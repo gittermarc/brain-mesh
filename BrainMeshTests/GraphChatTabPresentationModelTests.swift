@@ -259,8 +259,7 @@ struct GraphChatTabPresentationModelTests {
             isReconciliationRunning: false,
             isGenerationRunning: false,
             presentedSessionIdentity: presentedSessionIdentity,
-            previewSuggestions: [],
-            previewGraphID: nil,
+            previewSuggestionsSnapshot: nil,
             previewErrorMessage: nil,
             language: .german
         )

@@ -10,15 +10,16 @@ import Foundation
 nonisolated extension GraphChatEmptyStateSuggestionBuilder {
     static func ranked(
         _ candidates: [Candidate],
-        context: GraphChatSuggestionContext
-    ) -> [GraphChatEmptyStateSuggestion] {
-        let validator =
-            GraphChatCapabilityQuestionValidator()
-        let verified = toolEligibleCandidates(
+        context: GraphChatSuggestionContext,
+        mentionCatalog: GraphMentionCatalog,
+        validator: GraphChatCapabilityQuestionValidator
+    ) throws -> [GraphChatEmptyStateSuggestion] {
+        var verified: [VerifiedCandidate] = []
+        for candidate in toolEligibleCandidates(
             candidates,
             context: context
-        ).compactMap { candidate
-            -> VerifiedCandidate? in
+        ) {
+            try Task.checkCancellation()
             guard let capability =
                     GraphChatCapabilityCatalog.capability(
                         withID: candidate.capabilityID
@@ -31,20 +32,25 @@ nonisolated extension GraphChatEmptyStateSuggestionBuilder {
                     capability: capability,
                     schemaContext: context.schema,
                     chatScope: context.scope,
-                    language: context.language
+                    language: context.language,
+                    mentionCatalog: mentionCatalog
                   ) else {
-                return nil
+                continue
             }
-            return VerifiedCandidate(
-                candidate: candidate,
-                validation: validation
+            verified.append(
+                VerifiedCandidate(
+                    candidate: candidate,
+                    validation: validation
+                )
             )
         }
         let selected = selectedCandidates(
             verified.map(\.candidate)
         )
         let text = Texts(context.language)
-        return selected.compactMap { candidate in
+        var suggestions: [GraphChatEmptyStateSuggestion] = []
+        for candidate in selected {
+            try Task.checkCancellation()
             guard let capability =
                     GraphChatCapabilityCatalog.capability(
                         withID: candidate.capabilityID
@@ -54,22 +60,25 @@ nonisolated extension GraphChatEmptyStateSuggestionBuilder {
                         $0.candidate.id == candidate.id
                     }
                   )?.validation else {
-                return nil
+                continue
             }
             let title = text.title(for: capability)
-            return GraphChatEmptyStateSuggestion(
-                id: candidate.id,
-                capabilityID: capability.id,
-                title: title,
-                prompt: candidate.prompt,
-                kind: candidate.kind,
-                accessibilityLabel:
-                    "\(title): \(candidate.prompt)",
-                accessibilityHint:
-                    text.suggestionAccessibilityHint,
-                validation: validation
+            suggestions.append(
+                GraphChatEmptyStateSuggestion(
+                    id: candidate.id,
+                    capabilityID: capability.id,
+                    title: title,
+                    prompt: candidate.prompt,
+                    kind: candidate.kind,
+                    accessibilityLabel:
+                        "\(title): \(candidate.prompt)",
+                    accessibilityHint:
+                        text.suggestionAccessibilityHint,
+                    validation: validation
+                )
             )
         }
+        return suggestions
     }
 
     static func selectedCandidates(

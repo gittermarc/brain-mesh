@@ -12,10 +12,11 @@ struct GraphChatTabContent: View {
     let language: GraphChatResponseLanguage
     let betaCopy: GraphChatBetaCopy
     let presentedViewModel: GraphChatViewModel?
-    @Binding var previewDraft: String
+    let previewDraft: String
+    let previewDraftScope: GraphChatScope?
     let previewFocusRequestID: UUID?
 
-    let onSelectPreviewSuggestion: (GraphChatEmptyStateSuggestion) -> Void
+    let onCheckpointPreviewDraft: (String, GraphChatScope) -> Void
     let onOpenBetaInfo: () -> Void
     let onOpenPaywall: () -> Void
     let onUnlockGraph: () -> Void
@@ -76,14 +77,16 @@ struct GraphChatTabContent: View {
 
         case .proRequired(let presentation):
             GraphChatTabFreePreviewView(
-                draft: $previewDraft,
+                initialDraft: previewDraft,
+                draftScope: previewDraftScope,
                 presentation: presentation,
                 betaCopy: betaCopy,
                 focusRequestID: previewFocusRequestID,
-                onSelectSuggestion: onSelectPreviewSuggestion,
+                onCheckpointDraft: onCheckpointPreviewDraft,
                 onOpenBetaInfo: onOpenBetaInfo,
                 onOpenPaywall: onOpenPaywall
             )
+            .id(previewDraftScope)
 
         case .graphLocked:
             GraphChatTabLockedGraphView(onUnlock: onUnlockGraph)

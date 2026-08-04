@@ -115,13 +115,28 @@ final class GraphChatLaunchCoordinator: ObservableObject {
         guard request == nil || request?.scope.graphScope.graphID == scope.graphScope.graphID else {
             return
         }
-        draftScope = scope
-        draftText = String(
+        let bounded = String(
             text.prefix(
                 GraphChatIntentLimitPolicy
                     .default.maximumQuestionLength
             )
         )
+        let scopeChanged = draftScope != scope
+        let textChanged = draftText != bounded
+        guard scopeChanged || textChanged else {
+            return
+        }
+        if scopeChanged,
+           textChanged == false,
+           bounded.trimmingCharacters(
+                in: .whitespacesAndNewlines
+            ).isEmpty == false {
+            objectWillChange.send()
+        }
+        draftScope = scope
+        if textChanged {
+            draftText = bounded
+        }
     }
 
     func draft(for scope: GraphChatScope) -> String? {
@@ -137,7 +152,9 @@ final class GraphChatLaunchCoordinator: ObservableObject {
             return
         }
         draftScope = nil
-        draftText = ""
+        if draftText.isEmpty == false {
+            draftText = ""
+        }
     }
 
     func resetToWholeGraph(_ graphID: UUID) {

@@ -37,7 +37,8 @@ nonisolated struct GraphChatRelationshipIntentCompiler:
         schemaContext: GraphSchemaContext,
         requestID: UUID,
         sourceTurnID: UUID?,
-        clarificationID: UUID?
+        clarificationID: UUID?,
+        mentionCatalog: GraphMentionCatalog? = nil
     ) throws -> GraphChatSemanticIntentResolution {
         guard draft.family == .relationships else {
             throw GraphChatSemanticIntentResolutionError
@@ -63,7 +64,7 @@ nonisolated struct GraphChatRelationshipIntentCompiler:
             )
         }
 
-        let catalog = GraphMentionCatalog(
+        let catalog = mentionCatalog ?? GraphMentionCatalog(
             schemaContext: schemaContext
         )
         let centerEntityOutcome =

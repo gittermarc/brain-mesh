@@ -33,8 +33,12 @@ struct GraphChatTabView: View {
         GraphChatBetaSheetPresentationContract.opensAutomatically
     @State private var pendingBetaQuestion:
         GraphChatPendingBetaQuestionSelection?
-    @State private var previewSuggestions: [GraphChatEmptyStateSuggestion] = []
-    @State private var previewGraphID: UUID?
+    @State private var previewSuggestionsSnapshot:
+        GraphChatSuggestionsSnapshot?
+    @State private var previewSchemaContext: GraphSchemaContext?
+    @State private var previewSchemaGraphID: UUID?
+    @State private var previewSuggestionsController =
+        GraphChatSuggestionsSnapshotController()
     @State private var previewErrorMessage: String?
     @State private var previewFocusRequestID: UUID?
     @State private var launchValidationState: GraphChatTabLaunchValidationState = .noRequest
@@ -113,8 +117,7 @@ struct GraphChatTabView: View {
             isReconciliationRunning: sessionStore.isReconciliationRunning,
             isGenerationRunning: sessionStore.isGenerationRunning,
             presentedSessionIdentity: presentedSessionIdentity,
-            previewSuggestions: previewSuggestions,
-            previewGraphID: previewGraphID,
+            previewSuggestionsSnapshot: previewSuggestionsSnapshot,
             previewErrorMessage: previewErrorMessage,
             language: interfaceLanguage
         )
@@ -132,11 +135,13 @@ struct GraphChatTabView: View {
                 language: presentation.language,
                 betaCopy: betaCopy,
                 presentedViewModel: presentedViewModel,
-                previewDraft: previewDraftBinding(
+                previewDraft: previewDraft(
                     for: presentation.effectiveRequest
                 ),
+                previewDraftScope:
+                    presentation.effectiveRequest?.scope,
                 previewFocusRequestID: previewFocusRequestID,
-                onSelectPreviewSuggestion: selectPreviewSuggestion,
+                onCheckpointPreviewDraft: checkpointPreviewDraft,
                 onOpenBetaInfo: {
                     openBetaInfo(from: .compactNotice)
                 },
@@ -305,31 +310,28 @@ struct GraphChatTabView: View {
         presentedViewModelRequestID = request.id
     }
 
-    private func previewDraftBinding(
+    private func previewDraft(
         for request: GraphChatLaunchRequest?
-    ) -> Binding<String> {
+    ) -> String {
         guard let request else {
-            return .constant("")
+            return ""
         }
-        return Binding(
-            get: {
-                launchCoordinator.draft(for: request.scope) ?? ""
-            },
-            set: { value in
-                launchCoordinator.updateDraft(value, for: request.scope)
-            }
-        )
+        return launchCoordinator.draft(for: request.scope) ?? ""
     }
 
-    private func selectPreviewSuggestion(
-        _ suggestion: GraphChatEmptyStateSuggestion
+    private func checkpointPreviewDraft(
+        _ draft: String,
+        for scope: GraphChatScope
     ) {
-        guard let request = presentationModel.effectiveRequest else {
+        let presentation = presentationModel
+        guard presentation.activeGraphID
+                == scope.graphScope.graphID,
+              presentation.effectiveRequest?.scope == scope else {
             return
         }
         launchCoordinator.updateDraft(
-            suggestion.prompt,
-            for: request.scope
+            draft,
+            for: scope
         )
     }
 
@@ -412,10 +414,11 @@ struct GraphChatTabView: View {
             return presentedViewModel?.suggestions ?? []
 
         case .proRequired:
-            guard previewGraphID == presentation.activeGraphID else {
+            guard previewSuggestionsSnapshot?.key.graphID
+                    == presentation.activeGraphID else {
                 return []
             }
-            return previewSuggestions
+            return previewSuggestionsSnapshot?.suggestions ?? []
 
         default:
             return []
@@ -442,8 +445,12 @@ struct GraphChatTabView: View {
     }
 
     private func clearGraphScopedPresentationState() {
-        previewSuggestions = []
-        previewGraphID = nil
+        previewSuggestionsController.cancel(
+            clearCachedSnapshot: true
+        )
+        previewSuggestionsSnapshot = nil
+        previewSchemaContext = nil
+        previewSchemaGraphID = nil
         previewErrorMessage = nil
         previewFocusRequestID = nil
         pendingBetaQuestion = nil
@@ -458,18 +465,26 @@ struct GraphChatTabView: View {
         guard presentation.accessDecision.route == .proRequired,
               presentation.isGraphUnlocked,
               let activeGraphID = presentation.activeGraph?.id else {
-            previewSuggestions = []
-            previewGraphID = nil
+            previewSuggestionsController.cancel(
+                clearCachedSnapshot: true
+            )
+            previewSuggestionsSnapshot = nil
+            previewSchemaContext = nil
+            previewSchemaGraphID = nil
             previewErrorMessage = nil
             return
         }
 
-        previewSuggestions = []
-        previewGraphID = nil
         previewErrorMessage = nil
         do {
-            let context = try await GraphChatTabFreePreviewLoader()
-                .schemaContext(for: activeGraphID)
+            let context: GraphSchemaContext
+            if previewSchemaGraphID == activeGraphID,
+               let previewSchemaContext {
+                context = previewSchemaContext
+            } else {
+                context = try await GraphChatTabFreePreviewLoader()
+                    .schemaContext(for: activeGraphID)
+            }
             let currentPresentation = presentationModel
             guard context.graphScope.graphID == activeGraphID,
                   currentPresentation.activeGraphID == activeGraphID,
@@ -477,19 +492,52 @@ struct GraphChatTabView: View {
                   currentPresentation.isGraphUnlocked else {
                 return
             }
-            previewSuggestions = GraphChatTabFreePreviewLoader.suggestions(
-                schemaContext: context,
-                request: currentPresentation.effectiveRequest,
-                modelAvailability: sessionStore.availabilityState,
-                language: GraphChatResponseLanguageSelector.systemFallback()
+            previewSchemaContext = context
+            previewSchemaGraphID = activeGraphID
+
+            let previewRequest = currentPresentation.effectiveRequest
+                ?? GraphChatLaunchRequest(
+                    scope: .entireGraph(context.graphScope),
+                    context: .graph(name: context.snapshot.graphName)
+                )
+            let snapshotRequest = GraphChatSuggestionsSnapshotRequest(
+                context: GraphChatSuggestionContext(
+                    schema: context,
+                    scope: previewRequest.scope,
+                    launchContext: previewRequest.context,
+                    availableTools: Set(GraphChatToolKind.allCases),
+                    modelAvailability: sessionStore.availabilityState,
+                    language: currentPresentation.language,
+                    localeIdentifier: Locale.current.identifier
+                )
             )
-            previewGraphID = activeGraphID
+            if previewSuggestionsSnapshot?.key
+                != snapshotRequest.key {
+                previewSuggestionsSnapshot = nil
+            }
+            let snapshot = try await previewSuggestionsController
+                .snapshot(for: snapshotRequest)
+            let resolvedPresentation = presentationModel
+            guard Task.isCancelled == false,
+                  resolvedPresentation.activeGraphID == activeGraphID,
+                  resolvedPresentation.accessDecision.route == .proRequired,
+                  resolvedPresentation.isGraphUnlocked,
+                  resolvedPresentation.effectiveRequest?.id
+                    == currentPresentation.effectiveRequest?.id,
+                  resolvedPresentation.effectiveRequest?.scope
+                    == currentPresentation.effectiveRequest?.scope,
+                  resolvedPresentation.effectiveRequest?.context
+                    == currentPresentation.effectiveRequest?.context else {
+                return
+            }
+            if previewSuggestionsSnapshot != snapshot {
+                previewSuggestionsSnapshot = snapshot
+            }
             previewErrorMessage = nil
         } catch is CancellationError {
             return
         } catch {
-            previewSuggestions = []
-            previewGraphID = nil
+            previewSuggestionsSnapshot = nil
             if presentationModel.activeGraphID == activeGraphID {
                 previewErrorMessage = "Beispielfragen konnten für diesen Graphen nicht geladen werden."
             }

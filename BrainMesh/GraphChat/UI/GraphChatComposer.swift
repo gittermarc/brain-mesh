@@ -8,11 +8,11 @@
 import SwiftUI
 
 struct GraphChatComposer: View {
-    @Binding var text: String
+    @Bindable var controller: GraphChatComposerController
     @FocusState private var isComposerFocused: Bool
 
     let isGenerating: Bool
-    let canSend: Bool
+    let isSubmissionAllowed: Bool
     let editingState: GraphChatEditingState?
     let isPerformingSessionMutation: Bool
     let focusRequestID: UUID?
@@ -47,7 +47,10 @@ struct GraphChatComposer: View {
                     editingState == nil
                         ? "Frage zu diesem Graphen"
                         : "Geänderte Frage",
-                    text: $text,
+                    text: Binding(
+                        get: { controller.text },
+                        set: controller.updateFromUser
+                    ),
                     axis: .vertical
                 )
                 .focused($isComposerFocused)
@@ -136,6 +139,14 @@ struct GraphChatComposer: View {
             }
             isComposerFocused = true
         }
+        .onDisappear {
+            controller.checkpointLatest()
+        }
+    }
+
+    private var canSend: Bool {
+        isSubmissionAllowed
+            && controller.hasSubmissionText
     }
 
     private var composerHint: String {

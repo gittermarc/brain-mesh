@@ -30,7 +30,8 @@ nonisolated struct GraphChatFoundationalIntentCompiler: Sendable {
     }
 
     func compile(
-        _ input: GraphChatFoundationalIntentCompilerInput
+        _ input: GraphChatFoundationalIntentCompilerInput,
+        mentionCatalog: GraphMentionCatalog? = nil
     ) -> GraphChatFoundationalIntentCompilation {
         guard input.graphScope == input.schemaContext.graphScope,
               input.schemaContext.aliases.graphScope == input.graphScope,
@@ -47,6 +48,12 @@ nonisolated struct GraphChatFoundationalIntentCompiler: Sendable {
         guard schemaIsInternallyConsistent(input.schemaContext) else {
             return .rejected(.schemaIntegrityViolation)
         }
+        let catalog = mentionCatalog ?? GraphMentionCatalog(
+            schemaContext: input.schemaContext
+        )
+        guard catalog.graphScope == input.graphScope else {
+            return .rejected(.graphScopeMismatch)
+        }
 
         let normalizedQuestion = Self.normalized(input.question)
         guard normalizedQuestion.isEmpty == false else {
@@ -60,7 +67,8 @@ nonisolated struct GraphChatFoundationalIntentCompiler: Sendable {
         ) {
             let collection = compileCollection(
                 input,
-                entityMention: extraction.mention
+                entityMention: extraction.mention,
+                mentionCatalog: catalog
             )
             if collection != .notRecognized {
                 return collection
@@ -74,7 +82,8 @@ nonisolated struct GraphChatFoundationalIntentCompiler: Sendable {
         ) {
             let nodeDetails = compileNodeDetails(
                 input,
-                nodeMention: extraction.mention
+                nodeMention: extraction.mention,
+                mentionCatalog: catalog
             )
             if nodeDetails != .notRecognized {
                 return nodeDetails
@@ -91,13 +100,15 @@ nonisolated struct GraphChatFoundationalIntentCompiler: Sendable {
         }
         return compileSingleField(
             input,
-            normalizedQuestion: normalizedQuestion
+            normalizedQuestion: normalizedQuestion,
+            mentionCatalog: catalog
         )
     }
 
     private func compileCollection(
         _ input: GraphChatFoundationalIntentCompilerInput,
-        entityMention: String
+        entityMention: String,
+        mentionCatalog: GraphMentionCatalog
     ) -> GraphChatFoundationalIntentCompilation {
         if input.selectedCandidate?.node != nil
             || input.selectedCandidate?.fieldID != nil {
@@ -109,9 +120,7 @@ nonisolated struct GraphChatFoundationalIntentCompiler: Sendable {
                 kind: .entity,
                 language: input.responseLanguage,
                 graphScope: input.graphScope,
-                catalog: GraphMentionCatalog(
-                    schemaContext: input.schemaContext
-                ),
+                catalog: mentionCatalog,
                 constraints:
                     GraphMentionResolutionConstraints(
                         chatScope: input.chatScope,
@@ -210,7 +219,8 @@ nonisolated struct GraphChatFoundationalIntentCompiler: Sendable {
 
     private func compileNodeDetails(
         _ input: GraphChatFoundationalIntentCompilerInput,
-        nodeMention: String
+        nodeMention: String,
+        mentionCatalog: GraphMentionCatalog
     ) -> GraphChatFoundationalIntentCompilation {
         if input.selectedCandidate?.fieldID != nil {
             return .rejected(.staleClarification)
@@ -222,9 +232,7 @@ nonisolated struct GraphChatFoundationalIntentCompiler: Sendable {
                 kind: .node,
                 language: input.responseLanguage,
                 graphScope: input.graphScope,
-                catalog: GraphMentionCatalog(
-                    schemaContext: input.schemaContext
-                ),
+                catalog: mentionCatalog,
                 constraints:
                     GraphMentionResolutionConstraints(
                         chatScope: input.chatScope,
@@ -344,13 +352,11 @@ nonisolated struct GraphChatFoundationalIntentCompiler: Sendable {
 
     private func compileSingleField(
         _ input: GraphChatFoundationalIntentCompilerInput,
-        normalizedQuestion: String
+        normalizedQuestion: String,
+        mentionCatalog: GraphMentionCatalog
     ) -> GraphChatFoundationalIntentCompilation {
         _ = normalizedQuestion
         let selected = input.selectedCandidate
-        let catalog = GraphMentionCatalog(
-            schemaContext: input.schemaContext
-        )
         let attributeNodes = Set(
             input.schemaContext.foundationalAliases
                 .nodesByKey.values
@@ -365,7 +371,7 @@ nonisolated struct GraphChatFoundationalIntentCompiler: Sendable {
                 kind: .node,
                 language: input.responseLanguage,
                 graphScope: input.graphScope,
-                catalog: catalog,
+                catalog: mentionCatalog,
                 constraints:
                     GraphMentionResolutionConstraints(
                         chatScope: input.chatScope,
@@ -385,7 +391,7 @@ nonisolated struct GraphChatFoundationalIntentCompiler: Sendable {
                 kind: .field,
                 language: input.responseLanguage,
                 graphScope: input.graphScope,
-                catalog: catalog,
+                catalog: mentionCatalog,
                 constraints:
                     GraphMentionResolutionConstraints(
                         chatScope: input.chatScope,

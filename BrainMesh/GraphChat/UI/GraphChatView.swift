@@ -34,12 +34,9 @@ struct GraphChatView: View {
         }
         .safeAreaInset(edge: .bottom, spacing: 0) {
             GraphChatComposer(
-                text: Binding(
-                    get: { viewModel.composerState.text },
-                    set: viewModel.setComposerText
-                ),
+                controller: viewModel.composerController,
                 isGenerating: viewModel.isGenerating,
-                canSend: viewModel.canSend,
+                isSubmissionAllowed: viewModel.canSubmitComposer,
                 editingState: viewModel.editingState,
                 isPerformingSessionMutation: viewModel.isPerformingSessionMutation,
                 focusRequestID: viewModel.composerFocusRequestID,
@@ -144,7 +141,10 @@ struct GraphChatView: View {
                 Label(GraphChatMessageAction.startNewChat.title, systemImage: GraphChatMessageAction.startNewChat.systemImage)
             }
             .buttonStyle(.bordered)
-            .disabled(viewModel.canStartNewChat == false)
+            .disabled(
+                viewModel.canStartNewChatFromPublishedState
+                    == false
+            )
             .keyboardShortcut("n", modifiers: [.command, .shift])
 
             Button {
@@ -154,7 +154,10 @@ struct GraphChatView: View {
                     .frame(width: 36, height: 32)
             }
             .buttonStyle(.bordered)
-            .disabled(viewModel.canStartNewChat == false)
+            .disabled(
+                viewModel.canStartNewChatFromPublishedState
+                    == false
+            )
             .keyboardShortcut("n", modifiers: [.command, .shift])
         }
         .accessibilityLabel(GraphChatMessageActionAccessibility.newChatLabel)
@@ -173,8 +176,12 @@ struct GraphChatView: View {
                             language: viewModel.interfaceLanguage,
                             suggestions: viewModel.suggestions,
                             schemaErrorMessage: viewModel.schemaErrorMessage,
-                            isLoadingSuggestions: viewModel.schemaContext == nil
-                                && viewModel.schemaErrorMessage == nil,
+                            isLoadingSuggestions:
+                                viewModel.isLoadingSuggestions
+                                || (
+                                    viewModel.schemaContext == nil
+                                    && viewModel.schemaErrorMessage == nil
+                                ),
                             betaCopy: betaCopy,
                             onSelectSuggestion: viewModel.useSuggestion,
                             onOpenBetaInfo: onOpenBetaInfo

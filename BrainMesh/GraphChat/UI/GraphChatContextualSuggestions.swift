@@ -65,6 +65,7 @@ nonisolated struct GraphChatSuggestionContext: Sendable {
     let availableTools: Set<GraphChatToolKind>
     let modelAvailability: GraphChatAvailabilityPresentationState
     let language: GraphChatResponseLanguage
+    let localeIdentifier: String
 
     init(
         schema: GraphSchemaContext,
@@ -72,7 +73,8 @@ nonisolated struct GraphChatSuggestionContext: Sendable {
         launchContext: GraphChatLaunchContext,
         availableTools: Set<GraphChatToolKind> = Set(GraphChatToolKind.allCases),
         modelAvailability: GraphChatAvailabilityPresentationState = .available,
-        language: GraphChatResponseLanguage = GraphChatResponseLanguageSelector.systemFallback()
+        language: GraphChatResponseLanguage = GraphChatResponseLanguageSelector.systemFallback(),
+        localeIdentifier: String = Locale.current.identifier
     ) {
         self.schema = schema
         self.scope = scope
@@ -80,6 +82,7 @@ nonisolated struct GraphChatSuggestionContext: Sendable {
         self.availableTools = availableTools
         self.modelAvailability = modelAvailability
         self.language = language
+        self.localeIdentifier = localeIdentifier
     }
 }
 
@@ -95,6 +98,26 @@ nonisolated enum GraphChatEmptyStateSuggestionBuilder {
         guard context.modelAvailability.isAvailable else {
             return []
         }
+
+        let mentionCatalog = GraphMentionCatalog(
+            schemaContext: context.schema
+        )
+        return (try? validatedSuggestions(
+            for: context,
+            mentionCatalog: mentionCatalog,
+            validator: GraphChatCapabilityQuestionValidator()
+        )) ?? []
+    }
+
+    static func validatedSuggestions(
+        for context: GraphChatSuggestionContext,
+        mentionCatalog: GraphMentionCatalog,
+        validator: GraphChatCapabilityQuestionValidator
+    ) throws -> [GraphChatEmptyStateSuggestion] {
+        guard context.modelAvailability.isAvailable else {
+            return []
+        }
+        try Task.checkCancellation()
 
         let candidates: [Candidate]
         switch context.launchContext {
@@ -112,7 +135,12 @@ nonisolated enum GraphChatEmptyStateSuggestionBuilder {
             candidates = healthCandidates(context, finding: finding)
         }
 
-        return ranked(candidates, context: context)
+        return try ranked(
+            candidates,
+            context: context,
+            mentionCatalog: mentionCatalog,
+            validator: validator
+        )
     }
 
     /// A prompt-only snapshot cannot prove current UUID-backed bindings.

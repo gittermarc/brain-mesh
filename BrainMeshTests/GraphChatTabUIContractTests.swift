@@ -3,6 +3,7 @@
 //  BrainMeshTests
 //
 
+import Foundation
 import SwiftUI
 import Testing
 import UIKit
@@ -52,14 +53,17 @@ struct GraphChatTabUIContractTests {
             let previewImage = try #require(
                 renderedImage(
                     GraphChatTabFreePreviewView(
-                        draft: .constant("Welche Projekte sind offen?"),
+                        initialDraft: "Welche Projekte sind offen?",
+                        draftScope: .entireGraph(
+                            GraphScope(graphID: UUID())
+                        ),
                         presentation: GraphChatTabFreePreviewPresentation(
                             showsDraft: true,
                             suggestions: [suggestion],
                             errorMessage: nil
                         ),
                         betaCopy: GraphChatBetaCopy(language: .german),
-                        onSelectSuggestion: { _ in },
+                        onCheckpointDraft: { _, _ in },
                         onOpenBetaInfo: {},
                         onOpenPaywall: {}
                     ),

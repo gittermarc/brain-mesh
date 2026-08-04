@@ -29,7 +29,11 @@ nonisolated struct GraphChatTabRuntimeTaskIdentity: Hashable, Sendable {
 nonisolated struct GraphChatTabAccessTaskIdentity: Hashable, Sendable {
     let runtime: GraphChatTabRuntimeTaskIdentity
     let sourceRequestID: UUID?
+    let sourceScope: GraphChatScope?
+    let sourceLaunchContext: GraphChatLaunchContext?
     let effectiveRequestID: UUID?
+    let effectiveScope: GraphChatScope?
+    let effectiveLaunchContext: GraphChatLaunchContext?
     let availability: GraphChatAvailabilityPresentationState
     let indexState: GraphChatIndexPresentationState
     let isGenerationRunning: Bool
@@ -39,6 +43,8 @@ nonisolated struct GraphChatTabAccessTaskIdentity: Hashable, Sendable {
 nonisolated struct GraphChatTabLaunchValidationTaskIdentity: Hashable, Sendable {
     let activeGraphIDString: String
     let sourceRequestID: UUID?
+    let sourceScope: GraphChatScope?
+    let sourceLaunchContext: GraphChatLaunchContext?
     let lockRevision: UInt64
 }
 
@@ -135,8 +141,7 @@ nonisolated struct GraphChatTabPresentationModel: Hashable, Sendable {
         isReconciliationRunning: Bool,
         isGenerationRunning: Bool,
         presentedSessionIdentity: GraphChatTabPresentedSessionIdentity?,
-        previewSuggestions: [GraphChatEmptyStateSuggestion],
-        previewGraphID: UUID?,
+        previewSuggestionsSnapshot: GraphChatSuggestionsSnapshot?,
         previewErrorMessage: String?,
         language: GraphChatResponseLanguage
     ) {
@@ -160,8 +165,11 @@ nonisolated struct GraphChatTabPresentationModel: Hashable, Sendable {
             isGenerationRunning: isGenerationRunning
         )
         let visibleSuggestions: [GraphChatEmptyStateSuggestion]
-        if previewGraphID == activeGraphID {
-            visibleSuggestions = Array(previewSuggestions.prefix(4))
+        if previewSuggestionsSnapshot?.key.graphID == activeGraphID {
+            visibleSuggestions = Array(
+                (previewSuggestionsSnapshot?.suggestions ?? [])
+                    .prefix(4)
+            )
         } else {
             visibleSuggestions = []
         }
@@ -208,7 +216,11 @@ nonisolated struct GraphChatTabPresentationModel: Hashable, Sendable {
         self.accessTaskIdentity = GraphChatTabAccessTaskIdentity(
             runtime: runtimeTaskIdentity,
             sourceRequestID: sourceRequest?.id,
+            sourceScope: sourceRequest?.scope,
+            sourceLaunchContext: sourceRequest?.context,
             effectiveRequestID: effectiveRequest?.id,
+            effectiveScope: effectiveRequest?.scope,
+            effectiveLaunchContext: effectiveRequest?.context,
             availability: availability,
             indexState: indexState,
             isGenerationRunning: isGenerationRunning,
@@ -217,6 +229,8 @@ nonisolated struct GraphChatTabPresentationModel: Hashable, Sendable {
         self.launchValidationTaskIdentity = GraphChatTabLaunchValidationTaskIdentity(
             activeGraphIDString: activeGraphIDString,
             sourceRequestID: sourceRequest?.id,
+            sourceScope: sourceRequest?.scope,
+            sourceLaunchContext: sourceRequest?.context,
             lockRevision: lockRevision
         )
         self.language = language

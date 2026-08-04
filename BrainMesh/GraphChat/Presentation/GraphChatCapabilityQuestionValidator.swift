@@ -36,6 +36,8 @@ nonisolated struct GraphChatCapabilityQuestionValidator:
         GraphChatSemanticDraftValidator
     private let semanticResolver:
         GraphChatSemanticIntentResolver
+    private let instrumentation:
+        GraphChatSuggestionsInstrumentation
 
     init(
         foundationalCompiler:
@@ -58,7 +60,9 @@ nonisolated struct GraphChatCapabilityQuestionValidator:
                 GraphChatSemanticDraftValidator(),
         semanticResolver:
             GraphChatSemanticIntentResolver =
-                GraphChatSemanticIntentResolver()
+                GraphChatSemanticIntentResolver(),
+        instrumentation:
+            GraphChatSuggestionsInstrumentation = .disabled
     ) {
         self.foundationalCompiler = foundationalCompiler
         self.foundationalAdapter = foundationalAdapter
@@ -68,6 +72,7 @@ nonisolated struct GraphChatCapabilityQuestionValidator:
         self.requestBuilder = requestBuilder
         self.draftValidator = draftValidator
         self.semanticResolver = semanticResolver
+        self.instrumentation = instrumentation
     }
 
     func validate(
@@ -75,8 +80,15 @@ nonisolated struct GraphChatCapabilityQuestionValidator:
         capability: GraphChatCapability,
         schemaContext: GraphSchemaContext,
         chatScope: GraphChatScope,
-        language: GraphChatResponseLanguage
+        language: GraphChatResponseLanguage,
+        mentionCatalog: GraphMentionCatalog? = nil
     ) -> GraphChatCapabilityQuestionValidation? {
+        instrumentation.record(
+            .capabilityValidation(capability.id)
+        )
+        let catalog = mentionCatalog ?? GraphMentionCatalog(
+            schemaContext: schemaContext
+        )
         guard
             GraphChatCapabilityCatalog.capability(
                 withID: capability.id
@@ -85,7 +97,8 @@ nonisolated struct GraphChatCapabilityQuestionValidator:
             schemaContext.aliases.graphScope
                 == schemaContext.graphScope,
             schemaContext.foundationalAliases.graphScope
-                == schemaContext.graphScope
+                == schemaContext.graphScope,
+            catalog.graphScope == schemaContext.graphScope
         else {
             return nil
         }
@@ -137,13 +150,20 @@ nonisolated struct GraphChatCapabilityQuestionValidator:
             )
 
         do {
+            try Task.checkCancellation()
+            instrumentation.record(
+                .intentCompiler(
+                    capability.productionPath.compilerFamily
+                )
+            )
             let adaptation: GraphChatTypedIntentAdaptation
             switch capability.productionPath.compilerFamily {
             case .foundationalEntityCollection,
                 .foundationalNodeProfile:
                 guard case .compiled(let intent) =
                         foundationalCompiler.compile(
-                            foundationalInput
+                            foundationalInput,
+                            mentionCatalog: catalog
                         ) else {
                     return nil
                 }
@@ -153,13 +173,15 @@ nonisolated struct GraphChatCapabilityQuestionValidator:
 
             case .deterministicDirectRelationship:
                 guard foundationalCompiler.compile(
-                    foundationalInput
+                    foundationalInput,
+                    mentionCatalog: catalog
                 ) == .notRecognized,
                 composableReadFastPath.compile(
                     question: normalizedQuestion,
                     language: language,
                     schemaContext: schemaContext,
-                    chatScope: chatScope
+                    chatScope: chatScope,
+                    mentionCatalog: catalog
                 ) == nil,
                 let draft = relationshipFastPath.compile(
                     question: normalizedQuestion,
@@ -171,18 +193,21 @@ nonisolated struct GraphChatCapabilityQuestionValidator:
                     draft: draft,
                     providerPlan: providerPlan,
                     schemaContext: schemaContext,
-                    requestID: requestID
+                    requestID: requestID,
+                    mentionCatalog: catalog
                 )
 
             case .deterministicFrequencyRelationship:
                 guard foundationalCompiler.compile(
-                    foundationalInput
+                    foundationalInput,
+                    mentionCatalog: catalog
                 ) == .notRecognized,
                 let draft = composableReadFastPath.compile(
                     question: normalizedQuestion,
                     language: language,
                     schemaContext: schemaContext,
-                    chatScope: chatScope
+                    chatScope: chatScope,
+                    mentionCatalog: catalog
                 ) else {
                     return nil
                 }
@@ -190,7 +215,8 @@ nonisolated struct GraphChatCapabilityQuestionValidator:
                     draft: draft,
                     providerPlan: providerPlan,
                     schemaContext: schemaContext,
-                    requestID: requestID
+                    requestID: requestID,
+                    mentionCatalog: catalog
                 )
             }
 
@@ -198,6 +224,10 @@ nonisolated struct GraphChatCapabilityQuestionValidator:
                     == capability.productionPath.typedIntentKind else {
                 return nil
             }
+            try Task.checkCancellation()
+            instrumentation.record(
+                .readPlanValidation(capability.id)
+            )
             let validated = try makePlanValidator().validate(
                 adaptation.readPlan,
                 for: adaptation.intent,
@@ -235,7 +265,8 @@ nonisolated struct GraphChatCapabilityQuestionValidator:
         draft: GraphChatUntrustedSemanticIntentDraft,
         providerPlan: GraphChatProviderTurnPlan,
         schemaContext: GraphSchemaContext,
-        requestID: UUID
+        requestID: UUID,
+        mentionCatalog: GraphMentionCatalog
     ) throws -> GraphChatTypedIntentAdaptation {
         let request = try requestBuilder.makeRequest(
             providerPlan: providerPlan,
@@ -258,7 +289,8 @@ nonisolated struct GraphChatCapabilityQuestionValidator:
             requestID: requestID,
             sourceTurnID: nil,
             clarificationID: nil,
-            referenceDate: Self.referenceDate
+            referenceDate: Self.referenceDate,
+            mentionCatalog: mentionCatalog
         )
         guard case .compiled(let adaptation) = resolution else {
             throw GraphChatCapabilityQuestionValidationError

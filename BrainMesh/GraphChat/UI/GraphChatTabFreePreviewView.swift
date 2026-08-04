@@ -8,7 +8,6 @@
 import Foundation
 import SwiftUI
 
-
 nonisolated struct GraphChatTabFreePreviewLoader: Sendable {
     private let schemaProvider: any GraphSchemaSnapshotProviding
 
@@ -26,40 +25,48 @@ nonisolated struct GraphChatTabFreePreviewLoader: Sendable {
             exampleFieldIDs: []
         )
     }
-
-    static func suggestions(
-        schemaContext: GraphSchemaContext,
-        request: GraphChatLaunchRequest?,
-        modelAvailability: GraphChatAvailabilityPresentationState,
-        language: GraphChatResponseLanguage
-    ) -> [GraphChatEmptyStateSuggestion] {
-        let previewRequest = request ?? GraphChatLaunchRequest(
-            scope: .entireGraph(schemaContext.graphScope),
-            context: .graph(name: schemaContext.snapshot.graphName)
-        )
-        return GraphChatEmptyStateSuggestionBuilder.suggestions(
-            for: GraphChatSuggestionContext(
-                schema: schemaContext,
-                scope: previewRequest.scope,
-                launchContext: previewRequest.context,
-                availableTools: Set(GraphChatToolKind.allCases),
-                modelAvailability: modelAvailability,
-                language: language
-            )
-        )
-    }
 }
 
 struct GraphChatTabFreePreviewView: View {
-    @Binding var draft: String
-    @FocusState private var isDraftFocused: Bool
+    @State private var draftController:
+        GraphChatComposerController
 
+    let initialDraft: String
     let presentation: GraphChatTabFreePreviewPresentation
     let betaCopy: GraphChatBetaCopy
-    var focusRequestID: UUID? = nil
-    let onSelectSuggestion: (GraphChatEmptyStateSuggestion) -> Void
+    let focusRequestID: UUID?
     let onOpenBetaInfo: () -> Void
     let onOpenPaywall: () -> Void
+
+    init(
+        initialDraft: String,
+        draftScope: GraphChatScope?,
+        presentation: GraphChatTabFreePreviewPresentation,
+        betaCopy: GraphChatBetaCopy,
+        focusRequestID: UUID? = nil,
+        onCheckpointDraft: @escaping (String, GraphChatScope) -> Void,
+        onOpenBetaInfo: @escaping () -> Void,
+        onOpenPaywall: @escaping () -> Void
+    ) {
+        let bounded = Self.bounded(initialDraft)
+        self.initialDraft = bounded
+        self.presentation = presentation
+        self.betaCopy = betaCopy
+        self.focusRequestID = focusRequestID
+        self.onOpenBetaInfo = onOpenBetaInfo
+        self.onOpenPaywall = onOpenPaywall
+        _draftController = State(
+            initialValue: GraphChatComposerController(
+                initialText: bounded,
+                checkpointHandler: { value in
+                    guard let draftScope else {
+                        return
+                    }
+                    onCheckpointDraft(value, draftScope)
+                }
+            )
+        )
+    }
 
     var body: some View {
         ScrollView {
@@ -71,22 +78,10 @@ struct GraphChatTabFreePreviewView: View {
                 )
 
                 if presentation.showsDraft {
-                    VStack(alignment: .leading, spacing: 8) {
-                        Text("Deine Frage")
-                            .font(.headline)
-                        TextField(
-                            "Was möchtest du in deinem Graphen finden?",
-                            text: $draft,
-                            axis: .vertical
-                        )
-                        .focused($isDraftFocused)
-                        .lineLimit(2...6)
-                        .textFieldStyle(.roundedBorder)
-                        .accessibilityIdentifier("graph-chat-free-draft")
-                        Text("Der Draft bleibt nur im Speicher. Nach dem Kauf entscheidest du selbst, ob du ihn sendest.")
-                            .font(.footnote)
-                            .foregroundStyle(.secondary)
-                    }
+                    GraphChatTabFreePreviewDraftEditor(
+                        controller: draftController,
+                        focusRequestID: focusRequestID
+                    )
                 }
 
                 GraphChatBetaCompactNoticeCard(
@@ -101,7 +96,11 @@ struct GraphChatTabFreePreviewView: View {
                             .font(.headline)
                         ForEach(presentation.suggestions) { suggestion in
                             Button {
-                                onSelectSuggestion(suggestion)
+                                draftController.replaceText(
+                                    suggestion.prompt,
+                                    checkpoint: false
+                                )
+                                checkpointDraft()
                             } label: {
                                 Label(suggestion.prompt, systemImage: "text.bubble")
                                     .font(.subheadline)
@@ -121,7 +120,10 @@ struct GraphChatTabFreePreviewView: View {
                         .foregroundStyle(.secondary)
                 }
 
-                Button(action: onOpenPaywall) {
+                Button {
+                    checkpointDraft()
+                    onOpenPaywall()
+                } label: {
                     Label("Mit BrainMesh Pro freischalten", systemImage: "lock.open")
                         .frame(maxWidth: .infinity)
                 }
@@ -136,8 +138,65 @@ struct GraphChatTabFreePreviewView: View {
             .padding(20)
             .frame(maxWidth: .infinity)
         }
+        .onChange(of: initialDraft) { _, value in
+            let bounded = Self.bounded(value)
+            guard draftController.text != bounded else {
+                return
+            }
+            draftController.replaceText(
+                bounded,
+                checkpoint: false
+            )
+        }
+        .onDisappear {
+            checkpointDraft()
+        }
+    }
+
+    private func checkpointDraft() {
+        draftController.checkpointLatest()
+    }
+
+    private nonisolated static func bounded(
+        _ value: String
+    ) -> String {
+        String(
+            value.prefix(
+                GraphChatIntentLimitPolicy
+                    .default.maximumQuestionLength
+            )
+        )
+    }
+}
+
+private struct GraphChatTabFreePreviewDraftEditor: View {
+    @Bindable var controller: GraphChatComposerController
+    @FocusState private var isDraftFocused: Bool
+
+    let focusRequestID: UUID?
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text("Deine Frage")
+                .font(.headline)
+            TextField(
+                "Was möchtest du in deinem Graphen finden?",
+                text: Binding(
+                    get: { controller.text },
+                    set: controller.updateFromUser
+                ),
+                axis: .vertical
+            )
+            .focused($isDraftFocused)
+            .lineLimit(2...6)
+            .textFieldStyle(.roundedBorder)
+            .accessibilityIdentifier("graph-chat-free-draft")
+            Text("Der Draft bleibt nur im Speicher. Nach dem Kauf entscheidest du selbst, ob du ihn sendest.")
+                .font(.footnote)
+                .foregroundStyle(.secondary)
+        }
         .onChange(of: focusRequestID) { _, requestID in
-            guard requestID != nil, presentation.showsDraft else {
+            guard requestID != nil else {
                 return
             }
             isDraftFocused = true

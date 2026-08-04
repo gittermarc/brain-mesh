@@ -11,11 +11,14 @@ import Foundation
 @MainActor
 final class GraphChatViewModel: ObservableObject {
     @Published private(set) var messages: [GraphChatTranscriptMessage] = []
-    @Published private(set) var composerState = GraphChatComposerState()
     @Published private(set) var availabilityState: GraphChatAvailabilityPresentationState = .loading
     @Published private(set) var indexState: GraphChatIndexPresentationState = .loading
     @Published private(set) var schemaSnapshot: GraphSchemaSnapshot?
     @Published private(set) var schemaContext: GraphSchemaContext?
+    @Published private(set) var suggestionsSnapshot:
+        GraphChatSuggestionsSnapshot?
+    @Published private(set) var isLoadingSuggestions = false
+    @Published private(set) var isGenerating = false
     @Published private(set) var schemaErrorMessage: String?
     @Published private(set) var scrollAnchorToken = UUID()
     @Published private(set) var editingState: GraphChatEditingState?
@@ -31,7 +34,9 @@ final class GraphChatViewModel: ObservableObject {
     let configuredGraphName: String
     let launchContext: GraphChatLaunchContext
     let interfaceLanguage: GraphChatResponseLanguage
+    let interfaceLocaleIdentifier: String
     let availableTools: Set<GraphChatToolKind>
+    let composerController: GraphChatComposerController
 
     private let orchestrator: any GraphChatOrchestrating
     private let schemaProvider: any GraphSchemaSnapshotProviding
@@ -45,12 +50,13 @@ final class GraphChatViewModel: ObservableObject {
     private let accessDecisionProvider: (@MainActor () -> GraphChatAccessDecision)?
     private let generationAccessProvider: @MainActor () -> Bool
     private let observability: any GraphChatObservabilityRecording
-    private let draftChangeHandler: @MainActor (String) -> Void
     private let availabilityStateDidChange: @MainActor (GraphChatAvailabilityPresentationState) -> Void
     private let indexStateDidChange: @MainActor (GraphChatIndexPresentationState) -> Void
     private let generationStateDidChange: @MainActor (Bool) -> Void
     private let sessionDerivedStateDidClear: @MainActor () -> Void
     private let checkpointController: GraphChatConversationCheckpointController
+    private let suggestionsSnapshotController:
+        GraphChatSuggestionsSnapshotController
 
     private lazy var generationController: GraphChatGenerationController = GraphChatGenerationController(
         graphScope: graphScope,
@@ -123,6 +129,9 @@ final class GraphChatViewModel: ObservableObject {
     private var visiblePresentationIDs: Set<UUID> = []
     private var hasLoaded = false
     private var isLoadingSchema = false
+    private var requestedSuggestionsKey:
+        GraphChatSuggestionsSnapshotKey?
+    private var suggestionsPublicationTask: Task<Void, Never>?
 
     init(
         graphScope: GraphScope,
@@ -130,6 +139,7 @@ final class GraphChatViewModel: ObservableObject {
         graphName: String,
         launchContext: GraphChatLaunchContext? = nil,
         interfaceLanguage: GraphChatResponseLanguage = GraphChatResponseLanguageSelector.systemFallback(),
+        interfaceLocaleIdentifier: String = Locale.current.identifier,
         availableTools: Set<GraphChatToolKind> = Set(GraphChatToolKind.allCases),
         orchestrator: any GraphChatOrchestrating,
         schemaProvider: any GraphSchemaSnapshotProviding,
@@ -147,7 +157,10 @@ final class GraphChatViewModel: ObservableObject {
         availabilityStateDidChange: @escaping @MainActor (GraphChatAvailabilityPresentationState) -> Void = { _ in },
         indexStateDidChange: @escaping @MainActor (GraphChatIndexPresentationState) -> Void = { _ in },
         generationStateDidChange: @escaping @MainActor (Bool) -> Void = { _ in },
-        sessionDerivedStateDidClear: @escaping @MainActor () -> Void = {}
+        sessionDerivedStateDidClear: @escaping @MainActor () -> Void = {},
+        suggestionsSnapshotBuilder:
+            any GraphChatSuggestionsSnapshotBuilding =
+                GraphChatProductionSuggestionsSnapshotBuilder()
     ) {
         precondition(
             graphScope == chatScope.graphScope,
@@ -158,7 +171,11 @@ final class GraphChatViewModel: ObservableObject {
         self.configuredGraphName = graphName
         self.launchContext = launchContext ?? .inferred(from: chatScope)
         self.interfaceLanguage = interfaceLanguage
+        self.interfaceLocaleIdentifier = interfaceLocaleIdentifier
         self.availableTools = availableTools
+        self.composerController = GraphChatComposerController(
+            checkpointHandler: draftChangeHandler
+        )
         self.orchestrator = orchestrator
         self.schemaProvider = schemaProvider
         self.availabilityProvider = availabilityProvider
@@ -172,7 +189,6 @@ final class GraphChatViewModel: ObservableObject {
         self.accessDecisionProvider = accessDecisionProvider
         self.generationAccessProvider = generationAccessProvider
         self.observability = observability
-        self.draftChangeHandler = draftChangeHandler
         self.availabilityStateDidChange = availabilityStateDidChange
         self.indexStateDidChange = indexStateDidChange
         self.generationStateDidChange = generationStateDidChange
@@ -181,6 +197,10 @@ final class GraphChatViewModel: ObservableObject {
             graphScope: graphScope,
             chatScope: chatScope
         )
+        self.suggestionsSnapshotController =
+            GraphChatSuggestionsSnapshotController(
+                builder: suggestionsSnapshotBuilder
+            )
     }
 
     deinit {
@@ -188,6 +208,7 @@ final class GraphChatViewModel: ObservableObject {
         presentationCleanupTask?.cancel()
         correctionEditorTask?.cancel()
         correctionApplyTask?.cancel()
+        suggestionsPublicationTask?.cancel()
     }
 
     var graphName: String {
@@ -206,25 +227,40 @@ final class GraphChatViewModel: ObservableObject {
         scopePresentation.title
     }
 
-    var isGenerating: Bool {
-        generationController.isGenerating
+    var composerState: GraphChatComposerState {
+        GraphChatComposerState(
+            text: composerController.text,
+            isGenerating: isGenerating
+        )
     }
 
     var canSend: Bool {
-        composerState.canSend
+        composerController.hasSubmissionText
+            && isGenerating == false
+            && isPerformingSessionMutation == false
+            && correctionEditorSession == nil
+            && currentAccessDecision.canStartGeneration
+    }
+
+    var canSubmitComposer: Bool {
+        isGenerating == false
             && isPerformingSessionMutation == false
             && correctionEditorSession == nil
             && currentAccessDecision.canStartGeneration
     }
 
     var canStartNewChat: Bool {
+        canStartNewChatFromPublishedState
+            || (
+                correctionEditorSession == nil
+                && composerController.hasSubmissionText
+            )
+    }
+
+    var canStartNewChatFromPublishedState: Bool {
         correctionEditorSession == nil
             && (
                 messages.isEmpty == false
-                    || composerState
-                        .normalizedText
-                        .isEmpty
-                        == false
                     || editingState != nil
                     || isGenerating
             )
@@ -247,19 +283,7 @@ final class GraphChatViewModel: ObservableObject {
     }
 
     var suggestions: [GraphChatEmptyStateSuggestion] {
-        guard let schemaContext else {
-            return []
-        }
-        return GraphChatEmptyStateSuggestionBuilder.suggestions(
-            for: GraphChatSuggestionContext(
-                schema: schemaContext,
-                scope: chatScope,
-                launchContext: launchContext,
-                availableTools: availableTools,
-                modelAvailability: availabilityState,
-                language: interfaceLanguage
-            )
-        )
+        suggestionsSnapshot?.suggestions ?? []
     }
 
     func load() async {
@@ -319,38 +343,138 @@ final class GraphChatViewModel: ObservableObject {
             schemaContext = context
             schemaSnapshot = context.snapshot
             schemaErrorMessage = nil
+            await refreshSuggestionsSnapshotIfNeeded()
         } catch is CancellationError {
             return
         } catch {
             schemaContext = nil
             schemaSnapshot = nil
             schemaErrorMessage = error.localizedDescription
+            invalidateSuggestionsSnapshot()
         }
     }
 
     func refreshRuntimeStates() async {
         let availability = await availabilityProvider.availability()
+        let resolvedAvailability: GraphChatAvailabilityPresentationState
         switch availability {
         case .available:
-            availabilityState = .available
+            resolvedAvailability = .available
         case .unavailable(let reason):
-            availabilityState = .unavailable(reason: reason)
+            resolvedAvailability = .unavailable(reason: reason)
         }
-        availabilityStateDidChange(availabilityState)
+        if availabilityState != resolvedAvailability {
+            availabilityState = resolvedAvailability
+            availabilityStateDidChange(resolvedAvailability)
+        }
+        if schemaContext != nil {
+            await refreshSuggestionsSnapshotIfNeeded()
+        }
 
-        indexState = await indexStatusProvider.presentationState(for: graphScope)
-        indexStateDidChange(indexState)
+        let resolvedIndexState = await indexStatusProvider
+            .presentationState(for: graphScope)
+        if indexState != resolvedIndexState {
+            indexState = resolvedIndexState
+            indexStateDidChange(resolvedIndexState)
+        }
+    }
+
+    func refreshSuggestionsSnapshotIfNeeded() async {
+        guard let schemaContext else {
+            invalidateSuggestionsSnapshot()
+            return
+        }
+        let context = GraphChatSuggestionContext(
+            schema: schemaContext,
+            scope: chatScope,
+            launchContext: launchContext,
+            availableTools: availableTools,
+            modelAvailability: availabilityState,
+            language: interfaceLanguage,
+            localeIdentifier: interfaceLocaleIdentifier
+        )
+        let request = GraphChatSuggestionsSnapshotRequest(
+            context: context
+        )
+        if suggestionsSnapshot?.key == request.key {
+            if isLoadingSuggestions {
+                isLoadingSuggestions = false
+            }
+            return
+        }
+
+        if requestedSuggestionsKey != request.key {
+            requestedSuggestionsKey = request.key
+            if suggestionsSnapshot != nil {
+                suggestionsSnapshot = nil
+            }
+            if isLoadingSuggestions == false {
+                isLoadingSuggestions = true
+            }
+        }
+
+        do {
+            let snapshot = try await suggestionsSnapshotController
+                .snapshot(for: request)
+            guard Task.isCancelled == false,
+                  requestedSuggestionsKey == request.key else {
+                return
+            }
+            if suggestionsSnapshot != snapshot {
+                suggestionsSnapshot = snapshot
+            }
+            if isLoadingSuggestions {
+                isLoadingSuggestions = false
+            }
+        } catch is CancellationError {
+            guard requestedSuggestionsKey == request.key,
+                  Task.isCancelled == false else {
+                return
+            }
+            if isLoadingSuggestions {
+                isLoadingSuggestions = false
+            }
+        } catch {
+            guard requestedSuggestionsKey == request.key else {
+                return
+            }
+            if isLoadingSuggestions {
+                isLoadingSuggestions = false
+            }
+        }
+    }
+
+    private func scheduleSuggestionsSnapshotRefresh() {
+        suggestionsPublicationTask?.cancel()
+        if suggestionsSnapshot != nil {
+            suggestionsSnapshot = nil
+        }
+        if schemaContext != nil,
+           isLoadingSuggestions == false {
+            isLoadingSuggestions = true
+        }
+        suggestionsPublicationTask = Task { @MainActor [weak self] in
+            await self?.refreshSuggestionsSnapshotIfNeeded()
+        }
+    }
+
+    private func invalidateSuggestionsSnapshot() {
+        suggestionsPublicationTask?.cancel()
+        suggestionsPublicationTask = nil
+        suggestionsSnapshotController.cancel(
+            clearCachedSnapshot: true
+        )
+        requestedSuggestionsKey = nil
+        if suggestionsSnapshot != nil {
+            suggestionsSnapshot = nil
+        }
+        if isLoadingSuggestions {
+            isLoadingSuggestions = false
+        }
     }
 
     func setComposerText(_ text: String) {
-        let bounded = String(
-            text.prefix(
-                GraphChatIntentLimitPolicy
-                    .default.maximumQuestionLength
-            )
-        )
-        composerState.text = bounded
-        draftChangeHandler(bounded)
+        composerController.updateFromUser(text)
     }
 
     func notifyGenerationAccessChanged() {
@@ -387,19 +511,15 @@ final class GraphChatViewModel: ObservableObject {
               isPerformingSessionMutation == false,
               correctionEditorSession == nil,
               editingState == nil,
-              composerState.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+              composerController.normalizedText.isEmpty,
               let question = question?.trimmingCharacters(in: .whitespacesAndNewlines),
               question.isEmpty == false else {
             return
         }
-        let bounded = String(
-            question.prefix(
-                GraphChatIntentLimitPolicy
-                    .default.maximumQuestionLength
-            )
+        composerController.replaceText(
+            question,
+            checkpoint: true
         )
-        composerState.text = bounded
-        draftChangeHandler(bounded)
     }
 
     func useSuggestion(_ suggestion: GraphChatEmptyStateSuggestion) {
@@ -431,7 +551,10 @@ final class GraphChatViewModel: ObservableObject {
             return
         }
         cancelEditing(clearComposer: false)
-        setComposerText(prompt)
+        composerController.replaceText(
+            prompt,
+            checkpoint: true
+        )
         if requestsFocus {
             composerFocusRequestID = UUID()
         }
@@ -444,8 +567,10 @@ final class GraphChatViewModel: ObservableObject {
             return
         }
         cancelEditing(clearComposer: false)
-        composerState.text = suggestion.prompt
-        draftChangeHandler(suggestion.prompt)
+        composerController.replaceText(
+            suggestion.prompt,
+            checkpoint: true
+        )
     }
 
     func send() {
@@ -454,9 +579,10 @@ final class GraphChatViewModel: ObservableObject {
             return
         }
         if editingState != nil {
-            guard let question = composerState.submissionText() else {
+            guard let question = composerController.submissionText() else {
                 return
             }
+            composerController.checkpointLatest()
             messageActionController.submitEditedQuestion(
                 snapshot: messageActionSnapshot,
                 replacementQuestion: question
@@ -466,13 +592,13 @@ final class GraphChatViewModel: ObservableObject {
 
         let decision = currentAccessDecision
         guard decision.canStartGeneration,
-              let question = composerState.submissionText() else {
+              let question = composerController.submissionText() else {
             return
         }
 
+        composerController.checkpointLatest()
         let checkpoint = checkpointController.checkpointBeforeNextTurn()
-        composerState.text = ""
-        draftChangeHandler("")
+        composerController.replaceText("", checkpoint: true)
         let userMessage = GraphChatTranscriptMessage(
             state: .userQuestion(question),
             conversationCheckpointBeforeTurn: checkpoint
@@ -1050,11 +1176,22 @@ final class GraphChatViewModel: ObservableObject {
     func messageActionAvailability(
         for messageID: UUID
     ) -> GraphChatMessageActionAvailability {
+        // Availability does not depend on the draft. Keeping the local
+        // composer text out of this body-time snapshot preserves the
+        // transcript's Observation boundary while editing.
+        let availabilitySnapshot = GraphChatMessageActionSnapshot(
+            messages: messages,
+            composerText: "",
+            editingState: editingState,
+            feedbackByMessageID: feedbackByMessageID,
+            isPerformingSessionMutation:
+                isPerformingSessionMutation
+        )
         let availability =
             messageActionController.messageActionAvailability(
-            for: messageID,
-            snapshot: messageActionSnapshot
-        )
+                for: messageID,
+                snapshot: availabilitySnapshot
+            )
         guard correctionEditorSession != nil else {
             return availability
         }
@@ -1101,6 +1238,7 @@ final class GraphChatViewModel: ObservableObject {
         guard visiblePresentationIDs.isEmpty else {
             return
         }
+        composerController.checkpointLatest()
 
         presentationCleanupTask?.cancel()
         presentationCleanupTask = Task { @MainActor [weak self] in
@@ -1122,6 +1260,7 @@ final class GraphChatViewModel: ObservableObject {
     }
 
     func viewDidDisappear() {
+        composerController.checkpointLatest()
         presentationCleanupTask?.cancel()
         presentationCleanupTask = nil
         visiblePresentationIDs.removeAll()
@@ -1156,11 +1295,19 @@ final class GraphChatViewModel: ObservableObject {
         correctionEditorSession = nil
         visiblePresentationIDs.removeAll()
         actionNotice = nil
-        composerState = GraphChatComposerState()
+        composerController.deactivate(
+            preserveDraft: preserveDraft
+        )
+        suggestionsPublicationTask?.cancel()
+        suggestionsPublicationTask = nil
+        suggestionsSnapshotController.cancel(
+            clearCachedSnapshot: true
+        )
+        requestedSuggestionsKey = nil
+        suggestionsSnapshot = nil
+        isLoadingSuggestions = false
+        isGenerating = false
         isPerformingSessionMutation = false
-        if preserveDraft == false {
-            draftChangeHandler("")
-        }
         messages = []
         feedbackByMessageID = [:]
         editingState = nil
@@ -1287,8 +1434,7 @@ final class GraphChatViewModel: ObservableObject {
         guard clearComposer else {
             return
         }
-        composerState.text = ""
-        draftChangeHandler("")
+        composerController.replaceText("", checkpoint: true)
     }
 
     private func markAssistantCancelled(messageID: UUID) {
@@ -1318,8 +1464,14 @@ final class GraphChatViewModel: ObservableObject {
         messages[index].state = .assistant(state)
         if case .failure(let failure) = event,
            failure.code == .modelUnavailable || failure.code == .unavailable {
-            availabilityState = .unavailable(reason: .unknown)
-            availabilityStateDidChange(availabilityState)
+            let unavailableState:
+                GraphChatAvailabilityPresentationState =
+                    .unavailable(reason: .unknown)
+            if availabilityState != unavailableState {
+                availabilityState = unavailableState
+                availabilityStateDidChange(unavailableState)
+                scheduleSuggestionsSnapshotRefresh()
+            }
         }
         scrollAnchorToken = UUID()
     }
@@ -1327,7 +1479,7 @@ final class GraphChatViewModel: ObservableObject {
     private var messageActionSnapshot: GraphChatMessageActionSnapshot {
         GraphChatMessageActionSnapshot(
             messages: messages,
-            composerText: composerState.text,
+            composerText: composerController.text,
             editingState: editingState,
             feedbackByMessageID: feedbackByMessageID,
             isPerformingSessionMutation: isPerformingSessionMutation
@@ -1343,8 +1495,10 @@ final class GraphChatViewModel: ObservableObject {
 
         case .editingBegan(let editingState, let composerText):
             self.editingState = editingState
-            composerState.text = composerText
-            draftChangeHandler(composerText)
+            composerController.replaceText(
+                composerText,
+                checkpoint: true
+            )
 
         case .feedbackChanged(let feedbackByMessageID, let notice):
             self.feedbackByMessageID = feedbackByMessageID
@@ -1362,8 +1516,10 @@ final class GraphChatViewModel: ObservableObject {
         ):
             self.messages = messages
             self.feedbackByMessageID = feedbackByMessageID
-            composerState.text = composerText
-            draftChangeHandler(composerText)
+            composerController.replaceText(
+                composerText,
+                checkpoint: true
+            )
             if clearsEditing {
                 editingState = nil
             }
@@ -1371,8 +1527,7 @@ final class GraphChatViewModel: ObservableObject {
 
         case .newChatBegan:
             messages = []
-            composerState.text = ""
-            draftChangeHandler("")
+            composerController.replaceText("", checkpoint: true)
             editingState = nil
             feedbackByMessageID = [:]
             isPerformingSessionMutation = true
@@ -1423,8 +1578,7 @@ final class GraphChatViewModel: ObservableObject {
         messages = []
         feedbackByMessageID = [:]
         editingState = nil
-        composerState.text = ""
-        draftChangeHandler("")
+        composerController.replaceText("", checkpoint: true)
         scrollAnchorToken = UUID()
         sessionDerivedStateDidClear()
         showNotice(
@@ -1434,10 +1588,10 @@ final class GraphChatViewModel: ObservableObject {
     }
 
     private func updateVisibleGenerationState(_ isGenerating: Bool) {
-        guard composerState.isGenerating != isGenerating else {
+        guard self.isGenerating != isGenerating else {
             return
         }
-        composerState.isGenerating = isGenerating
+        self.isGenerating = isGenerating
         generationStateDidChange(isGenerating)
     }
 

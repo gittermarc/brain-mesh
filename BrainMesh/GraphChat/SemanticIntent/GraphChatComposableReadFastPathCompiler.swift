@@ -25,7 +25,8 @@ nonisolated struct GraphChatComposableReadFastPathCompiler:
         question: String,
         language: GraphChatResponseLanguage,
         schemaContext: GraphSchemaContext,
-        chatScope: GraphChatScope
+        chatScope: GraphChatScope,
+        mentionCatalog: GraphMentionCatalog? = nil
     ) -> GraphChatUntrustedSemanticIntentDraft? {
         guard
             chatScope
@@ -44,7 +45,8 @@ nonisolated struct GraphChatComposableReadFastPathCompiler:
             in: question,
             language: language,
             schemaContext: schemaContext,
-            chatScope: chatScope
+            chatScope: chatScope,
+            mentionCatalog: mentionCatalog
         )
         guard (2...3).contains(entities.count) else {
             return nil
@@ -106,9 +108,10 @@ nonisolated struct GraphChatComposableReadFastPathCompiler:
         in question: String,
         language: GraphChatResponseLanguage,
         schemaContext: GraphSchemaContext,
-        chatScope: GraphChatScope
+        chatScope: GraphChatScope,
+        mentionCatalog: GraphMentionCatalog?
     ) -> [GraphSchemaEntityResolution] {
-        let catalog = GraphMentionCatalog(
+        let catalog = mentionCatalog ?? GraphMentionCatalog(
             schemaContext: schemaContext
         )
         var remaining = Set(
