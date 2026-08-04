@@ -27,6 +27,7 @@ BrainMesh besitzt bereits mehrere wichtige Schutzlinien:
 - GRAPH-CHAT-CAPABILITY-GUIDANCE-1 führt eine einzige app-owned Capability-Quelle für stabile Nutzerführung ein. Antippbare Starterfragen werden gegen den vollständigen App-Katalog durch die realen Resolver-, Compiler- und Read-Plan-Validator-Pfade bewiesen; Toolverfügbarkeit oder ein grober UI-Kontext allein reichen nicht mehr aus.
 - GRAPH-CHAT-BETA-EXPERIENCE-1 ergänzt eine rein presentation-seitige Beta-Kommunikation: dauerhaftes Badge und Info-Aktion in der gemeinsamen iPhone-/iPad-Komposition, eine nur vor der Nutzung sichtbare Orientierungskarte und ein app-owned DE-/EN-Info-Sheet. Capability-Aussagen bleiben aus dem stabilen Katalog abgeleitet; auswählbare Beispiele bleiben produktionsvalidiert und senden nie automatisch.
 - GRAPH-CHAT-SCHEMA-PIPELINE-1 trennt den Chat-Schema-Read vom vollständigen `GraphSourceSnapshotDTO`. `GraphReadRepository+SchemaSource` materialisiert auf Fetch-Ebene nur Graph, Entities, Attribute-Nodes, Felddefinitionen und gezielt angeforderte Beispielwerte. Ein actor-isolierter, revisionsgebundener Single-Flight-Cache reicht dieselbe `GraphSchemaContextIdentity` durch Suggestions, Preflight, beide Intent-Stufen und Provider-Session; Composable Reads behalten ihren vollständigen autoritativen Snapshot.
+- GRAPH-CHAT-STREAMING-BACKPRESSURE-1 trennt die geordnete Verarbeitung bereits sicherer Stream-Events von ihrer sichtbaren Publikation. Die Presentation Firewall prüft weiterhin jeden relevanten kumulativen Provider-Snapshot; ein turnlokaler Actor koalesziert danach ausschließlich sichere Partials auf höchstens 20 Hz, veröffentlicht Terminalzustände sofort und hält Cancellation-/Replacement-Ownership geschlossen. History-Saves liegen an Turn-Start, Terminal und expliziten Runtime-Grenzen. Transcript und Scroll-State bilden eine eigene Observation-Grenze; Auto-Scroll läuft nur am unteren Rand, Partial-Scrolls sind animationslos und Reduce Motion wird respektiert.
 
 Die höchsten Architektur-Risiken liegen trotzdem an drei Systemgrenzen:
 
@@ -756,6 +757,7 @@ Konkreter Grund:
 - Cancellation muss Provider, Stream und UI-State in definierter Reihenfolge stoppen.
 - Scope-/Lock-/Entitlement-Wechsel invalidieren sensible Sessiondaten.
 - Provider-Cancellation nutzt bewusst einen separaten Task, um vor Streamende anzukommen.
+- Kumulative Provider-Partials müssen aus Sicherheitsgründen vollständig geprüft werden, dürfen aber MainActor, SwiftUI-Observation, History und Scroll nicht mit derselben Eventrate invalidieren.
 
 Risiko:
 
@@ -765,12 +767,14 @@ Risiko:
 - Feedback verweist auf ersetzte Nachricht;
 - Lock löscht nicht alle abgeleiteten Artefakte.
 
-Maßnahmen:
+Umgesetzte Maßnahmen:
 
-- Generation durch `GenerationID`/State Machine serialisieren.
-- Jede Callback-Publikation prüft aktuelle Generation und Graph Scope.
-- Structured Concurrency bevorzugen; unstrukturierte Tasks in einem Registry-Typ besitzen.
-- Race-Tests für cancel/edit/regenerate/lock/graph-switch.
+- `GraphChatGenerationOperationID` und Assistant-ID bleiben die doppelte Callback-Grenze. Der Ersatzturn cancelt und drainiert den Vorgänger; ein alter Turn kann weder Partial noch Terminal in den neuen Transcript übernehmen.
+- `GraphChatPresentationStreamFirewall` prüft weiterhin jeden nichtleeren kumulativen Provider-Snapshot. Der revisionsgebundene `GraphChatPresentationRegistry`-Snapshot ist immutable gecacht; Anzeigenamen und Konflikte besitzen direkte Dictionary-/Set-Lookups bei weiterhin separat sortierter deterministischer Reihenfolge.
+- Erst nach dieser Sicherheitsgrenze konsumiert `GraphChatStreamingBackpressureCoordinator` die sicheren App-Events actor-isoliert, bewahrt Eventsequenzen und jeweils den letzten sicheren Partial-Snapshot und begrenzt ausschließlich nichtterminale UI-Publikationen auf 20 Hz. Terminal, Failure und Cancellation hängen nicht hinter dem Throttle.
+- `GraphChatGenerationController` persistiert den vollständigen Transcript am Turn-Start und nach terminalem Checkpoint. Cancellation und explizite Runtime-Grenzen sichern je einmal; pro Provider-Partial existiert kein Save mehr. Background/Lock verwirft die bewusst nur sessionlokale History weiterhin vollständig und benötigt deshalb keinen zusätzlichen Disk-Checkpoint.
+- `GraphChatTranscriptController` hält Messages, Bottom-State und Scroll-Requests außerhalb des breiten ViewModels. Partials invalidieren dadurch nicht den Composer. Auto-Scroll setzt einen bereits unteren Viewport voraus, manuelles Hochscrollen sperrt weitere Partial-/Terminal-Requests, Partials erzeugen keine Animation und terminale Positionierung bleibt kurz sowie Reduce-Motion-konform.
+- Content-freie OSLog-Metriken erfassen Stream-Eventrate, sichere UI-Publikationen, History-Save-Grenzen und Turndauer ohne Frage, Antwort, Identifier oder Graphinhalt. Rate-/Terminal-/Cancellation-/Cache-/Scroll-Tests verwenden eine injizierte manuelle Clock und keine reale Wartezeit.
 
 ### Graph Chat Foundational Intent Compiler
 

@@ -15,13 +15,32 @@ nonisolated enum GraphChatProviderForwardedEvent: Hashable, Sendable {
 nonisolated struct GraphChatProviderExecutor: Sendable {
     private let provider: any GraphChatModelProvider
     private let sessionFactory: GraphChatProviderSessionFactory
+    private let observability: any GraphChatObservabilityRecording
+    private let presentationStreamFirewallFactory: @Sendable (
+        _ registry: GraphChatPresentationRegistry,
+        _ language: GraphChatResponseLanguage
+    ) -> any GraphChatPresentationStreamValidating
 
     init(
         provider: any GraphChatModelProvider,
-        sessionFactory: GraphChatProviderSessionFactory
+        sessionFactory: GraphChatProviderSessionFactory,
+        observability: any GraphChatObservabilityRecording =
+            NoOpGraphChatObservabilityRecorder(),
+        presentationStreamFirewallFactory: @escaping @Sendable (
+            _ registry: GraphChatPresentationRegistry,
+            _ language: GraphChatResponseLanguage
+        ) -> any GraphChatPresentationStreamValidating = { registry, language in
+            GraphChatPresentationStreamFirewall(
+                registry: registry,
+                language: language
+            )
+        }
     ) {
         self.provider = provider
         self.sessionFactory = sessionFactory
+        self.observability = observability
+        self.presentationStreamFirewallFactory =
+            presentationStreamFirewallFactory
     }
 
     func execute(
@@ -91,19 +110,25 @@ nonisolated struct GraphChatProviderExecutor: Sendable {
             sessionID: resources.sessionID,
             request: request
         )
-        let presentationFirewall = GraphChatPresentationStreamFirewall(
-            registry: resources.presentationRegistry,
-            language: resources.responseLanguage
+        let presentationFirewall = presentationStreamFirewallFactory(
+            resources.presentationRegistry,
+            resources.responseLanguage
         )
         var finalAnswer: GraphChatProviderFinalAnswer?
+        var providerEventCount = 0
+        var providerPartialSnapshotCount = 0
+        var safePartialEventCount = 0
+        let timer = BMDuration()
 
         do {
             for try await event in providerStream {
                 try Task.checkCancellation()
+                providerEventCount += 1
                 switch event {
                 case .toolActivity(let activity):
                     onEvent(.toolActivity(activity))
                 case .partialAnswer(let partial):
+                    providerPartialSnapshotCount += 1
                     // Foundation Models exposes cumulative structured snapshots.
                     // Rechecking the whole visible value prevents split aliases
                     // such as "E" followed by "E1" from ever being published.
@@ -113,6 +138,7 @@ nonisolated struct GraphChatProviderExecutor: Sendable {
                     if rawText.isEmpty == false {
                         if let text = await presentationFirewall
                             .presentCumulativeText(rawText) {
+                            safePartialEventCount += 1
                             onEvent(.partialAnswer(text))
                         }
                     }
@@ -123,8 +149,21 @@ nonisolated struct GraphChatProviderExecutor: Sendable {
         } catch {
             if Task.isCancelled {
                 await sessionFactory.requestCancellation(resources)
+                await recordProviderStreamingMetric(
+                    providerEventCount: providerEventCount,
+                    providerPartialSnapshotCount:
+                        providerPartialSnapshotCount,
+                    safePartialEventCount: safePartialEventCount,
+                    durationMilliseconds: timer.millisecondsElapsed
+                )
                 throw CancellationError()
             }
+            await recordProviderStreamingMetric(
+                providerEventCount: providerEventCount,
+                providerPartialSnapshotCount: providerPartialSnapshotCount,
+                safePartialEventCount: safePartialEventCount,
+                durationMilliseconds: timer.millisecondsElapsed
+            )
             throw error
         }
 
@@ -132,9 +171,21 @@ nonisolated struct GraphChatProviderExecutor: Sendable {
             try Task.checkCancellation()
         } catch {
             await sessionFactory.requestCancellation(resources)
+            await recordProviderStreamingMetric(
+                providerEventCount: providerEventCount,
+                providerPartialSnapshotCount: providerPartialSnapshotCount,
+                safePartialEventCount: safePartialEventCount,
+                durationMilliseconds: timer.millisecondsElapsed
+            )
             throw error
         }
         guard let finalAnswer else {
+            await recordProviderStreamingMetric(
+                providerEventCount: providerEventCount,
+                providerPartialSnapshotCount: providerPartialSnapshotCount,
+                safePartialEventCount: safePartialEventCount,
+                durationMilliseconds: timer.millisecondsElapsed
+            )
             throw GraphChatProviderError(
                 code: .unexpected,
                 message:
@@ -142,7 +193,32 @@ nonisolated struct GraphChatProviderExecutor: Sendable {
             )
         }
         await sessionFactory.completeProviderStream(resources)
+        await recordProviderStreamingMetric(
+            providerEventCount: providerEventCount,
+            providerPartialSnapshotCount: providerPartialSnapshotCount,
+            safePartialEventCount: safePartialEventCount,
+            durationMilliseconds: timer.millisecondsElapsed
+        )
         return finalAnswer
+    }
+
+    private func recordProviderStreamingMetric(
+        providerEventCount: Int,
+        providerPartialSnapshotCount: Int,
+        safePartialEventCount: Int,
+        durationMilliseconds: Double
+    ) async {
+        await observability.record(
+            .providerStreaming(
+                GraphChatProviderStreamingMetric(
+                    providerEventCount: providerEventCount,
+                    providerPartialSnapshotCount:
+                        providerPartialSnapshotCount,
+                    safePartialEventCount: safePartialEventCount,
+                    durationMilliseconds: durationMilliseconds
+                )
+            )
+        )
     }
 
     private func presentationSafeError(

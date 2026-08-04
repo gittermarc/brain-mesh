@@ -46,8 +46,10 @@ nonisolated enum GraphChatMessageActionControllerResult: Hashable, Sendable {
 
 @MainActor
 struct GraphChatMessageActionGenerationBridge {
+    typealias TurnStartPersistence = @MainActor () async -> Bool
     typealias Preparation = @MainActor (
-        _ operationID: GraphChatGenerationOperationID
+        _ operationID: GraphChatGenerationOperationID,
+        _ persistTurnStart: TurnStartPersistence
     ) async -> Bool
 
     private let isGeneratingValue: () -> Bool
@@ -142,6 +144,7 @@ final class GraphChatMessageActionController {
     private let historyStore: any GraphChatHistoryStoring
     private let feedbackStore: any GraphChatFeedbackStoring
     private let clipboardWriter: any GraphChatClipboardWriting
+    private let observability: any GraphChatObservabilityRecording
     private let checkpointController: GraphChatConversationCheckpointController
     private let generation: GraphChatMessageActionGenerationBridge
     private let accessDecisionProvider: AccessDecisionProvider
@@ -165,6 +168,8 @@ final class GraphChatMessageActionController {
         historyStore: any GraphChatHistoryStoring,
         feedbackStore: any GraphChatFeedbackStoring,
         clipboardWriter: any GraphChatClipboardWriting,
+        observability: any GraphChatObservabilityRecording =
+            NoOpGraphChatObservabilityRecorder(),
         checkpointController: GraphChatConversationCheckpointController,
         generation: GraphChatMessageActionGenerationBridge,
         accessDecisionProvider: @escaping AccessDecisionProvider,
@@ -185,6 +190,7 @@ final class GraphChatMessageActionController {
         self.historyStore = historyStore
         self.feedbackStore = feedbackStore
         self.clipboardWriter = clipboardWriter
+        self.observability = observability
         self.checkpointController = checkpointController
         self.generation = generation
         self.accessDecisionProvider = accessDecisionProvider
@@ -289,7 +295,7 @@ final class GraphChatMessageActionController {
             mode: .branchReplacement,
             usedIndexFallback: decision.usesIndexFallback
         )
-        generation.start(request) { [weak self] operationID in
+        generation.start(request) { [weak self] operationID, persistTurnStart in
             guard let self else {
                 return false
             }
@@ -340,15 +346,13 @@ final class GraphChatMessageActionController {
                     clearsEditing: true
                 )
             )
+            guard await persistTurnStart() else {
+                return false
+            }
             await self.feedbackStore.remove(
                 messageIDs: plan.removedMessageIDs,
                 for: self.chatScope
             )
-            await self.historyStore.save(
-                replacementMessages,
-                for: self.chatScope
-            )
-
             guard Task.isCancelled == false,
                   self.generation.isActive(operationID) else {
                 return false
@@ -425,6 +429,7 @@ final class GraphChatMessageActionController {
         let orchestrator = self.orchestrator
         let historyStore = self.historyStore
         let feedbackStore = self.feedbackStore
+        let observability = self.observability
         let checkpointController =
             self.checkpointController
         let chatScope = self.chatScope
@@ -663,6 +668,13 @@ final class GraphChatMessageActionController {
                     await historyStore.save(
                         replacementMessages,
                         for: chatScope
+                    )
+                    await observability.record(
+                        .historySave(
+                            GraphChatHistorySaveMetric(
+                                boundary: .interpretationCorrection
+                            )
+                        )
                     )
                     self.resultHandler(
                         .branchCommitted(
@@ -1044,7 +1056,7 @@ final class GraphChatMessageActionController {
             mode: isTechnicalRetry ? .technicalRetry : .regeneration,
             usedIndexFallback: decision.usesIndexFallback
         )
-        generation.start(request) { [weak self] operationID in
+        generation.start(request) { [weak self] operationID, persistTurnStart in
             guard let self else {
                 return false
             }
@@ -1091,15 +1103,13 @@ final class GraphChatMessageActionController {
                     clearsEditing: false
                 )
             )
+            guard await persistTurnStart() else {
+                return false
+            }
             await self.feedbackStore.remove(
                 messageID: plan.assistantMessageID,
                 for: self.chatScope
             )
-            await self.historyStore.save(
-                replacementMessages,
-                for: self.chatScope
-            )
-
             guard Task.isCancelled == false,
                   self.generation.isActive(operationID) else {
                 return false

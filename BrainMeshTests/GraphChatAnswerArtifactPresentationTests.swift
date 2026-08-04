@@ -134,6 +134,9 @@ struct GraphChatAnswerArtifactPresentationTests {
 
         #expect(plan.entries.map(\.id) == [second.id, unknownID, first.id])
         #expect(plan.hasFallback)
+        #expect(resolution.artifact(for: second.id)?.artifact == second)
+        #expect(resolution.artifact(for: first.id)?.artifact == first)
+        #expect(resolution.artifact(for: unknownID) == nil)
         guard case .fallback(let id, let reason) = plan.entries[1] else {
             Issue.record("Expected the unknown artifact to use the text fallback")
             return

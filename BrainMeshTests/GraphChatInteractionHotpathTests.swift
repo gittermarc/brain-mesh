@@ -7,6 +7,48 @@ import Testing
 @MainActor
 struct GraphChatInteractionHotpathTests {
     @Test
+    func streamingPartialInvalidatesTranscriptWithoutPublishingTheViewModel() async {
+        let setup = GraphChatUITestSupport.makeViewModel(scripts: [])
+        await setup.viewModel.load()
+        let assistantID = UUID()
+        setup.viewModel.transcriptController.replaceMessages(
+            [
+                GraphChatTranscriptMessage(
+                    id: assistantID,
+                    state: .assistant(
+                        GraphChatAssistantMessageState(question: "Question")
+                    )
+                )
+            ]
+        )
+        let viewModelPublications = LockedIntCounter()
+        let transcriptPublications = LockedIntCounter()
+        let viewModelObservation = setup.viewModel.objectWillChange.sink {
+            viewModelPublications.increment()
+        }
+        let transcriptObservation = setup.viewModel.transcriptController
+            .objectWillChange
+            .sink {
+                transcriptPublications.increment()
+            }
+
+        _ = setup.viewModel.transcriptController.apply(
+            GraphChatStreamingUIPublication(
+                events: [.partialAnswer("Safe partial")],
+                reason: .partial,
+                firstSourceSequence: 1,
+                lastSourceSequence: 1
+            ),
+            toAssistantMessageID: assistantID
+        )
+
+        #expect(transcriptPublications.value == 1)
+        #expect(viewModelPublications.value == 0)
+        _ = viewModelObservation
+        _ = transcriptObservation
+    }
+
+    @Test
     func oneHundredDraftChangesAndRepeatedReadsDoNotRebuildProductionSuggestions() async throws {
         let context = makeSuggestionContext()
         let scope = GraphChatScope.entireGraph(

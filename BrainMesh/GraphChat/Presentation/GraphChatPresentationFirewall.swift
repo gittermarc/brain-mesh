@@ -394,7 +394,13 @@ nonisolated struct GraphChatPresentationFirewall: Sendable {
     }
 }
 
-actor GraphChatPresentationStreamFirewall {
+nonisolated protocol GraphChatPresentationStreamValidating: Sendable {
+    func presentCumulativeText(_ text: String) async -> String?
+}
+
+actor GraphChatPresentationStreamFirewall:
+    GraphChatPresentationStreamValidating
+{
     private let registry: GraphChatPresentationRegistry
     private let language: GraphChatResponseLanguage
     private let firewall: GraphChatPresentationFirewall

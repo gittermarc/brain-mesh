@@ -9,8 +9,10 @@ import Foundation
 
 @MainActor
 final class GraphChatGenerationController {
+    typealias TurnStartPersistence = @MainActor () async -> Bool
     typealias Preparation = @MainActor (
-        _ operationID: GraphChatGenerationOperationID
+        _ operationID: GraphChatGenerationOperationID,
+        _ persistTurnStart: TurnStartPersistence
     ) async -> Bool
 
     private struct ActiveOperation {
@@ -34,11 +36,16 @@ final class GraphChatGenerationController {
     private let historyStore: any GraphChatHistoryStoring
     private let observability: any GraphChatObservabilityRecording
     private let callbacks: GraphChatGenerationCallbacks
+    private let streamingConfiguration:
+        GraphChatStreamingBackpressureConfiguration
+    private let streamingClock: GraphChatStreamingClock
     private let operationIDFactory: @MainActor () -> GraphChatGenerationOperationID
 
     private(set) var state: GraphChatGenerationState = .idle
     private var activeOperation: ActiveOperation?
     private var activeTask: Task<Void, Never>?
+    private var terminalOperationsFinishing:
+        Set<GraphChatGenerationOperationID> = []
     private var cancellationBarrier: Task<Void, Never>?
     private var cancellationBarrierID: UUID?
 
@@ -49,6 +56,9 @@ final class GraphChatGenerationController {
         historyStore: any GraphChatHistoryStoring,
         observability: any GraphChatObservabilityRecording,
         callbacks: GraphChatGenerationCallbacks,
+        streamingConfiguration:
+            GraphChatStreamingBackpressureConfiguration = .standard,
+        streamingClock: GraphChatStreamingClock = .continuous,
         operationIDFactory: @escaping @MainActor () -> GraphChatGenerationOperationID = {
             GraphChatGenerationOperationID()
         }
@@ -63,6 +73,8 @@ final class GraphChatGenerationController {
         self.historyStore = historyStore
         self.observability = observability
         self.callbacks = callbacks
+        self.streamingConfiguration = streamingConfiguration
+        self.streamingClock = streamingClock
         self.operationIDFactory = operationIDFactory
     }
 
@@ -94,7 +106,11 @@ final class GraphChatGenerationController {
     ) -> GraphChatGenerationOperationID {
         let previousOperation = activeOperation
         let previousTask = activeTask
-        previousTask?.cancel()
+        let previousTerminalEventAccepted =
+            previousOperation?.terminalEventAccepted == true
+        if previousTerminalEventAccepted == false {
+            previousTask?.cancel()
+        }
 
         if let previousOperation,
            previousOperation.terminalEventAccepted == false {
@@ -116,9 +132,33 @@ final class GraphChatGenerationController {
         let priorBarrier = cancellationBarrier
         let orchestrator = self.orchestrator
         let observability = self.observability
+        let historyStore = self.historyStore
+        let chatScope = self.chatScope
+        let initialTurnStartSnapshot = preparation == nil
+            ? callbacks.messageSnapshot()
+            : nil
         let operationTimer = BMDuration()
         activeTask = Task { [weak self] in
             await priorBarrier?.value
+
+            if let previousTask {
+                if previousTerminalEventAccepted == false {
+                    await orchestrator.cancelCurrentGeneration()
+                }
+                await previousTask.value
+            }
+
+            if let initialTurnStartSnapshot {
+                await historyStore.save(
+                    initialTurnStartSnapshot,
+                    for: chatScope
+                )
+                await observability.record(
+                    .historySave(
+                        GraphChatHistorySaveMetric(boundary: .turnStart)
+                    )
+                )
+            }
 
             guard Task.isCancelled == false else {
                 await observability.record(
@@ -130,11 +170,6 @@ final class GraphChatGenerationController {
                     )
                 )
                 return
-            }
-
-            if let previousTask {
-                await orchestrator.cancelCurrentGeneration()
-                await previousTask.value
             }
 
             guard let self,
@@ -155,7 +190,34 @@ final class GraphChatGenerationController {
             }
 
             if let preparation {
-                let isReady = await preparation(operationID)
+                var didPersistTurnStart = false
+                let isReady = await preparation(
+                    operationID,
+                    {
+                        if didPersistTurnStart {
+                            return true
+                        }
+                        guard Task.isCancelled == false,
+                              self.acceptsCallbacks(
+                                operationID: operationID,
+                                assistantMessageID:
+                                    request.assistantMessageID
+                              ) else {
+                            return false
+                        }
+                        await self.saveHistory(boundary: .turnStart)
+                        guard Task.isCancelled == false,
+                              self.acceptsCallbacks(
+                                operationID: operationID,
+                                assistantMessageID:
+                                    request.assistantMessageID
+                              ) else {
+                            return false
+                        }
+                        didPersistTurnStart = true
+                        return true
+                    }
+                )
                 guard Task.isCancelled == false,
                       self.acceptsCallbacks(
                         operationID: operationID,
@@ -175,11 +237,16 @@ final class GraphChatGenerationController {
                     self.finishWithoutTerminalOutcome(operationID)
                     return
                 }
+                guard didPersistTurnStart else {
+                    self.finishWithoutTerminalOutcome(operationID)
+                    return
+                }
             }
 
             await self.consume(
                 request: request,
-                operationID: operationID
+                operationID: operationID,
+                timer: operationTimer
             )
         }
         return operationID
@@ -235,6 +302,7 @@ final class GraphChatGenerationController {
         cancellationBarrierID = barrierID
         let orchestrator = self.orchestrator
         let historyStore = self.historyStore
+        let observability = self.observability
         let chatScope = self.chatScope
         let barrier = Task { [weak self] in
             await previousBarrier?.value
@@ -245,6 +313,11 @@ final class GraphChatGenerationController {
             }
             if let snapshot {
                 await historyStore.save(snapshot, for: chatScope)
+                await observability.record(
+                    .historySave(
+                        GraphChatHistorySaveMetric(boundary: .cancellation)
+                    )
+                )
             }
             self?.clearCancellationBarrier(barrierID)
         }
@@ -275,6 +348,7 @@ final class GraphChatGenerationController {
         cancellationBarrierID = barrierID
         let orchestrator = self.orchestrator
         let historyStore = self.historyStore
+        let observability = self.observability
         let chatScope = self.chatScope
         let barrier = Task { [weak self] in
             await previousBarrier?.value
@@ -287,6 +361,11 @@ final class GraphChatGenerationController {
                     snapshot,
                     for: chatScope
                 )
+                await observability.record(
+                    .historySave(
+                        GraphChatHistorySaveMetric(boundary: .runtimeBoundary)
+                    )
+                )
             }
             self?.clearCancellationBarrier(barrierID)
         }
@@ -296,20 +375,14 @@ final class GraphChatGenerationController {
 
     func isActive(_ operationID: GraphChatGenerationOperationID) -> Bool {
         activeOperation?.operationID == operationID
+            || terminalOperationsFinishing.contains(operationID)
     }
 
     private func consume(
         request: GraphChatGenerationRequest,
-        operationID: GraphChatGenerationOperationID
+        operationID: GraphChatGenerationOperationID,
+        timer: BMDuration
     ) async {
-        let timer = BMDuration()
-        var toolCount = 0
-        var toolKinds: Set<GraphChatToolKind> = []
-
-        await historyStore.save(
-            callbacks.messageSnapshot(),
-            for: chatScope
-        )
         guard Task.isCancelled == false,
               acceptsCallbacks(
                 operationID: operationID,
@@ -317,9 +390,7 @@ final class GraphChatGenerationController {
               ) else {
             await recordCancellationMetric(
                 for: request,
-                timer: timer,
-                toolCount: toolCount,
-                toolKinds: toolKinds
+                timer: timer
             )
             return
         }
@@ -329,75 +400,40 @@ final class GraphChatGenerationController {
             graphScope: graphScope,
             chatScope: chatScope
         )
-
-        for await event in stream {
-            guard Task.isCancelled == false,
-                  acceptsCallbacks(
+        let coordinator = GraphChatStreamingBackpressureCoordinator(
+            configuration: streamingConfiguration,
+            clock: streamingClock
+        )
+        let statistics = await coordinator.consume(stream) { [weak self] publication in
+            guard let self,
+                  Task.isCancelled == false,
+                  self.acceptsCallbacks(
                     operationID: operationID,
                     assistantMessageID: request.assistantMessageID
                   ) else {
-                await recordCancellationMetric(
-                    for: request,
-                    timer: timer,
-                    toolCount: toolCount,
-                    toolKinds: toolKinds
-                )
-                return
+                return false
             }
-
-            if case .toolActivity(let activity) = event,
-               activity.state == .started {
-                toolCount += 1
-                toolKinds.insert(activity.tool)
-            }
-
-            let terminalOutcome = GraphChatGenerationEventClassifier.outcome(
-                for: event
+            return await self.accept(
+                publication: publication,
+                request: request,
+                operationID: operationID
             )
-            if terminalOutcome != nil {
-                markTerminalEventAccepted(operationID)
-            }
-            callbacks.eventDidArrive(
-                event,
-                operationID,
-                request.assistantMessageID
+        }
+
+        if let terminalEvent = statistics.terminalEvent {
+            await recordStreamingPerformance(
+                statistics,
+                durationMilliseconds: timer.millisecondsElapsed
             )
-            if let terminalOutcome {
-                callbacks.outcomeDidResolve(
-                    operationID,
-                    request.assistantMessageID,
-                    terminalOutcome
-                )
-            }
-
-            if case .completed = event {
-                await callbacks.completedTurnDidArrive(
-                    operationID,
-                    request.assistantMessageID
-                )
-            }
-
-            await historyStore.save(
-                callbacks.messageSnapshot(),
-                for: chatScope
-            )
-
-            guard GraphChatGenerationEventClassifier.isTerminal(event) else {
-                continue
-            }
-
             let metric = GraphChatGenerationMetricFactory.terminalMetric(
-                for: event,
+                for: terminalEvent,
                 request: request,
                 durationMilliseconds: timer.millisecondsElapsed,
-                toolCount: toolCount,
-                toolKinds: toolKinds
+                toolCount: statistics.toolCount,
+                toolKinds: statistics.toolKinds
             )
             if let metric {
                 await observability.record(.request(metric))
-            }
-            if isActive(operationID) {
-                finish(operationID)
             }
             return
         }
@@ -407,11 +443,15 @@ final class GraphChatGenerationController {
                 operationID: operationID,
                 assistantMessageID: request.assistantMessageID
               ) else {
+            await recordStreamingPerformance(
+                statistics,
+                durationMilliseconds: timer.millisecondsElapsed
+            )
             await recordCancellationMetric(
                 for: request,
                 timer: timer,
-                toolCount: toolCount,
-                toolKinds: toolKinds
+                toolCount: statistics.toolCount,
+                toolKinds: statistics.toolKinds
             )
             return
         }
@@ -421,27 +461,50 @@ final class GraphChatGenerationController {
             message: "Die Antwort wurde ohne Abschluss beendet.",
             recoverySuggestion: "Versuche die Frage erneut."
         )
-        markTerminalEventAccepted(operationID)
-        callbacks.eventDidArrive(
-            .failure(failure),
-            operationID,
-            request.assistantMessageID
+        let terminalSourceSequence = UInt64(statistics.sourceEventCount) + 1
+        let firstSourceSequence =
+            statistics.firstUnpublishedSourceSequence
+            ?? terminalSourceSequence
+        let acceptedSyntheticTerminal = await accept(
+            publication: GraphChatStreamingUIPublication(
+                events: statistics.unpublishedEvents + [.failure(failure)],
+                reason: .terminal,
+                firstSourceSequence: firstSourceSequence,
+                lastSourceSequence: terminalSourceSequence
+            ),
+            request: request,
+            operationID: operationID
         )
-        callbacks.outcomeDidResolve(
-            operationID,
-            request.assistantMessageID,
-            .failure(failure)
+        let syntheticContainsPartial = statistics.unpublishedEvents.contains {
+            event in
+            if case .partialAnswer = event {
+                return true
+            }
+            return false
+        }
+        await recordStreamingPerformance(
+            statistics,
+            durationMilliseconds: timer.millisecondsElapsed,
+            additionalSafeUIPublicationCount:
+                acceptedSyntheticTerminal ? 1 : 0,
+            additionalPartialPublicationCount:
+                acceptedSyntheticTerminal && syntheticContainsPartial ? 1 : 0
         )
-        await historyStore.save(
-            callbacks.messageSnapshot(),
-            for: chatScope
-        )
+        guard acceptedSyntheticTerminal else {
+            await recordCancellationMetric(
+                for: request,
+                timer: timer,
+                toolCount: statistics.toolCount,
+                toolKinds: statistics.toolKinds
+            )
+            return
+        }
         await observability.record(
             .request(
                 GraphChatRequestMetric(
                     durationMilliseconds: timer.millisecondsElapsed,
-                    toolCount: toolCount,
-                    toolKinds: toolKinds,
+                    toolCount: statistics.toolCount,
+                    toolKinds: statistics.toolKinds,
                     evidenceCount: 0,
                     usedIndexFallback: request.usedIndexFallback,
                     outcome: .failed,
@@ -449,10 +512,92 @@ final class GraphChatGenerationController {
                 )
             )
         )
-        guard isActive(operationID) else {
-            return
+    }
+
+    private func accept(
+        publication: GraphChatStreamingUIPublication,
+        request: GraphChatGenerationRequest,
+        operationID: GraphChatGenerationOperationID
+    ) async -> Bool {
+        guard Task.isCancelled == false,
+              acceptsCallbacks(
+                operationID: operationID,
+                assistantMessageID: request.assistantMessageID
+              ) else {
+            return false
         }
-        finish(operationID)
+
+        let terminalEvent = publication.terminalEvent
+        if terminalEvent != nil {
+            markTerminalEventAccepted(operationID)
+        }
+        callbacks.publicationDidArrive(
+            publication,
+            operationID,
+            request.assistantMessageID
+        )
+
+        guard let terminalEvent else {
+            return true
+        }
+        if let terminalOutcome = GraphChatGenerationEventClassifier.outcome(
+            for: terminalEvent
+        ) {
+            callbacks.outcomeDidResolve(
+                operationID,
+                request.assistantMessageID,
+                terminalOutcome
+            )
+        }
+        if case .completed = terminalEvent {
+            await callbacks.completedTurnDidArrive(
+                operationID,
+                request.assistantMessageID
+            )
+        }
+        // Once the terminal publication was accepted, its checkpoint and
+        // history boundary must finish even if the user starts the next turn
+        // while this task is suspended in the completion callback.
+        await saveHistory(boundary: .terminal)
+        if isActive(operationID) {
+            finish(operationID)
+        }
+        return true
+    }
+
+    private func saveHistory(
+        boundary: GraphChatHistorySaveBoundary
+    ) async {
+        let snapshot = callbacks.messageSnapshot()
+        await historyStore.save(snapshot, for: chatScope)
+        await observability.record(
+            .historySave(GraphChatHistorySaveMetric(boundary: boundary))
+        )
+    }
+
+    private func recordStreamingPerformance(
+        _ statistics: GraphChatStreamingBackpressureStatistics,
+        durationMilliseconds: Double,
+        additionalSafeUIPublicationCount: Int = 0,
+        additionalPartialPublicationCount: Int = 0
+    ) async {
+        await observability.record(
+            .streamingPerformance(
+                GraphChatStreamingPerformanceMetric(
+                    safeStreamEventCount: statistics.sourceEventCount,
+                    partialEventCount: statistics.partialEventCount,
+                    safeUIPublicationCount:
+                        statistics.safeUIPublicationCount
+                        + additionalSafeUIPublicationCount,
+                    partialPublicationCount:
+                        statistics.partialPublicationCount
+                        + additionalPartialPublicationCount,
+                    rateLimitedPublicationCount:
+                        statistics.rateLimitedPublicationCount,
+                    durationMilliseconds: durationMilliseconds
+                )
+            )
+        )
     }
 
     private func acceptsCallbacks(
@@ -474,9 +619,11 @@ final class GraphChatGenerationController {
             return
         }
         activeOperation?.terminalEventAccepted = true
+        terminalOperationsFinishing.insert(operationID)
     }
 
     private func finish(_ operationID: GraphChatGenerationOperationID) {
+        terminalOperationsFinishing.remove(operationID)
         guard activeOperation?.operationID == operationID else {
             return
         }

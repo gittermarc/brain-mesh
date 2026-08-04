@@ -24,11 +24,25 @@ nonisolated struct GraphChatValidatedPresentationEntry: Hashable, Sendable {
     let kind: GraphChatPresentationIdentifierKind
 }
 
+nonisolated struct GraphChatPresentationRegistryRevision:
+    RawRepresentable,
+    Hashable,
+    Sendable
+{
+    let rawValue: UInt64
+}
+
 nonisolated struct GraphChatValidatedPresentationRegistry: Hashable, Sendable {
+    let revision: GraphChatPresentationRegistryRevision
     let entries: [GraphChatValidatedPresentationEntry]
     let conflictingIdentifiers: [String]
+    private let entriesByIdentifier: [
+        String: GraphChatValidatedPresentationEntry
+    ]
+    private let conflictingIdentifierSet: Set<String>
 
     static let empty = GraphChatValidatedPresentationRegistry(
+        revision: GraphChatPresentationRegistryRevision(rawValue: 0),
         entries: [],
         conflictingIdentifiers: []
     )
@@ -55,32 +69,60 @@ nonisolated struct GraphChatValidatedPresentationRegistry: Hashable, Sendable {
     }
 
     fileprivate init(
+        revision: GraphChatPresentationRegistryRevision =
+            GraphChatPresentationRegistryRevision(rawValue: 0),
         entries: [GraphChatValidatedPresentationEntry],
         conflictingIdentifiers: [String]
     ) {
+        self.revision = revision
         self.entries = entries
         self.conflictingIdentifiers = conflictingIdentifiers
+        self.entriesByIdentifier = Dictionary(
+            uniqueKeysWithValues: entries.map { ($0.identifier, $0) }
+        )
+        self.conflictingIdentifierSet = Set(conflictingIdentifiers)
     }
 
     func displayName(for identifier: String) -> String? {
         let normalized = Self.normalizedIdentifier(identifier)
-        guard conflictingIdentifiers.contains(normalized) == false else {
+        guard conflictingIdentifierSet.contains(normalized) == false else {
             return nil
         }
-        return entries.first {
-            $0.identifier == normalized
-        }?.displayName
+        return entriesByIdentifier[normalized]?.displayName
     }
 
     func containsConflict(for identifier: String) -> Bool {
-        conflictingIdentifiers.contains(
+        conflictingIdentifierSet.contains(
             Self.normalizedIdentifier(identifier)
         )
+    }
+
+    static func == (
+        lhs: GraphChatValidatedPresentationRegistry,
+        rhs: GraphChatValidatedPresentationRegistry
+    ) -> Bool {
+        lhs.revision == rhs.revision
+            && lhs.entries == rhs.entries
+            && lhs.conflictingIdentifiers == rhs.conflictingIdentifiers
+    }
+
+    func hash(into hasher: inout Hasher) {
+        hasher.combine(revision)
+        hasher.combine(entries)
+        hasher.combine(conflictingIdentifiers)
     }
 
     static func normalizedIdentifier(_ value: String) -> String {
         value.trimmingCharacters(in: .whitespacesAndNewlines).uppercased()
     }
+}
+
+nonisolated struct GraphChatPresentationRegistryCacheDiagnostics:
+    Hashable,
+    Sendable
+{
+    let revision: GraphChatPresentationRegistryRevision
+    let snapshotBuildCount: Int
 }
 
 nonisolated struct GraphChatPresentationContext: Hashable, Sendable {
@@ -91,6 +133,9 @@ nonisolated struct GraphChatPresentationContext: Hashable, Sendable {
 actor GraphChatPresentationRegistry {
     private let language: GraphChatResponseLanguage
     private var builder: GraphChatValidatedPresentationRegistryBuilder
+    private var revision = GraphChatPresentationRegistryRevision(rawValue: 0)
+    private var cachedSnapshot: GraphChatValidatedPresentationRegistry?
+    private var snapshotBuildCount = 0
 
     init(
         schemaContext: GraphSchemaContext,
@@ -111,38 +156,82 @@ actor GraphChatPresentationRegistry {
         node: NodeRefKey,
         displayName: String
     ) {
+        let previousMutationCount = builder.mutationCount
         builder.registerValidatedNode(
             alias: alias,
             node: node,
             displayName: displayName
         )
+        registerMutationIfNeeded(previousMutationCount)
     }
 
     func registerValidatedEvidence(_ evidence: [GraphEvidence]) {
+        let previousMutationCount = builder.mutationCount
         builder.register(evidence)
+        registerMutationIfNeeded(previousMutationCount)
     }
 
     func registerValidatedArtifact(
         id: GraphChatAnswerArtifactID,
         title: String
     ) {
+        let previousMutationCount = builder.mutationCount
         builder.registerValidatedArtifact(id: id, title: title)
+        registerMutationIfNeeded(previousMutationCount)
     }
 
     func registerValidatedArtifacts(
         _ artifacts: [GraphChatAnswerArtifact]
     ) {
+        let previousMutationCount = builder.mutationCount
         builder.register(artifacts)
+        registerMutationIfNeeded(previousMutationCount)
     }
 
     func snapshot() -> GraphChatValidatedPresentationRegistry {
-        builder.snapshot()
+        if let cachedSnapshot,
+           cachedSnapshot.revision == revision {
+            return cachedSnapshot
+        }
+        let snapshot = builder.snapshot(revision: revision)
+        cachedSnapshot = snapshot
+        snapshotBuildCount += 1
+        return snapshot
     }
 
     func removeAll() {
+        guard builder.isEmpty == false else {
+            return
+        }
         builder = GraphChatValidatedPresentationRegistryBuilder(
             language: language
         )
+        advanceRevision()
+    }
+
+    func cacheDiagnosticsForTesting() ->
+        GraphChatPresentationRegistryCacheDiagnostics
+    {
+        GraphChatPresentationRegistryCacheDiagnostics(
+            revision: revision,
+            snapshotBuildCount: snapshotBuildCount
+        )
+    }
+
+    private func registerMutationIfNeeded(
+        _ previousMutationCount: UInt64
+    ) {
+        guard builder.mutationCount != previousMutationCount else {
+            return
+        }
+        advanceRevision()
+    }
+
+    private func advanceRevision() {
+        revision = GraphChatPresentationRegistryRevision(
+            rawValue: revision.rawValue &+ 1
+        )
+        cachedSnapshot = nil
     }
 }
 
@@ -154,6 +243,11 @@ private nonisolated struct GraphChatValidatedPresentationRegistryBuilder {
         String: GraphChatValidatedPresentationEntry
     ] = [:]
     private var conflictingIdentifiers = Set<String>()
+    private(set) var mutationCount: UInt64 = 0
+
+    var isEmpty: Bool {
+        entriesByIdentifier.isEmpty && conflictingIdentifiers.isEmpty
+    }
 
     init(language: GraphChatResponseLanguage) {
         self.language = language
@@ -240,8 +334,12 @@ private nonisolated struct GraphChatValidatedPresentationRegistryBuilder {
         )
     }
 
-    func snapshot() -> GraphChatValidatedPresentationRegistry {
+    func snapshot(
+        revision: GraphChatPresentationRegistryRevision =
+            GraphChatPresentationRegistryRevision(rawValue: 0)
+    ) -> GraphChatValidatedPresentationRegistry {
         GraphChatValidatedPresentationRegistry(
+            revision: revision,
             entries: entriesByIdentifier.values.sorted { lhs, rhs in
                 if lhs.identifier != rhs.identifier {
                     return lhs.identifier < rhs.identifier
@@ -316,6 +414,7 @@ private nonisolated struct GraphChatValidatedPresentationRegistryBuilder {
             guard existing.displayName == entry.displayName else {
                 if priority(of: entry.kind) > priority(of: existing.kind) {
                     entriesByIdentifier[normalizedIdentifier] = entry
+                    mutationCount &+= 1
                     return
                 }
                 if priority(of: entry.kind) < priority(of: existing.kind) {
@@ -323,11 +422,13 @@ private nonisolated struct GraphChatValidatedPresentationRegistryBuilder {
                 }
                 entriesByIdentifier[normalizedIdentifier] = nil
                 conflictingIdentifiers.insert(normalizedIdentifier)
+                mutationCount &+= 1
                 return
             }
             return
         }
         entriesByIdentifier[normalizedIdentifier] = entry
+        mutationCount &+= 1
     }
 
     private func priority(

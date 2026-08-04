@@ -30,7 +30,11 @@ nonisolated struct GraphChatAnswerPresentationResolution: Hashable, Sendable {
     let artifactSessionID: GraphChatAnswerArtifactSessionID?
     let artifacts: [GraphChatResolvedAnswerArtifact]
     let evidence: [GraphEvidence]
+    let evidenceByID: [GraphEvidenceID: GraphEvidence]
     let unavailableArtifactReasons: [GraphChatAnswerArtifactID: GraphChatAnswerArtifactFallbackReason]
+    private let artifactsByID: [
+        GraphChatAnswerArtifactID: GraphChatResolvedAnswerArtifact
+    ]
 
     init(
         graphScope: GraphScope,
@@ -69,7 +73,13 @@ nonisolated struct GraphChatAnswerPresentationResolution: Hashable, Sendable {
         let normalizedRequestedIDs = requestedArtifactIDs.filter {
             seen.insert($0).inserted
         }
-        self.artifacts = normalizedRequestedIDs.compactMap { candidatesByID[$0] }
+        let resolvedArtifacts = normalizedRequestedIDs.compactMap {
+            candidatesByID[$0]
+        }
+        self.artifacts = resolvedArtifacts
+        self.artifactsByID = Dictionary(
+            uniqueKeysWithValues: resolvedArtifacts.map { ($0.id, $0) }
+        )
 
         var unavailableReasons = rejectedReasons
         for artifactID in normalizedRequestedIDs where candidatesByID[artifactID] == nil {
@@ -79,10 +89,14 @@ nonisolated struct GraphChatAnswerPresentationResolution: Hashable, Sendable {
         self.unavailableArtifactReasons = unavailableReasons
 
         var seenEvidence = Set<GraphEvidenceID>()
-        self.evidence = evidence.filter { item in
+        let resolvedEvidence = evidence.filter { item in
             item.sourceReference.graphID == graphScope.graphID
                 && seenEvidence.insert(item.id).inserted
         }
+        self.evidence = resolvedEvidence
+        self.evidenceByID = Dictionary(
+            uniqueKeysWithValues: resolvedEvidence.map { ($0.id, $0) }
+        )
     }
 
     static func unavailable(
@@ -103,10 +117,6 @@ nonisolated struct GraphChatAnswerPresentationResolution: Hashable, Sendable {
         )
     }
 
-    var evidenceByID: [GraphEvidenceID: GraphEvidence] {
-        Dictionary(uniqueKeysWithValues: evidence.map { ($0.id, $0) })
-    }
-
     var hasUnavailableArtifacts: Bool {
         unavailableArtifactReasons.isEmpty == false
     }
@@ -114,19 +124,18 @@ nonisolated struct GraphChatAnswerPresentationResolution: Hashable, Sendable {
     func artifact(
         for id: GraphChatAnswerArtifactID
     ) -> GraphChatResolvedAnswerArtifact? {
-        artifacts.first { $0.id == id }
+        artifactsByID[id]
     }
 
     func evidence(
         for ids: [GraphEvidenceID]
     ) -> [GraphEvidence] {
-        let byID = evidenceByID
         var seen = Set<GraphEvidenceID>()
         return ids.compactMap { id in
             guard seen.insert(id).inserted else {
                 return nil
             }
-            return byID[id]
+            return evidenceByID[id]
         }
     }
 }

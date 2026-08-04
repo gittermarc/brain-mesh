@@ -166,78 +166,12 @@ struct GraphChatView: View {
     }
 
     private var transcript: some View {
-        ScrollViewReader { proxy in
-            ScrollView {
-                LazyVStack(spacing: 14) {
-                    if viewModel.messages.isEmpty {
-                        GraphChatEmptyState(
-                            graphName: viewModel.graphName,
-                            scopePresentation: viewModel.scopePresentation,
-                            language: viewModel.interfaceLanguage,
-                            suggestions: viewModel.suggestions,
-                            schemaErrorMessage: viewModel.schemaErrorMessage,
-                            isLoadingSuggestions:
-                                viewModel.isLoadingSuggestions
-                                || (
-                                    viewModel.schemaContext == nil
-                                    && viewModel.schemaErrorMessage == nil
-                                ),
-                            betaCopy: betaCopy,
-                            onSelectSuggestion: viewModel.useSuggestion,
-                            onOpenBetaInfo: onOpenBetaInfo
-                        )
-                    } else {
-                        ForEach(viewModel.messages) { message in
-                            GraphChatMessageView(
-                                message: message,
-                                actionAvailability: viewModel.messageActionAvailability(
-                                    for: message.id
-                                ),
-                                selectedFeedback: viewModel.feedbackCategory(
-                                    for: message.id
-                                ),
-                                language: viewModel.interfaceLanguage,
-                                onAction: { action in
-                                    viewModel.performMessageAction(
-                                        action,
-                                        messageID: message.id
-                                    )
-                                },
-                                onRetry: viewModel.retry,
-                                onOpenEvidence: viewModel.openEntry,
-                                onShowEvidenceInGraph: viewModel.showInGraph,
-                                onUseFollowUp: viewModel.useFollowUp,
-                                onResolveAnswerPresentation: viewModel.resolveAnswerPresentation,
-                                canOpenArtifactTarget: viewModel.canOpenArtifactTarget,
-                                onOpenArtifactTarget: viewModel.openArtifactTarget,
-                                onInterpretationEvent:
-                                    viewModel.recordInterpretationEvent,
-                                onEditInterpretation:
-                                    viewModel.openInterpretationCorrection
-                            )
-                            .id(message.id)
-                        }
-                    }
-
-                    Color.clear
-                        .frame(height: 1)
-                        .id("graph-chat-bottom")
-                        .accessibilityHidden(true)
-                }
-                .frame(maxWidth: 760)
-                .padding(.horizontal)
-                .padding(.top, 16)
-                .padding(.bottom, 24)
-                .frame(maxWidth: .infinity)
-            }
-            .scrollDismissesKeyboard(.interactively)
-            .defaultScrollAnchor(.bottom)
-            .onChange(of: viewModel.scrollAnchorToken) { _, _ in
-                withAnimation(.easeOut(duration: 0.2)) {
-                    proxy.scrollTo("graph-chat-bottom", anchor: .bottom)
-                }
-            }
-        }
+        GraphChatTranscriptView(
+            viewModel: viewModel,
+            controller: viewModel.transcriptController,
+            betaCopy: betaCopy,
+            onOpenBetaInfo: onOpenBetaInfo
+        )
     }
 
     private func actionNotice(

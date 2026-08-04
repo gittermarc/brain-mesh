@@ -85,16 +85,35 @@ struct GraphChatPrivacyTests {
 
         let events = await recorder.snapshot()
         let serialized = String(reflecting: events)
-        #expect(events.count == 1)
         #expect(serialized.contains(promptSentinel) == false)
         #expect(serialized.contains(answerSentinel) == false)
         #expect(serialized.contains(notesSentinel) == false)
         #expect(serialized.contains(detailSentinel) == false)
         #expect(serialized.contains(filenameSentinel) == false)
-        guard case .request(let metric) = try #require(events.first) else {
-            Issue.record("Expected one request metric.")
-            return
+        let requestMetrics = events.compactMap { event -> GraphChatRequestMetric? in
+            guard case .request(let metric) = event else {
+                return nil
+            }
+            return metric
         }
+        let metric = try #require(requestMetrics.first)
+        #expect(requestMetrics.count == 1)
+        #expect(
+            events.filter {
+                if case .streamingPerformance = $0 {
+                    return true
+                }
+                return false
+            }.count == 1
+        )
+        #expect(
+            events.filter {
+                if case .historySave = $0 {
+                    return true
+                }
+                return false
+            }.count == 2
+        )
         #expect(metric.durationMilliseconds >= 0)
         #expect(metric.toolCount == 1)
         #expect(metric.toolKinds == [.getNode])

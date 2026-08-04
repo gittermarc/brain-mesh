@@ -99,8 +99,8 @@ struct GraphChatGenerationCallbacks {
         _ operationID: GraphChatGenerationOperationID,
         _ assistantMessageID: UUID
     ) -> Void
-    let eventDidArrive: (
-        _ event: GraphChatStreamEvent,
+    let publicationDidArrive: (
+        _ publication: GraphChatStreamingUIPublication,
         _ operationID: GraphChatGenerationOperationID,
         _ assistantMessageID: UUID
     ) -> Void
@@ -121,8 +121,8 @@ struct GraphChatGenerationCallbacks {
             _ operationID: GraphChatGenerationOperationID,
             _ assistantMessageID: UUID
         ) -> Void = { _, _ in },
-        eventDidArrive: @escaping (
-            _ event: GraphChatStreamEvent,
+        publicationDidArrive: @escaping (
+            _ publication: GraphChatStreamingUIPublication,
             _ operationID: GraphChatGenerationOperationID,
             _ assistantMessageID: UUID
         ) -> Void,
@@ -139,7 +139,7 @@ struct GraphChatGenerationCallbacks {
     ) {
         self.messageSnapshot = messageSnapshot
         self.operationWillCancel = operationWillCancel
-        self.eventDidArrive = eventDidArrive
+        self.publicationDidArrive = publicationDidArrive
         self.completedTurnDidArrive = completedTurnDidArrive
         self.outcomeDidResolve = outcomeDidResolve
         self.generationStateDidChange = generationStateDidChange

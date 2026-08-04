@@ -19,7 +19,188 @@ private final class GraphChatProviderForwardedEventRecorder: @unchecked Sendable
     }
 }
 
+private actor GraphChatCountingPresentationStreamFirewall:
+    GraphChatPresentationStreamValidating
+{
+    private var evaluatedTexts: [String] = []
+
+    func presentCumulativeText(_ text: String) -> String? {
+        evaluatedTexts.append(text)
+        return text
+    }
+
+    func snapshot() -> [String] {
+        evaluatedTexts
+    }
+}
+
+private actor GraphChatFilteringPresentationStreamFirewall:
+    GraphChatPresentationStreamValidating
+{
+    private var evaluationCount = 0
+
+    func presentCumulativeText(_ text: String) -> String? {
+        evaluationCount += 1
+        return text == "Rejected raw snapshot" ? nil : text
+    }
+
+    func count() -> Int {
+        evaluationCount
+    }
+}
+
+private actor GraphChatProviderExecutorObservabilityRecorder:
+    GraphChatObservabilityRecording
+{
+    private var events: [GraphChatObservabilityEvent] = []
+
+    func record(_ event: GraphChatObservabilityEvent) {
+        events.append(event)
+    }
+
+    func providerStreamingMetrics() -> [GraphChatProviderStreamingMetric] {
+        events.compactMap { event in
+            guard case .providerStreaming(let metric) = event else {
+                return nil
+            }
+            return metric
+        }
+    }
+}
+
 struct GraphChatProviderExecutorTests {
+    @Test
+    func rejectedProviderSnapshotNeverCrossesTheSafeEventBoundary() async throws {
+        let finalAnswer = GraphChatProviderTestSupport.makeFinalAnswer(
+            directAnswer: "Safe final answer",
+            hasInsufficientEvidence: true
+        )
+        let provider = FakeGraphChatModelProvider(
+            scripts: [
+                FakeGraphChatProviderScript(
+                    steps: [
+                        .event(
+                            .partialAnswer(
+                                GraphChatProviderPartialAnswer(
+                                    directAnswer: "Rejected raw snapshot",
+                                    hasInsufficientEvidence: nil
+                                )
+                            )
+                        ),
+                        .event(
+                            .partialAnswer(
+                                GraphChatProviderPartialAnswer(
+                                    directAnswer: "Safe cumulative snapshot",
+                                    hasInsufficientEvidence: nil
+                                )
+                            )
+                        ),
+                        .event(.completed(finalAnswer)),
+                    ]
+                )
+            ]
+        )
+        let setup = try await makeSetup(provider: provider)
+        let firewall = GraphChatFilteringPresentationStreamFirewall()
+        let observability = GraphChatProviderExecutorObservabilityRecorder()
+        let executor = GraphChatProviderExecutor(
+            provider: provider,
+            sessionFactory: setup.sessionFactory,
+            observability: observability,
+            presentationStreamFirewallFactory: { _, _ in firewall }
+        )
+        let recorder = GraphChatProviderForwardedEventRecorder()
+
+        _ = try await executor.execute(
+            resources: setup.resources,
+            request: setup.request,
+            onEvent: { event in
+                recorder.record(event)
+            }
+        )
+
+        #expect(await firewall.count() == 2)
+        #expect(
+            recorder.snapshot()
+                == [.partialAnswer("Safe cumulative snapshot")]
+        )
+        let metrics = await observability.providerStreamingMetrics()
+        let metric = try #require(metrics.first)
+        #expect(metric.providerPartialSnapshotCount == 2)
+        #expect(metric.safePartialEventCount == 1)
+        await setup.sessionFactory.cleanupFailedAttempt(
+            setup.resources,
+            requestProviderCancellation: false
+        )
+    }
+
+    @Test
+    func everyNonemptyProviderSnapshotCrossesTheStreamingFirewall() async throws {
+        let partialCount = 1_000
+        let partialSteps = (0..<partialCount).map { index in
+            FakeGraphChatProviderStep.event(
+                .partialAnswer(
+                    GraphChatProviderPartialAnswer(
+                        directAnswer: "Safe cumulative answer \(index)",
+                        hasInsufficientEvidence: nil
+                    )
+                )
+            )
+        }
+        let finalAnswer = GraphChatProviderTestSupport.makeFinalAnswer(
+            directAnswer: "Safe final answer",
+            hasInsufficientEvidence: true
+        )
+        let provider = FakeGraphChatModelProvider(
+            scripts: [
+                FakeGraphChatProviderScript(
+                    steps: partialSteps + [.event(.completed(finalAnswer))]
+                )
+            ]
+        )
+        let setup = try await makeSetup(provider: provider)
+        let firewall = GraphChatCountingPresentationStreamFirewall()
+        let observability = GraphChatProviderExecutorObservabilityRecorder()
+        let executor = GraphChatProviderExecutor(
+            provider: provider,
+            sessionFactory: setup.sessionFactory,
+            observability: observability,
+            presentationStreamFirewallFactory: { _, _ in firewall }
+        )
+        let recorder = GraphChatProviderForwardedEventRecorder()
+
+        _ = try await executor.execute(
+            resources: setup.resources,
+            request: setup.request,
+            onEvent: { event in
+                recorder.record(event)
+            }
+        )
+
+        let evaluatedTexts = await firewall.snapshot()
+        let metrics = await observability.providerStreamingMetrics()
+        let forwardedTexts = recorder.snapshot().compactMap { event -> String? in
+            guard case .partialAnswer(let text) = event else {
+                return nil
+            }
+            return text
+        }
+        #expect(evaluatedTexts.count == partialCount)
+        #expect(forwardedTexts == evaluatedTexts)
+        #expect(metrics.count == 1)
+        #expect(metrics.first?.providerEventCount == partialCount + 1)
+        #expect(metrics.first?.providerPartialSnapshotCount == partialCount)
+        #expect(metrics.first?.safePartialEventCount == partialCount)
+        #expect(
+            String(reflecting: metrics).contains("Safe cumulative answer")
+                == false
+        )
+        await setup.sessionFactory.cleanupFailedAttempt(
+            setup.resources,
+            requestProviderCancellation: false
+        )
+    }
+
     @Test
     func toolActivitiesAndPartialAnswersRemainInProviderOrder() async throws {
         let firstActivity = GraphChatToolActivity(

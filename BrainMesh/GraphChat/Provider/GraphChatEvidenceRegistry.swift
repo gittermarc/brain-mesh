@@ -7,6 +7,14 @@
 
 import Foundation
 
+nonisolated struct GraphChatEvidenceRegistryCacheDiagnostics:
+    Hashable,
+    Sendable
+{
+    let revision: UInt64
+    let snapshotBuildCount: Int
+}
+
 actor GraphChatEvidenceRegistry {
     private struct AppliedFilterKey: Hashable {
         let fieldName: String
@@ -20,6 +28,9 @@ actor GraphChatEvidenceRegistry {
     private var evidenceByID: [GraphEvidenceID: GraphEvidence] = [:]
     private var appliedFilters: [GraphChatAppliedFilter] = []
     private var appliedFilterKeys: Set<AppliedFilterKey> = []
+    private var evidenceRevision: UInt64 = 0
+    private var cachedEvidenceSnapshot: (revision: UInt64, evidence: [GraphEvidence])?
+    private var evidenceSnapshotBuildCount = 0
 
     init(scope: GraphChatScope) {
         self.scope = scope
@@ -27,6 +38,7 @@ actor GraphChatEvidenceRegistry {
 
     func register(_ evidence: [GraphEvidence]) throws {
         try Task.checkCancellation()
+        var didMutate = false
         for item in evidence {
             guard item.sourceReference.graphID == scope.graphScope.graphID else {
                 throw GraphChatToolError(
@@ -34,7 +46,14 @@ actor GraphChatEvidenceRegistry {
                     message: "Evidence aus einem anderen Graphen darf nicht registriert werden."
                 )
             }
-            evidenceByID[item.id] = item
+            if evidenceByID[item.id] != item {
+                evidenceByID[item.id] = item
+                didMutate = true
+            }
+        }
+        if didMutate {
+            evidenceRevision &+= 1
+            cachedEvidenceSnapshot = nil
         }
     }
 
@@ -92,14 +111,35 @@ actor GraphChatEvidenceRegistry {
     }
 
     func removeAll() {
+        let hadEvidence = evidenceByID.isEmpty == false
         evidenceByID.removeAll(keepingCapacity: false)
         appliedFilters.removeAll(keepingCapacity: false)
         appliedFilterKeys.removeAll(keepingCapacity: false)
+        if hadEvidence {
+            evidenceRevision &+= 1
+            cachedEvidenceSnapshot = nil
+        }
     }
 
     func snapshotForTesting() -> [GraphEvidence] {
-        evidenceByID.values.sorted {
+        if let cachedEvidenceSnapshot,
+           cachedEvidenceSnapshot.revision == evidenceRevision {
+            return cachedEvidenceSnapshot.evidence
+        }
+        let evidence = evidenceByID.values.sorted {
             $0.id.rawValue.uuidString < $1.id.rawValue.uuidString
         }
+        cachedEvidenceSnapshot = (evidenceRevision, evidence)
+        evidenceSnapshotBuildCount += 1
+        return evidence
+    }
+
+    func cacheDiagnosticsForTesting() ->
+        GraphChatEvidenceRegistryCacheDiagnostics
+    {
+        GraphChatEvidenceRegistryCacheDiagnostics(
+            revision: evidenceRevision,
+            snapshotBuildCount: evidenceSnapshotBuildCount
+        )
     }
 }

@@ -10,7 +10,6 @@ import Foundation
 
 @MainActor
 final class GraphChatViewModel: ObservableObject {
-    @Published private(set) var messages: [GraphChatTranscriptMessage] = []
     @Published private(set) var availabilityState: GraphChatAvailabilityPresentationState = .loading
     @Published private(set) var indexState: GraphChatIndexPresentationState = .loading
     @Published private(set) var schemaSnapshot: GraphSchemaSnapshot?
@@ -20,7 +19,6 @@ final class GraphChatViewModel: ObservableObject {
     @Published private(set) var isLoadingSuggestions = false
     @Published private(set) var isGenerating = false
     @Published private(set) var schemaErrorMessage: String?
-    @Published private(set) var scrollAnchorToken = UUID()
     @Published private(set) var editingState: GraphChatEditingState?
     @Published private(set) var feedbackByMessageID: [UUID: GraphChatFeedbackCategory] = [:]
     @Published private(set) var actionNotice: GraphChatActionNotice?
@@ -37,6 +35,11 @@ final class GraphChatViewModel: ObservableObject {
     let interfaceLocaleIdentifier: String
     let availableTools: Set<GraphChatToolKind>
     let composerController: GraphChatComposerController
+    let transcriptController = GraphChatTranscriptController()
+
+    var messages: [GraphChatTranscriptMessage] {
+        transcriptController.messages
+    }
 
     private let orchestrator: any GraphChatOrchestrating
     private let schemaProvider: any GraphSchemaSnapshotProviding
@@ -73,9 +76,9 @@ final class GraphChatViewModel: ObservableObject {
                     messageID: assistantMessageID
                 )
             },
-            eventDidArrive: { [weak self] event, _, assistantMessageID in
+            publicationDidArrive: { [weak self] publication, _, assistantMessageID in
                 self?.apply(
-                    event,
+                    publication,
                     toAssistantMessageID: assistantMessageID
                 )
             },
@@ -87,13 +90,13 @@ final class GraphChatViewModel: ObservableObject {
                       let checkpoint = self.checkpointController.captureCommittedCheckpoint(
                         state: state,
                         outcome: .completed
-                      ),
-                      let index = self.messages.firstIndex(where: {
-                        $0.id == assistantMessageID
-                      }) else {
+                      ) else {
                     return
                 }
-                self.messages[index].conversationCheckpointAfterTurn = checkpoint
+                self.transcriptController.setCheckpointAfterTurn(
+                    checkpoint,
+                    messageID: assistantMessageID
+                )
             },
             generationStateDidChange: { [weak self] isGenerating in
                 self?.updateVisibleGenerationState(isGenerating)
@@ -107,6 +110,7 @@ final class GraphChatViewModel: ObservableObject {
         historyStore: historyStore,
         feedbackStore: feedbackStore,
         clipboardWriter: clipboardWriter,
+        observability: observability,
         checkpointController: checkpointController,
         generation: GraphChatMessageActionGenerationBridge(
             controller: generationController
@@ -290,7 +294,8 @@ final class GraphChatViewModel: ObservableObject {
         var shouldRestoreConversationState = false
         if hasLoaded == false {
             hasLoaded = true
-            messages = await historyStore.messages(for: chatScope)
+            let restoredMessages = await historyStore.messages(for: chatScope)
+            transcriptController.replaceMessages(restoredMessages)
             await normalizeRestoredHistory()
             feedbackByMessageID = await messageActionController.loadFeedback(
                 for: messages
@@ -619,8 +624,10 @@ final class GraphChatViewModel: ObservableObject {
             ),
             conversationCheckpointBeforeTurn: checkpoint
         )
-        messages.append(userMessage)
-        messages.append(assistantMessage)
+        transcriptController.appendTurn(
+            userMessage: userMessage,
+            assistantMessage: assistantMessage
+        )
         launchGeneration(
             question: question,
             assistantMessageID: assistantID,
@@ -1316,14 +1323,13 @@ final class GraphChatViewModel: ObservableObject {
         isLoadingSuggestions = false
         isGenerating = false
         isPerformingSessionMutation = false
-        messages = []
+        transcriptController.replaceMessages([])
         feedbackByMessageID = [:]
         editingState = nil
         schemaContext = nil
         schemaSnapshot = nil
         schemaErrorMessage = nil
         indexState = .loading
-        scrollAnchorToken = UUID()
         sessionDerivedStateDidClear()
         return pendingLocalTasks
     }
@@ -1426,7 +1432,6 @@ final class GraphChatViewModel: ObservableObject {
         usedIndexFallback: Bool,
         mode: GraphChatGenerationMode
     ) {
-        scrollAnchorToken = UUID()
         generationController.start(
             GraphChatGenerationRequest(
                 question: question,
@@ -1446,32 +1451,41 @@ final class GraphChatViewModel: ObservableObject {
     }
 
     private func markAssistantCancelled(messageID: UUID) {
-        guard let index = messages.lastIndex(where: { message in
+        guard messages.lastIndex(where: { message in
             guard case .assistant(let state) = message.state,
                   state.isTerminal == false else {
                 return false
             }
             return message.id == messageID
-        }), case .assistant(var state) = messages[index].state else {
+        }) != nil else {
             return
         }
-        state.markCancelled()
-        messages[index].state = .assistant(state)
+        transcriptController.mutateAssistant(
+            messageID: messageID,
+            preferLastMatch: true
+        ) { state in
+            state.markCancelled()
+        }
     }
 
     private func apply(
-        _ event: GraphChatStreamEvent,
+        _ publication: GraphChatStreamingUIPublication,
         toAssistantMessageID messageID: UUID
     ) {
-        guard let index = messages.firstIndex(where: { $0.id == messageID }),
-              case .assistant(var state) = messages[index].state else {
+        guard transcriptController.apply(
+            publication,
+            toAssistantMessageID: messageID
+        ) else {
             return
         }
-
-        state.apply(event)
-        messages[index].state = .assistant(state)
-        if case .failure(let failure) = event,
-           failure.code == .modelUnavailable || failure.code == .unavailable {
+        let availabilityFailure = publication.events.first { event in
+            guard case .failure(let failure) = event else {
+                return false
+            }
+            return failure.code == .modelUnavailable
+                || failure.code == .unavailable
+        }
+        if availabilityFailure != nil {
             let unavailableState:
                 GraphChatAvailabilityPresentationState =
                     .unavailable(reason: .unknown)
@@ -1481,7 +1495,6 @@ final class GraphChatViewModel: ObservableObject {
                 scheduleSuggestionsSnapshotRefresh()
             }
         }
-        scrollAnchorToken = UUID()
     }
 
     private var messageActionSnapshot: GraphChatMessageActionSnapshot {
@@ -1514,7 +1527,7 @@ final class GraphChatViewModel: ObservableObject {
 
         case .sessionMutationBegan:
             isPerformingSessionMutation = true
-            scrollAnchorToken = UUID()
+            transcriptController.requestConversationMutationScroll()
 
         case .branchCommitted(
             let messages,
@@ -1522,7 +1535,10 @@ final class GraphChatViewModel: ObservableObject {
             let composerText,
             let clearsEditing
         ):
-            self.messages = messages
+            transcriptController.replaceMessages(
+                messages,
+                scroll: .conversationMutation
+            )
             self.feedbackByMessageID = feedbackByMessageID
             composerController.replaceText(
                 composerText,
@@ -1531,15 +1547,16 @@ final class GraphChatViewModel: ObservableObject {
             if clearsEditing {
                 editingState = nil
             }
-            scrollAnchorToken = UUID()
 
         case .newChatBegan:
-            messages = []
+            transcriptController.replaceMessages(
+                [],
+                scroll: .conversationMutation
+            )
             composerController.replaceText("", checkpoint: true)
             editingState = nil
             feedbackByMessageID = [:]
             isPerformingSessionMutation = true
-            scrollAnchorToken = UUID()
             sessionDerivedStateDidClear()
 
         case .interpretationCorrectionCommitted:
@@ -1583,11 +1600,13 @@ final class GraphChatViewModel: ObservableObject {
     }
 
     private func applyControlledHistoryReset() {
-        messages = []
+        transcriptController.replaceMessages(
+            [],
+            scroll: .conversationMutation
+        )
         feedbackByMessageID = [:]
         editingState = nil
         composerController.replaceText("", checkpoint: true)
-        scrollAnchorToken = UUID()
         sessionDerivedStateDidClear()
         showNotice(
             message: "Der frühere Gesprächskontext konnte nicht sicher wiederhergestellt werden. Ein neuer Chat wurde gestartet.",
@@ -1643,21 +1662,30 @@ final class GraphChatViewModel: ObservableObject {
     }
 
     private func normalizeRestoredHistory() async {
+        var normalizedMessages = messages
         var changed = false
-        for index in messages.indices {
-            guard case .assistant(var state) = messages[index].state,
+        for index in normalizedMessages.indices {
+            guard case .assistant(var state) = normalizedMessages[index].state,
                   state.isTerminal == false else {
                 continue
             }
             state.markCancelled()
-            messages[index].state = .assistant(state)
+            normalizedMessages[index].state = .assistant(state)
             changed = true
         }
 
         guard changed else {
             return
         }
-        await historyStore.save(messages, for: chatScope)
+        transcriptController.replaceMessages(normalizedMessages)
+        await historyStore.save(normalizedMessages, for: chatScope)
+        await observability.record(
+            .historySave(
+                GraphChatHistorySaveMetric(
+                    boundary: .recoveryNormalization
+                )
+            )
+        )
     }
 
     private func correctionEditorPresentation(

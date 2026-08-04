@@ -52,6 +52,74 @@ nonisolated struct GraphChatRequestMetric: Hashable, Sendable {
     }
 }
 
+nonisolated struct GraphChatStreamingPerformanceMetric: Hashable, Sendable {
+    let safeStreamEventCount: Int
+    let partialEventCount: Int
+    let safeUIPublicationCount: Int
+    let partialPublicationCount: Int
+    let rateLimitedPublicationCount: Int
+    let durationMilliseconds: Double
+
+    init(
+        safeStreamEventCount: Int,
+        partialEventCount: Int,
+        safeUIPublicationCount: Int,
+        partialPublicationCount: Int,
+        rateLimitedPublicationCount: Int,
+        durationMilliseconds: Double
+    ) {
+        self.safeStreamEventCount = max(0, safeStreamEventCount)
+        self.partialEventCount = max(0, partialEventCount)
+        self.safeUIPublicationCount = max(0, safeUIPublicationCount)
+        self.partialPublicationCount = max(0, partialPublicationCount)
+        self.rateLimitedPublicationCount = max(
+            0,
+            rateLimitedPublicationCount
+        )
+        self.durationMilliseconds = max(0, durationMilliseconds)
+    }
+}
+
+nonisolated struct GraphChatProviderStreamingMetric: Hashable, Sendable {
+    let providerEventCount: Int
+    let providerPartialSnapshotCount: Int
+    let safePartialEventCount: Int
+    let durationMilliseconds: Double
+
+    init(
+        providerEventCount: Int,
+        providerPartialSnapshotCount: Int,
+        safePartialEventCount: Int,
+        durationMilliseconds: Double
+    ) {
+        self.providerEventCount = max(0, providerEventCount)
+        self.providerPartialSnapshotCount = max(
+            0,
+            providerPartialSnapshotCount
+        )
+        self.safePartialEventCount = max(0, safePartialEventCount)
+        self.durationMilliseconds = max(0, durationMilliseconds)
+    }
+}
+
+nonisolated enum GraphChatHistorySaveBoundary:
+    String,
+    CaseIterable,
+    Hashable,
+    Sendable
+{
+    case turnStart
+    case terminal
+    case cancellation
+    case runtimeBoundary
+    case interpretationCorrection
+    case recoveryNormalization
+}
+
+nonisolated struct GraphChatHistorySaveMetric: Hashable, Sendable {
+    let boundary: GraphChatHistorySaveBoundary
+}
+
 nonisolated enum GraphChatToolRepairOutcome: String, CaseIterable, Hashable, Sendable {
     case offered
     case succeeded
@@ -295,6 +363,9 @@ nonisolated struct GraphChatIntentInterpretationMetric:
 
 nonisolated enum GraphChatObservabilityEvent: Hashable, Sendable {
     case request(GraphChatRequestMetric)
+    case providerStreaming(GraphChatProviderStreamingMetric)
+    case streamingPerformance(GraphChatStreamingPerformanceMetric)
+    case historySave(GraphChatHistorySaveMetric)
     case availability(GraphChatAvailabilityMetricState)
     case toolRepair(GraphChatToolRepairMetric)
     case authoritativeFact(GraphChatAuthoritativeFactMetric)
@@ -328,6 +399,32 @@ actor GraphChatTechnicalObservabilityRecorder: GraphChatObservabilityRecording {
             let errorCode = metric.errorCode?.rawValue ?? "none"
             BMLog.chat.info(
                 "Request finished outcome=\(metric.outcome.rawValue, privacy: .public) durationMS=\(metric.durationMilliseconds, format: .fixed(precision: 2)) toolCount=\(metric.toolCount) toolTypes=\(toolTypes, privacy: .public) evidenceCount=\(metric.evidenceCount) indexFallback=\(metric.usedIndexFallback) errorCode=\(errorCode, privacy: .public)"
+            )
+        case .streamingPerformance(let metric):
+            let durationSeconds = max(
+                metric.durationMilliseconds / 1_000,
+                0.001
+            )
+            let safeStreamEventsPerSecond =
+                Double(metric.safeStreamEventCount) / durationSeconds
+            let rateLimitedPublicationsPerSecond =
+                Double(metric.rateLimitedPublicationCount) / durationSeconds
+            BMLog.chat.info(
+                "Streaming performance safeStreamEvents=\(metric.safeStreamEventCount) partialEvents=\(metric.partialEventCount) safeUIPublications=\(metric.safeUIPublicationCount) partialPublications=\(metric.partialPublicationCount) rateLimitedPublications=\(metric.rateLimitedPublicationCount) safeStreamEventsPerSecond=\(safeStreamEventsPerSecond, format: .fixed(precision: 2)) rateLimitedPublicationsPerSecond=\(rateLimitedPublicationsPerSecond, format: .fixed(precision: 2)) durationMS=\(metric.durationMilliseconds, format: .fixed(precision: 2))"
+            )
+        case .providerStreaming(let metric):
+            let durationSeconds = max(
+                metric.durationMilliseconds / 1_000,
+                0.001
+            )
+            let providerEventsPerSecond =
+                Double(metric.providerEventCount) / durationSeconds
+            BMLog.chat.info(
+                "Provider streaming performance providerEvents=\(metric.providerEventCount) providerPartials=\(metric.providerPartialSnapshotCount) safePartials=\(metric.safePartialEventCount) providerEventsPerSecond=\(providerEventsPerSecond, format: .fixed(precision: 2)) durationMS=\(metric.durationMilliseconds, format: .fixed(precision: 2))"
+            )
+        case .historySave(let metric):
+            BMLog.chat.info(
+                "History save boundary=\(metric.boundary.rawValue, privacy: .public)"
             )
         case .toolRepair(let metric):
             let reason = metric.reason?.rawValue ?? "none"

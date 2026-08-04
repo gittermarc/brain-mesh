@@ -75,7 +75,8 @@ nonisolated struct GraphChatOrchestratorComposition: Sendable {
         )
         let providerExecutor = GraphChatProviderExecutor(
             provider: provider,
-            sessionFactory: sessionFactory
+            sessionFactory: sessionFactory,
+            observability: observability
         )
         let foundationalCoordinator =
             GraphChatFoundationalIntentCoordinator(

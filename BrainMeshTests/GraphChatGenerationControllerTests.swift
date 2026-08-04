@@ -20,16 +20,53 @@ private nonisolated struct RecordedGraphChatGenerationOutcome: Hashable, Sendabl
     let outcome: GraphChatGenerationOutcome
 }
 
+private actor GraphChatGenerationAsyncGate {
+    private var isOpen = false
+    private var waiters: [CheckedContinuation<Void, Never>] = []
+
+    func wait() async {
+        guard isOpen == false else {
+            return
+        }
+        await withCheckedContinuation { continuation in
+            waiters.append(continuation)
+        }
+    }
+
+    func open() {
+        guard isOpen == false else {
+            return
+        }
+        isOpen = true
+        let pendingWaiters = waiters
+        waiters.removeAll(keepingCapacity: false)
+        for waiter in pendingWaiters {
+            waiter.resume()
+        }
+    }
+}
+
 @MainActor
 private final class GraphChatGenerationCallbackRecorder {
     private(set) var messages: [GraphChatTranscriptMessage]
     private(set) var events: [RecordedGraphChatGenerationEvent] = []
+    private(set) var publications: [GraphChatStreamingUIPublication] = []
     private(set) var outcomes: [RecordedGraphChatGenerationOutcome] = []
     private(set) var cancelledOperationIDs: [GraphChatGenerationOperationID] = []
     private(set) var completedTurnOperationIDs: [GraphChatGenerationOperationID] = []
     private(set) var visibleStateChanges: [Bool] = []
+    private let completedTurnHandler: @MainActor (
+        GraphChatGenerationOperationID,
+        UUID
+    ) async -> Void
 
-    init(assistantMessageIDs: [UUID]) {
+    init(
+        assistantMessageIDs: [UUID],
+        completedTurnHandler: @escaping @MainActor (
+            GraphChatGenerationOperationID,
+            UUID
+        ) async -> Void = { _, _ in }
+    ) {
         messages = assistantMessageIDs.map { messageID in
             GraphChatTranscriptMessage(
                 id: messageID,
@@ -40,6 +77,7 @@ private final class GraphChatGenerationCallbackRecorder {
                 )
             )
         }
+        self.completedTurnHandler = completedTurnHandler
     }
 
     func callbacks() -> GraphChatGenerationCallbacks {
@@ -56,23 +94,33 @@ private final class GraphChatGenerationCallbackRecorder {
                     state.markCancelled()
                 }
             },
-            eventDidArrive: { [weak self] event, operationID, assistantMessageID in
+            publicationDidArrive: { [weak self] publication, operationID, assistantMessageID in
                 guard let self else {
                     return
                 }
-                events.append(
-                    RecordedGraphChatGenerationEvent(
-                        operationID: operationID,
-                        assistantMessageID: assistantMessageID,
-                        event: event
+                publications.append(publication)
+                for event in publication.events {
+                    events.append(
+                        RecordedGraphChatGenerationEvent(
+                            operationID: operationID,
+                            assistantMessageID: assistantMessageID,
+                            event: event
+                        )
                     )
-                )
-                mutateAssistant(assistantMessageID) { state in
-                    state.apply(event)
+                    mutateAssistant(assistantMessageID) { state in
+                        state.apply(event)
+                    }
                 }
             },
-            completedTurnDidArrive: { [weak self] operationID, _ in
-                self?.completedTurnOperationIDs.append(operationID)
+            completedTurnDidArrive: { [weak self] operationID, assistantMessageID in
+                guard let self else {
+                    return
+                }
+                completedTurnOperationIDs.append(operationID)
+                await completedTurnHandler(
+                    operationID,
+                    assistantMessageID
+                )
             },
             outcomeDidResolve: { [weak self] operationID, assistantMessageID, outcome in
                 self?.outcomes.append(
@@ -165,6 +213,24 @@ private actor GraphChatGenerationObservabilityRecorder:
             return metric
         }
     }
+
+    func streamingMetrics() -> [GraphChatStreamingPerformanceMetric] {
+        events.compactMap { event in
+            guard case .streamingPerformance(let metric) = event else {
+                return nil
+            }
+            return metric
+        }
+    }
+
+    func historyBoundaries() -> [GraphChatHistorySaveBoundary] {
+        events.compactMap { event in
+            guard case .historySave(let metric) = event else {
+                return nil
+            }
+            return metric.boundary
+        }
+    }
 }
 
 @MainActor
@@ -236,6 +302,11 @@ struct GraphChatGenerationControllerTests {
 
         let cleanup = setup.controller.cancel(discardSession: false)
         await cleanup?.value
+        #expect(await setup.history.snapshots().count == 2)
+        #expect(
+            await setup.observability.historyBoundaries()
+                == [.turnStart, .cancellation]
+        )
     }
 
     @Test
@@ -307,6 +378,91 @@ struct GraphChatGenerationControllerTests {
         let cleanup = setup.controller.cancel(discardSession: false)
         await cleanup?.value
         #expect(setup.callbacks.visibleStateChanges == [true, false])
+    }
+
+    @Test
+    func acceptedTerminalPersistenceFinishesBeforeTheNextTurnStarts() async {
+        let firstAssistantID = UUID()
+        let secondAssistantID = UUID()
+        let firstOperationID = GraphChatGenerationOperationID()
+        let secondOperationID = GraphChatGenerationOperationID()
+        let completionGate = GraphChatGenerationAsyncGate()
+        let setup = makeSetup(
+            assistantMessageIDs: [firstAssistantID, secondAssistantID],
+            operationIDs: [firstOperationID, secondOperationID],
+            scripts: [
+                GraphChatUIFakeScript(
+                    events: [
+                        .completed(
+                            GraphChatUITestSupport.finalAnswer(
+                                directAnswer: "First final"
+                            )
+                        )
+                    ]
+                ),
+                GraphChatUIFakeScript(
+                    events: [.started(requestID: UUID())],
+                    waitsForCancellation: true
+                ),
+            ],
+            completedTurnHandler: { operationID, _ in
+                if operationID == firstOperationID {
+                    await completionGate.wait()
+                }
+            }
+        )
+
+        setup.controller.start(
+            request(
+                question: "First",
+                assistantMessageID: firstAssistantID,
+                mode: .newTurn
+            )
+        )
+        await waitUntil {
+            setup.callbacks.events.contains {
+                $0.operationID == firstOperationID
+                    && GraphChatGenerationEventClassifier.isTerminal($0.event)
+            }
+        }
+
+        setup.controller.start(
+            request(
+                question: "Second",
+                assistantMessageID: secondAssistantID,
+                mode: .newTurn
+            )
+        )
+        let blockedSnapshot = await setup.orchestrator.snapshot()
+        #expect(blockedSnapshot.questions == ["First"])
+        #expect(blockedSnapshot.cancellationCount == 0)
+        #expect(setup.controller.isActive(firstOperationID))
+        #expect(setup.controller.isActive(secondOperationID))
+
+        await completionGate.open()
+        await GraphChatProviderTestSupport.waitUntil {
+            let snapshot = await setup.orchestrator.snapshot()
+            return snapshot.questions == ["First", "Second"]
+        }
+        await GraphChatProviderTestSupport.waitUntil {
+            await setup.observability.historyBoundaries().count >= 3
+        }
+
+        #expect(
+            await setup.observability.historyBoundaries()
+                == [.turnStart, .terminal, .turnStart]
+        )
+        let snapshots = await setup.history.snapshots()
+        #expect(
+            snapshots.dropFirst().first.flatMap {
+                assistantState(in: $0, messageID: firstAssistantID)
+            }?.phase == .final
+        )
+        #expect(setup.controller.activeOperationID == secondOperationID)
+        #expect(setup.controller.isActive(firstOperationID) == false)
+
+        let cleanup = setup.controller.cancel(discardSession: false)
+        await cleanup?.value
     }
 
     @Test
@@ -385,7 +541,7 @@ struct GraphChatGenerationControllerTests {
         #expect(metric.outcome == .completed)
 
         let snapshots = await setup.history.snapshots()
-        #expect(snapshots.count == expectedEvents.count + 1)
+        #expect(snapshots.count == 2)
         #expect(
             snapshots.first.flatMap {
                 assistantState(in: $0, messageID: assistantID)
@@ -396,8 +552,71 @@ struct GraphChatGenerationControllerTests {
                 assistantState(in: $0, messageID: assistantID)
             }?.phase == .final
         )
+        #expect(
+            snapshots.contains { snapshot in
+                assistantState(in: snapshot, messageID: assistantID)?.phase
+                    == .partial
+            } == false
+        )
         let savedScopes = await setup.history.scopes()
         #expect(savedScopes.allSatisfy { $0 == setup.chatScope })
+        #expect(
+            await setup.observability.historyBoundaries()
+                == [.turnStart, .terminal]
+        )
+        let streamingMetrics = await setup.observability.streamingMetrics()
+        #expect(streamingMetrics.count == 1)
+        #expect(streamingMetrics.first?.safeStreamEventCount == expectedEvents.count)
+        #expect(
+            streamingMetrics.first?.safeUIPublicationCount
+                == setup.callbacks.publications.count
+        )
+    }
+
+    @Test
+    func oneThousandPartialsStillPersistOnlyTurnStartAndTerminal() async {
+        let assistantID = UUID()
+        let partials = (0..<1_000).map {
+            GraphChatStreamEvent.partialAnswer("Safe cumulative partial \($0)")
+        }
+        let setup = makeSetup(
+            assistantMessageIDs: [assistantID],
+            operationIDs: [GraphChatGenerationOperationID()],
+            scripts: [
+                GraphChatUIFakeScript(
+                    events: partials + [
+                        .completed(
+                            GraphChatUITestSupport.finalAnswer(
+                                directAnswer: "Safe final"
+                            )
+                        )
+                    ]
+                )
+            ]
+        )
+
+        setup.controller.start(
+            request(
+                question: "Burst",
+                assistantMessageID: assistantID,
+                mode: .newTurn
+            )
+        )
+        await waitUntil {
+            setup.controller.isGenerating == false
+        }
+
+        #expect(await setup.history.snapshots().count == 2)
+        #expect(
+            await setup.observability.historyBoundaries()
+                == [.turnStart, .terminal]
+        )
+        #expect(
+            await setup.history.snapshots().contains { snapshot in
+                assistantState(in: snapshot, messageID: assistantID)?.phase
+                    == .partial
+            } == false
+        )
     }
 
     @Test
@@ -555,9 +774,20 @@ struct GraphChatGenerationControllerTests {
                 == .cancelled
         )
         let metrics = await setup.observability.requestMetrics()
+        let snapshots = await setup.history.snapshots()
         #expect(metrics.count == 1)
         #expect(metrics.first?.outcome == .cancelled)
         #expect(metrics.first?.errorCode == .cancelled)
+        #expect(snapshots.count == 2)
+        #expect(
+            snapshots.last.flatMap {
+                assistantState(in: $0, messageID: assistantID)
+            }?.phase == .cancelled
+        )
+        #expect(
+            await setup.observability.historyBoundaries()
+                == [.turnStart, .cancellation]
+        )
         #expect(setup.callbacks.visibleStateChanges == [true, false])
     }
 
@@ -645,6 +875,10 @@ struct GraphChatGenerationControllerTests {
         let historySnapshots = await setup.history.snapshots()
         #expect(orchestratorSnapshot.cancellationCount == 1)
         #expect(historySnapshots == [setup.callbacks.messages])
+        #expect(
+            await setup.observability.historyBoundaries()
+                == [.runtimeBoundary]
+        )
         #expect(setup.controller.isGenerating == false)
         #expect(setup.callbacks.visibleStateChanges.isEmpty)
     }
@@ -652,7 +886,11 @@ struct GraphChatGenerationControllerTests {
     private func makeSetup(
         assistantMessageIDs: [UUID],
         operationIDs: [GraphChatGenerationOperationID],
-        scripts: [GraphChatUIFakeScript]
+        scripts: [GraphChatUIFakeScript],
+        completedTurnHandler: @escaping @MainActor (
+            GraphChatGenerationOperationID,
+            UUID
+        ) async -> Void = { _, _ in }
     ) -> GraphChatGenerationControllerSetup {
         let graphScope = GraphScope(graphID: UUID())
         let chatScope = GraphChatScope.entireGraph(graphScope)
@@ -660,7 +898,8 @@ struct GraphChatGenerationControllerTests {
         let history = GraphChatGenerationHistoryRecorder()
         let observability = GraphChatGenerationObservabilityRecorder()
         let callbacks = GraphChatGenerationCallbackRecorder(
-            assistantMessageIDs: assistantMessageIDs
+            assistantMessageIDs: assistantMessageIDs,
+            completedTurnHandler: completedTurnHandler
         )
         let sequence = GraphChatGenerationOperationIDSequence(operationIDs)
         let controller = GraphChatGenerationController(

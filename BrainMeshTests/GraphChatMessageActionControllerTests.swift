@@ -142,11 +142,13 @@ final class GraphChatMessageActionControllerHarness {
                     messageID: assistantMessageID
                 )
             },
-            eventDidArrive: { [weak self] event, _, assistantMessageID in
-                self?.apply(
-                    event,
-                    toAssistantMessageID: assistantMessageID
-                )
+            publicationDidArrive: { [weak self] publication, _, assistantMessageID in
+                for event in publication.events {
+                    self?.apply(
+                        event,
+                        toAssistantMessageID: assistantMessageID
+                    )
+                }
             },
             completedTurnDidArrive: { [weak self] operationID, assistantMessageID in
                 guard let self,
