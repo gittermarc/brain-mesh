@@ -16,22 +16,11 @@ extension GraphCanvasView {
         theme: GraphTheme,
         colorScheme: ColorScheme
     ) {
-        for e in drawEdges {
-            if lens.hideNonRelevant && (lens.isHidden(e.a) || lens.isHidden(e.b)) { continue }
-            if !detailsFocusRenderPlan.shouldRender(edge: e) { continue }
-
-            guard let endpoints = GraphCanvasDynamicFrameBuilder.resolveEdgeEndpoints(
-                e,
-                availableValues: frame.screenPoints,
-                staticSnapshot: staticSnapshot
-            ),
-            let a = frame.screenPoints[endpoints.a],
-            let b = frame.screenPoints[endpoints.b] else {
-                continue
-            }
-
-            let edgeAlpha = lens.edgeOpacity(a: e.a, b: e.b) * detailsFocusRenderPlan.edgeOpacityMultiplier(a: e.a, b: e.b)
-            if edgeAlpha <= 0.001 { continue }
+        for preparedEdge in frame.preparedEdges {
+            let e = preparedEdge.edge
+            let a = preparedEdge.firstPoint
+            let b = preparedEdge.secondPoint
+            let edgeAlpha = preparedEdge.opacity
 
             var path = Path()
             path.move(to: a)

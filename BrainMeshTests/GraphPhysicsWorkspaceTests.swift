@@ -24,6 +24,12 @@ struct GraphPhysicsWorkspaceTests {
         assertWorkspaceSendable(GraphPhysicsRuntimeInput.self)
         assertWorkspaceSendable(GraphPhysicsRuntimeMetrics.self)
         assertWorkspaceSendable(GraphPhysicsRuntimeState.self)
+        assertWorkspaceSendable(
+            GraphPhysicsPositionSnapshot.self
+        )
+        assertWorkspaceSendable(
+            GraphPhysicsSimulationDebugSnapshot.self
+        )
     }
 
     @Test

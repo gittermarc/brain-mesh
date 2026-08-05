@@ -72,6 +72,16 @@ struct AppRootView: View {
                 graphChatLaunchCoordinator.handleAppTermination()
                 graphCopilotWorkspaceCoordinator.clearTransientState()
             }
+            .onReceive(
+                NotificationCenter.default.publisher(
+                    for: UIApplication
+                        .didReceiveMemoryWarningNotification
+                )
+            ) { _ in
+                cancelSearchIndexForegroundMaintenance()
+                graphChatSessionStore.handleMemoryPressure()
+                graphCopilotWorkspaceCoordinator.clearTransientState()
+            }
             .onChange(of: proStore.entitlement) { _, entitlement in
                 guard entitlement != .pro else {
                     return

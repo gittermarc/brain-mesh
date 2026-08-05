@@ -5,15 +5,23 @@ import Foundation
 
 @MainActor
 final class GraphPhysicsRuntimeTestHarness {
-    var externalState: GraphPhysicsExternalState
-    private(set) var committedStates:
-        [GraphPhysicsExternalState] = []
+    var externalPositions: [NodeKey: CGPoint]
+    private(set) var committedPositions:
+        [[NodeKey: CGPoint]] = []
+    private var initialVelocities: [NodeKey: CGVector]
+    private var hasConnected = false
 
     init(stepInput: GraphPhysicsStepInput) {
-        externalState = GraphPhysicsExternalState(
-            positions: stepInput.positions,
-            velocities: stepInput.velocities
-        )
+        externalPositions = stepInput.positions
+        initialVelocities = stepInput.velocities
+    }
+
+    func replaceExternalState(
+        stepInput: GraphPhysicsStepInput
+    ) {
+        externalPositions = stepInput.positions
+        initialVelocities = stepInput.velocities
+        hasConnected = false
     }
 
     func connect(
@@ -24,21 +32,21 @@ final class GraphPhysicsRuntimeTestHarness {
     ) {
         runtime.update(
             input: input,
-            externalState: externalState,
+            externalPositions: externalPositions,
             simulationAllowed: simulationAllowed,
             reason: reason,
-            externalStateProvider: { [unowned self] in
-                externalState
-            },
-            commit: { [unowned self] state in
-                externalState = state
-                committedStates.append(state)
+            initialVelocities:
+                hasConnected ? [:] : initialVelocities,
+            commit: { [unowned self] positions in
+                externalPositions = positions
+                committedPositions.append(positions)
             }
         )
+        hasConnected = true
     }
 
-    func clearCommittedStates() {
-        committedStates.removeAll(keepingCapacity: true)
+    func clearCommittedPositions() {
+        committedPositions.removeAll(keepingCapacity: true)
     }
 }
 
@@ -100,6 +108,7 @@ enum GraphPhysicsRuntimeTestInputs {
     static func replacing(
         _ input: GraphPhysicsRuntimeInput,
         graphID: UUID? = nil,
+        nodes: [GraphNode]? = nil,
         edges: [GraphEdge]? = nil,
         fixedNodeKeys: Set<NodeKey>? = nil,
         physicsRelevant: Set<NodeKey>?? = nil,
@@ -124,7 +133,7 @@ enum GraphPhysicsRuntimeTestInputs {
 
         return GraphPhysicsRuntimeInput(
             graphID: graphID ?? input.graphID,
-            nodes: input.nodes,
+            nodes: nodes ?? input.nodes,
             edges: edges ?? input.edges,
             fixedNodeKeys:
                 fixedNodeKeys ?? input.fixedNodeKeys,

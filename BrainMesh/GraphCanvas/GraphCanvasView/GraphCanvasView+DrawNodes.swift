@@ -11,22 +11,20 @@ extension GraphCanvasView {
     func drawNodes(
         in context: GraphicsContext,
         frame: GraphCanvasDynamicFrameCache,
-        staticSnapshot: GraphCanvasStaticRenderSnapshot,
         alphas: ZoomAlphas,
         theme: GraphTheme,
         colorScheme: ColorScheme
     ) {
-        for n in nodes {
-            if lens.hideNonRelevant && lens.isHidden(n.key) { continue }
-            if detailsFocusRenderPlan.isHidden(n.key) { continue }
-            guard let s = frame.screenPoints[n.key] else { continue }
+        for preparedNode in frame.preparedNodes {
+            let n = preparedNode.node
+            let s = preparedNode.screenPoint
 
             let isPinned = pinned.contains(n.key)
             let isSelected = (selection == n.key)
             let isCopilotHighlighted = copilotHighlightedNodes.contains(n.key)
-            let detailsOpacityMultiplier = detailsFocusRenderPlan.nodeOpacityMultiplier(for: n.key)
-            let nodeAlpha = lens.nodeOpacity(n.key) * detailsOpacityMultiplier
-            let isMatchedDetailsAttribute = detailsFocusRenderPlan.isMatchedAttribute(n.key)
+            let nodeAlpha = preparedNode.opacity
+            let isMatchedDetailsAttribute =
+                preparedNode.isMatchedDetailsAttribute
 
             switch n.key.kind {
             case .entity:
@@ -73,7 +71,8 @@ extension GraphCanvasView {
                 }
 
                 // Labels: Default besser sichtbar; Spotlight nur relevant
-                let isRelevantInSpotlight = (lens.distance[n.key] != nil)
+                let isRelevantInSpotlight =
+                    preparedNode.isRelevantInSpotlight
                 let allowLabel = (!alphas.spotlightLabelsOnly) || isRelevantInSpotlight
 
                 if allowLabel {
@@ -84,10 +83,7 @@ extension GraphCanvasView {
                             (isSelected || isCopilotHighlighted) ? 1.0 : 0.0
                         ) * nodeAlpha
                     if labelA > 0.04 {
-                        let off = staticSnapshot.labelOffsetsByNodeKey[n.key]
-                            ?? GraphCanvasStaticRenderSnapshotBuilder.labelOffset(
-                                for: n.key
-                            )
+                        let off = preparedNode.labelOffset
                         drawLabel(
                             n.label,
                             at: CGPoint(x: s.x + off.x, y: s.y + 28 + off.y),
@@ -167,7 +163,8 @@ extension GraphCanvasView {
                     context.draw(iconText, at: s, anchor: .center)
                 }
 
-                let isRelevantInSpotlight = (lens.distance[n.key] != nil)
+                let isRelevantInSpotlight =
+                    preparedNode.isRelevantInSpotlight
                 let allowLabel = (!alphas.spotlightLabelsOnly) || isRelevantInSpotlight
 
                 if allowLabel {
@@ -177,10 +174,7 @@ extension GraphCanvasView {
                             (isSelected || isCopilotHighlighted) ? 1.0 : 0.0
                         ) * nodeAlpha
                     if labelA > 0.06 {
-                        let off = staticSnapshot.labelOffsetsByNodeKey[n.key]
-                            ?? GraphCanvasStaticRenderSnapshotBuilder.labelOffset(
-                                for: n.key
-                            )
+                        let off = preparedNode.labelOffset
                         drawLabel(
                             n.label,
                             at: CGPoint(x: s.x + off.x, y: s.y + 24 + off.y),

@@ -39,7 +39,6 @@ extension GraphCanvasScreen {
                         openDetails(for: key)
                     },
                     positions: $positions,
-                    velocities: $velocities,
                     pinned: $pinned,
                     selection: selectionBinding,
                     scale: $scale,
@@ -335,6 +334,16 @@ extension GraphCanvasScreen {
                     false,
                     graphScope: activeGraphID.map { GraphScope(graphID: $0) }
                 )
+            }
+            .onChange(of: tabRouter.selection) { _, selection in
+                handleCanvasTabSelection(selection)
+            }
+            .onChange(of: scenePhase) { _, phase in
+                if phase == .active {
+                    handleCanvasTabSelection(tabRouter.selection)
+                } else {
+                    suspendCanvasOwnedWork()
+                }
             }
 
             // ✅ MiniMap throttling: only refresh MiniMap positions while the simulation runs.

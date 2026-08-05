@@ -499,6 +499,107 @@ struct GraphChatSessionSecurityTests {
         await bus.finish()
     }
 
+    @Test
+    func chatOwnedIndexWorkStopsOnlyAfterLastVisibleHostLeaves() async {
+        let graphScope = GraphScope(graphID: UUID())
+        let indexProvider = GraphChatBlockingIndexProbe()
+        let bus = GraphMutationEventBus()
+        let store = GraphChatSessionStore(
+            baseOrchestrator: GraphChatUIFakeOrchestrator(scripts: []),
+            availabilityProvider:
+                GraphChatUIFakeAvailabilityProvider(value: .available),
+            schemaProvider: GraphChatUIFakeSchemaProvider(
+                contexts: [
+                    GraphChatTestSupport.makeSchemaContext(
+                        graphID: graphScope.graphID
+                    )
+                ]
+            ),
+            indexStatusProvider: indexProvider,
+            mutationSubscriber: bus
+        )
+        let rootOwner = UUID()
+        let inspectorOwner = UUID()
+        store.setPresentationVisibility(
+            ownerID: rootOwner,
+            isVisible: true
+        )
+        store.setPresentationVisibility(
+            ownerID: inspectorOwner,
+            isVisible: true
+        )
+
+        let refresh = Task { @MainActor in
+            await store.refreshIndex(
+                for: graphScope,
+                prepareIfNeeded: true
+            )
+        }
+        for _ in 0..<2_000 {
+            if await indexProvider.hasStarted { break }
+            await Task.yield()
+        }
+
+        store.setPresentationVisibility(
+            ownerID: rootOwner,
+            isVisible: false
+        )
+        for _ in 0..<16 { await Task.yield() }
+        #expect(store.visiblePresentationOwnerCount == 1)
+        #expect(await indexProvider.cancellationCount == 0)
+
+        store.setPresentationVisibility(
+            ownerID: inspectorOwner,
+            isVisible: false
+        )
+        await refresh.value
+
+        #expect(store.visiblePresentationOwnerCount == 0)
+        #expect(await indexProvider.cancellationCount == 1)
+        await bus.finish()
+    }
+
+    @Test
+    func memoryPressureCancelsChatOwnedIndexWorker() async {
+        let graphScope = GraphScope(graphID: UUID())
+        let indexProvider = GraphChatBlockingIndexProbe()
+        let bus = GraphMutationEventBus()
+        let store = GraphChatSessionStore(
+            baseOrchestrator: GraphChatUIFakeOrchestrator(scripts: []),
+            availabilityProvider:
+                GraphChatUIFakeAvailabilityProvider(value: .available),
+            schemaProvider: GraphChatUIFakeSchemaProvider(
+                contexts: [
+                    GraphChatTestSupport.makeSchemaContext(
+                        graphID: graphScope.graphID
+                    )
+                ]
+            ),
+            indexStatusProvider: indexProvider,
+            mutationSubscriber: bus
+        )
+        store.setPresentationVisibility(
+            ownerID: UUID(),
+            isVisible: true
+        )
+        let refresh = Task { @MainActor in
+            await store.refreshIndex(
+                for: graphScope,
+                prepareIfNeeded: true
+            )
+        }
+        for _ in 0..<2_000 {
+            if await indexProvider.hasStarted { break }
+            await Task.yield()
+        }
+
+        store.handleMemoryPressure()
+        await refresh.value
+
+        #expect(await indexProvider.cancellationCount == 1)
+        await bus.finish()
+    }
+
     private func makeSessionStore(
         graphID: UUID,
         scripts: [GraphChatUIFakeScript],

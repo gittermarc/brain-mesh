@@ -31,7 +31,6 @@ extension GraphCanvasView {
                     pinned.remove(key)
                 } else {
                     pinned.insert(key)
-                    velocities[key] = .zero
                 }
             }
     }
@@ -55,7 +54,6 @@ extension GraphCanvasView {
                         draggingKey = key
                         selection = key
                         dragStartWorld = positions[key] ?? worldStart
-                        velocities[key] = .zero
                     } else {
                         dragStartPan = panStart
                     }
@@ -65,7 +63,6 @@ extension GraphCanvasView {
                     let dx = value.translation.width / scale
                     let dy = value.translation.height / scale
                     positions[key] = CGPoint(x: dragStartWorld.x + dx, y: dragStartWorld.y + dy)
-                    velocities[key] = .zero
                 } else {
                     pan = CGSize(width: dragStartPan.width + value.translation.width,
                                  height: dragStartPan.height + value.translation.height)
@@ -81,7 +78,6 @@ extension GraphCanvasView {
 
                 if let key = draggingKey {
                     pinned.insert(key)
-                    velocities[key] = .zero
                 } else {
                     panStart = pan
                 }

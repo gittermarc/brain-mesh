@@ -75,6 +75,53 @@ nonisolated struct BMDuration {
     }
 }
 
+/// Content-free signposts for Instruments validation of the canvas runtime.
+/// No graph, node, edge, label, note, draft, or identifier is recorded.
+nonisolated enum BMGraphPhysicsInstrumentation {
+    private static let signposter = OSSignposter(
+        logger: BMLog.physics
+    )
+
+    @inline(__always)
+    static func measureStep<Result>(
+        _ operation: () throws -> Result
+    ) rethrows -> Result {
+        let state = signposter.beginInterval("PhysicsStep")
+        defer {
+            signposter.endInterval("PhysicsStep", state)
+        }
+        return try operation()
+    }
+
+    static func snapshotPublished() {
+        signposter.emitEvent("SnapshotPublish")
+    }
+
+    static func coalescedFrame() {
+        signposter.emitEvent("CoalescedFrame")
+    }
+
+    static func droppedFrame() {
+        signposter.emitEvent("DroppedFrame")
+    }
+
+    static func pause() {
+        signposter.emitEvent("Pause")
+    }
+
+    static func resume() {
+        signposter.emitEvent("Resume")
+    }
+
+    static func graphChanged() {
+        signposter.emitEvent("GraphChange")
+    }
+
+    static func memoryPressure() {
+        signposter.emitEvent("MemoryPressure")
+    }
+}
+
 nonisolated enum BMNodeConnectionsPreviewLoadStatus:
     String,
     Equatable,

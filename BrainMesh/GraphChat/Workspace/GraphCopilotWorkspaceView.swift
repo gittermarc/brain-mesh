@@ -44,7 +44,7 @@ struct GraphCopilotWorkspaceView: View {
         VStack(spacing: 0) {
             contextHeader
             Divider()
-            GraphChatTabView()
+            GraphChatTabView(host: .canvasInspector)
         }
         .frame(minWidth: 320)
         .onAppear {

@@ -1,6 +1,6 @@
 # BrainMesh – Project Context
 
-> Start Here für neue Entwickler:innen. Stand: GRAPH-CHAT-STREAMING-BACKPRESSURE-1 nach GRAPH-SEARCH-INDEX-LIFECYCLE-1, mit sicherem turnlokalem Streaming-Backpressure, fachlichen History-Save-Grenzen und bottom-aware Transcript-Scrolling.
+> Start Here für neue Entwickler:innen. Stand: GRAPH-CANVAS-SIMULATION-ACTOR-1 nach GRAPH-CHAT-STREAMING-BACKPRESSURE-1, mit actor-isolierter Canvas-Simulation, koaleszierten Positions-Snapshots und sichtbarkeitsgebundenen Canvas-/Chat-Workern.
 
 ## TL;DR
 
@@ -42,6 +42,8 @@ BrainMesh ist eine native SwiftUI-App für iPhone und iPad, in der Nutzer:innen 
 - **Typed Conversation Scope**: Appseitig revalidierte, an Graph, Chat-Scope und Conversation gebundene Auflösung von `CURRENT` und gleichwertigen Conversation-Referenzen; enthält eine konkrete Entity sowie die zulässigen Nodes und wird vor der Query-Ausführung erneut geprüft.
 - **Presentation Firewall**: Turn-gebundene Trust Boundary, die interne Chat-Aliase und technische IDs vor Streaming, finaler UI-Ausgabe und Copy deterministisch auf validierte Anzeigenamen abbildet oder durch eine lokalisierte Ersatzantwort ersetzt.
 - **Safe Streaming Backpressure**: Jeder nichtleere kumulative Provider-Snapshot durchläuft weiterhin vollständig die turn-gebundene Presentation-/Identifier-Firewall. Erst die daraus entstandenen sicheren `GraphChatStreamEvent`s werden in einem turnlokalen Actor geordnet aggregiert; sichtbare Partial-Publikationen sind auf 20 Hz begrenzt, Terminal-, Fehler- und Cancellation-Grenzen bleiben unverzüglich. History speichert vollständige Conversation-Snapshots nur am Turn-Start, am Terminalzustand und an expliziten Cancellation-/Runtime-Grenzen, niemals pro Partial.
+- **Graph Physics Simulation Actor**: `GraphPhysicsSimulationActor` besitzt Scheduling, stabile Node-Indizes, zusammenhängende Positions-/Velocity-/Grid-Buffer, Adaptive Cadence, Cooling und Stabilität vollständig außerhalb des MainActor. `GraphPhysicsRuntime` ist nur der Main-Actor-Adapter und akzeptiert ausschließlich revisionsgebundene, value-only `GraphPhysicsPositionSnapshot`s; Velocity und Kräfte überschreiten die SwiftUI-Grenze nie.
+- **Feature Visibility Ownership**: `RootTabRouter.selection`, Scene-Phase und Host-Mounting sind autoritative Arbeitssignale. Canvas-Physik, Canvas-Loads, Derived State, MiniMap, Chat-Runtime und chat-eigene Indexvorbereitung pausieren beziehungsweise canceln ohne sichtbaren Owner. Ein unabhängig vom Chat gestarteter Foreground-Indexabgleich behält seinen eigenen AppRoot-Owner.
 - **Bounded Tool Repair**: Ausschließlich im echten offenen Legacy-Providerpfad verfügbare, request-gebundene Korrektur eines semantisch ungültigen Modell-Tool-Calls. Unterstützte Typed Intents erreichen diesen Pfad nie. Der Legacy-Provider erhält nur validierte Schema-/Scope-Hinweise und genau einen vollständigen Retry; Sicherheits-, Scope-, Repository-, Cancellation- und Budgetfehler bleiben harte Abbrüche.
 - **Primary Result Ledger**: Request-lokale, value-only Erfassung validierter erfolgreicher Tool-Ergebnisse. Eine deterministische App-Policy wählt das autoritative primäre Ergebnis und übergibt dessen Evidence und Artifacts unabhängig von Modell-IDs an den Finalizer.
 - **Deterministic Answer Fallback**: Lokalisierte, begrenzte Mindestantwort, die ausschließlich aus dem nach Live-Revalidierung verbliebenen primären Tool-Ergebnis gerendert wird. Sie ersetzt nur leeren, technischen, widersprüchlichen oder presentation-unsicheren Modelltext und behält dessen Evidence beziehungsweise Result-Artefakt.
@@ -78,6 +80,9 @@ BrainMesh ist eine native SwiftUI-App für iPhone und iPad, in der Nutzer:innen 
   - hostet `ContentView`;
   - bindet Startup, Scene-Phase, Graph-Wechsel, Locking und Pro-Status;
   - präsentiert Onboarding und Graph-Unlock.
+- `BrainMesh/GraphCanvas/Physics/GraphPhysicsSimulationActor.swift`
+  - besitzt Simulation, adaptive Tick-Tasks und Snapshot-Coalescing außerhalb des MainActor;
+  - beendet alte Graph-Lifecycles per Generation/Revision und hält interne Velocity-/Grid-Daten actorlokal.
 - Abhängigkeit: App Composition → SwiftData/Services → Root View → Tabs/Flows.
 
 ### UI / Presentation

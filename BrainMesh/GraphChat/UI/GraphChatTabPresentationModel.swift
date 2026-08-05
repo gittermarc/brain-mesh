@@ -7,6 +7,36 @@
 
 import Foundation
 
+nonisolated enum GraphChatTabHost: Hashable, Sendable {
+    case rootTab
+    case canvasInspector
+}
+
+nonisolated enum GraphChatHostVisibilityPolicy {
+    static func isVisible(
+        host: GraphChatTabHost,
+        selectedTab: RootTab,
+        isSceneActive: Bool,
+        isMounted: Bool
+    ) -> Bool {
+        guard isMounted, isSceneActive else { return false }
+        switch host {
+        case .rootTab:
+            return selectedTab == .chat
+        case .canvasInspector:
+            return selectedTab == .graph
+        }
+    }
+}
+
+nonisolated struct GraphChatVisibilityTaskIdentity<Base>:
+    Hashable,
+    Sendable
+where Base: Hashable & Sendable {
+    let base: Base
+    let isVisible: Bool
+}
+
 nonisolated struct GraphChatTabActiveGraphPresentation: Hashable, Sendable {
     let id: UUID
     let name: String

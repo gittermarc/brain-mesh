@@ -9,24 +9,21 @@ struct GraphPhysicsCommitPolicyTests {
         GraphPhysicsAdaptiveConfiguration.production
 
     @Test
-    func productionCommitBoundaryIsStable() {
+    func productionCommitBoundaryAndCadenceAreStable() {
         #expect(configuration.visualCommitEpsilon == 0.20)
         #expect(configuration.maximumTicksWithoutCommit == 3)
+        #expect(GraphPhysicsCadencePhase.active.framesPerSecond == 30)
+        #expect(GraphPhysicsCadencePhase.settling.framesPerSecond == 20)
+        #expect(GraphPhysicsCadencePhase.quiet.framesPerSecond == 12)
     }
 
     @Test
-    func activePhaseCommitsEveryTick() {
-        #expect(
-            shouldCommit(
-                phase: .active,
-                delta: 0,
-                ticks: 1
-            )
-        )
+    func activePhaseCommitsEveryChangedTick() {
+        #expect(shouldCommit(phase: .active, delta: 0, ticks: 1))
     }
 
     @Test
-    func settlingPhaseBundlesSubEpsilonChanges() {
+    func settlingAndQuietBundleSubEpsilonChanges() {
         #expect(
             !shouldCommit(
                 phase: .settling,
@@ -34,10 +31,6 @@ struct GraphPhysicsCommitPolicyTests {
                 ticks: 1
             )
         )
-    }
-
-    @Test
-    func quietPhaseBundlesSubEpsilonChanges() {
         #expect(
             !shouldCommit(
                 phase: .quiet,
@@ -48,7 +41,7 @@ struct GraphPhysicsCommitPolicyTests {
     }
 
     @Test
-    func exceedingPositionEpsilonCommits() {
+    func epsilonAndMaximumTickCountPublish() {
         #expect(
             shouldCommit(
                 phase: .quiet,
@@ -56,22 +49,17 @@ struct GraphPhysicsCommitPolicyTests {
                 ticks: 1
             )
         )
-    }
-
-    @Test
-    func maximumTickCountCommits() {
         #expect(
             shouldCommit(
                 phase: .settling,
                 delta: 0,
-                ticks:
-                    configuration.maximumTicksWithoutCommit
+                ticks: configuration.maximumTicksWithoutCommit
             )
         )
     }
 
     @Test
-    func forcedReasonsOverrideBundling() {
+    func forcedReasonsAndDraggingOverrideBundling() {
         for reason in [
             GraphPhysicsForcedCommitReason.stop,
             .sleep,
@@ -90,10 +78,6 @@ struct GraphPhysicsCommitPolicyTests {
                 Comment(rawValue: reason.rawValue)
             )
         }
-    }
-
-    @Test
-    func draggingAlwaysCommits() {
         #expect(
             shouldCommit(
                 phase: .quiet,
@@ -106,7 +90,7 @@ struct GraphPhysicsCommitPolicyTests {
 
     @Test
     @MainActor
-    func skippedCommitKeepsExternalStateWhileInternalStateAdvances() {
+    func deferredTickKeepsExternalPositionSnapshot() async {
         let fixture = GraphPhysicsRuntimeTestInputs.controlled(
             nodeCount: 4,
             speed: 0.01
@@ -120,58 +104,24 @@ struct GraphPhysicsCommitPolicyTests {
         harness.connect(runtime, input: fixture.runtime)
 
         for _ in 0..<6 {
-            runtime.runNextScheduledTickForTesting()
+            await runtime.runNextScheduledTickForTesting()
         }
+        let externalBefore = harness.externalPositions
+        let internalSnapshotBefore =
+            await runtime.debugSnapshotForTesting()
+        let internalBefore = internalSnapshotBefore.positions
+        await runtime.runNextScheduledTickForTesting()
+        let after = await runtime.debugSnapshotForTesting()
 
-        let externalBeforeSkippedTick = harness.externalState
-        let internalBeforeSkippedTick =
-            runtime.internalPositions
-        runtime.runNextScheduledTickForTesting()
-
-        #expect(runtime.metrics.skippedCommitCount == 1)
-        #expect(harness.externalState == externalBeforeSkippedTick)
-        #expect(
-            runtime.internalPositions
-                != internalBeforeSkippedTick
-        )
-        #expect(
-            runtime.internalPositions
-                != harness.externalState.positions
-        )
+        #expect(after.metrics.skippedCommitCount > 0)
+        #expect(harness.externalPositions == externalBefore)
+        #expect(after.positions != internalBefore)
+        #expect(after.positions != harness.externalPositions)
     }
 
     @Test
     @MainActor
-    func positionsAndVelocitiesCommitTogether() {
-        let fixture = GraphPhysicsRuntimeTestInputs.controlled(
-            nodeCount: 4,
-            speed: 1
-        )
-        let runtime = GraphPhysicsRuntime(
-            automaticallySchedules: false
-        )
-        let harness = GraphPhysicsRuntimeTestHarness(
-            stepInput: fixture.step
-        )
-        harness.connect(runtime, input: fixture.runtime)
-        runtime.runNextScheduledTickForTesting()
-
-        #expect(runtime.metrics.positionCommitCount == 1)
-        #expect(runtime.metrics.velocityCommitCount == 1)
-        #expect(harness.committedStates.count == 1)
-        #expect(
-            harness.committedStates[0].positions
-                == runtime.internalPositions
-        )
-        #expect(
-            harness.committedStates[0].velocities
-                == runtime.internalVelocities
-        )
-    }
-
-    @Test
-    @MainActor
-    func stopFlushesADeferredCommit() {
+    func stopFlushesPositionsWithoutPublishingInternalState() async {
         let fixture = GraphPhysicsRuntimeTestInputs.controlled(
             nodeCount: 4,
             speed: 0.01
@@ -184,22 +134,20 @@ struct GraphPhysicsCommitPolicyTests {
         )
         harness.connect(runtime, input: fixture.runtime)
         for _ in 0..<7 {
-            runtime.runNextScheduledTickForTesting()
+            await runtime.runNextScheduledTickForTesting()
         }
 
-        let commitsBeforeStop =
-            runtime.metrics.positionCommitCount
+        let before = await runtime.debugSnapshotForTesting()
         runtime.stop()
+        let after = await runtime.debugSnapshotForTesting()
 
         #expect(
-            runtime.metrics.positionCommitCount
-                == commitsBeforeStop + 1
+            after.metrics.positionCommitCount
+                == before.metrics.positionCommitCount + 1
         )
-        #expect(runtime.metrics.forcedCommitCount == 1)
-        #expect(
-            harness.externalState.positions
-                == runtime.internalPositions
-        )
+        #expect(after.metrics.velocityCommitCount == 0)
+        #expect(harness.externalPositions == after.positions)
+        #expect(!after.state.hasScheduledTick)
     }
 
     private func shouldCommit(

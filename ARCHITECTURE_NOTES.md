@@ -28,6 +28,7 @@ BrainMesh besitzt bereits mehrere wichtige Schutzlinien:
 - GRAPH-CHAT-BETA-EXPERIENCE-1 ergänzt eine rein presentation-seitige Beta-Kommunikation: dauerhaftes Badge und Info-Aktion in der gemeinsamen iPhone-/iPad-Komposition, eine nur vor der Nutzung sichtbare Orientierungskarte und ein app-owned DE-/EN-Info-Sheet. Capability-Aussagen bleiben aus dem stabilen Katalog abgeleitet; auswählbare Beispiele bleiben produktionsvalidiert und senden nie automatisch.
 - GRAPH-CHAT-SCHEMA-PIPELINE-1 trennt den Chat-Schema-Read vom vollständigen `GraphSourceSnapshotDTO`. `GraphReadRepository+SchemaSource` materialisiert auf Fetch-Ebene nur Graph, Entities, Attribute-Nodes, Felddefinitionen und gezielt angeforderte Beispielwerte. Ein actor-isolierter, revisionsgebundener Single-Flight-Cache reicht dieselbe `GraphSchemaContextIdentity` durch Suggestions, Preflight, beide Intent-Stufen und Provider-Session; Composable Reads behalten ihren vollständigen autoritativen Snapshot.
 - GRAPH-CHAT-STREAMING-BACKPRESSURE-1 trennt die geordnete Verarbeitung bereits sicherer Stream-Events von ihrer sichtbaren Publikation. Die Presentation Firewall prüft weiterhin jeden relevanten kumulativen Provider-Snapshot; ein turnlokaler Actor koalesziert danach ausschließlich sichere Partials auf höchstens 20 Hz, veröffentlicht Terminalzustände sofort und hält Cancellation-/Replacement-Ownership geschlossen. History-Saves liegen an Turn-Start, Terminal und expliziten Runtime-Grenzen. Transcript und Scroll-State bilden eine eigene Observation-Grenze; Auto-Scroll läuft nur am unteren Rand, Partial-Scrolls sind animationslos und Reduce Motion wird respektiert.
+- GRAPH-CANVAS-SIMULATION-ACTOR-1 verlagert Physics Steps, Velocity, Spatial Grid, Delta-/Cooling-/Stability-Scans und Tick-Scheduling in `GraphPhysicsSimulationActor`. Der Pure-Physics-Kern bleibt deterministisch; sein Actor-Pfad arbeitet nach einer Topologieauflösung mit stabilen Indizes und zusammenhängenden Arrays. SwiftUI erhält ausschließlich koaleszierte `GraphPhysicsPositionSnapshot`s, die der Main-Actor-Adapter nach Graph- und Command-Revision prüft. Drag-Positionen können deshalb nicht von älteren Actor-Snapshots überschrieben werden.
 
 Die höchsten Architektur-Risiken liegen trotzdem an drei Systemgrenzen:
 
@@ -38,10 +39,22 @@ Die höchsten Architektur-Risiken liegen trotzdem an drei Systemgrenzen:
 2. **Abgeleitete Vollgraph-Snapshots**
    - Search-Rebuild/Reconciliation, Home-Health und Stats laden bei Cache Miss große Datenmengen;
    - mehrere Schritte materialisieren und sortieren komplette Arrays im Speicher.
-3. **Main-Actor- und Task-Lifecycle**
-   - Canvas-Physics und Dictionary-Publikation laufen auf dem MainActor;
-   - Graph-Chat-State ist komplex und stark taskgetrieben;
+3. **Task-Lifecycle und verbleibende breite UI-Observation**
+   - Canvas-Physics läuft actor-isoliert; nur fertige Positions-Snapshots werden auf dem MainActor übernommen;
+   - Graph-Chat-State bleibt komplex und stark taskgetrieben, ist nun aber an explizite sichtbare Host-Owner gebunden;
    - Event-Streams sind prozesslokal und standardmäßig unbounded.
+
+### 1.1 Canvas-Simulation und Sichtbarkeitsgrenzen
+
+- `GraphPhysicsSimulationActor` besitzt genau einen optionalen, von ihm gespeicherten Tick-Task. Pause, Graphwechsel und Deinitialisierung canceln diesen Task; es gibt keinen Canvas-`Timer`, Display Link oder `Task.detached`.
+- `GraphPhysicsWorkspace` hält Node-ID→Index nur an Reconcile-Grenzen. Der Tick-Hotpath verwendet Positions-, Velocity-, Fixed-State-, Grid- und Distant-Delta-Arrays. Add/Remove erhält Zustand bestehender IDs; Graphwechsel verwirft den alten Lifecycle deterministisch.
+- `GraphPhysicsRuntime` koalesziert Main-Actor-Kommandos und publiziert nur `[NodeKey: CGPoint]`. Snapshot-Revision und Command-Revision bilden die Stale-Result-Grenze, insbesondere während Dragging.
+- Die Frequenzstufen bleiben 30/20/12 FPS. Unveränderte Snapshots werden verworfen; unterhalb der visuellen Delta-Grenze bündelt die Commit-Policy mehrere Engine-Ticks.
+- `GraphCanvasDynamicFrameCache` wird vor dem `Canvas`-Draw-Closure vorbereitet. Der Draw-Closure konsumiert nur fertige Screen-Points plus den unveränderlichen statischen Render-Snapshot.
+- Canvas-Simulation, Loads, Derived State und MiniMap hängen explizit an Graph-Tab, aktiver Scene und Covering Sheets. App-Hintergrund und Memory Pressure canceln beziehungsweise reduzieren transiente Arbeit.
+- Root-Chat und Canvas-Inspector registrieren getrennte sichtbare Owner. Erst der Verlust des letzten Owners beendet Generation, Suggestions und eine ausschließlich vom Chat gehaltene Indexvorbereitung. Der AppRoot-Foreground-Reconcile bleibt davon unabhängig.
+- `GraphCanvasScreen` konsumiert für Chat-Starts `GraphChatLaunchAction` als schmale Environment-Closure und beobachtet nicht mehr den Draft-/Streaming-führenden `GraphChatLaunchCoordinator`.
+- Content-freie Signposts heißen `PhysicsStep`, `SnapshotPublish`, `CoalescedFrame`, `DroppedFrame`, `Pause`, `Resume`, `GraphChange` und `MemoryPressure`.
 
 ## 2. Analyseumfang und Größenprofil
 
@@ -514,19 +527,21 @@ Empfehlung:
 Pfade:
 
 - `BrainMesh/GraphCanvas/Physics/GraphPhysicsRuntime.swift`
+- `BrainMesh/GraphCanvas/Physics/GraphPhysicsSimulationActor.swift`
 - `BrainMesh/GraphCanvas/Physics/GraphPhysicsWorkspace.swift`
+- `BrainMesh/GraphCanvas/Physics/GraphPhysicsEngine.swift`
 - `BrainMesh/GraphCanvas/GraphCanvasDynamicFrameBuilder.swift`
 - `BrainMesh/GraphCanvas/GraphCanvasView/GraphCanvasView+Physics.swift`
 
-Konkreter Grund:
+Aktueller Stand:
 
-- `GraphPhysicsRuntime` ist `@MainActor`.
-- Ein `Timer` taktet adaptiv mit 30/20/12 FPS.
-- Physics-Step, Maximum-Delta-Scan und Publish-Koordination liegen im Main-Actor-Runtimepfad.
-- Publish kopiert vollständige Positions- und Velocity-Dictionaries.
-- Der Commit aktualisiert beide Dictionaries in einer Main-Actor-Transaktion.
-- Der Dynamic Frame Builder iteriert Nodes und Edges und baut Screen-Point-Dictionaries neu.
-- Jede veröffentlichte Physics-Änderung kann die SwiftUI-/Canvas-Darstellung invalidieren.
+- `GraphPhysicsRuntime` ist nur noch der `@MainActor`-Adapter für UI-Kommandos und fertige Positions-Snapshots.
+- `GraphPhysicsSimulationActor` besitzt Tick-Scheduling, Adaptive Cadence, Stability, Delta-Scans und den zusammenhängenden Workspace vollständig außerhalb des MainActor.
+- `GraphPhysicsEngine` bleibt der reine deterministische Rechenkern; der Actor verwendet dessen vorbereiteten Stable-Index-Pfad.
+- Es gibt keinen Canvas-`Timer` und keinen Display Link. Ein gespeicherter strukturierter Task schläft über die injizierbare Clock mit 30/20/12 FPS.
+- Velocity, Kräfte und Grid-Zustand bleiben actor-intern. Über die UI-Grenze gehen ausschließlich koaleszierte `GraphPhysicsPositionSnapshot`s.
+- Der Dynamic Frame Builder bereitet Screen-Points vor dem eigentlichen `Canvas`-Draw-Closure vor; der Draw-Pfad konsumiert nur den fertigen Cache.
+- Graph-, Command- und Snapshot-Revisionen sowie ein Live-Merge für Drag-/Pin-Positionen verhindern stale Überschreibungen.
 
 Vorhandene Begrenzung:
 
@@ -540,22 +555,20 @@ Vorhandene Begrenzung:
 Bewertung:
 
 - Kein ungebremster Graph-Render.
-- Trotzdem ist der MainActor bei aktiver Simulation der dominante Frame-Budget-Kandidat.
-- Instruments muss Tickzeit, Dictionary-Allokationen und Canvas-Body getrennt messen.
+- Physik- und Grid-Arbeit belastet den MainActor nicht mehr; dort verbleiben Gesten, sichtbarer View-State, Frame-Vorbereitung und Snapshot-Übernahme.
+- Instruments muss weiterhin Actor-Tickzeit, Snapshot-Frequenz, Main-Actor-Commit, Frame-Vorbereitung und Canvas-Body getrennt messen.
 
-Optimierungshebel:
+Verbleibende Mess- und Optimierungshebel:
 
-- Physics-Step in einen Actor/Worker mit Value-Workspace verlagern.
-- Nur coalesced Positions-Snapshots zum MainActor publizieren.
-- Velocities nur publizieren, wenn UI/Interaktion sie wirklich benötigt.
-- Stable Node Index statt Dictionary-Rebuild im inneren Loop evaluieren.
-- `ContinuousClock`/display-synchronen Scheduler gegen `Timer` benchmarken.
+- Commit- und Frame-Cache-Allokationen auf realen Geräten quantifizieren.
+- Die 30/20/12-FPS-Cadence und Publish-Epsilon gegen reale Interaktionsprofile validieren.
+- Actor-Ticks, `SnapshotPublish` und SwiftUI-Invalidierungen mit den content-freien Signposts korrelieren.
 - Bestehende Caps als Produktinvariante dokumentieren und testen.
 
-Risiko des Refactors:
+Validierungsrisiko:
 
-- Hoch: Dragging, Wake/Sleep, Fokus und externe Positionsänderungen sind zeitkritisch.
-- Vorher Golden-/Determinismus-Tests und Frame-Signposts ausbauen.
+- Dragging, Wake/Sleep, Fokus, Graphwechsel und externe Positionsänderungen bleiben zeitkritisch.
+- Determinismus-, Toleranz-, Lifecycle-, Coalescing- und synthetische Operationstests decken die Codeverträge ab; echte Frame-/Hitch-Werte müssen auf einem iPhone mit Instruments erhoben werden.
 
 ### P1: Entities Home
 
@@ -1679,24 +1692,20 @@ Nach:
 
 ### Canvas Physics
 
-Aus:
-
-- `BrainMesh/GraphCanvas/Physics/GraphPhysicsRuntime.swift`
-
-Nach:
+Aktuelle Grenze:
 
 - `GraphPhysicsSimulationActor.swift`
-  - Step und Workspace off-main.
-- `GraphPhysicsCadenceScheduler.swift`
-  - Zeitplanung/Lifecycle.
-- `GraphPhysicsSnapshotPublisher.swift`
-  - Coalescing und MainActor Commit.
-- `GraphPhysicsExternalStateReconciler.swift`
-  - Drag-/Scope-/Input-Resync.
+  - besitzt Step, Workspace, Spatial Grid, Stable Indices, Cadence, Stability, Coalescing und genau einen Tick-Task off-main;
+- `GraphPhysicsRuntime.swift`
+  - ist der schmale Main-Actor-Adapter für Command-Coalescing, Revision-Check und Positions-Commit;
+- `GraphPhysicsWorkspace.swift`
+  - hält Positionen, Velocity, Fixed-State und Grid-Puffer in zusammenhängenden Arrays;
+- `GraphPhysicsEngine.swift`
+  - bleibt der reine deterministische Mathematikkern für Pure- und vorbereiteten Actor-Pfad;
+- `GraphCanvasView+Physics.swift`
+  - synchronisiert UI-Positionen und schützt Drag-/Pin-Koordinaten an der Snapshot-Grenze.
 
-Voraussetzung:
-
-- Messbare Frame-/Determinismus-Baseline.
+Geräteprofiling und Messpunkte stehen in `BrainMesh/GraphCanvas/GRAPH_CANVAS_INSTRUMENTS.md`.
 
 ## 7.2 Cache- und Index-Ideen
 

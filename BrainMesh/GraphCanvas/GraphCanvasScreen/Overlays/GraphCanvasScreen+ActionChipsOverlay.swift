@@ -74,10 +74,8 @@ extension GraphCanvasScreen {
             setFocus(to: node)
         case .pin:
             pinned.insert(node.key)
-            velocities[node.key] = .zero
         case .unpin:
             pinned.remove(node.key)
-            velocities[node.key] = .zero
         case .showMoreLinks:
             showAllLinksForSelection = true
         case .showFewerLinks:
@@ -156,7 +154,7 @@ extension GraphCanvasScreen {
             entityID: reference.entityID,
             entityName: reference.entityName
         )
-        graphChatLaunchCoordinator.launch(
+        graphChatLaunch(
             launch,
             presentationStyle: graphChatPresentationStyle
         )
@@ -180,7 +178,7 @@ extension GraphCanvasScreen {
         else {
             return
         }
-        graphChatLaunchCoordinator.launch(
+        graphChatLaunch(
             launch,
             presentationStyle: graphChatPresentationStyle
         )

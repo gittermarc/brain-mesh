@@ -11,14 +11,12 @@ extension GraphCanvasScreen {
         let oldPos = positions
 
         positions.removeAll(keepingCapacity: true)
-        velocities.removeAll(keepingCapacity: true)
         guard !nodes.isEmpty else { return }
 
         if preservePinned {
             for k in pinned {
                 if let p = oldPos[k] {
                     positions[k] = p
-                    velocities[k] = .zero
                 }
             }
         }
@@ -32,7 +30,6 @@ extension GraphCanvasScreen {
             let angle = (CGFloat(i) / CGFloat(max(1, entityNodes.count))) * (.pi * 2)
             let p = CGPoint(x: cos(angle) * radius, y: sin(angle) * radius)
             positions[n.key] = p
-            velocities[n.key] = .zero
         }
 
         let containment = edges.filter { $0.type == .containment }
@@ -48,7 +45,6 @@ extension GraphCanvasScreen {
         for a in attrNodes {
             if pinned.contains(a.key), positions[a.key] != nil { continue }
             positions[a.key] = positions[a.key] ?? CGPoint(x: 0, y: 0)
-            velocities[a.key] = .zero
         }
 
         let satRadius: CGFloat = 70
@@ -59,7 +55,6 @@ extension GraphCanvasScreen {
                 let angle = (CGFloat(i) / CGFloat(max(1, attrs.count))) * (.pi * 2)
                 let p = CGPoint(x: ep.x + cos(angle) * satRadius, y: ep.y + sin(angle) * satRadius)
                 positions[ak] = p
-                velocities[ak] = .zero
             }
         }
     }

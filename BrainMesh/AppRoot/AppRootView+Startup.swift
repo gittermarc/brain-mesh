@@ -40,11 +40,14 @@ extension AppRootView {
 
         // SF Symbols catalog loads lazily when opening the icon picker (no startup work here).
 
+        async let accountStatusRefresh: Void =
+            SyncRuntime.shared.refreshAccountStatus()
         await bootstrapGraphing()
         await enforceLockIfNeeded()
         await autoHydrateImagesIfDue()
         await enforceLockIfNeeded()
         await maybePresentOnboardingIfNeeded()
+        _ = await accountStatusRefresh
         scheduleSearchIndexForegroundReconciliation()
     }
 

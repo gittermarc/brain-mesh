@@ -1239,6 +1239,40 @@ final class GraphChatViewModel: ObservableObject {
         )
     }
 
+    /// Pauses chat-owned work while preserving the transcript and draft.
+    /// The session remains reusable when any explicit host becomes visible.
+    func suspendForVisibilityLoss() {
+        composerController.checkpointLatest()
+        presentationCleanupTask?.cancel()
+        presentationCleanupTask = nil
+        noticeTask?.cancel()
+        noticeTask = nil
+        cancelInterpretationCorrection()
+        correctionEditorTask?.cancel()
+        correctionEditorTask = nil
+        correctionApplyTask?.cancel()
+        correctionApplyTask = nil
+        suggestionsPublicationTask?.cancel()
+        suggestionsPublicationTask = nil
+        suggestionsSnapshotController.cancel(
+            clearCachedSnapshot: false
+        )
+        isLoadingSuggestions = false
+        messageActionController.cancelGeneration(
+            discardSession: false,
+            showCancellationNotice: false
+        )
+    }
+
+    func releaseTransientCapacityForMemoryPressure() {
+        suspendForVisibilityLoss()
+        suggestionsSnapshotController.cancel(
+            clearCachedSnapshot: true
+        )
+        requestedSuggestionsKey = nil
+        suggestionsSnapshot = nil
+    }
+
     /// Multiple visible hosts can share this memory-only view model on iPad.
     func presentationDidAppear(_ presentationID: UUID) {
         presentationCleanupTask?.cancel()

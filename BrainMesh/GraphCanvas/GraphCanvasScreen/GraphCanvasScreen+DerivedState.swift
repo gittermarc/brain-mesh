@@ -29,6 +29,10 @@ extension GraphCanvasScreen {
         input: GraphCanvasDerivedStateInputSnapshot,
         reason: GraphCanvasDerivedStateTriggerReason
     ) {
+        guard tabRouter.selection == .graph,
+              scenePhase == .active else {
+            return
+        }
         derivedStateScheduler.schedule(
             input: input,
             graphID: activeGraphID,
@@ -41,6 +45,10 @@ extension GraphCanvasScreen {
 
     @MainActor
     func resumeDerivedStateAfterGraphLoad() {
+        guard tabRouter.selection == .graph,
+              scenePhase == .active else {
+            return
+        }
         derivedStateScheduler.resumeAfterGraphTransition(
             input: derivedStateInputSnapshot,
             graphID: activeGraphID,

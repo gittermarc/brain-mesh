@@ -27,6 +27,7 @@ struct BrainMeshApp: App {
     @StateObject private var graphCopilotWorkspaceCoordinator: GraphCopilotWorkspaceCoordinator
 
     private let sharedModelContainer: ModelContainer
+    private let graphChatLaunchAction: GraphChatLaunchAction
 
     init() {
         let graphLockCoordinator = GraphLockCoordinator()
@@ -83,10 +84,12 @@ struct BrainMeshApp: App {
         _graphChatLaunchCoordinator = StateObject(wrappedValue: graphChatLaunchCoordinator)
         _graphChatSessionStore = StateObject(wrappedValue: graphChatSessionStore)
         _graphCopilotWorkspaceCoordinator = StateObject(wrappedValue: graphCopilotWorkspaceCoordinator)
-
-        // Refresh iCloud account status once on launch (shows up in Settings → Sync).
-        Task.detached(priority: .utility) {
-            await SyncRuntime.shared.refreshAccountStatus()
+        graphChatLaunchAction = GraphChatLaunchAction {
+            [weak graphChatLaunchCoordinator] launch, style in
+            graphChatLaunchCoordinator?.launch(
+                launch,
+                presentationStyle: style
+            )
         }
 
         // App-level loader/hydrator configuration (off-main).
@@ -108,6 +111,10 @@ struct BrainMeshApp: App {
                 .environmentObject(recentNodeStore)
                 .environmentObject(entitiesHomeRouting)
                 .environmentObject(graphChatLaunchCoordinator)
+                .environment(
+                    \.graphChatLaunchAction,
+                    graphChatLaunchAction
+                )
                 .environmentObject(graphChatSessionStore)
                 .environmentObject(graphCopilotWorkspaceCoordinator)
         }

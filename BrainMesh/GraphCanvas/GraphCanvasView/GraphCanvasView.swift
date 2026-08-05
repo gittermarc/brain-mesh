@@ -31,7 +31,8 @@ struct GraphCanvasView: View {
     let workMode: WorkMode
     let collisionStrength: CGFloat
 
-    /// External gate: only run the physics timer while the canvas is actually visible and the app is active.
+    /// External gate: only own a simulation task while the Canvas is visible,
+    /// selected, uncovered, and the app is active.
     /// (GraphCanvasScreen is the source of truth for this.)
     let simulationAllowed: Bool
 
@@ -43,7 +44,6 @@ struct GraphCanvasView: View {
     let onTapSelectedThumbnail: () -> Void
 
     @Binding var positions: [NodeKey: CGPoint]
-    @Binding var velocities: [NodeKey: CGVector]
     @Binding var pinned: Set<NodeKey>
     @Binding var selection: NodeKey?
 
@@ -55,6 +55,7 @@ struct GraphCanvasView: View {
 
     // NOTE: Zugriff in Extensions -> nicht `private` (private == file-scope)
     @State var physicsRuntime = GraphPhysicsRuntime()
+    @State var dynamicFrame: GraphCanvasDynamicFrameCache = .empty
     @State var panStart: CGSize = .zero
     @State var scaleStart: CGFloat = 1.0
 
@@ -78,12 +79,21 @@ struct GraphCanvasView: View {
             let theme = self.theme
             let scheme = colorScheme
             let nodeKeys: [NodeKey] = nodes.map { $0.key }
+            let dynamicFrameInput = makeDynamicFrameInput(
+                size: size
+            )
 
             let canvas = ZStack {
                 GraphCanvasBackground(theme: theme)
 
                 Canvas { context, _ in
-                    renderCanvas(in: context, size: size, alphas: alphas, theme: theme, colorScheme: scheme)
+                    renderCanvas(
+                        in: context,
+                        frame: dynamicFrame,
+                        alphas: alphas,
+                        theme: theme,
+                        colorScheme: scheme
+                    )
                 }
 
                 // ✅ Selection Thumbnail Overlay (nur near + nur wenn Bild vorhanden)
@@ -103,6 +113,7 @@ struct GraphCanvasView: View {
             let lifecycleCanvas = interactiveCanvas
                 .onAppear {
                     updateSimulationState()
+                    prepareDynamicFrame(dynamicFrameInput)
                     refreshThumbnailCache()
                 }
                 .onDisappear { stopSimulation() }
@@ -111,6 +122,17 @@ struct GraphCanvasView: View {
                 }
                 .onChange(of: graphID) { _, _ in
                     wakeSimulationIfNeeded(reason: .graphChanged)
+                }
+                .onChange(of: dynamicFrameInput) { _, input in
+                    prepareDynamicFrame(input)
+                }
+                .onReceive(
+                    NotificationCenter.default.publisher(
+                        for: UIApplication
+                            .didReceiveMemoryWarningNotification
+                    )
+                ) { _ in
+                    physicsRuntime.handleMemoryPressure()
                 }
 
             let graphInputCanvas = lifecycleCanvas
@@ -159,9 +181,6 @@ struct GraphCanvasView: View {
 
             physicsConfigurationCanvas
                 .onChange(of: positions) { _, _ in
-                    externalPhysicsStateDidChange()
-                }
-                .onChange(of: velocities) { _, _ in
                     externalPhysicsStateDidChange()
                 }
                 .onChange(of: selectedImagePath) { _, _ in refreshThumbnailCache() }

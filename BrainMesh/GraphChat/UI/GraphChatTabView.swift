@@ -16,6 +16,7 @@ private struct GraphChatPendingBetaQuestionSelection {
 
 struct GraphChatTabView: View {
     @Environment(\.modelContext) private var modelContext
+    @Environment(\.scenePhase) private var scenePhase
     @EnvironmentObject private var launchCoordinator: GraphChatLaunchCoordinator
     @EnvironmentObject private var sessionStore: GraphChatSessionStore
     @EnvironmentObject private var graphCopilotWorkspaceCoordinator: GraphCopilotWorkspaceCoordinator
@@ -24,6 +25,8 @@ struct GraphChatTabView: View {
     @EnvironmentObject private var commandCenter: CommandCenterCoordinator
     @EnvironmentObject private var graphJump: GraphJumpCoordinator
     @EnvironmentObject private var tabRouter: RootTabRouter
+
+    let host: GraphChatTabHost
 
     @AppStorage(BMAppStorageKeys.activeGraphID) private var activeGraphIDString: String = ""
     @Query(sort: \MetaGraph.name) private var graphs: [MetaGraph]
@@ -44,9 +47,24 @@ struct GraphChatTabView: View {
     @State private var launchValidationState: GraphChatTabLaunchValidationState = .noRequest
     @State private var presentedViewModel: GraphChatViewModel?
     @State private var presentedViewModelRequestID: UUID?
+    @State private var visibilityOwnerID = UUID()
+    @State private var isMounted = false
+
+    init(host: GraphChatTabHost = .rootTab) {
+        self.host = host
+    }
 
     private var activeGraphID: UUID? {
         UUID(uuidString: activeGraphIDString)
+    }
+
+    private var isHostVisible: Bool {
+        GraphChatHostVisibilityPolicy.isVisible(
+            host: host,
+            selectedTab: tabRouter.selection,
+            isSceneActive: scenePhase == .active,
+            isMounted: isMounted
+        )
     }
 
     private var activeGraph: MetaGraph? {
@@ -158,13 +176,31 @@ struct GraphChatTabView: View {
                 }
             )
         }
-        .task(id: presentation.launchValidationTaskIdentity) {
+        .task(
+            id: GraphChatVisibilityTaskIdentity(
+                base: presentation.launchValidationTaskIdentity,
+                isVisible: isHostVisible
+            )
+        ) {
+            guard isHostVisible else { return }
             validateLaunchRequest()
         }
-        .task(id: presentation.runtimeTaskIdentity) {
+        .task(
+            id: GraphChatVisibilityTaskIdentity(
+                base: presentation.runtimeTaskIdentity,
+                isVisible: isHostVisible
+            )
+        ) {
+            guard isHostVisible else { return }
             await refreshRuntimeStates()
         }
-        .task(id: presentation.accessTaskIdentity) {
+        .task(
+            id: GraphChatVisibilityTaskIdentity(
+                base: presentation.accessTaskIdentity,
+                isVisible: isHostVisible
+            )
+        ) {
+            guard isHostVisible else { return }
             await synchronizeSessionAccess()
             guard Task.isCancelled == false else {
                 return
@@ -177,6 +213,24 @@ struct GraphChatTabView: View {
             }
             synchronizePresentedViewModel()
             await loadPreviewSuggestionsIfAllowed()
+        }
+        .onAppear {
+            isMounted = true
+            synchronizeHostVisibility(
+                GraphChatHostVisibilityPolicy.isVisible(
+                    host: host,
+                    selectedTab: tabRouter.selection,
+                    isSceneActive: scenePhase == .active,
+                    isMounted: true
+                )
+            )
+        }
+        .onDisappear {
+            isMounted = false
+            synchronizeHostVisibility(false)
+        }
+        .onChange(of: isHostVisible) { _, isVisible in
+            synchronizeHostVisibility(isVisible)
         }
         .onChange(of: activeGraphIDString) { _, _ in
             clearGraphScopedPresentationState()
@@ -203,6 +257,7 @@ struct GraphChatTabView: View {
     }
 
     private func validateLaunchRequest() {
+        guard isHostVisible else { return }
         let presentation = presentationModel
         let sourceRequestID = presentation.sourceRequest?.id
         let activeGraphID = presentation.activeGraphID
@@ -234,6 +289,7 @@ struct GraphChatTabView: View {
     }
 
     private func refreshRuntimeStates() async {
+        guard isHostVisible else { return }
         await GraphChatTabAccessCoordinator.refreshRuntimeStates(
             sessionStore: sessionStore,
             contextProvider: {
@@ -248,6 +304,7 @@ struct GraphChatTabView: View {
     }
 
     private func synchronizeSessionAccess() async {
+        guard isHostVisible else { return }
         let presentation = presentationModel
         await GraphChatTabAccessCoordinator.synchronizeSessionAccess(
             sessionStore: sessionStore,
@@ -461,6 +518,7 @@ struct GraphChatTabView: View {
     }
 
     private func loadPreviewSuggestionsIfAllowed() async {
+        guard isHostVisible else { return }
         let presentation = presentationModel
         guard presentation.accessDecision.route == .proRequired,
               presentation.isGraphUnlocked,
@@ -541,6 +599,18 @@ struct GraphChatTabView: View {
             if presentationModel.activeGraphID == activeGraphID {
                 previewErrorMessage = "Beispielfragen konnten für diesen Graphen nicht geladen werden."
             }
+        }
+    }
+
+    private func synchronizeHostVisibility(_ isVisible: Bool) {
+        sessionStore.setPresentationVisibility(
+            ownerID: visibilityOwnerID,
+            isVisible: isVisible
+        )
+        if !isVisible {
+            previewSuggestionsController.cancel(
+                clearCachedSnapshot: false
+            )
         }
     }
 

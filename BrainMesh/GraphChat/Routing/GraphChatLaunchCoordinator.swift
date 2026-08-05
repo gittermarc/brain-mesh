@@ -7,6 +7,7 @@
 
 import Combine
 import Foundation
+import SwiftUI
 
 nonisolated enum GraphChatPresentationStyle: String, Hashable, Sendable {
     case rootTab
@@ -48,6 +49,46 @@ nonisolated struct GraphChatLaunchRequest: Identifiable, Hashable, Sendable {
                     .default.maximumQuestionLength
             )
         )
+    }
+}
+
+/// Narrow, non-observable launch dependency for views that only initiate a
+/// chat. Draft and streaming changes therefore do not invalidate the caller.
+nonisolated struct GraphChatLaunchAction: Sendable {
+    private let handler:
+        @MainActor @Sendable (
+            GraphChatContextLaunch,
+            GraphChatPresentationStyle
+        ) -> Void
+
+    init(
+        handler: @escaping @MainActor @Sendable (
+            GraphChatContextLaunch,
+            GraphChatPresentationStyle
+        ) -> Void
+    ) {
+        self.handler = handler
+    }
+
+    @MainActor
+    func callAsFunction(
+        _ launch: GraphChatContextLaunch,
+        presentationStyle: GraphChatPresentationStyle
+    ) {
+        handler(launch, presentationStyle)
+    }
+}
+
+private nonisolated struct GraphChatLaunchActionKey:
+    EnvironmentKey
+{
+    static let defaultValue = GraphChatLaunchAction { _, _ in }
+}
+
+extension EnvironmentValues {
+    var graphChatLaunchAction: GraphChatLaunchAction {
+        get { self[GraphChatLaunchActionKey.self] }
+        set { self[GraphChatLaunchActionKey.self] = newValue }
     }
 }
 

@@ -46,6 +46,12 @@ struct GraphCanvasDynamicFrameBuilderTests {
                     scale: scale
                 )
         )
+        #expect(frame.preparedNodes.map(\.node.key) == [alpha.key, beta.key])
+        #expect(
+            frame.preparedNodes[0].labelOffset
+                == snapshot.labelOffsetsByNodeKey[alpha.key]
+        )
+        #expect(frame.preparedEdges.isEmpty)
     }
 
     @Test
@@ -192,6 +198,12 @@ struct GraphCanvasDynamicFrameBuilderTests {
         #expect(frame.screenPoints[selection.key] != nil)
         #expect(frame.screenPoints[neighbor.key] != nil)
         #expect(frame.screenPoints[hidden.key] == nil)
+        #expect(
+            frame.preparedNodes.map(\.node.key)
+                == [selection.key, neighbor.key]
+        )
+        #expect(frame.preparedEdges.map(\.edge) == [visibleEdge])
+        #expect(frame.preparedEdges[0].opacity > 0)
         #expect(lens.nodeOpacity(selection.key) == 1)
         #expect(lens.nodeOpacity(neighbor.key) == 0.92)
         #expect(
@@ -261,6 +273,7 @@ struct GraphCanvasDynamicFrameBuilderTests {
         #expect(frame.screenPoints[beta.key] != nil)
         #expect(frame.defensiveEndpointFallbackCount == 1)
         #expect(frame.skippedEdgeEndpointCount == 0)
+        #expect(frame.preparedEdges.count == 1)
         #expect(staleSnapshot == snapshotBeforeFrame)
         #expect(
             staleSnapshot.nodeKeyByIdentifier[beta.key.identifier] == nil
@@ -289,6 +302,7 @@ struct GraphCanvasDynamicFrameBuilderTests {
         #expect(frame.screenPoints[unknown.key] == nil)
         #expect(frame.defensiveEndpointFallbackCount == 0)
         #expect(frame.skippedEdgeEndpointCount == 1)
+        #expect(frame.preparedEdges.isEmpty)
     }
 
     @Test
@@ -361,6 +375,8 @@ struct GraphCanvasDynamicFrameBuilderTests {
 
             #expect(frame.defensiveEndpointFallbackCount == 0)
             #expect(frame.skippedEdgeEndpointCount == 0)
+            #expect(frame.preparedNodes.count == 2)
+            #expect(frame.preparedEdges.count == 1)
             #expect(
                 initialResolution.snapshot.labelOffsetsByNodeKey[beta.key]
                     != nil

@@ -10,9 +10,55 @@ import Foundation
 /// Focus, or visibility. Static label and identifier lookups are intentionally
 /// absent and remain owned by `GraphCanvasStaticRenderSnapshot`.
 nonisolated struct GraphCanvasDynamicFrameCache: Equatable, Sendable {
+    static let empty = GraphCanvasDynamicFrameCache(
+        screenPoints: [:],
+        preparedNodes: [],
+        preparedEdges: [],
+        defensiveEndpointFallbackCount: 0,
+        skippedEdgeEndpointCount: 0
+    )
+
     let screenPoints: [NodeKey: CGPoint]
+    let preparedNodes: [GraphCanvasPreparedDynamicNode]
+    let preparedEdges: [GraphCanvasPreparedDynamicEdge]
     let defensiveEndpointFallbackCount: Int
     let skippedEdgeEndpointCount: Int
+}
+
+nonisolated struct GraphCanvasPreparedDynamicNode:
+    Equatable,
+    Sendable
+{
+    let node: GraphNode
+    let screenPoint: CGPoint
+    let labelOffset: CGPoint
+    let opacity: CGFloat
+    let isRelevantInSpotlight: Bool
+    let isMatchedDetailsAttribute: Bool
+}
+
+nonisolated struct GraphCanvasPreparedDynamicEdge:
+    Equatable,
+    Sendable
+{
+    let edge: GraphEdge
+    let firstPoint: CGPoint
+    let secondPoint: CGPoint
+    let opacity: CGFloat
+}
+
+/// Main-Actor render preparation input. SwiftUI compares this value at the
+/// view boundary; the Canvas draw closure consumes only the finished cache.
+@MainActor
+struct GraphCanvasDynamicFrameInput: Equatable {
+    let nodes: [GraphNode]
+    let drawEdges: [GraphEdge]
+    let positions: [NodeKey: CGPoint]
+    let center: CGPoint
+    let scale: CGFloat
+    let lens: LensContext
+    let detailsFocusRenderPlan: GraphDetailsRenderPlan
+    let staticSnapshot: GraphCanvasStaticRenderSnapshot
 }
 
 nonisolated struct GraphCanvasResolvedEdgeEndpoints: Equatable, Sendable {
@@ -23,6 +69,22 @@ nonisolated struct GraphCanvasResolvedEdgeEndpoints: Equatable, Sendable {
 
 @MainActor
 enum GraphCanvasDynamicFrameBuilder {
+    static func build(
+        input: GraphCanvasDynamicFrameInput
+    ) -> GraphCanvasDynamicFrameCache {
+        build(
+            nodes: input.nodes,
+            drawEdges: input.drawEdges,
+            positions: input.positions,
+            center: input.center,
+            scale: input.scale,
+            lens: input.lens,
+            detailsFocusRenderPlan:
+                input.detailsFocusRenderPlan,
+            staticSnapshot: input.staticSnapshot
+        )
+    }
+
     static func build(
         nodes: [GraphNode],
         drawEdges: [GraphEdge],
@@ -35,6 +97,8 @@ enum GraphCanvasDynamicFrameBuilder {
     ) -> GraphCanvasDynamicFrameCache {
         var screenPoints: [NodeKey: CGPoint] = [:]
         screenPoints.reserveCapacity(nodes.count + (drawEdges.count * 2))
+        var preparedNodes: [GraphCanvasPreparedDynamicNode] = []
+        preparedNodes.reserveCapacity(nodes.count)
 
         for node in nodes {
             let key = node.key
@@ -42,14 +106,36 @@ enum GraphCanvasDynamicFrameBuilder {
             if detailsFocusRenderPlan.isHidden(key) { continue }
 
             if let position = positions[key] {
-                screenPoints[key] = screenPoint(
+                let point = screenPoint(
                     worldPoint: position,
                     center: center,
                     scale: scale
                 )
+                screenPoints[key] = point
+                preparedNodes.append(
+                    GraphCanvasPreparedDynamicNode(
+                        node: node,
+                        screenPoint: point,
+                        labelOffset:
+                            staticSnapshot
+                                .labelOffsetsByNodeKey[key]
+                            ?? GraphCanvasStaticRenderSnapshotBuilder
+                                .labelOffset(for: key),
+                        opacity: lens.nodeOpacity(key)
+                            * detailsFocusRenderPlan
+                                .nodeOpacityMultiplier(for: key),
+                        isRelevantInSpotlight:
+                            lens.distance[key] != nil,
+                        isMatchedDetailsAttribute:
+                            detailsFocusRenderPlan
+                                .isMatchedAttribute(key)
+                    )
+                )
             }
         }
 
+        var preparedEdges: [GraphCanvasPreparedDynamicEdge] = []
+        preparedEdges.reserveCapacity(drawEdges.count)
         var defensiveEndpointFallbackCount = 0
         var skippedEdgeEndpointCount = 0
 
@@ -91,10 +177,33 @@ enum GraphCanvasDynamicFrameBuilder {
                     scale: scale
                 )
             }
+
+            guard let firstPoint = screenPoints[endpoints.a],
+                  let secondPoint = screenPoints[endpoints.b] else {
+                skippedEdgeEndpointCount += 1
+                continue
+            }
+            let opacity =
+                lens.edgeOpacity(a: edge.a, b: edge.b) *
+                detailsFocusRenderPlan.edgeOpacityMultiplier(
+                    a: edge.a,
+                    b: edge.b
+                )
+            guard opacity > 0.001 else { continue }
+            preparedEdges.append(
+                GraphCanvasPreparedDynamicEdge(
+                    edge: edge,
+                    firstPoint: firstPoint,
+                    secondPoint: secondPoint,
+                    opacity: opacity
+                )
+            )
         }
 
         return GraphCanvasDynamicFrameCache(
             screenPoints: screenPoints,
+            preparedNodes: preparedNodes,
+            preparedEdges: preparedEdges,
             defensiveEndpointFallbackCount: defensiveEndpointFallbackCount,
             skippedEdgeEndpointCount: skippedEdgeEndpointCount
         )

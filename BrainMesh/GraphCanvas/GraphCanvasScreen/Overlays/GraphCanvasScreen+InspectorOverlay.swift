@@ -363,9 +363,6 @@ extension GraphCanvasScreen {
     func stabilizeLayout() {
         let all = Set(nodes.map(\.key))
         pinned = all
-        for k in all {
-            velocities[k] = .zero
-        }
     }
 }
 

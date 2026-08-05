@@ -16,7 +16,7 @@ struct GraphCanvasScreen: View {
     @EnvironmentObject var onboarding: OnboardingCoordinator
     // NOTE: Must not be `private` because jump handling touches helpers in separate extension files.
     @EnvironmentObject var graphJump: GraphJumpCoordinator
-    @EnvironmentObject var graphChatLaunchCoordinator: GraphChatLaunchCoordinator
+    @Environment(\.graphChatLaunchAction) var graphChatLaunch
     @EnvironmentObject var graphCopilotWorkspaceCoordinator: GraphCopilotWorkspaceCoordinator
     @EnvironmentObject var tabRouter: RootTabRouter
 
@@ -67,7 +67,6 @@ struct GraphCanvasScreen: View {
     @State var nodes: [GraphNode] = []
     @State var edges: [GraphEdge] = []  // ✅ alle Kanten (Physik / Daten)
     @State var positions: [NodeKey: CGPoint] = [:]
-    @State var velocities: [NodeKey: CGVector] = [:]
 
     // ✅ Render caches (kein SwiftData-Fetch im Render-Pfad)
     @State var labelCache: [NodeKey: String] = [:]
@@ -122,7 +121,7 @@ struct GraphCanvasScreen: View {
 
     // ✅ Derived render state (cached)
     // Previously computed inside `body` on every re-render.
-    // During physics ticks, `positions/velocities` change frequently which triggers many re-renders.
+    // During published physics snapshots, `positions` changes and triggers a re-render.
     // Caching keeps the per-frame work minimal.
     @State var drawEdgesCache: [GraphEdge] = []
     @State var lensCache: LensContext = LensContext.build(
@@ -159,12 +158,13 @@ struct GraphCanvasScreen: View {
     @State var dismissedLimitNoticeFingerprint: String?
     @State var viewPresetMessage: String?
 
-    // ✅ Visibility gate for physics timer (P0.2)
+    // ✅ Authoritative visibility gate for the simulation actor.
     @State var isScreenVisible: Bool = false
 
     // ✅ Cancellable loads (avoid overlapping work when multiple triggers fire quickly)
     // NOTE: Must not be `private` because the load pipeline lives in extension files.
     @State var loadTask: Task<Void, Never>?
+    @State var graphLoadPending = false
 
     // ✅ Stale-result guard (only commit if token matches the latest scheduled load)
     @State var currentLoadToken: UUID = UUID()

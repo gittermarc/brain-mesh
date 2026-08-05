@@ -51,18 +51,39 @@ extension GraphCanvasView {
         )
     }
 
-    func renderCanvas(in context: GraphicsContext, size: CGSize, alphas: ZoomAlphas, theme: GraphTheme, colorScheme: ColorScheme) {
-        let center = CGPoint(x: size.width / 2 + pan.width, y: size.height / 2 + pan.height)
-        let frame = GraphCanvasDynamicFrameBuilder.build(
+    func makeDynamicFrameInput(
+        size: CGSize
+    ) -> GraphCanvasDynamicFrameInput {
+        GraphCanvasDynamicFrameInput(
             nodes: nodes,
             drawEdges: drawEdges,
             positions: positions,
-            center: center,
+            center: CGPoint(
+                x: size.width / 2 + pan.width,
+                y: size.height / 2 + pan.height
+            ),
             scale: scale,
             lens: lens,
             detailsFocusRenderPlan: detailsFocusRenderPlan,
             staticSnapshot: staticRenderSnapshot
         )
+    }
+
+    func prepareDynamicFrame(
+        _ input: GraphCanvasDynamicFrameInput
+    ) {
+        dynamicFrame = GraphCanvasDynamicFrameBuilder.build(
+            input: input
+        )
+    }
+
+    func renderCanvas(
+        in context: GraphicsContext,
+        frame: GraphCanvasDynamicFrameCache,
+        alphas: ZoomAlphas,
+        theme: GraphTheme,
+        colorScheme: ColorScheme
+    ) {
         drawEdges(
             in: context,
             frame: frame,
@@ -74,7 +95,6 @@ extension GraphCanvasView {
         drawNodes(
             in: context,
             frame: frame,
-            staticSnapshot: staticRenderSnapshot,
             alphas: alphas,
             theme: theme,
             colorScheme: colorScheme

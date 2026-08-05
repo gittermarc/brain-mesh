@@ -6,12 +6,34 @@
 import CoreGraphics
 import Foundation
 
-nonisolated struct GraphPhysicsExternalState:
+/// The only dynamic physics value allowed to cross into SwiftUI.
+///
+/// Storage stays contiguous while it crosses the actor boundary. The
+/// Main-Actor adapter materializes the dictionary exactly once, immediately
+/// before committing a relevant snapshot to the view state.
+nonisolated struct GraphPhysicsPositionSnapshot:
     Equatable,
     Sendable
 {
-    let positions: [NodeKey: CGPoint]
-    let velocities: [NodeKey: CGVector]
+    let graphID: UUID?
+    let identity: GraphPhysicsRuntimeIdentity
+    let commandRevision: UInt64
+    let snapshotRevision: UInt64
+    let orderedNodeKeys: [NodeKey]
+    let positions: [CGPoint]
+    let positionPresence: [Bool]
+
+    var positionsByNodeKey: [NodeKey: CGPoint] {
+        var result: [NodeKey: CGPoint] = [:]
+        result.reserveCapacity(orderedNodeKeys.count)
+        for index in orderedNodeKeys.indices
+        where positionPresence.indices.contains(index)
+            && positionPresence[index]
+            && positions.indices.contains(index) {
+            result[orderedNodeKeys[index]] = positions[index]
+        }
+        return result
+    }
 }
 
 nonisolated struct GraphPhysicsRuntimeIdentity:
@@ -125,6 +147,7 @@ nonisolated enum GraphPhysicsRuntimeWakeReason:
     case collisionStrength
     case externalState
     case graphChanged
+    case memoryPressure
 }
 
 nonisolated struct GraphPhysicsSchedulingToken:
@@ -136,6 +159,7 @@ nonisolated struct GraphPhysicsSchedulingToken:
     let sequence: UInt64
 }
 
+/// Diagnostic counters are actor-owned. They contain no graph content.
 nonisolated struct GraphPhysicsRuntimeMetrics:
     Equatable,
     Sendable
@@ -143,6 +167,7 @@ nonisolated struct GraphPhysicsRuntimeMetrics:
     var engineTickCount = 0
     var positionCommitCount = 0
     var skippedCommitCount = 0
+    /// Kept as a migration assertion: this must remain zero.
     var velocityCommitCount = 0
     var forcedCommitCount = 0
     var activeTickCount = 0
@@ -150,10 +175,19 @@ nonisolated struct GraphPhysicsRuntimeMetrics:
     var quietTickCount = 0
     var sleepCount = 0
     var wakeCount = 0
+    var pauseCount = 0
+    var resumeCount = 0
+    var graphSwitchCount = 0
+    var memoryPressureCount = 0
+    var coalescedSnapshotCount = 0
+    var droppedSnapshotCount = 0
     var workspaceFullResetCount = 0
     var workspaceReuseCount = 0
     var externalResynchronizationCount = 0
     var maximumSimultaneouslyScheduledTickCount = 0
+    var totalTheoreticalExactPairCount = 0
+    var totalExactCheckedNodePairCount = 0
+    var totalSpringCount = 0
     var lastSleepEngineTick: Int?
     var lastStepMetrics: GraphPhysicsStepMetrics?
 
@@ -176,4 +210,44 @@ nonisolated struct GraphPhysicsRuntimeState:
     let ticksSinceLastCommit: Int
     let maximumCumulativeUnpublishedPositionDelta: CGFloat
     let stableQuietSamples: Int
+    let commandRevision: UInt64
+}
+
+/// Full internal state exists only for deterministic tests and diagnostics.
+/// It is never accepted by GraphPhysicsRuntime's SwiftUI commit boundary.
+nonisolated struct GraphPhysicsSimulationDebugSnapshot:
+    Equatable,
+    Sendable
+{
+    let positions: [NodeKey: CGPoint]
+    let velocities: [NodeKey: CGVector]
+    let indexByNodeKey: [NodeKey: Int]
+    let state: GraphPhysicsRuntimeState
+    let metrics: GraphPhysicsRuntimeMetrics
+    let workspaceCapacity:
+        GraphPhysicsWorkspaceCapacitySnapshot
+}
+
+nonisolated struct GraphPhysicsSimulationCommand: Sendable {
+    let input: GraphPhysicsRuntimeInput
+    let identity: GraphPhysicsRuntimeIdentity
+    let externalPositions: [NodeKey: CGPoint]
+    let initialVelocities: [NodeKey: CGVector]
+    let simulationAllowed: Bool
+    let reason: GraphPhysicsRuntimeWakeReason
+    let commandRevision: UInt64
+}
+
+nonisolated protocol GraphPhysicsRuntimeClock: Sendable {
+    func sleep(for interval: TimeInterval) async throws
+}
+
+nonisolated struct ContinuousGraphPhysicsRuntimeClock:
+    GraphPhysicsRuntimeClock
+{
+    func sleep(for interval: TimeInterval) async throws {
+        try await ContinuousClock().sleep(
+            for: .seconds(interval)
+        )
+    }
 }

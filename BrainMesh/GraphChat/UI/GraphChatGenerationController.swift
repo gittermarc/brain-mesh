@@ -435,6 +435,9 @@ final class GraphChatGenerationController {
             if let metric {
                 await observability.record(.request(metric))
             }
+            if isActive(operationID) {
+                finish(operationID)
+            }
             return
         }
 
@@ -512,6 +515,9 @@ final class GraphChatGenerationController {
                 )
             )
         )
+        if isActive(operationID) {
+            finish(operationID)
+        }
     }
 
     private func accept(
@@ -559,9 +565,8 @@ final class GraphChatGenerationController {
         // history boundary must finish even if the user starts the next turn
         // while this task is suspended in the completion callback.
         await saveHistory(boundary: .terminal)
-        if isActive(operationID) {
-            finish(operationID)
-        }
+        // The visible generation remains active until the coordinator returns
+        // its final statistics and terminal observability has been recorded.
         return true
     }
 

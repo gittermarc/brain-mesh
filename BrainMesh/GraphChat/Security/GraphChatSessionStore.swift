@@ -8,6 +8,7 @@
 import Combine
 import Foundation
 import SwiftData
+import os
 
 private nonisolated struct GraphChatIndexRefreshRequest: Equatable, Sendable {
     let graphScope: GraphScope?
@@ -44,6 +45,8 @@ final class GraphChatSessionStore: ObservableObject {
     private var availabilityRefreshTask: Task<Void, Never>?
     private var indexRefreshTask: Task<Void, Never>?
     private var indexRefreshRequest: GraphChatIndexRefreshRequest?
+    private var visibilityCleanupTask: Task<Void, Never>?
+    private var visiblePresentationOwnerIDs: Set<UUID> = []
     private var accessRevision: UInt64 = 0
 
     init(
@@ -126,6 +129,7 @@ final class GraphChatSessionStore: ObservableObject {
         mutationTask?.cancel()
         availabilityRefreshTask?.cancel()
         indexRefreshTask?.cancel()
+        visibilityCleanupTask?.cancel()
     }
 
     var isReconciliationRunning: Bool {
@@ -134,6 +138,55 @@ final class GraphChatSessionStore: ObservableObject {
 
     var hasActiveSession: Bool {
         currentViewModel != nil
+    }
+
+    var visiblePresentationOwnerCount: Int {
+        visiblePresentationOwnerIDs.count
+    }
+
+    func setPresentationVisibility(
+        ownerID: UUID,
+        isVisible: Bool
+    ) {
+        let wasVisible = !visiblePresentationOwnerIDs.isEmpty
+        if isVisible {
+            visiblePresentationOwnerIDs.insert(ownerID)
+        } else {
+            visiblePresentationOwnerIDs.remove(ownerID)
+        }
+        let isNowVisible = !visiblePresentationOwnerIDs.isEmpty
+        guard wasVisible != isNowVisible else { return }
+
+        if isNowVisible {
+            visibilityCleanupTask?.cancel()
+            visibilityCleanupTask = nil
+            BMLog.chat.debug(
+                "chat_visibility state=visible owners=\(self.visiblePresentationOwnerIDs.count, privacy: .public)"
+            )
+        } else {
+            BMLog.chat.debug(
+                "chat_visibility state=hidden owners=0"
+            )
+            visibilityCleanupTask?.cancel()
+            visibilityCleanupTask = Task { @MainActor [weak self] in
+                await Task.yield()
+                guard let self,
+                      Task.isCancelled == false,
+                      self.visiblePresentationOwnerIDs.isEmpty else {
+                    return
+                }
+                self.visibilityCleanupTask = nil
+                self.cancelChatOwnedWorkForVisibilityLoss()
+            }
+        }
+    }
+
+    func handleMemoryPressure() {
+        BMLog.chat.debug("chat_lifecycle memory_pressure")
+        visibilityCleanupTask?.cancel()
+        visibilityCleanupTask = nil
+        cancelChatOwnedWorkForVisibilityLoss()
+        currentViewModel?.releaseTransientCapacityForMemoryPressure()
     }
 
     func refreshAvailability() async {
@@ -179,11 +232,7 @@ final class GraphChatSessionStore: ObservableObject {
                 indexRefreshRequest.graphScope == request.graphScope
                 && (indexRefreshRequest.prepareIfNeeded || request.prepareIfNeeded == false)
             if existingRequestSatisfiesCurrent {
-                await withTaskCancellationHandler {
-                    await indexRefreshTask.value
-                } onCancel: {
-                    indexRefreshTask.cancel()
-                }
+                await indexRefreshTask.value
                 return
             }
             indexRefreshTask.cancel()
@@ -228,11 +277,7 @@ final class GraphChatSessionStore: ObservableObject {
         }
         indexRefreshRequest = request
         indexRefreshTask = refreshTask
-        await withTaskCancellationHandler {
-            await refreshTask.value
-        } onCancel: {
-            refreshTask.cancel()
-        }
+        await refreshTask.value
         if indexRefreshRequest == request {
             indexRefreshTask = nil
             indexRefreshRequest = nil
@@ -419,8 +464,18 @@ final class GraphChatSessionStore: ObservableObject {
         }
     }
 
+    private func cancelChatOwnedWorkForVisibilityLoss() {
+        availabilityRefreshTask?.cancel()
+        availabilityRefreshTask = nil
+        indexRefreshTask?.cancel()
+        indexRefreshTask = nil
+        indexRefreshRequest = nil
+        currentViewModel?.suspendForVisibilityLoss()
+    }
+
     func handleExternalSchemaReconciliation(graphID: UUID) {
         guard currentScope?.graphScope.graphID == graphID,
+              !visiblePresentationOwnerIDs.isEmpty,
               let currentViewModel else {
             return
         }
@@ -531,7 +586,9 @@ final class GraphChatSessionStore: ObservableObject {
             let changesSchema = delivery.batch.events.contains {
                 $0.schemaImpact == .structure
             }
-            if changesSchema, let currentViewModel {
+            if changesSchema,
+               !visiblePresentationOwnerIDs.isEmpty,
+               let currentViewModel {
                 Task { @MainActor in
                     await currentViewModel
                         .refreshSchemaAfterAuthoritativeChange()

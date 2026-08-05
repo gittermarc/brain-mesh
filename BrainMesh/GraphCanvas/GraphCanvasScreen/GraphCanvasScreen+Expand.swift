@@ -204,7 +204,6 @@ extension GraphCanvasScreen {
                 let angle = (CGFloat(i) / CGFloat(max(1, newNodeKeys.count))) * (.pi * 2)
                 let p = CGPoint(x: cos(angle) * 140, y: sin(angle) * 140)
                 positions[k] = p
-                velocities[k] = .zero
             }
             return
         }
@@ -216,7 +215,6 @@ extension GraphCanvasScreen {
             let r = rBase + CGFloat((i % 4)) * 14
             let p = CGPoint(x: cp.x + cos(angle) * r, y: cp.y + sin(angle) * r)
             positions[k] = p
-            velocities[k] = .zero
         }
     }
 }
