@@ -6,6 +6,30 @@ import Testing
 struct GraphMutationEventBusTests {
 
     @Test
+    func searchSourceRevisionIsStableUntilCommitOrExternalChange() async throws {
+        let bus = GraphMutationEventBus()
+        let scope = GraphScope(graphID: testUUID(8_001))
+        let initial = await bus.searchSourceRevision(in: scope)
+
+        #expect(await bus.searchSourceRevision(in: scope) == initial)
+
+        let batch = try makeBatch(
+            id: testUUID(8_002),
+            graphID: scope.graphID,
+            kinds: [.entityUpdated]
+        )
+        _ = await bus.publishCommitted(batch)
+
+        #expect(await bus.searchSourceRevision(in: scope) == batch.id)
+
+        await bus.recordExternalSearchSourceChange()
+        let afterExternalChange = await bus.searchSourceRevision(in: scope)
+
+        #expect(afterExternalChange != batch.id)
+        #expect(await bus.searchSourceRevision(in: scope) == afterExternalChange)
+    }
+
+    @Test
     func subscriberReceivesCommittedBatchesInPublicationOrder() async throws {
         let bus = GraphMutationEventBus()
         let graphID = testUUID(1)

@@ -131,6 +131,18 @@ nonisolated protocol GraphSchemaRevisionProviding: Sendable {
     ) async
 }
 
+/// Process-local search-source revision authority.
+///
+/// Search readiness must not add operational metadata to the deployed
+/// SwiftData/CloudKit domain schema. A fresh process therefore starts with a
+/// fresh revision and performs one authoritative foreground reconciliation.
+/// Committed local mutation batches advance the revision to their batch ID,
+/// which keeps subsequent search and chat readiness checks constant-size.
+nonisolated protocol GraphSearchSourceRevisionProviding: Sendable {
+    func searchSourceRevision(in scope: GraphScope) async -> UUID
+    func recordExternalSearchSourceChange() async
+}
+
 extension GraphMutationSubscribing {
     func mutationBatches() async -> AsyncStream<GraphMutationDelivery> {
         await mutationBatches(bufferingPolicy: .default)
@@ -146,7 +158,8 @@ extension GraphMutationSubscribing {
 actor GraphMutationEventBus:
     GraphMutationPublishing,
     GraphMutationSubscribing,
-    GraphSchemaRevisionProviding
+    GraphSchemaRevisionProviding,
+    GraphSearchSourceRevisionProviding
 {
     static let shared = GraphMutationEventBus()
 
@@ -155,6 +168,7 @@ actor GraphMutationEventBus:
     private var isFinished = false
     private var schemaRevisionGeneration = UUID()
     private var schemaRevisionStates: [UUID: SchemaRevisionState] = [:]
+    private var searchSourceRevisions: [UUID: UUID] = [:]
 
     private struct SchemaRevisionState {
         var structure: GraphSchemaRevisionToken
@@ -199,6 +213,7 @@ actor GraphMutationEventBus:
         _ batch: GraphMutationBatch
     ) async -> GraphMutationPublishReceipt {
         advanceSchemaRevision(for: batch)
+        searchSourceRevisions[batch.graphID] = batch.id
         guard isFinished == false else {
             logFinishedPublishIgnored()
             return .busFinished
@@ -325,6 +340,23 @@ actor GraphMutationEventBus:
         schemaRevisionStates[scope.graphID] = state
     }
 
+    func searchSourceRevision(in scope: GraphScope) -> UUID {
+        if let revision = searchSourceRevisions[scope.graphID] {
+            return revision
+        }
+        let revision = UUID()
+        searchSourceRevisions[scope.graphID] = revision
+        return revision
+    }
+
+    /// A persistent-store remote-change notification does not expose the
+    /// affected graph. Clearing every process-local token is conservative: the
+    /// active graph is reconciled immediately, while every other graph receives
+    /// a new token before its next readiness check.
+    func recordExternalSearchSourceChange() {
+        searchSourceRevisions.removeAll(keepingCapacity: false)
+    }
+
     /// Reopens an instance with a fresh sequence for deterministic isolated tests.
     func resetForTesting() {
         finishActiveSubscriptions()
@@ -332,6 +364,7 @@ actor GraphMutationEventBus:
         isFinished = false
         schemaRevisionGeneration = UUID()
         schemaRevisionStates.removeAll(keepingCapacity: false)
+        searchSourceRevisions.removeAll(keepingCapacity: false)
         logReset()
     }
 

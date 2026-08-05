@@ -14,7 +14,10 @@ extension GraphReadRepository {
         try checkCancellation()
         let graph = try context.fetch(GraphScopedFetches.graph(in: scope)).first
         try checkCancellation()
-        return graph?.searchSourceRevision
+        guard graph != nil else { return nil }
+        return await searchSourceRevisionProvider.searchSourceRevision(
+            in: scope
+        )
     }
 
     func searchIndexSourcePage(

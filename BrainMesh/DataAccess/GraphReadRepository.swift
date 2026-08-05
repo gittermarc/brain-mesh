@@ -33,21 +33,27 @@ actor GraphReadRepository {
     private var containerState: ContainerState
     let additionalCancellationCheck: @Sendable () throws -> Void
     let schemaSourceInstrumentation: GraphSchemaSourceInstrumentation
+    /// Must be the same revision authority that publishes and feeds index mutations.
+    let searchSourceRevisionProvider: any GraphSearchSourceRevisionProviding
 
     init() {
         containerState = .awaitingConfiguration
         additionalCancellationCheck = {}
         schemaSourceInstrumentation = .disabled
+        searchSourceRevisionProvider = GraphMutationEventBus.shared
     }
 
     init(
         container: AnyModelContainer,
         cancellationCheck: @escaping @Sendable () throws -> Void = {},
-        schemaSourceInstrumentation: GraphSchemaSourceInstrumentation = .disabled
+        schemaSourceInstrumentation: GraphSchemaSourceInstrumentation = .disabled,
+        searchSourceRevisionProvider: any GraphSearchSourceRevisionProviding =
+            GraphMutationEventBus.shared
     ) {
         containerState = .ready(container)
         additionalCancellationCheck = cancellationCheck
         self.schemaSourceInstrumentation = schemaSourceInstrumentation
+        self.searchSourceRevisionProvider = searchSourceRevisionProvider
     }
 
     func configure(container: AnyModelContainer) {

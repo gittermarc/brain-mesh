@@ -33,6 +33,7 @@ BrainMesh ist eine native SwiftUI-App für iPhone und iPad, in der Nutzer:innen 
 - **Graph Scope**: `graphID` grenzt fast alle Datensätze auf einen Graphen ein.
 - **Mutation Batch**: Datenminimaler Event nach erfolgreichem Save; invalidiert Index und Caches.
 - **Search Index**: Pro App lokaler SQLite-/FTS-Index; aus SwiftData vollständig rekonstruierbar.
+- **Search Source Revision**: Prozesslokaler, graphgescopter Revisionstoken im Mutation Event Bus. Ein Prozessstart oder persistenter Remote-Change verwirft den Token und erzwingt genau einen autoritativen Foreground-Abgleich; lokale Save-then-Publish-Mutationen setzen ihn auf die Batch-ID. Operative Indexmetadaten verändern dadurch nicht das produktive SwiftData-/CloudKit-Schema.
 - **Graph Chat**: On-Device-LLM-Flow mit sechs read-only Tools und graphgebundener Evidenz.
 - **Graph Chat Schema Source**: `GraphSchemaSourceSnapshotDTO` ist der einzige Schema-Input des Chats. Der Repository-Pfad lädt ausschließlich Graph-Metadaten, Entities, Attribute-Nodes und Felddefinitionen; Detailwerte nur für explizite `exampleFieldIDs`. Links, Attachments, Medien, Backlinks, Statistiken und gewöhnliche Detailwerte sind in diesem DTO nicht darstellbar. Der vollständige `GraphSourceSnapshotDTO` bleibt ausschließlich für fachlich vollständige Reads wie den Composable Read Executor erhalten.
 - **Graph Schema Context Cache**: Actor-isolierter Single-Flight-Cache mit Schlüssel aus Graph-ID, autoritativer Struktur-/Beispielwert-Revision, exakt sortiertem Example-Field-Scope, Schema-Limits und Builder-Version. Strukturmutationen invalidieren alle fachlich betroffenen Schlüssel; Link-, Attachment- und normale Wertmutationen verändern den Basisschema-Schlüssel nicht. Suggestions, Preflight, Intent-Prüfung und Provider-Session verwenden dieselbe `GraphSchemaContextIdentity` eines Turns.
@@ -73,7 +74,7 @@ BrainMesh ist eine native SwiftUI-App für iPhone und iPad, in der Nutzer:innen 
 
 - `BrainMesh/BrainMeshApp.swift`
   - erstellt `Schema` und `ModelContainer`;
-  - konfiguriert CloudKit oder den Release-Fallback auf lokalen Storage;
+  - konfiguriert CloudKit oder bei einem Öffnungsfehler ausschließlich einen nicht persistierenden Recovery-Container mit blockierender UI;
   - erstellt globale `ObservableObject`-Stores und Coordinators;
   - konfiguriert Loader über `AppLoadersConfigurator`.
 - `BrainMesh/AppRoot/AppRootView.swift`
@@ -389,8 +390,7 @@ Invarianten:
 - `BrainMesh/BrainMeshApp.swift` erstellt ein SwiftData-`Schema` aus acht Modeltypen.
 - Primärkonfiguration: `ModelConfiguration(schema:cloudKitDatabase: .automatic)`.
 - Entitlement: privater Container `iCloud.de.marcfechner.BrainMesh`.
-- Debug: Container-Initialisierungsfehler führt zu `fatalError`.
-- Release: CloudKit-Fehler führt zu neuem lokalen `ModelConfiguration`-Fallback.
+- Release und Debug: Ein CloudKit-/Store-Öffnungsfehler aktiviert ausschließlich einen nicht persistierenden In-Memory-Recovery-Container. Die Root-UI blockiert Bootstrap und Datenaktionen; es wird kein leerer persistenter Ersatzstore erzeugt.
 - `BrainMesh/Settings/SyncRuntime.swift` zeigt Storage-Modus und iCloud-Accountstatus.
 - Der Accountstatus ist kein Beleg für erfolgreichen Datenabgleich.
 
@@ -451,10 +451,9 @@ Invarianten:
 ### Offline- und Multi-Device-Verhalten
 
 - SwiftData kann lokal arbeiten, während CloudKit später abgleicht.
-- Release kann bei Containerfehlern vollständig auf local-only starten.
+- Ein Containerfehler kann nicht mehr als leerer local-only-Datenbestand erscheinen. Recovery rendert nur Diagnose und berührt den persistenten Store nicht.
 - Es gibt keine anwendungseigene Konfliktauflösungs- oder Sharing-Schicht.
 - Foreground-Reconciliation repariert den lokalen Suchindex nach externen Änderungen.
-- **UNKNOWN U2**: Wie ein local-only gestarteter Store später kontrolliert in den CloudKit-Store überführt wird.
 - **UNKNOWN U10**: Welche fachliche Konfliktsemantik bei gleichzeitigen Änderungen auf mehreren Geräten erwartet wird.
 
 ## UI Map
@@ -665,7 +664,6 @@ Invarianten:
 ## Open Questions
 
 - **UNKNOWN U1**: Welche CloudKit-Schemas und Umgebungen sind deployed, und wie wird deren Änderung freigegeben?
-- **UNKNOWN U2**: Wie wird ein Release-local-only-Store später in den CloudKit-Store überführt oder zusammengeführt?
 - **UNKNOWN U3**: Welche produktiven Vorgängerstores müssen bei künftigen Modeländerungen garantiert migrieren?
 - **UNKNOWN U4**: Welche APNs-Umgebung enthält das signierte Distributionsarchiv effektiv?
 - **UNKNOWN U5**: Wird `BrainMesh/BrainMesh Pro.storekit` in einem lokalen oder CI-Scheme aktiviert?

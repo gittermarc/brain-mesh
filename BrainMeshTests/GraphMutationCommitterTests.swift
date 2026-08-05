@@ -6,44 +6,43 @@ import Testing
 struct GraphMutationCommitterTests {
     @Test
     @MainActor
-    func successfulSaveAdvancesGraphSearchSourceRevisionAtomically() async throws {
+    func successfulSaveAdvancesProcessSearchSourceRevisionAfterCommit() async throws {
         let store = try BrainMeshTestContainer.makeInMemoryStore()
         let graph = MetaGraph(name: "Revision")
         graph.id = testUUID(900)
-        let oldRevision = graph.searchSourceRevision
         store.context.insert(graph)
+        let bus = GraphMutationEventBus()
+        let scope = GraphScope(graphID: graph.id)
+        let oldRevision = await bus.searchSourceRevision(in: scope)
         let batch = try GraphMutationBatchFactory.graphUpdated(
             graphID: graph.id
         )
-        let publisher = GraphMutationRecordingPublisher(
-            receipts: [.published(sequenceNumber: 900)]
-        )
 
-        _ = try await GraphMutationCommitter(publisher: publisher).commit(
+        _ = try await GraphMutationCommitter(publisher: bus).commit(
             batch,
             in: store.context
         )
 
-        #expect(graph.searchSourceRevision == batch.id)
-        #expect(graph.searchSourceRevision != oldRevision)
-        #expect(await publisher.recordedBatches == [batch])
+        #expect(await bus.searchSourceRevision(in: scope) == batch.id)
+        #expect(await bus.searchSourceRevision(in: scope) != oldRevision)
     }
 
     @Test
     @MainActor
-    func failedSaveRollsBackGraphSearchSourceRevision() async throws {
+    func failedSaveDoesNotAdvanceProcessSearchSourceRevision() async throws {
         let store = try BrainMeshTestContainer.makeInMemoryStore()
         let graph = MetaGraph(name: "Revision Rollback")
         graph.id = testUUID(901)
         store.context.insert(graph)
         try store.context.save()
-        let oldRevision = graph.searchSourceRevision
+        let bus = GraphMutationEventBus()
+        let scope = GraphScope(graphID: graph.id)
+        let oldRevision = await bus.searchSourceRevision(in: scope)
         let batch = try GraphMutationBatchFactory.graphUpdated(
             graphID: graph.id
         )
-        let publisher = GraphMutationRecordingPublisher(receipts: [])
         let committer = GraphMutationCommitter(
-            publisher: publisher,
+            publisher: bus,
             saveOperation: { _ in
                 throw GraphMutationCommitterTestError.saveFailed
             }
@@ -53,8 +52,7 @@ struct GraphMutationCommitterTests {
             _ = try await committer.commit(batch, in: store.context)
         }
 
-        #expect(graph.searchSourceRevision == oldRevision)
-        #expect(await publisher.recordedBatches.isEmpty)
+        #expect(await bus.searchSourceRevision(in: scope) == oldRevision)
     }
 
     @Test

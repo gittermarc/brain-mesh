@@ -17,14 +17,6 @@ final class MetaGraph {
     // so existing records don't suddenly look "new" after automatic migration.
     var createdAt: Date = Date.distantPast
 
-    /// Authoritative graph-scoped revision for all search-index source data.
-    ///
-    /// Every committed graph mutation changes this value in the same SwiftData
-    /// transaction as the graph content. CloudKit therefore transports the
-    /// revision together with imported changes, while the local search index can
-    /// compare it with persisted SQLite metadata without loading the graph.
-    var searchSourceRevision: UUID = UUID()
-
     var name: String = "" {
         didSet { nameFolded = BMSearch.fold(name) }
     }

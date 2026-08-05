@@ -635,10 +635,10 @@ actor GraphSearchIndexer {
             let observedSourceRevision = try await sourceReader.searchSourceRevision(
                 in: scope
             )
-            // GraphMutationCommitter persists `batch.id` on MetaGraph in the
-            // same save as these source changes. Publishing that exact revision
-            // prevents an already-committed, but not-yet-consumed successor
-            // batch from being covered accidentally by this update.
+            // The post-commit mutation bus advances the process-local source
+            // revision to `batch.id`. Publishing that exact revision prevents
+            // an already-committed, but not-yet-consumed successor batch from
+            // being covered accidentally by this update.
             try await store.markLifecycleReady(
                 graphID: scope.graphID,
                 sourceRevision: batch.id,

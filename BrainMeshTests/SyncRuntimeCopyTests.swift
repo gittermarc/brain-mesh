@@ -16,12 +16,24 @@ struct SyncRuntimeCopyTests {
     }
 
     @Test
-    func storageMode_localOnlyExplainsDeviceScope() {
-        let mode = SyncRuntime.StorageMode.localOnly
+    func storageMode_recoveryBlocksPersistentDataAccessAndExplainsSafety() {
+        let mode = SyncRuntime.StorageMode.recovery
 
-        #expect(mode.title == "Nur lokal")
-        #expect(mode.detail.contains("lokalen Speicher") == true)
-        #expect(mode.trustHint.contains("diesem Gerät") == true)
+        #expect(mode.title == "Datenzugriff geschützt")
+        #expect(mode.detail.contains("kein leerer Ersatzspeicher") == true)
+        #expect(mode.trustHint.contains("weder gelöscht noch überschrieben") == true)
+        #expect(mode.allowsPersistentDataAccess == false)
+    }
+
+    @Test
+    func storageBootstrapFailureExposesOnlyDomainAndCode() {
+        let failure = SyncRuntime.StorageBootstrapFailure(
+            domain: "NSCocoaErrorDomain",
+            code: 134_110
+        )
+
+        #expect(failure.reference == "NSCocoaErrorDomain (134110)")
+        #expect(Mirror(reflecting: failure).children.count == 2)
     }
 
     @Test

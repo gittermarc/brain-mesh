@@ -7,6 +7,7 @@
 
 import SwiftData
 import SwiftUI
+import os
 
 @main
 struct BrainMeshApp: App {
@@ -50,21 +51,33 @@ struct BrainMeshApp: App {
 
         do {
             sharedModelContainer = try ModelContainer(for: schema, configurations: [cloudConfig])
-            print("✅ SwiftData CloudKit: KONTAINER erstellt (cloudKitDatabase: .automatic)")
+            BMLog.storage.info(
+                "storage_container_open mode=cloudkit outcome=success"
+            )
             SyncRuntime.shared.setStorageMode(.cloudKit)
         } catch {
-            #if DEBUG
-                fatalError("❌ SwiftData CloudKit KONTAINER FEHLER (DEBUG, kein Fallback): \(error)")
-            #else
-                print("⚠️ SwiftData CloudKit failed, falling back to local-only: \(error)")
-                let localConfig = ModelConfiguration(schema: schema)
-                do {
-                    sharedModelContainer = try ModelContainer(for: schema, configurations: [localConfig])
-                    SyncRuntime.shared.setStorageMode(.localOnly)
-                } catch {
-                    fatalError("❌ Could not create local ModelContainer: \(error)")
-                }
-            #endif
+            let nsError = error as NSError
+            BMLog.storage.fault(
+                "storage_container_open mode=cloudkit outcome=recovery domain=\(nsError.domain, privacy: .public) code=\(nsError.code, privacy: .public)"
+            )
+            SyncRuntime.shared.enterStorageRecovery(for: error)
+
+            // Never replace an unreadable production store with a persistent,
+            // empty local branch. The in-memory container exists only so the
+            // app can render a blocking recovery explanation without touching
+            // the user's on-disk or CloudKit data.
+            let recoveryConfig = ModelConfiguration(
+                schema: schema,
+                isStoredInMemoryOnly: true
+            )
+            do {
+                sharedModelContainer = try ModelContainer(
+                    for: schema,
+                    configurations: [recoveryConfig]
+                )
+            } catch {
+                fatalError("Could not create the in-memory recovery container: \(error)")
+            }
         }
 
         let graphChatSessionStore = GraphChatSessionStore(

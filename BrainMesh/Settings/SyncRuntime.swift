@@ -12,21 +12,22 @@ import Combine
 /// Small runtime helper to surface whether SwiftData is running with CloudKit enabled
 /// and whether the current device has an iCloud account available.
 ///
-/// Motivation: When CloudKit init fails (e.g. entitlements/signing mismatch), the app may fall back
-/// to local-only storage in Release builds. That looks like "Sync is broken".
+/// Motivation: A CloudKit/container failure must never look like an empty but
+/// writable graph store. Recovery mode blocks data access without touching the
+/// existing persistent store.
 @MainActor
 final class SyncRuntime: ObservableObject {
 
     enum StorageMode: String {
         case cloudKit
-        case localOnly
+        case recovery
 
         var title: String {
             switch self {
             case .cloudKit:
                 return "iCloud aktiv"
-            case .localOnly:
-                return "Nur lokal"
+            case .recovery:
+                return "Datenzugriff geschützt"
             }
         }
 
@@ -34,8 +35,8 @@ final class SyncRuntime: ObservableObject {
             switch self {
             case .cloudKit:
                 return "BrainMesh nutzt SwiftData mit CloudKit in deiner privaten iCloud-Datenbank. Änderungen können auf deinen Geräten abgeglichen werden."
-            case .localOnly:
-                return "BrainMesh nutzt den lokalen Speicher dieses Geräts. Änderungen erscheinen nicht automatisch auf anderen Geräten."
+            case .recovery:
+                return "BrainMesh konnte den bestehenden Datenspeicher nicht sicher öffnen. Es wurde kein leerer Ersatzspeicher aktiviert."
             }
         }
 
@@ -43,9 +44,22 @@ final class SyncRuntime: ObservableObject {
             switch self {
             case .cloudKit:
                 return "iCloud-Sync hält Geräte auf dem gleichen Stand, ersetzt aber kein bewusst gespeichertes Backup oder einen Export."
-            case .localOnly:
-                return "Lokaler Speicher ist kein Fehlerzustand: Deine Daten bleiben auf diesem Gerät erhalten, bis iCloud wieder verfügbar ist oder die App wieder mit CloudKit startet."
+            case .recovery:
+                return "Die vorhandenen Graphen wurden durch diesen Start weder gelöscht noch überschrieben."
             }
+        }
+
+        var allowsPersistentDataAccess: Bool {
+            self != .recovery
+        }
+    }
+
+    struct StorageBootstrapFailure: Equatable, Sendable {
+        let domain: String
+        let code: Int
+
+        var reference: String {
+            "\(domain) (\(code))"
         }
     }
 
@@ -60,6 +74,7 @@ final class SyncRuntime: ObservableObject {
     static let containerIdentifier = "iCloud.de.marcfechner.BrainMesh"
 
     @Published private(set) var storageMode: StorageMode = .cloudKit
+    @Published private(set) var storageBootstrapFailure: StorageBootstrapFailure?
 
     @Published private(set) var iCloudAccountStatusText: String = "Noch nicht geprüft"
     @Published private(set) var iCloudAccountStatusDetail: String = "Tippe auf Status prüfen oder öffne diesen Bereich erneut, um den iCloud-Kontostatus zu aktualisieren."
@@ -68,6 +83,18 @@ final class SyncRuntime: ObservableObject {
 
     func setStorageMode(_ mode: StorageMode) {
         storageMode = mode
+        if mode != .recovery {
+            storageBootstrapFailure = nil
+        }
+    }
+
+    func enterStorageRecovery(for error: Error) {
+        let nsError = error as NSError
+        storageBootstrapFailure = StorageBootstrapFailure(
+            domain: nsError.domain,
+            code: nsError.code
+        )
+        storageMode = .recovery
     }
 
     /// Fetches iCloud account status for the configured container.

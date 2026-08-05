@@ -37,9 +37,6 @@ nonisolated extension GraphTransferImportCoordinator {
         let committer = GraphMutationCommitter(publisher: mutationPublisher)
         _ = try await committer.commitCallerIsolated(
             batch,
-            prepare: {
-                importedGraph?.searchSourceRevision = batch.id
-            },
             save: {
                 try saveContext()
             },

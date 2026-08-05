@@ -12,6 +12,9 @@ extension AppRootView {
 
     @MainActor
     func runStartupIfNeeded() async {
+        guard SyncRuntime.shared.storageMode.allowsPersistentDataAccess else {
+            return
+        }
         guard didRunStartupOnce == false else {
             await maybePresentOnboardingIfNeeded()
             return

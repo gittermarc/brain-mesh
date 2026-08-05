@@ -87,13 +87,15 @@ struct GraphChatToolsTests {
             databaseURL: location.databaseURL,
             backendPreference: .indexedFallback
         )
+        let mutationBus = GraphMutationEventBus()
         let fetchRecorder = GraphChatSourceFetchRecorder()
         let workRecorder = GraphSearchIndexWorkRecorder()
         let repository = GraphReadRepository(
             container: AnyModelContainer(modelStore.container),
             schemaSourceInstrumentation: GraphSchemaSourceInstrumentation {
                 fetchRecorder.record($0)
-            }
+            },
+            searchSourceRevisionProvider: mutationBus
         )
         let builder = GraphSearchDocumentBuilder(
             workInstrumentation: GraphSearchIndexWorkInstrumentation {
@@ -103,7 +105,7 @@ struct GraphChatToolsTests {
         let indexer = GraphSearchIndexer(
             sourceReader: repository,
             store: indexStore,
-            subscriber: GraphMutationEventBus(),
+            subscriber: mutationBus,
             builder: builder
         )
         let reconciler = GraphSearchIndexReconciler(
@@ -115,10 +117,11 @@ struct GraphChatToolsTests {
         await indexer.setReadinessInvalidator(reconciler)
 
         do {
-            _ = await reconciler.ensureReady(
+            let initialReadiness = await reconciler.ensureReady(
                 scope: GraphScope(graphID: graph.id),
                 reason: .firstSearch
             )
+            #expect(initialReadiness.isIndexUsable)
             #expect(fetchRecorder.count(.fullSourceSnapshot) == 0)
             fetchRecorder.reset()
             workRecorder.reset()

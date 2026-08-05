@@ -27,6 +27,7 @@ BrainMesh besitzt bereits mehrere wichtige Schutzlinien:
 - GRAPH-CHAT-CAPABILITY-GUIDANCE-1 führt eine einzige app-owned Capability-Quelle für stabile Nutzerführung ein. Antippbare Starterfragen werden gegen den vollständigen App-Katalog durch die realen Resolver-, Compiler- und Read-Plan-Validator-Pfade bewiesen; Toolverfügbarkeit oder ein grober UI-Kontext allein reichen nicht mehr aus.
 - GRAPH-CHAT-BETA-EXPERIENCE-1 ergänzt eine rein presentation-seitige Beta-Kommunikation: dauerhaftes Badge und Info-Aktion in der gemeinsamen iPhone-/iPad-Komposition, eine nur vor der Nutzung sichtbare Orientierungskarte und ein app-owned DE-/EN-Info-Sheet. Capability-Aussagen bleiben aus dem stabilen Katalog abgeleitet; auswählbare Beispiele bleiben produktionsvalidiert und senden nie automatisch.
 - GRAPH-CHAT-SCHEMA-PIPELINE-1 trennt den Chat-Schema-Read vom vollständigen `GraphSourceSnapshotDTO`. `GraphReadRepository+SchemaSource` materialisiert auf Fetch-Ebene nur Graph, Entities, Attribute-Nodes, Felddefinitionen und gezielt angeforderte Beispielwerte. Ein actor-isolierter, revisionsgebundener Single-Flight-Cache reicht dieselbe `GraphSchemaContextIdentity` durch Suggestions, Preflight, beide Intent-Stufen und Provider-Session; Composable Reads behalten ihren vollständigen autoritativen Snapshot.
+- DATA-STORE-COMPATIBILITY-FIX entfernt die operative Search-Source-Revision wieder aus `MetaGraph` und damit aus dem produktiven SwiftData-/CloudKit-Schema. Der Mutation Event Bus besitzt stattdessen einen prozesslokalen Graph-Token; Prozessstart und `NSPersistentStoreRemoteChange` erzwingen einen autoritativen Abgleich. Ein Containerfehler öffnet keinen persistenten leeren Fallback mehr, sondern ausschließlich eine blockierende In-Memory-Recovery-Oberfläche.
 - GRAPH-CHAT-STREAMING-BACKPRESSURE-1 trennt die geordnete Verarbeitung bereits sicherer Stream-Events von ihrer sichtbaren Publikation. Die Presentation Firewall prüft weiterhin jeden relevanten kumulativen Provider-Snapshot; ein turnlokaler Actor koalesziert danach ausschließlich sichere Partials auf höchstens 20 Hz, veröffentlicht Terminalzustände sofort und hält Cancellation-/Replacement-Ownership geschlossen. History-Saves liegen an Turn-Start, Terminal und expliziten Runtime-Grenzen. Transcript und Scroll-State bilden eine eigene Observation-Grenze; Auto-Scroll läuft nur am unteren Rand, Partial-Scrolls sind animationslos und Reduce Motion wird respektiert.
 - GRAPH-CANVAS-SIMULATION-ACTOR-1 verlagert Physics Steps, Velocity, Spatial Grid, Delta-/Cooling-/Stability-Scans und Tick-Scheduling in `GraphPhysicsSimulationActor`. Der Pure-Physics-Kern bleibt deterministisch; sein Actor-Pfad arbeitet nach einer Topologieauflösung mit stabilen Indizes und zusammenhängenden Arrays. SwiftUI erhält ausschließlich koaleszierte `GraphPhysicsPositionSnapshot`s, die der Main-Actor-Adapter nach Graph- und Command-Revision prüft. Drag-Positionen können deshalb nicht von älteren Actor-Snapshots überschrieben werden.
 
@@ -34,7 +35,7 @@ Die höchsten Architektur-Risiken liegen trotzdem an drei Systemgrenzen:
 
 1. **SwiftData/CloudKit-Schema und Store-Lifecycle**
    - kein `VersionedSchema`/`SchemaMigrationPlan`;
-   - Release-Fallback auf einen lokalen Store;
+   - produktive Store-Fixtures fehlen weiterhin;
    - optionale `graphID` und mehrere skalare Fremdschlüssel.
 2. **Abgeleitete Vollgraph-Snapshots**
    - Search-Rebuild/Reconciliation, Home-Health und Stats laden bei Cache Miss große Datenmengen;
@@ -107,26 +108,19 @@ Pfad: `BrainMesh/BrainMeshApp.swift`
 - Das Schema umfasst acht Typen.
 - Primär wird `ModelConfiguration(schema:cloudKitDatabase: .automatic)` verwendet.
 - CloudKit arbeitet über den privaten Container aus `BrainMesh/BrainMesh.entitlements`.
-- Debug stoppt bei Containerfehlern sofort.
-- Release erstellt bei Containerfehlern einen lokalen ModelContainer.
-- `BrainMesh/Settings/SyncRuntime.swift` zeigt `.cloudKit` oder `.localOnly`.
+- Bei einem Containerfehler verwenden Debug und Release ausschließlich einen nicht persistierenden In-Memory-Container, um die blockierende Recovery-UI zu rendern.
+- Bootstrap und datenführende Root-Flows laufen im Recovery-Modus nicht an.
+- `BrainMesh/Settings/SyncRuntime.swift` unterscheidet `.cloudKit` und `.recovery`; der frühere implizite `.localOnly`-Fallback ist vollständig entfernt.
 
-#### Risiko: zwei mögliche Store-Lebenszyklen
+#### Schutz: kein stiller zweiter Store-Lebenszyklus
 
 Konkreter Grund:
 
-- CloudKit- und lokaler Fallback werden als getrennte `ModelConfiguration`-Initialisierungen erstellt.
-- Im Code existiert keine explizite Promotion-, Merge- oder Recovery-Operation zwischen beiden Modi.
-- Ein Release-Start im local-only-Modus kann deshalb Daten erzeugen, deren späterer Übergang nicht fachlich definiert ist.
+- Ein fehlgeschlagener CloudKit-/SwiftData-Start öffnet keinen persistenten lokalen Ersatzstore.
+- Die In-Memory-Konfiguration ist nicht schreibbarer Produktmodus, sondern ausschließlich Host für die Recovery-Erklärung.
+- Bestehende Storedateien und CloudKit-Daten werden in diesem Zustand weder gebootstrapped noch überschrieben.
 
-**UNKNOWN U2**: Ob SwiftData beim nächsten CloudKit-fähigen Start denselben Store übernimmt, einen separaten Store öffnet oder eine manuelle Überführung benötigt, ist im Projekt nicht spezifiziert.
-
-Empfehlung:
-
-- Store-Modus und persistente Store-URL explizit protokollieren.
-- Local-only-Fallback als benannten Recovery-Zustand modellieren.
-- Vor Einführung eine Gerätetestmatrix mit iCloud aus/an, App-Neustart und bereits vorhandenen Daten ausführen.
-- Keine automatische Datenkopie implementieren, bevor die tatsächlichen Store-URLs und SwiftData-Semantik verifiziert sind.
+Der Fehler wird content-free mit Domain und Code protokolliert und als kopierbare technische Referenz angezeigt. Ein korrigierter Build kann den unveränderten produktiven Store beim nächsten Start erneut öffnen.
 
 ### 4.2 Schema und Migration
 
@@ -640,14 +634,14 @@ Maßnahmen:
 Hotspot-Grund:
 
 - Containererstellung liegt synchron im App-`init`.
-- Debug stoppt hart; Release wechselt Storemodus.
-- Der Modus beeinflusst die gesamte Datenwahrheit der Session.
+- Ein Fehler wechselt ausschließlich in den blockierenden, nicht persistierenden Recovery-Modus.
+- Ein leerer Ersatzstore kann dadurch nicht mehr als Datenwahrheit der Session erscheinen.
 
 Maßnahmen:
 
 - Startdauer signposten.
 - Store-URL, Modus und Fehlerklasse content-free loggen.
-- UI für local-only als Recovery-Zustand, nicht nur Statuslabel.
+- Recovery-UI und technischen Fehlercode in der Geräte-/TestFlight-Matrix prüfen.
 
 ### Foreground Search Reconciliation
 
@@ -659,7 +653,7 @@ Hotspot-Grund:
 
 Maßnahmen:
 
-- persistente graphweite Source-Revision;
+- prozesslokale graphweite Source-Revision mit einem erzwungenen autoritativen Abgleich nach Prozessstart und Persistent-Store-Remote-Change;
 - billiger Headervergleich vor Source-Materialisierung;
 - paginiertes Hashing;
 - adaptive Reconciliation abhängig von letzter CloudKit-Importzeit;
@@ -1773,7 +1767,7 @@ Logging darf Fehlerklasse und Operation-ID enthalten, aber keine Nutzinhalte.
 
 ### Datenverlust / Store
 
-- Release-local-only-Fallback erzeugt potenziell einen nicht synchronisierten Datenzweig.
+- Der frühere Release-local-only-Fallback ist entfernt; Containerfehler blockieren Datenzugriff, statt einen nicht synchronisierten Zweig zu erzeugen.
 - Fehlende Schema-Migrationsfixtures können Containerstart nach Update verhindern.
 - App-level Backfill hilft nicht, wenn der Container vorher nicht geöffnet werden kann.
 - Direkte Saves ohne Mutation Event können abgeleitete Zustände stale lassen.
@@ -2000,7 +1994,7 @@ Die realistischen Obergrenzen sind **UNKNOWN U7** und müssen produktseitig fest
 
 - echte SwiftData-Migrationstests mit alten Storedateien;
 - CloudKit-Container-Startmatrix auf Gerät;
-- Release-local-only → CloudKit-Recovery;
+- Container-Öffnungsfehler → blockierende In-Memory-Recovery ohne persistenten Ersatzstore;
 - graphgescopte Navigation bei kollidierenden IDs;
 - Lazy Attachment Migration vor Export/Delete/Stats;
 - Event-Bus-Overflow → Full-Rebuild;
@@ -2070,10 +2064,6 @@ Die realistischen Obergrenzen sind **UNKNOWN U7** und müssen produktseitig fest
   - Welche Development- und Production-Schemas sind deployed?
   - Wer genehmigt additive/kompatible Änderungen?
   - Gibt es ein Rollback-/Recovery-Runbook?
-- **UNKNOWN U2 – Local-only Recovery**
-  - Welche Store-URL öffnet SwiftData je Modus?
-  - Wie werden local-only Änderungen später mit CloudKit zusammengeführt?
-  - Muss der Nutzer explizit exportieren/importieren?
 - **UNKNOWN U3 – Migrationsbasis**
   - Welche Appversionen sind produktiv?
   - Gibt es anonymisierte oder synthetische Store-Fixtures?

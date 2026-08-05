@@ -8,7 +8,9 @@
 import Foundation
 
 nonisolated protocol GraphSearchSourceReading: Sendable {
-    /// Returns the authoritative graph revision using a graph-row-only read.
+    /// Returns the process-local committed-source revision without loading graph
+    /// contents. A new process intentionally receives a fresh token and must
+    /// reconcile once before the persistent index can use its fast path.
     /// `nil` means the source cannot provide a revision and forces reconciliation.
     func searchSourceRevision(in scope: GraphScope) async throws -> UUID?
 

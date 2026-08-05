@@ -79,27 +79,13 @@ nonisolated struct GraphMutationCommitter {
         _ batches: [GraphMutationBatch],
         in modelContext: ModelContext
     ) async throws -> [GraphMutationPublishReceipt] {
-        var originalSearchSourceRevisions: [(
-            graph: MetaGraph,
-            previousRevision: UUID
-        )] = []
-
         return try await commitPrepared(
             batches,
-            prepare: {
-                originalSearchSourceRevisions = try advanceSearchSourceRevisions(
-                    for: batches,
-                    in: modelContext
-                )
-            },
+            prepare: {},
             save: {
                 try saveOperation(modelContext)
             },
             rollback: {
-                // SwiftData rollback does not reliably refresh already mutated model instances.
-                for originalRevision in originalSearchSourceRevisions {
-                    originalRevision.graph.searchSourceRevision = originalRevision.previousRevision
-                }
                 modelContext.rollback()
             }
         )
@@ -176,46 +162,6 @@ nonisolated struct GraphMutationCommitter {
         }
 
         return receipts
-    }
-
-    @MainActor
-    private func advanceSearchSourceRevisions(
-        for batches: [GraphMutationBatch],
-        in modelContext: ModelContext
-    ) throws -> [(graph: MetaGraph, previousRevision: UUID)] {
-        var revisions: [(
-            graph: MetaGraph,
-            previousRevision: UUID,
-            nextRevision: UUID
-        )] = []
-        revisions.reserveCapacity(batches.count)
-
-        for batch in batches {
-            let graphID = batch.graphID
-            var descriptor = FetchDescriptor<MetaGraph>(
-                predicate: #Predicate<MetaGraph> { graph in
-                    graph.id == graphID
-                }
-            )
-            descriptor.fetchLimit = 1
-            if let graph = try modelContext.fetch(descriptor).first {
-                revisions.append(
-                    (
-                        graph: graph,
-                        previousRevision: graph.searchSourceRevision,
-                        nextRevision: batch.id
-                    )
-                )
-            }
-        }
-
-        for revision in revisions {
-            revision.graph.searchSourceRevision = revision.nextRevision
-        }
-
-        return revisions.map { revision in
-            (graph: revision.graph, previousRevision: revision.previousRevision)
-        }
     }
 
     private func orderedUniqueBatches(

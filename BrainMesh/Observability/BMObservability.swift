@@ -55,6 +55,7 @@ nonisolated enum BMLog {
         subsystem: subsystem,
         category: "detail-integrity"
     )
+    static let storage = Logger(subsystem: subsystem, category: "storage")
     static let chat = Logger(subsystem: subsystem, category: "chat")
 }
 

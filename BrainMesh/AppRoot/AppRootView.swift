@@ -5,6 +5,7 @@
 //  Created by Marc Fechner on 15.12.25.
 //
 
+import CoreData
 import SwiftData
 import SwiftUI
 import UIKit
@@ -22,6 +23,8 @@ struct AppRootView: View {
     @EnvironmentObject var graphChatLaunchCoordinator: GraphChatLaunchCoordinator
     @EnvironmentObject var graphChatSessionStore: GraphChatSessionStore
     @EnvironmentObject var graphCopilotWorkspaceCoordinator: GraphCopilotWorkspaceCoordinator
+
+    @ObservedObject private var syncRuntime = SyncRuntime.shared
 
     @AppStorage(BMAppStorageKeys.activeGraphID) var activeGraphIDString: String = ""
 
@@ -42,6 +45,18 @@ struct AppRootView: View {
     @State var searchIndexForegroundMaintenanceTask: Task<Void, Never>? = nil
 
     var body: some View {
+        if syncRuntime.storageMode.allowsPersistentDataAccess {
+            dataBackedContent
+        } else {
+            PersistenceRecoveryView(
+                failure: syncRuntime.storageBootstrapFailure
+            )
+            .tint(appearance.appTintColor)
+            .preferredColorScheme(appearance.preferredColorScheme)
+        }
+    }
+
+    private var dataBackedContent: some View {
         ContentView()
             .tint(appearance.appTintColor)
             .preferredColorScheme(appearance.preferredColorScheme)
@@ -81,6 +96,15 @@ struct AppRootView: View {
                 cancelSearchIndexForegroundMaintenance()
                 graphChatSessionStore.handleMemoryPressure()
                 graphCopilotWorkspaceCoordinator.clearTransientState()
+            }
+            .onReceive(
+                NotificationCenter.default.publisher(
+                    for: .NSPersistentStoreRemoteChange
+                )
+            ) { _ in
+                scheduleSearchIndexForegroundReconciliation(
+                    invalidateSearchSourceRevision: true
+                )
             }
             .onChange(of: proStore.entitlement) { _, entitlement in
                 guard entitlement != .pro else {

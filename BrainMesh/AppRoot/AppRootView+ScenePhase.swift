@@ -114,19 +114,28 @@ extension AppRootView {
         }
     }
 
-    func scheduleSearchIndexForegroundReconciliation() {
-        guard
-            let scope = GraphSearchIndexForegroundReconciliationPolicy.scope(
+    func scheduleSearchIndexForegroundReconciliation(
+        invalidateSearchSourceRevision: Bool = false
+    ) {
+        let scope = observedScenePhase == .active
+            ? GraphSearchIndexForegroundReconciliationPolicy.scope(
                 activeGraphIDString: activeGraphIDString,
                 isSystemModalPresented: systemModals.isSystemModalPresented,
                 hasActiveGraphLockRequest: graphLock.activeRequest != nil
             )
-        else {
+            : nil
+        guard scope != nil || invalidateSearchSourceRevision else {
             return
         }
 
         cancelSearchIndexForegroundMaintenance()
         searchIndexForegroundMaintenanceTask = Task(priority: .utility) {
+            if invalidateSearchSourceRevision {
+                await GraphMutationEventBus.shared
+                    .recordExternalSearchSourceChange()
+            }
+            guard let scope else { return }
+            guard Task.isCancelled == false else { return }
             _ = await GraphSearchIndexReconciler.shared.performMaintenance(
                 scope: scope,
                 reason: .foreground
